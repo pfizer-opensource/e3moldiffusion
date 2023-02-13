@@ -1,0 +1,209 @@
+from typing import Union
+
+import torch
+from rdkit import Chem
+from torch import nn
+from torch_geometric.data import Data
+
+# allowable multiple choice node and edge features
+allowable_features = {
+    'possible_atomic_num_list' : list(range(1, 119)) + ['misc'],
+    'possible_chirality_list' : [
+        'CHI_UNSPECIFIED',
+        'CHI_TETRAHEDRAL_CW',
+        'CHI_TETRAHEDRAL_CCW',
+        'CHI_OTHER'
+    ],
+    'possible_degree_list' : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 'misc'],
+    'possible_formal_charge_list' : [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 'misc'],
+    'possible_numH_list' : [0, 1, 2, 3, 4, 5, 6, 7, 8, 'misc'],
+    'possible_number_radical_e_list': [0, 1, 2, 3, 4, 'misc'],
+    'possible_hybridization_list' : [
+        'SP', 'SP2', 'SP3', 'SP3D', 'SP3D2', 'misc'
+        ],
+    'possible_is_aromatic_list': [False, True],
+    'possible_is_in_ring_list': [False, True],
+    'possible_bond_type_list' : [
+        'SINGLE',
+        'DOUBLE',
+        'TRIPLE',
+        'AROMATIC',
+        'misc'
+    ],
+    'possible_bond_stereo_list': [
+        'STEREONONE',
+        'STEREOZ',
+        'STEREOE',
+        'STEREOCIS',
+        'STEREOTRANS',
+        'STEREOANY',
+    ],
+    'possible_is_conjugated_list': [False, True],
+}
+
+
+def safe_index(l, e):
+    """
+    Return index of element e in list l. If e is not present, return the last index
+    """
+    try:
+        return l.index(e)
+    except:
+        return len(l) - 1
+
+
+def atom_to_feature_vector(atom):
+    """
+    Converts rdkit atom object to feature list of indices
+    :param mol: rdkit atom object
+    :return: list
+    """
+    atom_feature = [
+            safe_index(allowable_features['possible_atomic_num_list'], atom.GetAtomicNum()),
+            safe_index(allowable_features['possible_degree_list'], atom.GetTotalDegree()),
+            safe_index(allowable_features['possible_hybridization_list'], str(atom.GetHybridization())),
+            allowable_features['possible_is_aromatic_list'].index(atom.GetIsAromatic()),
+            allowable_features['possible_is_in_ring_list'].index(atom.IsInRing()),
+            ]
+    return atom_feature
+
+
+def get_atom_feature_dims():
+    return list(map(len, [
+        allowable_features['possible_atomic_num_list'],
+        allowable_features['possible_degree_list'],
+        allowable_features['possible_hybridization_list'],
+        allowable_features['possible_is_aromatic_list'],
+        allowable_features['possible_is_in_ring_list']
+        ]))
+
+
+def bond_to_feature_vector(bond):
+    """
+    Converts rdkit bond object to feature list of indices
+    :param mol: rdkit bond object
+    :return: list
+    """
+    bond_feature = [
+                safe_index(allowable_features['possible_bond_type_list'], str(bond.GetBondType()))
+            ]
+    return bond_feature
+
+
+def get_bond_feature_dims():
+    return list(map(len, [
+        allowable_features['possible_bond_type_list'],
+        ]))
+
+
+def atom_feature_vector_to_dict(atom_feature):
+    [atomic_num_idx,
+    degree_idx,
+    hybridization_idx,
+    is_aromatic_idx,
+    is_in_ring_idx] = atom_feature
+
+    feature_dict = {
+        'atomic_num': allowable_features['possible_atomic_num_list'][atomic_num_idx],
+        'degree': allowable_features['possible_degree_list'][degree_idx],
+        'hybridization': allowable_features['possible_hybridization_list'][hybridization_idx],
+        'is_aromatic': allowable_features['possible_is_aromatic_list'][is_aromatic_idx],
+        'is_in_ring': allowable_features['possible_is_in_ring_list'][is_in_ring_idx]
+    }
+    return feature_dict
+
+
+def bond_feature_vector_to_dict(bond_feature):
+    [bond_type_idx] = bond_feature
+
+    feature_dict = {
+        'bond_type': allowable_features['possible_bond_type_list'][bond_type_idx]
+    }
+
+    return feature_dict
+
+
+def smiles_or_mol_to_graph(smol: Union[str, Chem.Mol]):
+    if isinstance(smol, str):
+        mol = Chem.MolFromSmiles(smol)
+    else:
+        mol = smol
+
+    # atoms
+    atom_features_list = []
+    for atom in mol.GetAtoms():
+        atom_features_list.append(atom_to_feature_vector(atom))
+    
+    x = torch.tensor(atom_features_list, dtype=torch.int64)
+    assert x.size(-1) == 5
+    # only take atom element
+    x = x[:, 0].view(-1, 1)
+
+    # bonds
+    edges_list = []
+    edge_features_list = []
+    for bond in mol.GetBonds():
+        i = bond.GetBeginAtomIdx()
+        j = bond.GetEndAtomIdx()
+        edge_feature = bond_to_feature_vector(bond)
+        # add edges in both directions
+        edges_list.append((i, j))
+        edge_features_list.append(edge_feature[0])
+        edges_list.append((j, i))
+        edge_features_list.append(edge_feature[0])
+
+    # data.edge_index: Graph connectivity in COO format with shape [2, num_edges]
+    edge_index = torch.tensor(edges_list, dtype=torch.int64).T
+    # data.edge_attr: Edge feature matrix with shape [num_edges]
+    edge_attr = torch.tensor(edge_features_list, dtype=torch.int64)
+
+    if edge_index.numel() > 0:  # Sort indices.
+        perm = (edge_index[0] * x.size(0) + edge_index[1]).argsort()
+        edge_index, edge_attr = edge_index[:, perm], edge_attr[perm]
+    data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+    return data
+
+
+class AtomEncoder(nn.Module):
+    def __init__(self, emb_dim):
+        super(AtomEncoder, self).__init__()
+        FULL_ATOM_FEATURE_DIMS = [get_atom_feature_dims()[0]]
+        self.atom_embedding_list = nn.ModuleList()
+        for dim in FULL_ATOM_FEATURE_DIMS:
+            emb = nn.Embedding(dim, emb_dim, max_norm=1.0)
+            self.atom_embedding_list.append(emb)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        for emb in self.atom_embedding_list:
+            nn.init.xavier_uniform_(emb.weight.data)
+
+    def forward(self, x):
+        x_embedding = 0
+        for i in range(x.shape[1]):
+            x_embedding += self.atom_embedding_list[i](x[:, i])
+        return x_embedding
+
+class BondEncoder(nn.Module):
+    def __init__(self, emb_dim):
+        super(BondEncoder, self).__init__()
+        FULL_BOND_FEATURE_DIMS = get_bond_feature_dims()
+        self.bond_embedding = nn.Embedding(FULL_BOND_FEATURE_DIMS[0] + 3, emb_dim, max_norm=1.0)
+        self.reset_parameters()
+    def reset_parameters(self):
+        nn.init.xavier_uniform_(self.bond_embedding.weight.data)
+    def forward(self, edge_attr):
+        bond_embedding = self.bond_embedding(edge_attr)
+        return bond_embedding
+    
+if __name__ == '__main__':
+    smol = "O1C=C[C@H]([C@H]1O2)c3c2cc(OC)c4c3OC(=O)C5=C4CCC(=O)5"
+    data = smiles_or_mol_to_graph(smol)
+    print(data)
+    print(data.x)
+    
+    atomencoder = AtomEncoder(emb_dim=16)
+    bondencoder = BondEncoder(emb_dim=16)
+    
+    x = atomencoder(data.x)
+    edge_attr = bondencoder(data.edge_attr)

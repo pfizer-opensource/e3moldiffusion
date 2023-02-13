@@ -1,0 +1,20 @@
+*.egg-info
+.eggs
+__pycache__
+build
+dist
+.idea/*
+
+*.DS_Store*
+
+# setuptools_scm
+e3moldiffusion/_version.py
+
+geom/data/*
+!geom/data/.gitkeep
+geom/slurm_outs/*
+
+e3moldiffusion/sample_data.py
+sample_data/*
+
+.vscode/
