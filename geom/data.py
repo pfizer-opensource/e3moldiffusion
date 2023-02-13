@@ -30,7 +30,7 @@ from tqdm import tqdm
 try:
     PROCESS_PATH = osp.abspath(__file__.__name__) + "/geom"
 except:
-    PROCESS_PATH = "/home/let55/workspace/projects/ssmolconf/experiments/geom"
+    PROCESS_PATH = "/home/let55/workspace/projects/e3moldiffusion/geom"
 
 PATH = "/home/let55/workspace/datasets/geom/rdkit_folder"
 
