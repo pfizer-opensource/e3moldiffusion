@@ -762,7 +762,6 @@ if __name__ == "__main__":
     loader = iter(datamodule.train_dataloader(shuffle=True))
     data = next(loader)
 
-    loader = datamodule.val_dataloader(shuffle=True)
-    for data in tqdm(loader, total=len(loader)):
-        pass
-    
+    # loader = datamodule.val_dataloader(shuffle=True)
+    # for data in tqdm(loader, total=len(loader)):
+    #     pass
