@@ -34,6 +34,8 @@ except:
 
 PATH = "/home/let55/workspace/datasets/geom/rdkit_folder"
 
+DB_READ_PATH = "/hpfs/projects/mlcs/e3moldiffusion"
+
 DATA_PATH = osp.join(PROCESS_PATH, "data")
 if not osp.exists(DATA_PATH):
     os.makedirs(DATA_PATH)
@@ -639,15 +641,16 @@ class GeomDataModule(LightningDataModule):
         env_in_init: bool = False,
         shuffle_train: bool = False,
         subset_frac: float = 0.1,
-        pin_memory: bool = False,
-        persistent_workers: bool = False,
+        pin_memory: bool = True,
+        persistent_workers: bool = True,
     ):
         super().__init__()
         assert dataset in ["qm9", "drugs"]
         self.dataset = dataset
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.path = osp.join(DATA_PATH, f"{dataset}", "database")
+        # self.path = osp.join(DATA_PATH, f"{dataset}", "database")   # old, on the gpfs
+        self.path = osp.join(DB_READ_PATH, f"{dataset}", "database")   # new, on the hpfs
         self.env_in_init = env_in_init
         self.shuffle_train = shuffle_train
         self.subset_frac = subset_frac
@@ -699,7 +702,7 @@ class GeomDataModule(LightningDataModule):
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            shuffle=self.shuffle_train,
+            shuffle=shuffle,
             persistent_workers=self.persistent_workers,
         )
         return dataloader
@@ -710,7 +713,7 @@ class GeomDataModule(LightningDataModule):
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            shuffle=self.shuffle_train,
+            shuffle=shuffle,
             persistent_workers=self.persistent_workers,
         )
         return dataloader
@@ -741,27 +744,4 @@ def main(dataset, max_conformers, processes, chunk_size, subchunk):
 
 if __name__ == "__main__":
     main()
-
-    # print("Initializing Dataset")
-    # datamodule = GeomDataModule(
-    #    batch_size=64,
-    #    num_workers=4,
-    #    dataset="drugs",
-    #    env_in_init=True,
-    #    shuffle_train=True,
-    #    subset_frac=0.1,
-    #     pin_memory=False,
-    #   persistent_workers=False,
-    # )
-    # datamodule.setup()
-     
-    # print(f"Train set size {len(datamodule.train_dataset)}")
-    # print(f"Val set size {len(datamodule.val_dataset)}")
-    # print(f"Test set size {len(datamodule.test_dataset)}")
-    # data = datamodule.train_dataset[0]
-    # loader = iter(datamodule.train_dataloader(shuffle=True))
-    # data = next(loader)
-
-    #loader = datamodule.val_dataloader(shuffle=True)
-    #for data in tqdm(loader, total=len(loader)):
-    #    pass
+    

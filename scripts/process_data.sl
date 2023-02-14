@@ -8,7 +8,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=3G
 #SBATCH --cpus-per-task=32
-#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/%j.out
+#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/dataprocessing_%j.out
 
 cd /gpfs/workspace/users/let55/projects/e3moldiffusion/geom
 source activate e3moldiffusion
