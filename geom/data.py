@@ -212,7 +212,7 @@ class MolFeaturization:
         data = self.featurize_smiles_or_mol(smiles_mol=smiles_mol["mol"])
         assert data is not None
         # data = self.higher_order(data)
-        # data = self.fully_connected_edge_idx(data=data, without_self_loop=True)
+        data = self.fully_connected_edge_idx(data=data, without_self_loop=True)
         # data = self.upper_edge_idx(data, order=self.order)
         data.energy = torch.tensor([smiles_mol["energy"]], dtype=torch.float32).view(
             -1, 1
@@ -740,28 +740,28 @@ def main(dataset, max_conformers, processes, chunk_size, subchunk):
 
 
 if __name__ == "__main__":
-    # main()
+    main()
 
-    print("Initializing Dataset")
-    datamodule = GeomDataModule(
-        batch_size=64,
-        num_workers=4,
-        dataset="drugs",
-        env_in_init=True,
-        shuffle_train=True,
-        subset_frac=0.1,
-        pin_memory=False,
-        persistent_workers=False,
-    )
-    datamodule.setup()
+    # print("Initializing Dataset")
+    # datamodule = GeomDataModule(
+    #    batch_size=64,
+    #    num_workers=4,
+    #    dataset="drugs",
+    #    env_in_init=True,
+    #    shuffle_train=True,
+    #    subset_frac=0.1,
+    #     pin_memory=False,
+    #   persistent_workers=False,
+    # )
+    # datamodule.setup()
+     
+    # print(f"Train set size {len(datamodule.train_dataset)}")
+    # print(f"Val set size {len(datamodule.val_dataset)}")
+    # print(f"Test set size {len(datamodule.test_dataset)}")
+    # data = datamodule.train_dataset[0]
+    # loader = iter(datamodule.train_dataloader(shuffle=True))
+    # data = next(loader)
 
-    print(f"Train set size {len(datamodule.train_dataset)}")
-    print(f"Val set size {len(datamodule.val_dataset)}")
-    print(f"Test set size {len(datamodule.test_dataset)}")
-    data = datamodule.train_dataset[0]
-    loader = iter(datamodule.train_dataloader(shuffle=True))
-    data = next(loader)
-
-    # loader = datamodule.val_dataloader(shuffle=True)
-    # for data in tqdm(loader, total=len(loader)):
-    #     pass
+    #loader = datamodule.val_dataloader(shuffle=True)
+    #for data in tqdm(loader, total=len(loader)):
+    #    pass
