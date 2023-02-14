@@ -262,7 +262,7 @@ class Trainer(pl.LightningModule):
             "val/loss",
             loss,
             batch_size=batch_size,
-            sync_dist=len(self._hparams["gpus"]) > 1,
+            sync_dist=self._hparams["gpus"] > 1,
         )
 
     def configure_optimizers(self):
