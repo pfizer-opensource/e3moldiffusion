@@ -42,7 +42,7 @@ def add_arguments(parser):
     #    type=float,
     #    help="Fraction to train on only for experimenting. Defaults to 0.1",
     #)
-    parser.add_argument("--max_num_conformers", default=30, dtype=int,
+    parser.add_argument("--max_num_conformers", default=30, type=int,
                         help="Maximum number of conformers per molecule. \
                             Defaults to 30. Set to -1 for all conformers available in database"
                             )

@@ -3,6 +3,7 @@
 #SBATCH --mail-user=tuan.le@pfizer.com 
 #SBATCH --mail-type=ALL
 #SBATCH --partition=gpu
+#SBATCH --constraint=weka
 #SBATCH --time=2-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -19,3 +20,4 @@ echo "runnning experiment"
 
 python train.py --gpus 1 --id 1 --max_num_conformers 30 --num_workers 6 --save_dir logs/diffusion --num_epochs 100 \
  --load_ckpt /home/let55/workspace/projects/e3moldiffusion/geom/logs/diffusion/run0/last.ckpt
+
