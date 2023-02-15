@@ -11,6 +11,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=4
+#SBATCH --cpus-per-task=3
 #SBATCH --mem=32G
 
 ## https://github.com/Lightning-AI/lightning/issues/4612
