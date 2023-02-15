@@ -23,7 +23,7 @@ def add_arguments(parser):
     parser.add_argument("-s", "--save_dir", default=DEFAULT_SAVE_DIR, type=str)
     parser.add_argument("--precision", default=32, type=int)
     parser.add_argument("-b", "--batch_size", default=256, type=int)
-    parser.add_argument("--lr", default=5e-4, type=float)
+    parser.add_argument("--lr", default=1e-4, type=float)
     parser.add_argument("--gamma", default=0.975, type=float)
     parser.add_argument("--grad_clip_val", default=10.0, type=float)
     parser.add_argument("--exp_scheduler", default=False, action="store_true")
@@ -53,11 +53,11 @@ def add_arguments(parser):
     parser.add_argument("--sdim", default=64, type=int)
     parser.add_argument("--vdim", default=16, type=int)
     parser.add_argument("--edim", default=0, type=int)
-    parser.add_argument("--tdim", default=64, type=int)
-    parser.add_argument("--num_layers", default=5, type=int)
+    parser.add_argument("--tdim", default=16, type=int)
+    parser.add_argument("--num_layers", default=4, type=int)
     parser.add_argument("--omit_norm", default=False, action="store_true")
     parser.add_argument("--fully_connected", default=False, action="store_true")
-    parser.add_argument("--cutoff", default=7.5, type=float)
+    parser.add_argument("--cutoff", default=5.0, type=float)
 
 
     parser.add_argument(
