@@ -55,7 +55,7 @@ class VPSDE(nn.Module):
         beta_min: float = 0.1,
         beta_max: float = 20.0,
         N: int = 1000,
-        scaled_reverse_posterior_sigma: bool = False,
+        scaled_reverse_posterior_sigma: bool = True,
     ):
         """Construct a Variance Preserving SDE.
         Args:

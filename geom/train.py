@@ -68,7 +68,7 @@ class Trainer(pl.LightningModule):
 
         self.sde = VPSDE(beta_min=hparams["beta_min"], beta_max=hparams["beta_max"],
                          N=hparams["num_diffusion_timesteps"],
-                         scaled_reverse_posterior_sigma=False
+                         scaled_reverse_posterior_sigma=True
                          )
         
         self.sampler = VPAncestralSamplingPredictor(sde=self.sde)
@@ -77,12 +77,13 @@ class Trainer(pl.LightningModule):
     def reverse_sampling(
         self,
         x: Tensor,
-        edge_index: Tensor,
+        edge_index: OptTensor = None,
         edge_attr: OptTensor = None,
         batch: OptTensor = None,
         num_diffusion_timesteps: Optional[int] = None,
         save_traj: bool = False,
     ) -> Tuple[Tensor, List]:
+        
         if num_diffusion_timesteps is None:
             num_diffusion_timesteps = self._hparams["num_diffusion_timesteps"]
 
@@ -93,6 +94,28 @@ class Trainer(pl.LightningModule):
         num_graphs = int(batch.max()) + 1
 
         pos = torch.randn(x.size(0), 3, device=x.device, dtype=self.timesteps_embedding.dtype)
+        
+        if self._hparams["fully_connected"]:
+            if edge_index is None:
+                # fully-connected graphs
+                batch_num_nodes = torch.bincount(batch)
+                ptr = torch.cumsum(batch_num_nodes, dim=0)
+                ptr = torch.concat([torch.zeros(1, device=ptr.device, dtype=ptr.dtype), ptr[:-1]], dim=0)       
+                edge_index_list = []
+                for offset, n in zip(ptr.cpu().tolist(), batch_num_nodes.cpu().tolist()):
+                    row = torch.arange(n, dtype=torch.long)
+                    col = torch.arange(n, dtype=torch.long)
+                    row = row.view(-1, 1).repeat(1, n).view(-1)
+                    col = col.repeat(n)
+                    edge_index = torch.stack([row, col], dim=0)
+                    mask = edge_index[0] != edge_index[1]
+                    edge_index = edge_index[:, mask]
+                    edge_index += offset
+                    edge_index_list.append(edge_index)
+                edge_index = torch.concat(edge_index_list, dim=-1).to(x.device)
+        else:
+            edge_index = radius_graph(x=pos, r=self._hparams["cutoff"], batch=batch, max_num_neighbors=64)
+                
         if self._hparams["energy_preserving"]:
             pos.requires_grad_()
 
@@ -112,7 +135,7 @@ class Trainer(pl.LightningModule):
                 size=(num_graphs,), fill_value=t_, dtype=torch.long, device=x.device
             )
             temb = self.timesteps_embedding[t][batch]
-            
+                
             out = self.model(
                 x=x,
                 t=temb,
@@ -135,8 +158,15 @@ class Trainer(pl.LightningModule):
             noise = torch.randn_like(pos)
             noise = noise - scatter_mean(noise, index=batch, dim=0, dim_size=bs)[batch]
             
-            pos, pos_mean = self.sampler.update_fn(x=pos, score=out, t=t, noise=noise)
-          
+            ttmp = t / self._hparams["num_diffusion_timesteps"]
+            pos, pos_mean = self.sampler.update_fn(x=pos, score=out, t=ttmp[batch], noise=noise)
+
+            if not self._hparams["fully_connected"]:
+                edge_index = radius_graph(x=pos.detach(),
+                                          r=self._hparams["cutoff"],
+                                          batch=batch,
+                                          max_num_neighbors=64
+                                          )
             if save_traj:
                 pos_sde_traj.append(pos.detach())
                 pos_mean_traj.append(pos_mean.detach())

@@ -16,5 +16,6 @@ dependencies:
   - conda-forge::pytorch-lightning=1.7.4
   - conda-forge::jupyter
   - pip:
+      - ase
       - lmdb
       - nglview
