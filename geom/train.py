@@ -347,7 +347,8 @@ if __name__ == "__main__":
         dataset=hparams.dataset,
         env_in_init=True,
         shuffle_train=True,
-        subset_frac=hparams.subset_frac,
+        # subset_frac=hparams.subset_frac,
+        max_num_conformers=hparams.max_num_conformers,
         transform=MolFeaturization(order=3),
         pin_memory=True,
         persistent_workers=True

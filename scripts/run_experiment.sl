@@ -17,4 +17,5 @@ cd /gpfs/workspace/users/let55/projects/e3moldiffusion/geom
 source activate e3moldiffusion
 echo "runnning experiment"
 
-python train.py --gpus 1 --id 0 --subset_frac 1.0 --num_workers 6 --save_dir logs/diffusion --num_epochs 100
+python train.py --gpus 1 --id 1 --max_num_conformers 30 --num_workers 6 --save_dir logs/diffusion --num_epochs 100 \
+ --load_ckpt /home/let55/workspace/projects/e3moldiffusion/geom/logs/diffusion/run0/last.ckpt

@@ -540,8 +540,19 @@ def create_splits(dataset: str = "drugs"):
 
     global_info = Geom_dataset._global_info
     global_info.smiles = global_info.smiles.astype(str)
+    
+    unique_smiles = global_info.smiles.unique()
+    smiles_to_molID = {smi: i for i, smi in enumerate(unique_smiles)}
+    
+    smiles_to_id_DF = pd.DataFrame()
+    smiles_to_id_DF['mol_id'] = list(smiles_to_molID.values())
+    smiles_to_id_DF['smiles'] = list(smiles_to_molID.keys())
 
-    Nmols = len(set(global_info.smiles))
+    save_id = osp.join(process_path, "smiles_to_mol_id.csv")
+    if not osp.exists(save_id):
+        smiles_to_id_DF.to_csv(save_id)
+        
+    Nmols = len(unique_smiles)
     print(
         f"Dataset consists of {len(global_info)} conformations for {Nmols} distinct molecules"
     )
@@ -602,8 +613,17 @@ def create_splits(dataset: str = "drugs"):
 
     save_test = osp.join(process_path, "test_info.csv")
     save_val = osp.join(process_path, "val_info.csv")
-    test_info = test_info[["global_id", "geom_id"]]
-    val_info = val_info[["global_id", "geom_id"]]
+    
+    # map the mol-id for smiles
+    test_info["mol_id"] = test_info["smiles"].apply(lambda x: smiles_to_molID.get(x))
+    val_info["mol_id"] = val_info["smiles"].apply(lambda x: smiles_to_molID.get(x))
+
+    not_identified = test_info["mol_id"].isnull().sum() + val_info["mol_id"].isnull().sum()
+    if  not_identified != 0:
+        print(f"{not_identified} mol ids are not retrieved based on smiles identifiers for test and val set")
+
+    test_info = test_info[["global_id", "geom_id", "mol_id"]]
+    val_info = val_info[["global_id", "geom_id", "mol_id"]]
 
     if not os.path.exists(save_test) and not os.path.exists(save_val):
         print("Saving test and validation info dataframe")
@@ -622,7 +642,12 @@ def create_splits(dataset: str = "drugs"):
     assert len(train_global_ids) + len(val_test_global_ids) == len(global_info)
 
     train_info = global_info.loc[train_global_ids]
-    train_info = train_info[["global_id", "geom_id"]]
+    train_info["mol_id"] = train_info["smiles"].apply(lambda x: smiles_to_molID.get(x))
+    not_identified = train_info["mol_id"].isnull().sum()
+    if  not_identified != 0:
+        print(f"{not_identified} mol ids are not retrieved based on smiles identifiers for training set")
+
+    train_info = train_info[["global_id", "geom_id", "mol_id"]]
     save_train = osp.join(process_path, "train_info.csv")
     if not os.path.exists(save_train):
         print("Saving train info dataframe")
@@ -640,7 +665,8 @@ class GeomDataModule(LightningDataModule):
         dataset: str = "drugs",
         env_in_init: bool = False,
         shuffle_train: bool = False,
-        subset_frac: float = 0.1,
+        # subset_frac: float = 0.1, # old
+        max_num_conformers: int = 30,   # -1 means all
         pin_memory: bool = True,
         persistent_workers: bool = True,
     ):
@@ -653,7 +679,8 @@ class GeomDataModule(LightningDataModule):
         self.path = osp.join(DB_READ_PATH, f"{dataset}", "database")   # new, on the hpfs
         self.env_in_init = env_in_init
         self.shuffle_train = shuffle_train
-        self.subset_frac = subset_frac
+        # self.subset_frac = subset_frac
+        self.max_num_conformers = max_num_conformers
         self.transform = transform
         self.pin_memory = pin_memory
         self.persistent_workers = persistent_workers
@@ -664,6 +691,45 @@ class GeomDataModule(LightningDataModule):
         )
 
         parent_dir = osp.dirname(self.path)
+        
+        train_info = pd.read_csv(osp.join(parent_dir, "train_info.csv"))
+        val_info = pd.read_csv(osp.join(parent_dir, "val_info.csv"))
+        self.test_ids = pd.read_csv(osp.join(parent_dir, "test_info.csv"))["global_id"].tolist()
+
+        if self.max_num_conformers != -1:
+            # kinda slow processing now...
+            # training
+            train_ids = []
+            for _, subdf in train_info.groupby("mol_id"):
+                ids = subdf["global_id"].values[:self.max_num_conformers]
+                train_ids.append(ids)
+            train_ids = np.concatenate(train_ids)
+                
+            # validation
+            val_ids = []
+            for _, subdf in val_info.groupby("mol_id"):
+                ids = subdf["global_id"].values[:self.max_num_conformers]
+                val_ids.append(ids)
+            val_ids = np.concatenate(val_ids)
+        
+        self.train_ids = train_ids.tolist()
+        self.val_ids = val_ids.tolist()
+                
+        if stage == "fit" or stage is None:
+            self.train_dataset = Subset(dataset=database, indices=self.train_ids)
+            self.val_dataset = Subset(dataset=database, indices=self.val_ids)
+        if stage == "test" or stage is None:
+            self.test_dataset = Subset(dataset=database, indices=self.test_ids)
+            
+            
+    def _setup(self, stage: Optional[str] = None) -> None:
+        # old with fractions
+        database = GeomLMDBDataset(
+            data_file=self.path, transform=self.transform, env_in_init=True
+        )
+
+        parent_dir = osp.dirname(self.path)
+        
         self.train_ids = pd.read_csv(osp.join(parent_dir, "train_info.csv"))[
             "global_id"
         ].tolist()

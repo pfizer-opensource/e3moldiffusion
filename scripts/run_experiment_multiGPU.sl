@@ -24,4 +24,5 @@ cd /gpfs/workspace/users/let55/projects/e3moldiffusion/geom
 source activate e3moldiffusion
 echo "runnning experiment"
 
-srun python train.py --gpus 4 --id 1 --subset_frac 1.0 --num_workers 4 --energy_preserving --save_dir logs/diffusion --num_epochs 100
+# todo: Check how it will work...
+# srun python train.py --gpus 4 --id 1 --subset_frac 1.0 --num_workers 4 --energy_preserving --save_dir logs/diffusion --num_epochs 100

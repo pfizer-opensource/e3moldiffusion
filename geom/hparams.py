@@ -36,12 +36,17 @@ def add_arguments(parser):
 
     parser.add_argument("--load_ckpt", default="", type=str)
     parser.add_argument("--dataset", default="drugs", choices=["qm9", "drugs"])
-    parser.add_argument(
-        "--subset_frac",
-        default=0.1,
-        type=float,
-        help="Fraction to train on only for experimenting. Defaults to 0.1",
-    )
+    #parser.add_argument(
+    #    "--subset_frac",
+    #    default=0.1,
+    #    type=float,
+    #    help="Fraction to train on only for experimenting. Defaults to 0.1",
+    #)
+    parser.add_argument("--max_num_conformers", default=30, dtype=int,
+                        help="Maximum number of conformers per molecule. \
+                            Defaults to 30. Set to -1 for all conformers available in database"
+                            )
+
     parser.add_argument("--accum_batch", default=None, type=int)
 
     parser.add_argument("--energy_preserving", default=False, action="store_true")
