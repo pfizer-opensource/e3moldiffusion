@@ -381,7 +381,7 @@ if __name__ == "__main__":
         detect_anomaly=hparams.detect_anomaly,
     )
 
-    pl.seed_everything(seed=0)
+    pl.seed_everything(seed=0, workers=hparams.gpus > 1)
 
     trainer.fit(
         model=model,
