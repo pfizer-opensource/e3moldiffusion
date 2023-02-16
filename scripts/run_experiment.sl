@@ -18,4 +18,4 @@ cd /gpfs/workspace/users/let55/projects/e3moldiffusion/geom
 source activate e3moldiffusion
 echo "runnning experiment"
 
-python train.py --gpus 1 --id 5 --max_num_conformers 30 --num_workers 6 --save_dir logs/diffusion --num_epochs 100 --sdim 64 --vdim 16 --tdim 16 --num_layers 4 --lr 1e-4 --batch_size 256 --cutoff 5.0
+python train.py --gpus 1 --id 6 --max_num_conformers 30 --num_workers 6 --save_dir logs/diffusion --num_epochs 100 --sdim 64 --vdim 16 --tdim 16 --num_layers 4 --lr 1e-4 --batch_size 256 --cutoff 5.0
