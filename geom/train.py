@@ -185,6 +185,23 @@ class Trainer(pl.LightningModule):
                 size=(node_feat.size(0),), device=node_feat.device, dtype=torch.long
             )
         
+        bs = int(data_batch.max()) + 1
+        
+        timestep_embs = self.timestep_embedder(t)[data_batch]
+
+        # center the true point cloud
+        pos_centered = pos - scatter_mean(pos, index=data_batch, dim=0, dim_size=bs)[data_batch]
+
+        # sample COM noise
+        noise = torch.randn_like(pos)
+        noise = noise - scatter_mean(noise, index=data_batch, dim=0, dim_size=bs)[data_batch]
+        
+        # get mean and std of pos_t | pos_0
+        mean, std = self.sde.marginal_prob(x=pos_centered, t=t[data_batch])
+        
+        # perturb
+        pos_perturbed = mean + std * noise
+        
         if self._hparams["fully_connected"]:
             edge_index = batch.edge_index_fc
             if edge_index is None:
@@ -203,25 +220,8 @@ class Trainer(pl.LightningModule):
                     edge_index_list.append(edge_index)
                 edge_index = torch.concat(edge_index_list, dim=-1).to(node_feat.device)
         else:
-            edge_index = radius_graph(x=pos, r=self._hparams["cutoff"], batch=data_batch, max_num_neighbors=64)
-
-        bs = int(data_batch.max()) + 1
-        
-        timestep_embs = self.timestep_embedder(t)[data_batch]
-
-        # center the true point cloud
-        pos_centered = pos - scatter_mean(pos, index=data_batch, dim=0, dim_size=bs)[data_batch]
-
-        # sample COM noise
-        noise = torch.randn_like(pos)
-        noise = noise - scatter_mean(noise, index=data_batch, dim=0, dim_size=bs)[data_batch]
-        
-        # get mean and std of pos_t | pos_0
-        mean, std = self.sde.marginal_prob(x=pos_centered, t=t[data_batch])
-        
-        # perturb
-        pos_perturbed = mean + std * noise
-        
+            edge_index = radius_graph(x=pos_perturbed, r=self._hparams["cutoff"], batch=data_batch, max_num_neighbors=64)
+            
         if self._hparams["energy_preserving"]:
             pos_perturbed.requires_grad = True
 
