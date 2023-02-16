@@ -23,7 +23,7 @@ def add_arguments(parser):
     parser.add_argument("-s", "--save_dir", default=DEFAULT_SAVE_DIR, type=str)
     parser.add_argument("--precision", default=32, type=int)
     parser.add_argument("-b", "--batch_size", default=256, type=int)
-    parser.add_argument("--lr", default=1e-4, type=float)
+    parser.add_argument("--lr", default=5e-4, type=float)
     parser.add_argument("--gamma", default=0.975, type=float)
     parser.add_argument("--grad_clip_val", default=10.0, type=float)
     parser.add_argument("--exp_scheduler", default=False, action="store_true")

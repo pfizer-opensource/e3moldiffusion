@@ -6,3 +6,5 @@
 ## Useful links:
 - https://slurm.schedmd.com/sbatch.html
 - https://pytorch-lightning.readthedocs.io/en/stable/clouds/cluster_advanced.html --> need to get multi GPU run on slurm cluster...
+- https://researchcomputing.princeton.edu/support/knowledge-base/pytorch
+- https://github.com/PrincetonUniversity/multi_gpu_training/tree/main/03_pytorch_lightning
