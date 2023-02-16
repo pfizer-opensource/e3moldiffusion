@@ -165,12 +165,12 @@ def smiles_or_mol_to_graph(smol: Union[str, Chem.Mol]):
 
 
 class AtomEncoder(nn.Module):
-    def __init__(self, emb_dim):
+    def __init__(self, emb_dim, max_norm: float = 1.0):
         super(AtomEncoder, self).__init__()
         FULL_ATOM_FEATURE_DIMS = [get_atom_feature_dims()[0]]
         self.atom_embedding_list = nn.ModuleList()
         for dim in FULL_ATOM_FEATURE_DIMS:
-            emb = nn.Embedding(dim, emb_dim, max_norm=1.0)
+            emb = nn.Embedding(dim, emb_dim, max_norm=max_norm)
             self.atom_embedding_list.append(emb)
         self.reset_parameters()
 
