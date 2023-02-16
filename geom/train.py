@@ -13,8 +13,9 @@ from pytorch_lightning.callbacks import (
     TQDMProgressBar,
 )
 from pytorch_lightning.loggers import TensorBoardLogger
-from e3moldiffusion.sde import VPSDE, VPAncestralSamplingPredictor, get_timestep_embedding
+from e3moldiffusion.sde import VPSDE, VPAncestralSamplingPredictor, get_timestep_embedding, ChebyshevExpansion
 from e3moldiffusion.gnn import EQGATEncoder
+import numpy as np
 
 from torch import Tensor
 from torch_geometric.data import Batch
@@ -48,7 +49,7 @@ class Trainer(pl.LightningModule):
         self.save_hyperparameters(hparams)
 
         self._hparams = hparams
-
+        
         self.model = EQGATEncoder(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             t_dim=hparams["tdim"],
@@ -58,18 +59,19 @@ class Trainer(pl.LightningModule):
             use_norm=not hparams["omit_norm"],
         )
 
-        timesteps = torch.arange(hparams["num_diffusion_timesteps"], dtype=torch.long)
-        timesteps_embedding = get_timestep_embedding(
-            timesteps=timesteps, embedding_dim=hparams["tdim"]
-        ).to(torch.float32)
+        #timesteps = torch.arange(hparams["num_diffusion_timesteps"], dtype=torch.long)
+        #timesteps_embedding = get_timestep_embedding(
+        #    timesteps=timesteps, embedding_dim=hparams["tdim"]
+        #).to(torch.float32)
 
-        self.register_buffer("timesteps", tensor=timesteps)
-        self.register_buffer("timesteps_embedding", tensor=timesteps_embedding)
+        #self.register_buffer("timesteps", tensor=timesteps)
+        #self.register_buffer("timesteps_embedding", tensor=timesteps_embedding)
 
+        self.timestep_embedder = ChebyshevExpansion(max_value=1.0, embedding_dim=hparams["tdim"])
+        
         self.sde = VPSDE(beta_min=hparams["beta_min"], beta_max=hparams["beta_max"],
                          N=hparams["num_diffusion_timesteps"],
-                         scaled_reverse_posterior_sigma=True
-                         )
+                         scaled_reverse_posterior_sigma=True)
         
         self.sampler = VPAncestralSamplingPredictor(sde=self.sde)
         
@@ -91,9 +93,6 @@ class Trainer(pl.LightningModule):
             batch = torch.zeros(len(x), device=x.device, dtype=torch.long)
 
         bs = int(batch.max()) + 1
-        num_graphs = int(batch.max()) + 1
-
-        pos = torch.randn(x.size(0), 3, device=x.device, dtype=self.timesteps_embedding.dtype)
         
         if self._hparams["fully_connected"]:
             if edge_index is None:
@@ -119,32 +118,30 @@ class Trainer(pl.LightningModule):
         if self._hparams["energy_preserving"]:
             pos.requires_grad_()
 
+        # initialiaze the 0-mean point cloud from N(0, I)
+        pos = torch.randn(x.size(0), 3,
+                          device=x.device,
+                          dtype=self.model.atom_encoder.atom_embedding_list[0].weight.dtype)
         pos = pos - scatter_mean(pos, dim=0, index=batch, dim_size=bs)[batch]
 
         pos_sde_traj = []
         pos_mean_traj = []
         
-        chain = range(
-            self._hparams["num_diffusion_timesteps"] - num_diffusion_timesteps,
-            self._hparams["num_diffusion_timesteps"],
-        )
-        print(chain)
-
-        for t_ in tqdm(reversed(chain), total=num_diffusion_timesteps):
-            t = torch.full(
-                size=(num_graphs,), fill_value=t_, dtype=torch.long, device=x.device
-            )
-            temb = self.timesteps_embedding[t][batch]
-                
+        timestep_discretization = torch.linspace(0, 1, num_diffusion_timesteps, dtype=pos.dtype, device=pos.device)
+        timestep_discretization[0] = self._hparams["eps_min"]
+        temb = self.timestep_embedder(timestep_discretization)
+        chain = range(num_diffusion_timesteps)
+        
+        for timestep in tqdm(reversed(chain), total=num_diffusion_timesteps):
+            current_temb = temb[timestep][batch]
             out = self.model(
                 x=x,
-                t=temb,
+                t=current_temb,
                 pos=pos,
                 edge_index=edge_index,
                 edge_attr=edge_attr,
                 batch=batch,
             )
-
             if self._hparams["energy_preserving"]:
                 grad_outputs: List[OptTensor] = [torch.ones_like(out)]
                 out = torch.autograd.grad(
@@ -158,8 +155,8 @@ class Trainer(pl.LightningModule):
             noise = torch.randn_like(pos)
             noise = noise - scatter_mean(noise, index=batch, dim=0, dim_size=bs)[batch]
             
-            ttmp = t / self._hparams["num_diffusion_timesteps"]
-            pos, pos_mean = self.sampler.update_fn(x=pos, score=out, t=ttmp[batch], noise=noise)
+            ttmp = timestep_discretization[timestep][batch]
+            pos, pos_mean = self.sampler.update_fn(x=pos, score=out, t=ttmp, noise=noise)
 
             if not self._hparams["fully_connected"]:
                 edge_index = radius_graph(x=pos.detach(),
@@ -180,9 +177,9 @@ class Trainer(pl.LightningModule):
         ptr = batch.ptr
 
         if t is None:
-            t = torch.zeros(
+            t = torch.ones(
                 size=(node_feat.size(0),), device=node_feat.device, dtype=pos.dtype
-            )
+            ) * self._hparams["eps_min"]
         if data_batch is None:
             data_batch = torch.zeros(
                 size=(node_feat.size(0),), device=node_feat.device, dtype=torch.long
@@ -210,9 +207,9 @@ class Trainer(pl.LightningModule):
 
         bs = int(data_batch.max()) + 1
         
-        timestep_embs = t * (self._hparams["num_diffusion_timesteps"] - 1)
-        timestep_embs = self.timesteps_embedding[timestep_embs.long()][data_batch]
+        timestep_embs = self.timestep_embedder(t)[data_batch]
 
+        # center the true point cloud
         pos_centered = pos - scatter_mean(pos, index=data_batch, dim=0, dim_size=bs)[data_batch]
 
         # sample COM noise
@@ -250,6 +247,7 @@ class Trainer(pl.LightningModule):
         else:
             energy_norm = 0.0
 
+        # center the predictions as ground truth noise is also centered
         out_mean = scatter_mean(out, index=data_batch, dim=0, dim_size=bs)
         out = out - out_mean[data_batch]
 

@@ -6,7 +6,7 @@ import torch
 from torch import Tensor, nn
 
 
-def get_timestep_embedding(timesteps: Tensor, embedding_dim: int) -> Tensor:
+def get_timestep_embedding(timesteps: torch.Tensor, embedding_dim: int):
     """
     From Fairseq.
     Build sinusoidal embeddings.
@@ -19,6 +19,56 @@ def get_timestep_embedding(timesteps: Tensor, embedding_dim: int) -> Tensor:
     emb = torch.matmul(1.0 * timesteps.reshape(-1, 1), emb.reshape(1, -1))
     emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
     return emb
+
+
+class ChebyshevExpansion(nn.Module):
+    def __init__(self, max_value: float = 1.0, embedding_dim: int = 20):
+        super(ChebyshevExpansion, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.max_value = max_value
+        self.shift_scale = lambda x: 2 * x / max_value - 1.0
+
+    @staticmethod
+    def chebyshev_recursion(x, n):
+        if x.ndim == 1:
+            x = x.unsqueeze(-1)
+        if not n > 2:
+            print(f"Naural exponent n={n} has to be > 2.")
+            print("Exiting code.")
+            exit()
+
+        t_n_1 = torch.ones_like(x)
+        t_n = x
+        ts = [t_n_1, t_n]
+        for _ in range(n - 2):
+            t_n_new = 2 * x * t_n - t_n_1
+            t_n_1 = t_n
+            t_n = t_n_new
+            ts.append(t_n_new)
+            
+        basis_functions = torch.cat(ts, dim=-1)
+        return basis_functions
+    
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.shift_scale(x)
+        x = self.chebyshev_recursion(x, n=self.embedding_dim)
+        return x
+    
+    @classmethod
+    def plot_chebyshev_functions(self, max_value: float = 1.0, embedding_dim: Optional[int] = 20):
+        import matplotlib.pyplot as plt
+        if embedding_dim is None:
+            embedding_dim = self.embedding_dim     
+        t = torch.linspace(0, max_value, 1000)
+        basis_functions = self(x=t)
+        for basis in range(basis_functions.size(1)):
+            plt.plot(t, basis_functions[:, basis].cpu().numpy(), label=r"b_{}".format(basis))
+        plt.legend()
+        plt.show()
+        return None
+    
+    def __repr__(self):
+        return f"{self.__class__.__name__}(embedding_dim={self.embedding_dim}, max_value={self.max_value})"
 
 
 def get_ddpm_params(
@@ -115,6 +165,14 @@ class VPSDE(nn.Module):
         return drift, diffusion
 
     def marginal_prob(self, x: Tensor, t: Tensor):
+        """_summary_
+        Eq. 34 in https://arxiv.org/pdf/2011.13456.pdf
+        Args:
+            x (Tensor): _description_ Continuous data feature tensor
+            t (Tensor): _description_ Continuous time variable between 0 and 1
+        Returns:
+            _type_: _description_
+        """
         expand_axis = len(x.size()) - 1
         log_mean_coeff = (
             -0.25 * t**2 * (self.beta_max - self.beta_min) - 0.5 * t * self.beta_min
@@ -126,18 +184,30 @@ class VPSDE(nn.Module):
         mean = torch.exp(log_mean_coeff) * x
         std = torch.sqrt(1.0 - torch.exp(2.0 * log_mean_coeff))
         return mean, std
-
-    def prior_sampling(self, shape) -> Tensor:
-        return torch.randn(*shape, device=self.alphas.device)
-
-    def prior_logp(self, z: Tensor) -> Tensor:
-        shape = z.shape
-        N = np.prod(shape[1:])
-        logps = (
-            -N / 2.0 * np.log(2 * np.pi)
-            - (z**2).view(z.size(0), -1).sum(dim=-1) / 2.0
+    
+    @classmethod
+    def plot_signal_to_noise(self, beta_min: Optional[float] = 0.1, beta_max: Optional[float] = 20.0):
+        import matplotlib.pyplot as plt
+        if beta_min is None:
+            beta_min = self.beta_min
+        if beta_max is None:
+            beta_max = self.beta_max 
+            
+        t = torch.linspace(0, 1, 1000)
+        
+        log_mean_coeff = (
+            -0.25 * t**2 * (beta_max - beta_min) - 0.5 * t * beta_min
         )
-        return logps
+        
+        signal = torch.exp(log_mean_coeff)
+        noise = torch.sqrt(1.0 - torch.exp(2.0 * log_mean_coeff))
+        
+        plt.title(f"Signal and Noise Schedule for beta_min={beta_min:.2f} and beta_max={beta_max:.2f}")
+        plt.plot(t, signal, label="signal")
+        plt.plot(t, noise, label="noise")
+        plt.legend()
+        plt.show()
+        
 
     def discretize(self, x: Tensor, t: Tensor) -> Tuple[Tensor, Tensor]:
         """DDPM discretization."""
@@ -165,11 +235,24 @@ class VPAncestralSamplingPredictor:
     def update_fn(
         self, x: Tensor, score: Tensor, t: Tensor, noise: Optional[Tensor] = None
     ) -> Tuple[Tensor, Tensor]:
+        """_summary_
+        See Algorithm 2 in https://arxiv.org/pdf/2006.11239.pdf
+        Args:
+            x (Tensor): _description_
+            score (Tensor): _description_
+            t (Tensor): _description_
+            noise (Optional[Tensor], optional): _description_. Defaults to None.
+
+        Returns:
+            Tuple[Tensor, Tensor]: _description_
+        """
         assert x.shape == score.shape
         expand_axis = len(x.size()) - 1
 
         sde = self.sde
+        # discretize continuous time variable
         timestep = (t * (sde.N - 1) / sde.T).long()
+        
         sqrt_alpha = sde.sqrt_alphas[timestep]
         beta = sde.discrete_betas[timestep]
         sqrt_1m_alphas_cumprod = sde.sqrt_1m_alphas_cumprod[timestep]
@@ -181,12 +264,11 @@ class VPAncestralSamplingPredictor:
             beta = beta.unsqueeze(-1)
             reverse_posterior_sigma = reverse_posterior_sigma.unsqueeze(-1)
 
+        if noise is None:
+            noise = torch.randn_like(x) 
+        # Line 4 in Algorithm 2 in https://arxiv.org/pdf/2006.11239.pdf
         scaling = beta / sqrt_1m_alphas_cumprod
         x_mean = (x - scaling * score) / sqrt_alpha
-
-        if noise is None:
-            noise = torch.randn_like(x)
-
         x = x_mean + reverse_posterior_sigma * noise
 
         return x, x_mean

@@ -135,7 +135,7 @@ class LayerNorm(nn.Module):
         batch_size = int(batch.max()) + 1
         smean = s.mean(dim=-1, keepdim=True)
         smean = scatter_mean(smean, batch, dim=0, dim_size=batch_size)
-        
+    
         s = s - smean[batch]
 
         std = (s * s).mean(dim=-1, keepdim=True)

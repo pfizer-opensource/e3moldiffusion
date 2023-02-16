@@ -59,7 +59,6 @@ def add_arguments(parser):
     parser.add_argument("--fully_connected", default=False, action="store_true")
     parser.add_argument("--cutoff", default=5.0, type=float)
 
-
     parser.add_argument(
         "--eps_min", default=1e-3, type=float
     )  # minimum continuous time
