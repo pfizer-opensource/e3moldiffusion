@@ -94,6 +94,12 @@ class Trainer(pl.LightningModule):
 
         bs = int(batch.max()) + 1
         
+        # initialiaze the 0-mean point cloud from N(0, I)
+        pos = torch.randn(x.size(0), 3,
+                          device=x.device,
+                          dtype=self.model.atom_encoder.atom_embedding_list[0].weight.dtype)
+        pos = pos - scatter_mean(pos, dim=0, index=batch, dim_size=bs)[batch]
+        
         if self._hparams["fully_connected"]:
             if edge_index is None:
                 # fully-connected graphs
@@ -117,12 +123,6 @@ class Trainer(pl.LightningModule):
                 
         if self._hparams["energy_preserving"]:
             pos.requires_grad_()
-
-        # initialiaze the 0-mean point cloud from N(0, I)
-        pos = torch.randn(x.size(0), 3,
-                          device=x.device,
-                          dtype=self.model.atom_encoder.atom_embedding_list[0].weight.dtype)
-        pos = pos - scatter_mean(pos, dim=0, index=batch, dim_size=bs)[batch]
 
         pos_sde_traj = []
         pos_mean_traj = []
