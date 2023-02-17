@@ -17,5 +17,6 @@ dependencies:
   - conda-forge::jupyter
   - pip:
       - ase
+      - py3Dmol
       - lmdb
       - nglview

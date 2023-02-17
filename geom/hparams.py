@@ -54,10 +54,13 @@ def add_arguments(parser):
     parser.add_argument("--vdim", default=16, type=int)
     parser.add_argument("--edim", default=0, type=int)
     parser.add_argument("--tdim", default=16, type=int)
-    parser.add_argument("--num_layers", default=4, type=int)
+    parser.add_argument("--num_layers", default=5, type=int)
     parser.add_argument("--omit_norm", default=False, action="store_true")
     parser.add_argument("--fully_connected", default=False, action="store_true")
     parser.add_argument("--cutoff", default=5.0, type=float)
+    parser.add_argument("--omit_cross_product", default=False, action="store_true")
+    parser.add_argument("--continuous", default=False, action="store_true",
+                        help="If the diffusion process is applied on continuous time variable. Defaults to False")
 
     parser.add_argument(
         "--eps_min", default=1e-3, type=float

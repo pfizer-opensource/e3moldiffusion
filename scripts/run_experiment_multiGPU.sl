@@ -13,9 +13,9 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem-per-cpu=16G
-#SBATCH --gres=gpu:4 
-#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/multiGPU_experiment_%j.out
-#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/multiGPU_experiment_%j.err
+#SBATCH --gres=gpu:4
+#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/multiGPU_experiment_discrete_%j.out
+#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/multiGPU_experiment_discrete_%j.err
 
 # debugging flags (optional)
 # https://pytorch.org/docs/stable/distributed.html
@@ -28,4 +28,4 @@ cd /gpfs/workspace/users/let55/projects/e3moldiffusion/geom
 source activate e3moldiffusion
 echo "runnning multi-gpu experiment"
 
-srun python train.py --gpus 4 --id 0 --max_num_conformers 30 --num_workers 8 --save_dir logs/drugs --num_epochs 100 --lr 5e-4 --num_layers 4 --sdim 128 --vdim 32 --tdim 16 --batch_size 256 --cutoff 5.0
+srun python train.py --gpus 4 --id 2 --max_num_conformers 30 --num_workers 8 --save_dir logs/drugs --num_epochs 100 --lr 5e-4 --num_layers 5 --sdim 64 --vdim 16 --tdim 16 --batch_size 256 --fully_connected --omit_norm

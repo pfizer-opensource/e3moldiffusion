@@ -1,5 +1,5 @@
 import math
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -226,10 +226,102 @@ class VPSDE(nn.Module):
         return f, G
 
 
+class DiscreteDDPM(nn.Module):
+    def __init__(
+        self,
+        beta_min: float = 0.1,
+        beta_max: float = 20.0,
+        N: int = 1000,
+        scaled_reverse_posterior_sigma: bool = True,
+    ):
+        """Constructs discrete Diffusion schedule according to DDPM in Ho et al. (2020).
+        Args:
+          beta_min: value of beta(0)
+          beta_max: value of beta(1)
+          N: number of discretization steps
+        """
+        super().__init__()
+        self.beta_min = beta_min
+        self.beta_max = beta_max
+        self.N = N
+        self.scaled_reverse_posterior_sigma = scaled_reverse_posterior_sigma
+
+        discrete_betas = torch.linspace(beta_min / N, beta_max / N, N)
+        sqrt_betas = torch.sqrt(discrete_betas)
+        alphas = 1.0 - discrete_betas
+        sqrt_alphas = torch.sqrt(alphas)
+        alphas_cumprod = torch.cumprod(alphas, dim=0)
+        alphas_cumprod_prev = torch.nn.functional.pad(
+            alphas_cumprod[:-1], (1, 0), value=1.0
+        )
+        sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
+        sqrt_1m_alphas_cumprod = torch.sqrt(1.0 - alphas_cumprod)
+
+        if scaled_reverse_posterior_sigma:
+            rev_variance = (
+                discrete_betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
+            )
+            rev_variance[0] = rev_variance[1] / 2.0
+            reverse_posterior_sigma = torch.sqrt(rev_variance)
+        else:
+            reverse_posterior_sigma = torch.sqrt(discrete_betas)
+
+        self.register_buffer("discrete_betas", discrete_betas)
+        self.register_buffer("sqrt_betas", sqrt_betas)
+        self.register_buffer("alphas", alphas)
+        self.register_buffer("sqrt_alphas", sqrt_alphas)
+        self.register_buffer("alphas_cumprod", alphas_cumprod)
+        self.register_buffer("alphas_cumprod_prev", alphas_cumprod_prev)
+        self.register_buffer("sqrt_alphas_cumprod", sqrt_alphas_cumprod)
+        self.register_buffer("sqrt_1m_alphas_cumprod", sqrt_1m_alphas_cumprod)
+        self.register_buffer("reverse_posterior_sigma", reverse_posterior_sigma)
+
+    def marginal_prob(self, x: Tensor, t: Tensor):
+        """_summary_
+        Eq. 4 in https://arxiv.org/abs/2006.11239
+        Args:
+            x (Tensor): _description_ Continuous data feature tensor
+            t (Tensor): _description_ Discrete time variable between 1 and T
+        Returns:
+            _type_: _description_
+        """
+        expand_axis = len(x.size()) - 1
+        
+        assert str(t.dtype) == "torch.int64"
+        signal = self.sqrt_alphas_cumprod[t]
+        std = self.sqrt_1m_alphas_cumprod[t]
+        
+        for _ in range(expand_axis):
+            signal = signal.unsqueeze(-1)
+            std = std.unsqueeze(-1)
+
+        mean = signal * x
+        
+        return mean, std
+    
+    @classmethod
+    def plot_signal_to_noise(self, beta_min: Optional[float] = 0.1, beta_max: Optional[float] = 20.0):
+        import matplotlib.pyplot as plt
+        if beta_min is None:
+            beta_min = self.beta_min
+        if beta_max is None:
+            beta_max = self.beta_max 
+            
+        t = torch.arange(0, 1000)
+        signal = self.sqrt_alphas_cumprod[t]
+        std = self.sqrt_1m_alphas_cumprod[t]
+        
+        plt.title(f"Signal and Noise Schedule for beta_min={beta_min:.2f} and beta_max={beta_max:.2f}")
+        plt.plot(t, signal, label="signal")
+        plt.plot(t, std, label="noise")
+        plt.legend()
+        plt.show()
+        
+
 class VPAncestralSamplingPredictor:
     """The ancestral sampling predictor. Only supports VP SDE."""
 
-    def __init__(self, sde: VPSDE):
+    def __init__(self, sde: Union[VPSDE, DiscreteDDPM]):
         self.sde = sde
 
     def update_fn(
@@ -250,9 +342,14 @@ class VPAncestralSamplingPredictor:
         expand_axis = len(x.size()) - 1
 
         sde = self.sde
-        # discretize continuous time variable
-        timestep = (t * (sde.N - 1) / sde.T).long()
         
+        if "float" in str(t.dtype):
+            # discretize continuous time variable
+            timestep = (t * (sde.N - 1) / sde.T).long()
+        else:
+            # in case t is already discrete
+            timestep = t
+              
         sqrt_alpha = sde.sqrt_alphas[timestep]
         beta = sde.discrete_betas[timestep]
         sqrt_1m_alphas_cumprod = sde.sqrt_1m_alphas_cumprod[timestep]

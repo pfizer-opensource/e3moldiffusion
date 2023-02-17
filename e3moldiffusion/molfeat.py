@@ -165,7 +165,7 @@ def smiles_or_mol_to_graph(smol: Union[str, Chem.Mol]):
 
 
 class AtomEncoder(nn.Module):
-    def __init__(self, emb_dim, max_norm: float = 1.0):
+    def __init__(self, emb_dim, max_norm: float = 10.0):
         super(AtomEncoder, self).__init__()
         FULL_ATOM_FEATURE_DIMS = [get_atom_feature_dims()[0]]
         self.atom_embedding_list = nn.ModuleList()
@@ -185,10 +185,10 @@ class AtomEncoder(nn.Module):
         return x_embedding
 
 class BondEncoder(nn.Module):
-    def __init__(self, emb_dim):
+    def __init__(self, emb_dim, max_norm: float = 10.0):
         super(BondEncoder, self).__init__()
         FULL_BOND_FEATURE_DIMS = get_bond_feature_dims()
-        self.bond_embedding = nn.Embedding(FULL_BOND_FEATURE_DIMS[0] + 3, emb_dim, max_norm=1.0)
+        self.bond_embedding = nn.Embedding(FULL_BOND_FEATURE_DIMS[0] + 3, emb_dim, max_norm=max_norm)
         self.reset_parameters()
     def reset_parameters(self):
         nn.init.xavier_uniform_(self.bond_embedding.weight.data)

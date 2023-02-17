@@ -13,7 +13,7 @@ from pytorch_lightning.callbacks import (
     TQDMProgressBar,
 )
 from pytorch_lightning.loggers import TensorBoardLogger
-from e3moldiffusion.sde import VPSDE, VPAncestralSamplingPredictor, get_timestep_embedding, ChebyshevExpansion
+from e3moldiffusion.sde import VPSDE, VPAncestralSamplingPredictor, get_timestep_embedding, ChebyshevExpansion, DiscreteDDPM
 from e3moldiffusion.gnn import EQGATEncoder
 import numpy as np
 
@@ -57,22 +57,27 @@ class Trainer(pl.LightningModule):
             num_layers=hparams["num_layers"],
             energy_preserving=hparams["energy_preserving"],
             use_norm=not hparams["omit_norm"],
+            use_cross_product=not hparams["omit_cross_product"],
+            use_mlp_update=False,
         )
 
-        #timesteps = torch.arange(hparams["num_diffusion_timesteps"], dtype=torch.long)
-        #timesteps_embedding = get_timestep_embedding(
-        #    timesteps=timesteps, embedding_dim=hparams["tdim"]
-        #).to(torch.float32)
+        timesteps = torch.arange(hparams["num_diffusion_timesteps"], dtype=torch.long)
+        timesteps_embedder = get_timestep_embedding(
+            timesteps=timesteps, embedding_dim=hparams["tdim"]
+        ).to(torch.float32)
 
-        #self.register_buffer("timesteps", tensor=timesteps)
-        #self.register_buffer("timesteps_embedding", tensor=timesteps_embedding)
-
-        self.timestep_embedder = ChebyshevExpansion(max_value=1.0, embedding_dim=hparams["tdim"])
+        self.register_buffer("timesteps", tensor=timesteps)
+        self.register_buffer("timesteps_embedder", tensor=timesteps_embedder)
         
-        self.sde = VPSDE(beta_min=hparams["beta_min"], beta_max=hparams["beta_max"],
-                         N=hparams["num_diffusion_timesteps"],
-                         scaled_reverse_posterior_sigma=True)
-        
+        if hparams["continuous"]:
+            self.sde = VPSDE(beta_min=hparams["beta_min"], beta_max=hparams["beta_max"],
+                             N=hparams["num_diffusion_timesteps"],
+                             scaled_reverse_posterior_sigma=True)
+        else:
+            self.sde = DiscreteDDPM(beta_min=hparams["beta_min"], beta_max=hparams["beta_max"],
+                                    N=hparams["num_diffusion_timesteps"],
+                                    scaled_reverse_posterior_sigma=True)
+            
         self.sampler = VPAncestralSamplingPredictor(sde=self.sde)
         
 
@@ -93,6 +98,8 @@ class Trainer(pl.LightningModule):
             batch = torch.zeros(len(x), device=x.device, dtype=torch.long)
 
         bs = int(batch.max()) + 1
+        
+        num_graphs = torch.bincount(batch)
         
         # initialiaze the 0-mean point cloud from N(0, I)
         pos = torch.randn(x.size(0), 3,
@@ -127,16 +134,14 @@ class Trainer(pl.LightningModule):
         pos_sde_traj = []
         pos_mean_traj = []
         
-        timestep_discretization = torch.linspace(0, 1, num_diffusion_timesteps, dtype=pos.dtype, device=pos.device)
-        timestep_discretization[0] = self._hparams["eps_min"]
-        temb = self.timestep_embedder(timestep_discretization)
         chain = range(num_diffusion_timesteps)
-        
+        print(chain)
         for timestep in tqdm(reversed(chain), total=num_diffusion_timesteps):
-            current_temb = temb[timestep][batch]
+            t = torch.full(size=(num_graphs,), fill_value=timestep, dtype=torch.long, device=pos.device)
+            temb = self.timesteps_embedder[t][batch]
             out = self.model(
                 x=x,
-                t=current_temb,
+                t=temb,
                 pos=pos,
                 edge_index=edge_index,
                 edge_attr=edge_attr,
@@ -151,12 +156,11 @@ class Trainer(pl.LightningModule):
                     create_graph=True,
                     retain_graph=True,
                 )[0]
-
+        
             noise = torch.randn_like(pos)
             noise = noise - scatter_mean(noise, index=batch, dim=0, dim_size=bs)[batch]
-            
-            ttmp = timestep_discretization[timestep][batch]
-            pos, pos_mean = self.sampler.update_fn(x=pos, score=out, t=ttmp, noise=noise)
+        
+            pos, pos_mean = self.sampler.update_fn(x=pos, score=out, t=t[batch], noise=noise)
 
             if not self._hparams["fully_connected"]:
                 edge_index = radius_graph(x=pos.detach(),
@@ -170,29 +174,24 @@ class Trainer(pl.LightningModule):
 
         return pos, [pos_sde_traj, pos_mean_traj]
 
-    def forward(self, batch: Batch, t: OptTensor = None):
+    def forward(self, batch: Batch, t: Tensor):
         node_feat: Tensor = batch.x
         pos: Tensor = batch.pos
         data_batch: Tensor = batch.batch
         ptr = batch.ptr
 
-        if t is None:
-            t = torch.ones(
-                size=(node_feat.size(0),), device=node_feat.device, dtype=pos.dtype
-            ) * self._hparams["eps_min"]
-        if data_batch is None:
-            data_batch = torch.zeros(
-                size=(node_feat.size(0),), device=node_feat.device, dtype=torch.long
-            )
-        
         bs = int(data_batch.max()) + 1
         
-        timestep_embs = self.timestep_embedder(t)[data_batch]
-
+        if self._hparams["continuous"]:
+            t_ = (t * (self.sde.N - 1)).long()
+            timestep_embs = self.timesteps_embedder[t_][data_batch]
+        else:
+            timestep_embs = self.timesteps_embedder[t][data_batch]
+            
         # center the true point cloud
         pos_centered = pos - scatter_mean(pos, index=data_batch, dim=0, dim_size=bs)[data_batch]
 
-        # sample COM noise
+        # sample 0-COM noise
         noise = torch.randn_like(pos)
         noise = noise - scatter_mean(noise, index=data_batch, dim=0, dim_size=bs)[data_batch]
         
@@ -252,13 +251,20 @@ class Trainer(pl.LightningModule):
         out = out - out_mean[data_batch]
 
         out_dict = {"pred_noise": out, "true_noise": noise, "energy_norm": energy_norm}
-
         return out_dict
 
     def training_step(self, batch, batch_idx, debug: bool = False):
         batch_size = int(batch.batch.max()) + 1
-        t = torch.rand(size=(batch_size, ), dtype=batch.pos.dtype, device=batch.pos.device)
-        t = t * (self.sde.T - self._hparams["eps_min"]) + self._hparams["eps_min"]
+        
+        if self._hparams["continuous"]:
+            t = torch.rand(size=(batch_size, ), dtype=batch.pos.dtype, device=batch.pos.device)
+            t = t * (self.sde.T - self._hparams["eps_min"]) + self._hparams["eps_min"]
+        else:
+            # ToDo: Check the discrete state t=0
+            t = torch.randint(low=0, high=self._hparams['num_diffusion_timesteps'],
+                              size=(batch_size,), 
+                              dtype=torch.long, device=batch.x.device)
+            
         out_dict = self(batch=batch, t=t)
         loss = torch.pow(out_dict["pred_noise"] - out_dict["true_noise"], 2).sum(-1)
         loss = scatter_mean(loss, index=batch.batch, dim=0, dim_size=batch_size)
@@ -277,8 +283,14 @@ class Trainer(pl.LightningModule):
             torch.set_grad_enabled(True)
 
         batch_size = int(batch.batch.max()) + 1
-        t = torch.rand(size=(batch_size, ), dtype=batch.pos.dtype, device=batch.pos.device)
-        t = t * (self.sde.T - self._hparams["eps_min"]) + self._hparams["eps_min"]
+        if self._hparams["continuous"]:
+            t = torch.rand(size=(batch_size, ), dtype=batch.pos.dtype, device=batch.pos.device)
+            t = t * (self.sde.T - self._hparams["eps_min"]) + self._hparams["eps_min"]
+        else:
+            # ToDo: Check the discrete state t=0
+            t = torch.randint(low=0, high=self._hparams['num_diffusion_timesteps'],
+                              size=(batch_size,), 
+                              dtype=torch.long, device=batch.x.device)
         out_dict = self(batch=batch, t=t)
 
         loss = torch.pow(out_dict["pred_noise"] - out_dict["true_noise"], 2).sum(-1)
