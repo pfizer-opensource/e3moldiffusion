@@ -13,6 +13,7 @@ from pytorch_lightning.callbacks import (
     TQDMProgressBar,
 )
 from pytorch_lightning.loggers import TensorBoardLogger
+from e3moldiffusion.molfeat import get_bond_feature_dims
 from e3moldiffusion.sde import VPSDE, VPAncestralSamplingPredictor, get_timestep_embedding, ChebyshevExpansion, DiscreteDDPM
 from e3moldiffusion.gnn import EQGATEncoder
 import numpy as np
@@ -21,10 +22,13 @@ from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.typing import OptTensor
 from torch_cluster import radius_graph
+from torch_sparse import coalesce
 from torch_scatter import scatter_mean
 from tqdm import tqdm
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
+
+BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 
 default_hparams = {
     "sdim": 64,
@@ -168,6 +172,9 @@ class Trainer(pl.LightningModule):
                                           batch=batch,
                                           max_num_neighbors=64
                                           )
+                
+            # toDO: in case bond features are included when topology of molecule is known.
+            
             if save_traj:
                 pos_sde_traj.append(pos.detach())
                 pos_mean_traj.append(pos_mean.detach())
@@ -179,6 +186,8 @@ class Trainer(pl.LightningModule):
         pos: Tensor = batch.pos
         data_batch: Tensor = batch.batch
         ptr = batch.ptr
+        bond_edge_index = batch.edge_index
+        bond_edge_attr = batch.edge_attr
 
         bs = int(data_batch.max()) + 1
         
@@ -220,6 +229,18 @@ class Trainer(pl.LightningModule):
                 edge_index = torch.concat(edge_index_list, dim=-1).to(node_feat.device)
         else:
             edge_index = radius_graph(x=pos_perturbed, r=self._hparams["cutoff"], batch=data_batch, max_num_neighbors=64)
+        
+        if self._hparams["use_bond_features"]:
+            # possibly combine the bond-edge-index with radius graph
+            # Note: This scenario is useful when learning the 3D coordinates only. 
+            # From an optimization perspective, atoms that are connected by topology should have certain distance values. 
+            # Since the atom types are fixed here, we know which molecule we want to generate a 3D configuration from, so the edge-index will help as inductive bias
+            edge_attr = torch.full(size=(edge_index.size(-1), ), fill_value=BOND_FEATURE_DIMS + 1, device=edge_index.device, dtype=torch.long)
+            # combine
+            edge_index = torch.cat([edge_index, bond_edge_index], dim=-1)
+            edge_attr =  torch.cat([edge_attr, bond_edge_attr], dim=0)
+            # coalesce, i.e. reduce and remove duplicate entries by taking the minimum value, making sure that the bond-features are included
+            edge_index, edge_attr = coalesce(index=edge_index, value=edge_attr, m=pos.size(0), n = pos.size(0), op="min")
             
         if self._hparams["energy_preserving"]:
             pos_perturbed.requires_grad = True
@@ -229,7 +250,7 @@ class Trainer(pl.LightningModule):
             t=timestep_embs,
             pos=pos_perturbed,
             edge_index=edge_index,
-            edge_attr=None,
+            edge_attr=edge_attr if self._hparams["use_bond_features"] else None,
             batch=data_batch,
         )
 
@@ -329,6 +350,10 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser = add_arguments(parser)
     hparams = parser.parse_args()
+    
+    if hparams.fully_connected and hparams.use_bond_features:
+        print("You have selected `fully_connected` and `use_bond_features` which is currently not implemented")
+        raise ValueError        
 
     if not os.path.exists(hparams.save_dir):
         os.makedirs(hparams.save_dir)

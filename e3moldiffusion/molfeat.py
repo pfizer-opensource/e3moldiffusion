@@ -167,6 +167,9 @@ def smiles_or_mol_to_graph(smol: Union[str, Chem.Mol]):
 class AtomEncoder(nn.Module):
     def __init__(self, emb_dim, max_norm: float = 10.0):
         super(AtomEncoder, self).__init__()
+        # before: richer input featurization that also consists information about topology of graph like degree etc.
+        # FULL_ATOM_FEATURE_DIMS = get_atom_feature_dims()
+        # now: only atom type
         FULL_ATOM_FEATURE_DIMS = [get_atom_feature_dims()[0]]
         self.atom_embedding_list = nn.ModuleList()
         for dim in FULL_ATOM_FEATURE_DIMS:
@@ -188,7 +191,10 @@ class BondEncoder(nn.Module):
     def __init__(self, emb_dim, max_norm: float = 10.0):
         super(BondEncoder, self).__init__()
         FULL_BOND_FEATURE_DIMS = get_bond_feature_dims()
-        self.bond_embedding = nn.Embedding(FULL_BOND_FEATURE_DIMS[0] + 3, emb_dim, max_norm=max_norm)
+        # before: used higher-order graphs, i.e. edges are constructed within 3 hop-neighbourhood.
+        # self.bond_embedding = nn.Embedding(FULL_BOND_FEATURE_DIMS[0] + 3, emb_dim, max_norm=max_norm)
+        # now: only rely on bond-graph based on topology and potentially include the radius-edge-index
+        self.bond_embedding = nn.Embedding(FULL_BOND_FEATURE_DIMS[0] + 2, emb_dim, max_norm=max_norm)
         self.reset_parameters()
     def reset_parameters(self):
         nn.init.xavier_uniform_(self.bond_embedding.weight.data)
@@ -197,6 +203,10 @@ class BondEncoder(nn.Module):
         return bond_embedding
     
 if __name__ == '__main__':
+    FULL_BOND_FEATURE_DIMS = get_bond_feature_dims()
+    bond_attrs = FULL_BOND_FEATURE_DIMS[0] + 3
+    from torch_sparse import coalesce
+    from torch_cluster import radius_graph
     smol = "O1C=C[C@H]([C@H]1O2)c3c2cc(OC)c4c3OC(=O)C5=C4CCC(=O)5"
     data = smiles_or_mol_to_graph(smol)
     print(data)
@@ -207,3 +217,25 @@ if __name__ == '__main__':
     
     x = atomencoder(data.x)
     edge_attr = bondencoder(data.edge_attr)
+    
+    pos = torch.randn(data.x.size(0), 3)
+    bond_edge_index, bond_edge_attr = data.edge_index, data.edge_attr
+    radius_edge_index = radius_graph(pos, r=5.0, max_num_neighbors=64, flow="source_to_target")
+    # fromr radius_edge_index remove that are in bond_edge_index
+    
+    radius_feat = FULL_BOND_FEATURE_DIMS[0] + 1
+    radius_edge_attr = torch.full((radius_edge_index.size(1), ), fill_value=radius_feat, device=pos.device, dtype=torch.long)
+    # need to combine radius-edge-index with graph-edge-index
+
+    nbonds = bond_edge_index.size(1)
+    nradius = radius_edge_index.size(1)
+    
+    combined_edge_index = torch.cat([bond_edge_index, radius_edge_index], dim=-1)
+    combined_edge_attr = torch.cat([bond_edge_attr, radius_edge_attr], dim=0)
+    
+    nbefore = combined_edge_index.size(1) 
+    # coalesce
+    combined_edge_index, combined_edge_attr = coalesce(index=combined_edge_index, value=combined_edge_attr, m=pos.size(0), n=pos.size(0), op="min")
+    print(combined_edge_index[:, :30])
+    print()
+    print(combined_edge_attr[:30])
