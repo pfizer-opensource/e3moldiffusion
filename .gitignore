@@ -18,3 +18,5 @@ e3moldiffusion/sample_data.py
 sample_data/*
 
 .vscode/
+
+# scripts/experiment*.sl
