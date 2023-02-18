@@ -46,7 +46,6 @@ default_hparams = {
     "omit_norm": False,
 }
 
-
 class Trainer(pl.LightningModule):
     def __init__(self, hparams=default_hparams):
         super().__init__()
@@ -101,10 +100,14 @@ class Trainer(pl.LightningModule):
         if batch is None:
             batch = torch.zeros(len(x), device=x.device, dtype=torch.long)
 
+        if self._hparams["use_bond_features"]:
+            bond_edge_index = edge_index
+            bond_edge_attr = edge_attr
+            assert bond_edge_index is not None
+            assert bond_edge_attr is not None
+            
         bs = int(batch.max()) + 1
-        
-        num_graphs = torch.bincount(batch)
-        
+                
         # initialiaze the 0-mean point cloud from N(0, I)
         pos = torch.randn(x.size(0), 3,
                           device=x.device,
@@ -131,7 +134,19 @@ class Trainer(pl.LightningModule):
                 edge_index = torch.concat(edge_index_list, dim=-1).to(x.device)
         else:
             edge_index = radius_graph(x=pos, r=self._hparams["cutoff"], batch=batch, max_num_neighbors=64)
-                
+        
+        if self._hparams["use_bond_features"]:
+            # possibly combine the bond-edge-index with radius graph
+            # Note: This scenario is useful when learning the 3D coordinates only. 
+            # From an optimization perspective, atoms that are connected by topology should have certain distance values. 
+            # Since the atom types are fixed here, we know which molecule we want to generate a 3D configuration from, so the edge-index will help as inductive bias
+            edge_attr = torch.full(size=(edge_index.size(-1), ), fill_value=BOND_FEATURE_DIMS + 1, device=edge_index.device, dtype=torch.long)
+            # combine
+            edge_index = torch.cat([edge_index, bond_edge_index], dim=-1)
+            edge_attr =  torch.cat([edge_attr, bond_edge_attr], dim=0)
+            # coalesce, i.e. reduce and remove duplicate entries by taking the minimum value, making sure that the bond-features are included
+            edge_index, edge_attr = coalesce(index=edge_index, value=edge_attr, m=pos.size(0), n = pos.size(0), op="min")
+            
         if self._hparams["energy_preserving"]:
             pos.requires_grad_()
 
@@ -141,7 +156,7 @@ class Trainer(pl.LightningModule):
         chain = range(num_diffusion_timesteps)
         print(chain)
         for timestep in tqdm(reversed(chain), total=num_diffusion_timesteps):
-            t = torch.full(size=(num_graphs,), fill_value=timestep, dtype=torch.long, device=pos.device)
+            t = torch.full(size=(bs, ), fill_value=timestep, dtype=torch.long, device=pos.device)
             temb = self.timesteps_embedder[t][batch]
             out = self.model(
                 x=x,
@@ -173,8 +188,18 @@ class Trainer(pl.LightningModule):
                                           max_num_neighbors=64
                                           )
                 
-            # toDO: in case bond features are included when topology of molecule is known.
-            
+            if self._hparams["use_bond_features"]:
+                # possibly combine the bond-edge-index with radius graph
+                # Note: This scenario is useful when learning the 3D coordinates only. 
+                # From an optimization perspective, atoms that are connected by topology should have certain distance values. 
+                # Since the atom types are fixed here, we know which molecule we want to generate a 3D configuration from, so the edge-index will help as inductive bias
+                edge_attr = torch.full(size=(edge_index.size(-1), ), fill_value=BOND_FEATURE_DIMS + 1, device=edge_index.device, dtype=torch.long)
+                # combine
+                edge_index = torch.cat([edge_index, bond_edge_index], dim=-1)
+                edge_attr =  torch.cat([edge_attr, bond_edge_attr], dim=0)
+                # coalesce, i.e. reduce and remove duplicate entries by taking the minimum value, making sure that the bond-features are included
+                edge_index, edge_attr = coalesce(index=edge_index, value=edge_attr, m=pos.size(0), n = pos.size(0), op="min")
+                                
             if save_traj:
                 pos_sde_traj.append(pos.detach())
                 pos_mean_traj.append(pos_mean.detach())
@@ -290,7 +315,7 @@ class Trainer(pl.LightningModule):
         loss = torch.pow(out_dict["pred_noise"] - out_dict["true_noise"], 2).sum(-1)
         loss = scatter_mean(loss, index=batch.batch, dim=0, dim_size=batch_size)
         loss = torch.mean(loss, dim=0) 
-        loss = loss + out_dict["energy_norm"]
+        loss = loss + 1e-2 * out_dict["energy_norm"]
         self.log(
             "train/loss",
             loss,
@@ -317,7 +342,7 @@ class Trainer(pl.LightningModule):
         loss = torch.pow(out_dict["pred_noise"] - out_dict["true_noise"], 2).sum(-1)
         loss = scatter_mean(loss, index=batch.batch, dim=0, dim_size=batch_size)
         loss = torch.mean(loss, dim=0)
-        loss = loss + out_dict["energy_norm"]
+        loss = loss + 1e-2 * out_dict["energy_norm"]
         
         self.log(
             "val/loss",

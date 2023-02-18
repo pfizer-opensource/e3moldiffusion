@@ -22,6 +22,7 @@ import torch_geometric
 from pytorch_lightning import LightningDataModule
 from e3moldiffusion.molfeat import get_bond_feature_dims, smiles_or_mol_to_graph
 from torch.utils.data import Subset
+from torch_sparse import coalesce
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.utils import to_dense_adj
@@ -55,6 +56,8 @@ DRUGS_smi_to_id = {s: i for i, s in enumerate(DRUGS_mapping)}
 DRUGS_id_to_smi = {i: s for s, i in DRUGS_smi_to_id.items()}
 DRUGS_pickles = [osp.join(osp.join(PATH, "drugs"), f) for f in DRUGS_pickles]
 
+BOND_FEATURE_DIMS = get_bond_feature_dims()
+BOND_FEATURE_DIMS = BOND_FEATURE_DIMS[0]
 
 def chunks(lst, n):
     """Yield successive n-sized chunks from lst."""
@@ -209,7 +212,7 @@ class MolFeaturization:
             edge_index = edge_index[:, mask]
         data.edge_index_fc = edge_index
         return data
-
+    
     def __call__(self, smiles_mol: Union[str, Chem.Mol, dict]) -> Data:
         data = self.featurize_smiles_or_mol(smiles_mol=smiles_mol["mol"])
         assert data is not None
