@@ -92,8 +92,10 @@ class Trainer(pl.LightningModule):
         batch: OptTensor = None,
         num_diffusion_timesteps: Optional[int] = None,
         save_traj: bool = False,
+        bond_edge_index: OptTensor = None,
+        bond_edge_attr: OptTensor = None
     ) -> Tuple[Tensor, List]:
-        
+                
         if num_diffusion_timesteps is None:
             num_diffusion_timesteps = self._hparams["num_diffusion_timesteps"]
 
@@ -101,8 +103,6 @@ class Trainer(pl.LightningModule):
             batch = torch.zeros(len(x), device=x.device, dtype=torch.long)
 
         if self._hparams["use_bond_features"]:
-            bond_edge_index = edge_index
-            bond_edge_attr = edge_attr
             assert bond_edge_index is not None
             assert bond_edge_attr is not None
             
@@ -136,7 +136,7 @@ class Trainer(pl.LightningModule):
             edge_index = radius_graph(x=pos, r=self._hparams["cutoff"], batch=batch, max_num_neighbors=64)
         
         if self._hparams["use_bond_features"]:
-            # possibly combine the bond-edge-index with radius graph
+            # possibly combine the bond-edge-index with radius graph or fully-connected graph
             # Note: This scenario is useful when learning the 3D coordinates only. 
             # From an optimization perspective, atoms that are connected by topology should have certain distance values. 
             # Since the atom types are fixed here, we know which molecule we want to generate a 3D configuration from, so the edge-index will help as inductive bias
@@ -187,19 +187,19 @@ class Trainer(pl.LightningModule):
                                           batch=batch,
                                           max_num_neighbors=64
                                           )
-                
-            if self._hparams["use_bond_features"]:
-                # possibly combine the bond-edge-index with radius graph
-                # Note: This scenario is useful when learning the 3D coordinates only. 
-                # From an optimization perspective, atoms that are connected by topology should have certain distance values. 
-                # Since the atom types are fixed here, we know which molecule we want to generate a 3D configuration from, so the edge-index will help as inductive bias
-                edge_attr = torch.full(size=(edge_index.size(-1), ), fill_value=BOND_FEATURE_DIMS + 1, device=edge_index.device, dtype=torch.long)
-                # combine
-                edge_index = torch.cat([edge_index, bond_edge_index], dim=-1)
-                edge_attr =  torch.cat([edge_attr, bond_edge_attr], dim=0)
-                # coalesce, i.e. reduce and remove duplicate entries by taking the minimum value, making sure that the bond-features are included
-                edge_index, edge_attr = coalesce(index=edge_index, value=edge_attr, m=pos.size(0), n = pos.size(0), op="min")
-                                
+                if self._hparams["use_bond_features"]:
+                    # possibly combine the bond-edge-index with radius graph or fully-connected graph
+                    # Note: This scenario is useful when learning the 3D coordinates only. 
+                    # From an optimization perspective, atoms that are connected by topology should have certain distance values. 
+                    # Since the atom types are fixed here, we know which molecule we want to generate a 3D configuration from, so the edge-index will help as inductive bias
+                    edge_attr = torch.full(size=(edge_index.size(-1), ), fill_value=BOND_FEATURE_DIMS + 1, device=edge_index.device, dtype=torch.long)
+                    # combine
+                    edge_index = torch.cat([edge_index, bond_edge_index], dim=-1)
+                    edge_attr =  torch.cat([edge_attr, bond_edge_attr], dim=0)
+                    # coalesce, i.e. reduce and remove duplicate entries by taking the minimum value, making sure that the bond-features are included
+                    edge_index, edge_attr = coalesce(index=edge_index, value=edge_attr, m=pos.size(0), n = pos.size(0), op="min")
+            
+                    
             if save_traj:
                 pos_sde_traj.append(pos.detach())
                 pos_mean_traj.append(pos_mean.detach())
@@ -251,12 +251,12 @@ class Trainer(pl.LightningModule):
                     edge_index = edge_index[:, mask]
                     edge_index += offset
                     edge_index_list.append(edge_index)
-                edge_index = torch.concat(edge_index_list, dim=-1).to(node_feat.device)
+                edge_index = torch.concat(edge_index_list, dim=-1).to(node_feat.device)     
         else:
             edge_index = radius_graph(x=pos_perturbed, r=self._hparams["cutoff"], batch=data_batch, max_num_neighbors=64)
         
         if self._hparams["use_bond_features"]:
-            # possibly combine the bond-edge-index with radius graph
+            # possibly combine the bond-edge-index with radius graph or fully-connected graph
             # Note: This scenario is useful when learning the 3D coordinates only. 
             # From an optimization perspective, atoms that are connected by topology should have certain distance values. 
             # Since the atom types are fixed here, we know which molecule we want to generate a 3D configuration from, so the edge-index will help as inductive bias
@@ -376,10 +376,6 @@ if __name__ == "__main__":
     parser = add_arguments(parser)
     hparams = parser.parse_args()
     
-    if hparams.fully_connected and hparams.use_bond_features:
-        print("You have selected `fully_connected` and `use_bond_features` which is currently not implemented")
-        raise ValueError        
-
     if not os.path.exists(hparams.save_dir):
         os.makedirs(hparams.save_dir)
 
