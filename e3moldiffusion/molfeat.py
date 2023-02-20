@@ -137,7 +137,7 @@ def smiles_or_mol_to_graph(smol: Union[str, Chem.Mol]):
     x = torch.tensor(atom_features_list, dtype=torch.int64)
     assert x.size(-1) == 5
     # only take atom element
-    x = x[:, 0].view(-1, 1)
+    # x = x[:, 0].view(-1, 1)
 
     # bonds
     edges_list = []
@@ -165,12 +165,13 @@ def smiles_or_mol_to_graph(smol: Union[str, Chem.Mol]):
 
 
 class AtomEncoder(nn.Module):
-    def __init__(self, emb_dim, max_norm: float = 10.0):
+    def __init__(self, emb_dim, max_norm: float = 10.0, only_atom_type: bool = True):
         super(AtomEncoder, self).__init__()
         # before: richer input featurization that also consists information about topology of graph like degree etc.
-        # FULL_ATOM_FEATURE_DIMS = get_atom_feature_dims()
-        # now: only atom type
-        FULL_ATOM_FEATURE_DIMS = [get_atom_feature_dims()[0]]
+        FULL_ATOM_FEATURE_DIMS = get_atom_feature_dims()
+        if only_atom_type:
+            # now: only atom type
+            FULL_ATOM_FEATURE_DIMS = [FULL_ATOM_FEATURE_DIMS[0]]
         self.atom_embedding_list = nn.ModuleList()
         for dim in FULL_ATOM_FEATURE_DIMS:
             emb = nn.Embedding(dim, emb_dim, max_norm=max_norm)
@@ -183,7 +184,7 @@ class AtomEncoder(nn.Module):
 
     def forward(self, x):
         x_embedding = 0
-        for i in range(x.shape[1]):
+        for i in range(len(self.atom_embedding_list)):
             x_embedding += self.atom_embedding_list[i](x[:, i])
         return x_embedding
 

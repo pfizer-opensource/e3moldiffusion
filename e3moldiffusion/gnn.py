@@ -22,10 +22,12 @@ class EQGATEncoder(nn.Module):
                  use_norm: bool = False,
                  use_cross_product: bool = False,
                  use_mlp_update: bool = False,
+                 use_all_atom_features: bool = False
                  ):
         super(EQGATEncoder, self).__init__()
 
-        self.atom_encoder = AtomEncoder(emb_dim=hn_dim[0])
+        self.atom_encoder = AtomEncoder(emb_dim=hn_dim[0],
+                                        use_all_atom_features=use_all_atom_features)
 
         if edge_dim is not None:
             self.edge_dim = edge_dim

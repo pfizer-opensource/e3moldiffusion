@@ -62,6 +62,7 @@ class Trainer(pl.LightningModule):
             use_norm=not hparams["omit_norm"],
             use_cross_product=not hparams["omit_cross_product"],
             use_mlp_update=False,
+            use_all_atom_features=hparams["use_all_atom_features"]
         )
 
         timesteps = torch.arange(hparams["num_diffusion_timesteps"], dtype=torch.long)
