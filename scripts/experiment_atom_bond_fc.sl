@@ -20,7 +20,7 @@ echo "runnning experiment"
 
 
 args=(
-    --gpus 1 --id 1 --max_num_conformers 30 --num_workers 4
+    --gpus 1 --id 7 --max_num_conformers 30 --num_workers 4
     --save_dir logs/drugs --num_epochs 100
     --sdim 64 --vdim 16 --tdim 16 --num_layers 4 
     --lr 5e-4 --batch_size 256
