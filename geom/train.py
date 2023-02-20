@@ -323,8 +323,27 @@ class Trainer(pl.LightningModule):
             on_step=True,
             batch_size=batch_size,
         )
+        
+        if not self._hparams["continuous"]:
+            t = t.float() / self._hparams["num_diffusion_timesteps"]
+            
+        time_mean = torch.mean(t)
+        time_var = torch.std(t).pow(2)
+        self.log(
+            "train/time_mean",
+            time_mean,
+            on_step=True,
+            batch_size=batch_size,
+        )
+        self.log(
+            "train/time_var",
+            time_var,
+            on_step=True,
+            batch_size=batch_size,
+        )
+        
         return loss
-
+    
     def validation_step(self, batch, batch_idx):
         if self._hparams["energy_preserving"]:
             torch.set_grad_enabled(True)
@@ -351,7 +370,26 @@ class Trainer(pl.LightningModule):
             batch_size=batch_size,
             sync_dist=self._hparams["gpus"] > 1,
         )
-
+        
+        if not self._hparams["continuous"]:
+            t = t.float() / self._hparams["num_diffusion_timesteps"]
+            
+        time_mean = torch.mean(t)
+        time_var = torch.std(t).pow(2)
+        self.log(
+            "val/time_mean",
+            time_mean,
+            batch_size=batch_size,
+            sync_dist=self._hparams["gpus"] > 1,
+        )
+        self.log(
+            "val/time_var",
+            time_var,
+            batch_size=batch_size,
+            sync_dist=self._hparams["gpus"] > 1,
+        )
+        
+        
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self._hparams["lr"])
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
