@@ -181,6 +181,8 @@ class Trainer(pl.LightningModule):
             noise = noise - scatter_mean(noise, index=batch, dim=0, dim_size=bs)[batch]
         
             pos, pos_mean = self.sampler.update_fn(x=pos, score=out, t=t[batch], noise=noise)
+            pos = pos - scatter_mean(pos, index=batch, dim=0, dim_size=bs)[batch]
+            pos_mean = pos_mean - scatter_mean(pos_mean, index=batch, dim=0, dim_size=bs)[batch]
 
             if not self._hparams["fully_connected"]:
                 edge_index = radius_graph(x=pos.detach(),
