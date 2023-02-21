@@ -706,14 +706,16 @@ class GeomDataModule(LightningDataModule):
             for _, subdf in train_info.groupby("mol_id"):
                 ids = subdf["global_id"].values[:self.max_num_conformers]
                 train_ids.append(ids)
-            train_ids = np.concatenate(train_ids)
-                
+            train_ids = np.concatenate(train_ids)   
             # validation
             val_ids = []
             for _, subdf in val_info.groupby("mol_id"):
                 ids = subdf["global_id"].values[:self.max_num_conformers]
                 val_ids.append(ids)
             val_ids = np.concatenate(val_ids)
+        else:
+            train_ids = train_info["global_id"]
+            val_ids = val_info["global_info"]
         
         self.train_ids = train_ids.tolist()
         self.val_ids = val_ids.tolist()
