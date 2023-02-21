@@ -61,7 +61,7 @@ class Trainer(pl.LightningModule):
             energy_preserving=hparams["energy_preserving"],
             use_norm=not hparams["omit_norm"],
             use_cross_product=not hparams["omit_cross_product"],
-            use_mlp_update=False,
+            use_mlp_update=True,
             use_all_atom_features=hparams["use_all_atom_features"],
             vector_aggr=hparams["vector_aggr"]
         )

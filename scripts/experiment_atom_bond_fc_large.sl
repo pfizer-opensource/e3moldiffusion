@@ -4,7 +4,7 @@
 #SBATCH --mail-type=ALL
 #SBATCH --partition=gpu
 #SBATCH --constraint=weka
-#SBATCH --time=5-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
@@ -20,7 +20,7 @@ echo "runnning experiment"
 
 
 args=(
-    --gpus 1 --id 15
+    --gpus 1 --id 0
     --dataset drugs
     --max_num_conformers 30 --num_workers 4
     --save_dir logs/drugs --num_epochs 100
@@ -29,7 +29,7 @@ args=(
     --fully_connected 
     --use_bond_features --edim 32 
     --use_all_atom_features
-    --omit_norm
+    # --omit_norm
     --omit_cross_product
     --vector_aggr mean
     )

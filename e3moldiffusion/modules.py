@@ -138,10 +138,10 @@ class LayerNorm(nn.Module):
     
         s = s - smean[batch]
 
-        std = (s * s).mean(dim=-1, keepdim=True)
-        std = scatter_mean(std, batch, dim=0, dim_size=batch_size)
-        std = torch.clamp(std, min=self.eps).sqrt()
-        sout = s / std[batch]
+        var = (s * s).mean(dim=-1, keepdim=True)
+        var = scatter_mean(var, batch, dim=0, dim_size=batch_size)
+        var = torch.clamp(var, min=self.eps) # .sqrt()
+        sout = s / var[batch]
 
         if self.weight is not None and self.bias is not None:
             sout = sout * self.weight + self.bias

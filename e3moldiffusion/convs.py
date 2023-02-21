@@ -145,6 +145,7 @@ class EQGATConv(MessagePassing):
         d, r, e = edge_attr
 
         de = d.view(-1, 1)
+        # de = 1.0 / (1.0 + d.view(-1, 1))
 
         if e is not None:
             aij = torch.cat([sa_i, sa_j, de, e], dim=-1)
