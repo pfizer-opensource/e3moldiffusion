@@ -65,7 +65,7 @@ class EQGATConv(MessagePassing):
         if edge_dim is None:
             edge_dim = 0
 
-        self.edge_net = nn.Sequential(DenseLayer(2 * self.si + edge_dim + 1,
+        self.edge_net = nn.Sequential(DenseLayer(2 * self.si + edge_dim + 2,
                                                  self.si,
                                                  bias=True, activation=nn.SiLU()
                                                  ),
@@ -146,12 +146,14 @@ class EQGATConv(MessagePassing):
 
         # instead of using basis functions multiplied with a smooth cutoff function,
         # we just embed distances over the function b(d) = 1.0 / (1.0 + d)
-        de = 1.0 / (1.0 + d.view(-1, 1))
+        de0 = 1.0 / (1.0 + d.view(-1, 1))
+        # also use raw distance
+        de1 = d.view(-1, 1)
 
         if e is not None:
-            aij = torch.cat([sa_i, sa_j, de, e], dim=-1)
+            aij = torch.cat([sa_i, sa_j, de0, de1, e], dim=-1)
         else:
-            aij = torch.cat([sa_i, sa_j, de], dim=-1)
+            aij = torch.cat([sa_i, sa_j, de0, de1], dim=-1)
 
         aij = self.edge_net(aij)
 

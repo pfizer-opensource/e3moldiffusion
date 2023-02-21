@@ -19,10 +19,11 @@ class EQGATEncoder(nn.Module):
                  edge_dim: int = 16,
                  num_layers: int = 5,
                  energy_preserving: bool = False,
-                 use_norm: bool = True,
-                 use_cross_product: bool = True,
+                 use_norm: bool = False,
+                 use_cross_product: bool = False,
                  use_mlp_update: bool = False,
-                 use_all_atom_features: bool = True
+                 use_all_atom_features: bool = True,
+                 vector_aggr: str = "mean",
                  ):
         super(EQGATEncoder, self).__init__()
 
@@ -53,7 +54,7 @@ class EQGATEncoder(nn.Module):
                       edge_dim=self.edge_dim,
                       has_v_in=i>0,
                       use_mlp_update=use_mlp_update,
-                      vector_aggr="mean",
+                      vector_aggr=vector_aggr,
                       use_cross_product=use_cross_product
                       )
             for i in range(num_layers)

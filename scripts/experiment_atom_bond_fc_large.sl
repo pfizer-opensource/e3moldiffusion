@@ -20,15 +20,18 @@ echo "runnning experiment"
 
 
 args=(
-    --gpus 1 --id 11
+    --gpus 1 --id 15
     --dataset drugs
-    --max_num_conformers -1 --num_workers 4
+    --max_num_conformers 30 --num_workers 4
     --save_dir logs/drugs --num_epochs 100
     --sdim 128 --vdim 32 --tdim 128 --num_layers 4 
     --lr 5e-4 --batch_size 256
     --fully_connected 
     --use_bond_features --edim 32 
     --use_all_atom_features
+    --omit_norm
+    --omit_cross_product
+    --vector_aggr mean
     )
 
 python train.py "${args[@]}"
