@@ -715,7 +715,7 @@ class GeomDataModule(LightningDataModule):
             val_ids = np.concatenate(val_ids)
         else:
             train_ids = train_info["global_id"]
-            val_ids = val_info["global_info"]
+            val_ids = val_info["global_id"]
         
         self.train_ids = train_ids.tolist()
         self.val_ids = val_ids.tolist()
