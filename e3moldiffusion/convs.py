@@ -43,7 +43,7 @@ class EQGATConv(MessagePassing):
         has_v_in: bool = False,
         use_mlp_update: bool = False,
         vector_aggr: str = "mean",
-        use_cross_product: bool = True
+        use_cross_product: bool = False
     ):
         super(EQGATConv, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
@@ -65,9 +65,9 @@ class EQGATConv(MessagePassing):
         if edge_dim is None:
             edge_dim = 0
 
-        self.edge_net = nn.Sequential(DenseLayer(2 * self.si + edge_dim + 2,
+        self.edge_net = nn.Sequential(DenseLayer(2 * self.si + edge_dim + 1,
                                                  self.si,
-                                                 bias=True, activation=nn.SiLU()
+                                                 bias=True, activation=nn.Tanh()
                                                  ),
                                       DenseLayer(self.si, self.v_mul * self.vi + self.si,
                                                  bias=True
@@ -144,16 +144,12 @@ class EQGATConv(MessagePassing):
 
         d, r, e = edge_attr
 
-        # instead of using basis functions multiplied with a smooth cutoff function,
-        # we just embed distances over the function b(d) = 1.0 / (1.0 + d)
-        de0 = 1.0 / (1.0 + d.view(-1, 1))
-        # also use raw distance
-        de1 = d.view(-1, 1)
+        de = d.view(-1, 1)
 
         if e is not None:
-            aij = torch.cat([sa_i, sa_j, de0, de1, e], dim=-1)
+            aij = torch.cat([sa_i, sa_j, de, e], dim=-1)
         else:
-            aij = torch.cat([sa_i, sa_j, de0, de1], dim=-1)
+            aij = torch.cat([sa_i, sa_j, de], dim=-1)
 
         aij = self.edge_net(aij)
 
