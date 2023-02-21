@@ -15,14 +15,14 @@ from e3moldiffusion.molfeat import AtomEncoder, BondEncoder
 class EQGATEncoder(nn.Module):
     def __init__(self,
                  hn_dim: Tuple[int, int] = (64, 16),
-                 t_dim: int = 16,
-                 edge_dim: int = 0,
+                 t_dim: int = 64,
+                 edge_dim: int = 16,
                  num_layers: int = 5,
                  energy_preserving: bool = False,
-                 use_norm: bool = False,
-                 use_cross_product: bool = False,
+                 use_norm: bool = True,
+                 use_cross_product: bool = True,
                  use_mlp_update: bool = False,
-                 use_all_atom_features: bool = False
+                 use_all_atom_features: bool = True
                  ):
         super(EQGATEncoder, self).__init__()
 
@@ -40,8 +40,10 @@ class EQGATEncoder(nn.Module):
             self.edge_encoder = None
 
         self.t_dim = t_dim
-        self.t_mapping = DenseLayer(t_dim, t_dim)
-        self.feat_time_merging = DenseLayer(hn_dim[0] + t_dim, hn_dim[0], bias=False)
+        self.t_mapping = nn.Sequential(
+            DenseLayer(t_dim, t_dim, activation=nn.SiLU()),
+            DenseLayer(t_dim, hn_dim[0])
+            )
         
         self.sdim, self.vdim = hn_dim
 
@@ -111,7 +113,7 @@ class EQGATEncoder(nn.Module):
 
         s = self.atom_encoder(x)
         temb = self.t_mapping(t)[batch]
-        s = self.feat_time_merging(torch.concat([s, temb], dim=-1))
+        s = s + temb
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
 
         for i in range(len(self.convs)):
