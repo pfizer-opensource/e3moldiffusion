@@ -15,7 +15,7 @@ from pytorch_lightning.callbacks import (
 from pytorch_lightning.loggers import TensorBoardLogger
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from e3moldiffusion.sde import VPSDE, VPAncestralSamplingPredictor, get_timestep_embedding, ChebyshevExpansion, DiscreteDDPM
-from e3moldiffusion.gnn import EQGATEncoder
+from e3moldiffusion.gnn import ScoreModelCoords, EQGATEncoder
 import numpy as np
 
 from torch import Tensor
@@ -29,6 +29,10 @@ from tqdm import tqdm
 logging.getLogger("lightning").setLevel(logging.WARNING)
 
 BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
+
+
+# MODEL = EQGATEncoder
+MODEL = ScoreModelCoords
 
 default_hparams = {
     "sdim": 64,
@@ -53,15 +57,13 @@ class Trainer(pl.LightningModule):
 
         self._hparams = hparams
         
-        self.model = EQGATEncoder(
+        self.model = MODEL(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             t_dim=hparams["tdim"],
             edge_dim=hparams["edim"],
             num_layers=hparams["num_layers"],
-            energy_preserving=hparams["energy_preserving"],
             use_norm=not hparams["omit_norm"],
             use_cross_product=not hparams["omit_cross_product"],
-            use_mlp_update=True,
             use_all_atom_features=hparams["use_all_atom_features"],
             vector_aggr=hparams["vector_aggr"]
         )
@@ -75,13 +77,18 @@ class Trainer(pl.LightningModule):
         self.register_buffer("timesteps_embedder", tensor=timesteps_embedder)
         
         if hparams["continuous"]:
-            self.sde = VPSDE(beta_min=hparams["beta_min"], beta_max=hparams["beta_max"],
+            # todo: double check continuous time
+            raise NotImplementedError
+            self.sde = VPSDE(beta_min=hparams["beta_min"],
+                             beta_max=hparams["beta_max"],
                              N=hparams["num_diffusion_timesteps"],
                              scaled_reverse_posterior_sigma=True)
         else:
-            self.sde = DiscreteDDPM(beta_min=hparams["beta_min"], beta_max=hparams["beta_max"],
+            self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
+                                    beta_max=hparams["beta_max"],
                                     N=hparams["num_diffusion_timesteps"],
-                                    scaled_reverse_posterior_sigma=True)
+                                    scaled_reverse_posterior_sigma=True,
+                                    schedule=hparams["schedule"])
             
         self.sampler = VPAncestralSamplingPredictor(sde=self.sde)
         
@@ -401,6 +408,7 @@ class Trainer(pl.LightningModule):
             cooldown=self._hparams["cooldown"],
             factor=self._hparams["factor"],
         )
+        # ToDo ExponentialLR 
         scheduler = {
             "scheduler": lr_scheduler,
             "interval": "epoch",
@@ -445,7 +453,6 @@ if __name__ == "__main__":
         dataset=hparams.dataset,
         env_in_init=True,
         shuffle_train=True,
-        # subset_frac=hparams.subset_frac,
         max_num_conformers=hparams.max_num_conformers,
         transform=MolFeaturization(order=3),
         pin_memory=True,
@@ -476,7 +483,7 @@ if __name__ == "__main__":
         precision=hparams.precision,
         num_sanity_val_steps=2,
         max_epochs=hparams.num_epochs,
-        detect_anomaly=hparams.detect_anomaly,
+        detect_anomaly=hparams.detect_anomaly
     )
 
     pl.seed_everything(seed=0, workers=hparams.gpus > 1)

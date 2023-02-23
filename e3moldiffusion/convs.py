@@ -41,9 +41,9 @@ class EQGATConv(MessagePassing):
         edge_dim: Optional[int] = None,
         eps: float = 1e-6,
         has_v_in: bool = False,
-        use_mlp_update: bool = False,
+        use_mlp_update: bool = True,
         vector_aggr: str = "mean",
-        use_cross_product: bool = False
+        use_cross_product: bool = True
     ):
         super(EQGATConv, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
@@ -67,7 +67,7 @@ class EQGATConv(MessagePassing):
 
         self.edge_net = nn.Sequential(DenseLayer(2 * self.si + edge_dim + 1,
                                                  self.si,
-                                                 bias=True, activation=nn.Tanh()
+                                                 bias=True, activation=nn.SiLU()
                                                  ),
                                       DenseLayer(self.si, self.v_mul * self.vi + self.si,
                                                  bias=True
@@ -144,8 +144,8 @@ class EQGATConv(MessagePassing):
 
         d, r, e = edge_attr
 
-        de = d.view(-1, 1)
-        # de = 1.0 / (1.0 + d.view(-1, 1))
+        # de = d.view(-1, 1)
+        de = 1.0 / (1.0 + d.view(-1, 1))
 
         if e is not None:
             aij = torch.cat([sa_i, sa_j, de, e], dim=-1)

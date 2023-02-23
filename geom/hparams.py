@@ -19,19 +19,18 @@ def add_arguments(parser):
     parser.add_argument("-i", "--id", type=int, default=0)
     parser.add_argument("-g", "--gpus", default=1, type=int)
     parser.add_argument("-e", "--num_epochs", default=300, type=int)
-    parser.add_argument("--eval_freq", default=0.8, type=float)
+    parser.add_argument("--eval_freq", default=0.5, type=float)
     parser.add_argument("-s", "--save_dir", default=DEFAULT_SAVE_DIR, type=str)
     parser.add_argument("--precision", default=32, type=int)
     parser.add_argument("-b", "--batch_size", default=256, type=int)
-    parser.add_argument("--lr", default=1e-4, type=float)
+    parser.add_argument("--lr", default=5e-4, type=float)
     parser.add_argument("--gamma", default=0.975, type=float)
-    parser.add_argument("--grad_clip_val", default=10.0, type=float)
-    parser.add_argument("--exp_scheduler", default=False, action="store_true")
+    parser.add_argument("--grad_clip_val", default=100.0, type=float)
     parser.add_argument("--frequency", default=5, type=int)
     parser.add_argument("--detect_anomaly", default=False, action="store_true")
     parser.add_argument("--num_workers", default=4, type=int)
-    parser.add_argument("--patience", default=10, type=int)
-    parser.add_argument("--cooldown", default=10, type=int)
+    parser.add_argument("--patience", default=5, type=int)
+    parser.add_argument("--cooldown", default=5, type=int)
     parser.add_argument("--factor", default=0.75, type=float)
 
     parser.add_argument("--load_ckpt", default="", type=str)
@@ -64,16 +63,19 @@ def add_arguments(parser):
     parser.add_argument("--omit_cross_product", default=False, action="store_true")
     parser.add_argument("--continuous", default=False, action="store_true",
                         help="If the diffusion process is applied on continuous time variable. Defaults to False")
+    parser.add_argument("--schedule",
+                        default="cosine",
+                        choices=["linear", "cosine", "quad", "sigmoid"])
 
     parser.add_argument(
         "--eps_min", default=1e-3, type=float
     )  # minimum continuous time
     parser.add_argument(
-        "--beta_min", default=0.1, type=float
-    )  # diffusion coefficients set as if continuous
+        "--beta_min", default=1e-4, type=float
+    ) 
     parser.add_argument(
-        "--beta_max", default=20.0, type=float
-    )  # after conversion / T --> 1e-4; 0.02 as originally
-    parser.add_argument("--num_diffusion_timesteps", default=1000, type=int)
+        "--beta_max", default=2e-2, type=float
+    )
+    parser.add_argument("--num_diffusion_timesteps", default=300, type=int)
 
     return parser

@@ -667,7 +667,7 @@ class GeomDataModule(LightningDataModule):
         transform=MolFeaturization(order=3),
         dataset: str = "drugs",
         env_in_init: bool = False,
-        shuffle_train: bool = False,
+        shuffle_train: bool = True,
         # subset_frac: float = 0.1, # old
         max_num_conformers: int = 30,   # -1 means all
         pin_memory: bool = True,

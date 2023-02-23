@@ -1,5 +1,6 @@
 import math
 from typing import Optional, Tuple, Union
+import matplotlib.pyplot as plt
 
 import numpy as np
 import torch
@@ -226,13 +227,96 @@ class VPSDE(nn.Module):
         return f, G
 
 
+def clip_noise_schedule(alphas2, clip_value=0.001):
+    """
+    For a noise schedule given by alpha^2, this clips alpha_t / alpha_t-1. This may help improve stability during
+    sampling.
+    """
+    alphas2 = np.concatenate([np.ones(1), alphas2], axis=0)
+
+    alphas_step = (alphas2[1:] / alphas2[:-1])
+
+    alphas_step = np.clip(alphas_step, a_min=clip_value, a_max=1.)
+    alphas2 = np.cumprod(alphas_step, axis=0)
+
+    return alphas2
+
+
+def get_beta_schedule(beta_start: float = 1e-4,
+                      beta_end: float = 2e-2,
+                      num_diffusion_timesteps: int = 1000,
+                      kind: str = 'linear',
+                      plot: bool = False, 
+                      **kwargs):
+
+    if kind == 'quad':
+        betas = (
+            torch.linspace(
+                beta_start ** 0.5,
+                beta_end ** 0.5,
+                num_diffusion_timesteps,
+                dtype=torch.get_default_dtype(),
+            )
+            ** 2
+        )
+    elif kind == 'sigmoid':
+        betas = torch.linspace(-6, 6, num_diffusion_timesteps)
+        betas = torch.sigmoid(betas) * (beta_end - beta_start) + beta_start
+    elif kind == 'linear':
+        betas = torch.linspace(beta_start, beta_end, num_diffusion_timesteps)
+    elif kind == "cosine":
+        s = kwargs.get("s")
+        if s is None:
+            s = 0.008
+        steps = num_diffusion_timesteps + 2
+        x = torch.linspace(0, num_diffusion_timesteps, steps)
+        alphas_cumprod = torch.cos(((x / num_diffusion_timesteps) + s) / (1 + s) * torch.pi * 0.5) ** 2
+        alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
+        betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
+        betas = torch.clip(betas, 0.0, 0.999)
+    elif kind == "polynomial":
+        s = kwargs.get("s")
+        p = kwargs.get("p")
+        if s is None:
+            s = 1e-4
+        if p is None:
+            p = 3.
+        steps = num_diffusion_timesteps + 1
+        x = np.linspace(0, steps, steps)
+        alphas2 = (1 - np.power(x / steps, p))**2
+        alphas2 = clip_noise_schedule(alphas2, clip_value=0.001)
+        precision = 1 - 2 * s
+        alphas2 = precision * alphas2 + s
+        alphas = np.sqrt(alphas2)
+        betas = 1.0 - alphas
+        betas = torch.from_numpy(betas).float()
+
+    if plot:
+        plt.plot(range(len(betas)), betas)
+        plt.xlabel("t")
+        plt.ylabel("beta")
+        plt.show()
+
+        alphas = 1.0 - betas
+        signal_coeff = alphas.cumprod(0)
+        noise_coeff = torch.sqrt(1.0 - signal_coeff)
+        plt.plot(np.arange(num_diffusion_timesteps), signal_coeff, label="signal")
+        plt.plot(np.arange(num_diffusion_timesteps), noise_coeff, label="noise")
+        plt.legend()
+        plt.show()
+
+    return betas
+
+
 class DiscreteDDPM(nn.Module):
     def __init__(
         self,
-        beta_min: float = 0.1,
-        beta_max: float = 20.0,
-        N: int = 1000,
+        beta_min: float = 1e-4,
+        beta_max: float = 2e-2,
+        N: int = 300,
         scaled_reverse_posterior_sigma: bool = True,
+        schedule: str = "cosine",
+        **kwargs
     ):
         """Constructs discrete Diffusion schedule according to DDPM in Ho et al. (2020).
         Args:
@@ -245,10 +329,16 @@ class DiscreteDDPM(nn.Module):
         self.beta_max = beta_max
         self.N = N
         self.scaled_reverse_posterior_sigma = scaled_reverse_posterior_sigma
-
-        discrete_betas = torch.linspace(beta_min / N, beta_max / N, N)
+        
+        assert schedule in ["linear", "quad", "cosine", "sigmoid", "polynomial"]
+        
+        discrete_betas = get_beta_schedule(beta_start=beta_min, beta_end=beta_max,
+                                           num_diffusion_timesteps=N,
+                                           kind=schedule, plot=False)
+        
         sqrt_betas = torch.sqrt(discrete_betas)
         alphas = 1.0 - discrete_betas
+            
         sqrt_alphas = torch.sqrt(alphas)
         alphas_cumprod = torch.cumprod(alphas, dim=0)
         alphas_cumprod_prev = torch.nn.functional.pad(
@@ -299,21 +389,19 @@ class DiscreteDDPM(nn.Module):
         
         return mean, std
     
-    @classmethod
-    def plot_signal_to_noise(self, beta_min: Optional[float] = 0.1, beta_max: Optional[float] = 20.0):
-        import matplotlib.pyplot as plt
-        if beta_min is None:
-            beta_min = self.beta_min
-        if beta_max is None:
-            beta_max = self.beta_max 
+    def plot_signal_to_noise(self):
+        
+        beta_min = self.beta_min
+        beta_max = self.beta_max 
             
-        t = torch.arange(0, 1000)
+        t = torch.arange(0, self.N)
         signal = self.sqrt_alphas_cumprod[t]
         std = self.sqrt_1m_alphas_cumprod[t]
         
-        plt.title(f"Signal and Noise Schedule for beta_min={beta_min:.2f} and beta_max={beta_max:.2f}")
+        plt.title(f"Signal and Noise Schedule for beta_min={beta_min} and beta_max={beta_max}")
         plt.plot(t, signal, label="signal")
         plt.plot(t, std, label="noise")
+        plt.xlabel("timesteps")
         plt.legend()
         plt.show()
         
@@ -375,26 +463,16 @@ class VPAncestralSamplingPredictor:
 if __name__ == "__main__":
     from torch_scatter import scatter_mean
 
-    sde = VPSDE(beta_min=0.1, beta_max=20.0, N=1000)
-
-    x = torch.randn(5, 2)
-    eps_min = 1e-3
-
-    t = torch.rand(x.size(0))
-    t = t * (1.0 - eps_min) + eps_min
-
-    print(x)
-    print("---" * 10)
-    meant, sigmat = sde.marginal_prob(x=x, t=t)
-    print(t)
-    print()
-    print(meant)
-    print(sigmat)
-
-    drift, diffusion = sde.sde(x=x, t=t)
-    print()
-    print(drift)
-    print(diffusion)
+    T = 300
+    schedule = "cosine"
+    
+    sde = DiscreteDDPM(beta_min=1e-4,
+                       beta_max=2e-2,
+                       N=T,
+                       scaled_reverse_posterior_sigma=True, 
+                       schedule=schedule)
+    
+    sde.plot_signal_to_noise()
 
     # in case we have a batch of 16 point clouds
     bs = 16
@@ -409,9 +487,9 @@ if __name__ == "__main__":
 
     noise = torch.randn_like(x)
     noise = noise - scatter_mean(noise, batch, dim=0)[batch]
+    print(scatter_mean(noise, batch, dim=0).norm())
 
-    t = torch.rand(bs)
-    t = t * (sde.T - eps_min) + eps_min
+    t = torch.randint(low=0, high=T,  size=(bs, ) )
     t = t[batch]
 
     meant, sigmat = sde.marginal_prob(x=x, t=t)
@@ -419,3 +497,18 @@ if __name__ == "__main__":
     # sampling xt | x0
     xt = meant + sigmat * noise
     
+    
+    # for reverse, check coefficients
+    # update rule is as follows:
+    # x_{t-1} = 1 / sqrt(alpha_t) * ( x_t - score_scaling(t) * score(x_t, t) ) + \sigma_t * z
+    # where z ~ N(0, 1)
+    
+    score_scaling = sde.discrete_betas / sde.sqrt_1m_alphas_cumprod
+    sigma = sde.reverse_posterior_sigma
+    a = 1 / sde.sqrt_alphas
+     
+    plt.plot(range(len(score_scaling)), score_scaling, label="score_scaling")
+    plt.plot(range(len(sigma)), sigma, label="sigma")
+    plt.plot(range(len(a)), a, label="1/sqrt(alphas)")
+    plt.legend()
+    plt.show()

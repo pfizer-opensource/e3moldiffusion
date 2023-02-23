@@ -20,16 +20,16 @@ class EQGATEncoder(nn.Module):
                  edge_dim: int = 16,
                  num_layers: int = 5,
                  energy_preserving: bool = False,
-                 use_norm: bool = False,
+                 use_norm: bool = True,
                  use_cross_product: bool = False,
-                 use_mlp_update: bool = True,
                  use_all_atom_features: bool = True,
                  vector_aggr: str = "mean",
                  ):
         super(EQGATEncoder, self).__init__()
 
         self.atom_encoder = AtomEncoder(emb_dim=hn_dim[0],
-                                        use_all_atom_features=use_all_atom_features)
+                                        use_all_atom_features=use_all_atom_features,
+                                        max_norm=1.0)
 
         if edge_dim is not None:
             self.edge_dim = edge_dim
@@ -37,7 +37,7 @@ class EQGATEncoder(nn.Module):
             self.edge_dim = 0
 
         if self.edge_dim:
-            self.edge_encoder = BondEncoder(emb_dim=edge_dim)
+            self.edge_encoder = BondEncoder(emb_dim=edge_dim, max_norm=1.0)
         else:
             self.edge_encoder = None
 
@@ -54,7 +54,7 @@ class EQGATEncoder(nn.Module):
                       out_dims=hn_dim,
                       edge_dim=self.edge_dim,
                       has_v_in=i>0,
-                      use_mlp_update=use_mlp_update,
+                      use_mlp_update= i < (num_layers - 1),
                       vector_aggr=vector_aggr,
                       use_cross_product=use_cross_product
                       )
@@ -122,7 +122,6 @@ class EQGATEncoder(nn.Module):
             if self.use_norm:
                 s, v = self.norms[i](x=(s, v), batch=batch)
             s, v = self.convs[i](x=(s, v), edge_index=edge_index, edge_attr=edge_attr_c)
-            s = F.silu(s)
 
         if self.energy_preserving:
             out, _ = self.downstream(x=(s, v))
@@ -133,27 +132,38 @@ class EQGATEncoder(nn.Module):
         return out
     
     
-
-# Score Model that also learns on continuous embedded atom features and continuous 3d coords
-
-class E3AtomScoreModel(nn.Module):
+class ScoreModelCoords(nn.Module):
     def __init__(self,
                  hn_dim: Tuple[int, int] = (64, 16),
                  t_dim: int = 64,
+                 edge_dim: int = 16,
                  num_layers: int = 5,
-                 use_norm: bool = False,
+                 use_norm: bool = True,
                  use_cross_product: bool = False,
-                 use_mlp_update: bool = False,
+                 use_all_atom_features: bool = True,
                  vector_aggr: str = "mean",
                  **kwargs
                  ):
-        super(E3AtomScoreModel, self).__init__()
+        super(ScoreModelCoords, self).__init__()
 
-        self.atom_linear = DenseLayer(hn_dim[0], hn_dim[0])
+        self.atom_encoder = AtomEncoder(emb_dim=hn_dim[0],
+                                        use_all_atom_features=use_all_atom_features,
+                                        max_norm=1.0)
+
+        if edge_dim is not None:
+            self.edge_dim = edge_dim
+        else:
+            self.edge_dim = 0
+
+        if self.edge_dim:
+            self.edge_encoder = BondEncoder(emb_dim=edge_dim, max_norm=1.0)
+        else:
+            self.edge_encoder = None
+
         self.t_dim = t_dim
         self.t_mapping = nn.Sequential(
             DenseLayer(t_dim, t_dim, activation=nn.SiLU()),
-            DenseLayer(t_dim, hn_dim[0])
+            DenseLayer(t_dim, hn_dim[0], activation=nn.SiLU())
             )
         
         self.sdim, self.vdim = hn_dim
@@ -163,7 +173,7 @@ class E3AtomScoreModel(nn.Module):
                       out_dims=hn_dim,
                       edge_dim=self.edge_dim,
                       has_v_in=i>0,
-                      use_mlp_update=use_mlp_update,
+                      use_mlp_update= i < (num_layers - 1),
                       vector_aggr=vector_aggr,
                       use_cross_product=use_cross_product
                       )
@@ -175,19 +185,24 @@ class E3AtomScoreModel(nn.Module):
             LayerNorm(dims=hn_dim) if use_norm else nn.Identity()
             for _ in range(num_layers)
         ])
-
-        self.downstream = DenseLayer(in_features=hn_dim[1], out_features=1)
+        
+        self.distance_score = DenseLayer(in_features=hn_dim[0], out_features=1)
+        self.coords_score = DenseLayer(in_features=hn_dim[1], out_features=1)
 
         self.reset_parameters()
 
     def reset_parameters(self):
         self.atom_encoder.reset_parameters()
         reset(self.t_mapping)
+        if self.edge_dim:
+            self.edge_encoder.reset_parameters()
         for conv, norm in zip(self.convs, self.norms):
             conv.reset_parameters()
             if self.use_norm:
                 norm.reset_parameters()
-        self.downstream.reset_parameters()
+        
+        self.distance_score.reset_parameters()
+        self.coords_score.reset_parameters()
 
     def forward(self,
                 x: Tensor,
@@ -207,8 +222,8 @@ class E3AtomScoreModel(nn.Module):
         source, target = edge_index
         r = pos[target] - pos[source]
         d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6).sqrt()
-        r = torch.div(r, d.unsqueeze(-1))
-        edge_attr_c = (d, r, edge_attr)
+        r_norm = torch.div(r, d.unsqueeze(-1))
+        edge_attr_c = (d, r_norm, edge_attr)
 
         s = self.atom_encoder(x)
         temb = self.t_mapping(t)[batch]
@@ -220,13 +235,15 @@ class E3AtomScoreModel(nn.Module):
                 s, v = self.norms[i](x=(s, v), batch=batch)
             s, v = self.convs[i](x=(s, v), edge_index=edge_index, edge_attr=edge_attr_c)
 
-        if self.energy_preserving:
-            out, _ = self.downstream(x=(s, v))
-            out = scatter(src=out, index=batch, dim=0, dim_size=batch_size, reduce="add").squeeze()
-        else:
-            out = self.downstream(v).squeeze()
-
+        s = F.silu(s)
+        d = self.distance_score(s)
+        d = d[source] + d[target]
+        dr = d * r
+        dr = scatter(src=dr, index=target, dim=0, dim_size=s.size(0), reduce="add").squeeze()
+        out = self.coords_score(v).squeeze()
+        out = out + dr        
         return out
+
 
 if __name__ == '__main__':
     
