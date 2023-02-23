@@ -10,7 +10,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=4G
 #SBATCH --cpus-per-task=4
-#SBATCH --gres=gpu:1 
+#SBATCH --gres=gpu:v100:1
 #SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_singleGPU_%j.out
 #SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_singleGPU_%j.err
 
