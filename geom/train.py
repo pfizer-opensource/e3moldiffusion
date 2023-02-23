@@ -142,7 +142,10 @@ class Trainer(pl.LightningModule):
                     edge_index_list.append(edge_index)
                 edge_index = torch.concat(edge_index_list, dim=-1).to(x.device)
         else:
-            edge_index = radius_graph(x=pos, r=self._hparams["cutoff"], batch=batch, max_num_neighbors=64)
+            edge_index = radius_graph(x=pos,
+                                      r=self._hparams["cutoff"],
+                                      batch=batch,
+                                      max_num_neighbors=self._hparams["cutoff"])
         
         if self._hparams["use_bond_features"]:
             # possibly combine the bond-edge-index with radius graph or fully-connected graph
@@ -196,7 +199,7 @@ class Trainer(pl.LightningModule):
                 edge_index = radius_graph(x=pos.detach(),
                                           r=self._hparams["cutoff"],
                                           batch=batch,
-                                          max_num_neighbors=64
+                                          max_num_neighbors=self._hparams["max_num_neighbors"]
                                           )
                 if self._hparams["use_bond_features"]:
                     # possibly combine the bond-edge-index with radius graph or fully-connected graph

@@ -60,6 +60,8 @@ def add_arguments(parser):
     parser.add_argument("--use_all_atom_features", default=False, action="store_true")
     parser.add_argument("--fully_connected", default=False, action="store_true")
     parser.add_argument("--cutoff", default=5.0, type=float)
+    parser.add_argument("--max_num_neighbors", default=128, type=int)
+
     parser.add_argument("--omit_cross_product", default=False, action="store_true")
     parser.add_argument("--continuous", default=False, action="store_true",
                         help="If the diffusion process is applied on continuous time variable. Defaults to False")
