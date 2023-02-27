@@ -15,7 +15,8 @@ from pytorch_lightning.callbacks import (
 from pytorch_lightning.loggers import TensorBoardLogger
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from e3moldiffusion.sde import VPSDE, VPAncestralSamplingPredictor, get_timestep_embedding, ChebyshevExpansion, DiscreteDDPM
-from e3moldiffusion.gnn import ScoreModelCoords, EQGATEncoder
+from e3moldiffusion.gnn import ScoreModelCoords
+
 import numpy as np
 
 from torch import Tensor
@@ -30,34 +31,14 @@ logging.getLogger("lightning").setLevel(logging.WARNING)
 
 BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 
-
-# MODEL = EQGATEncoder
-MODEL = ScoreModelCoords
-
-default_hparams = {
-    "sdim": 64,
-    "vdim": 16,
-    "tdim": 64,
-    "edim": 16,
-    "num_layers": 5,
-    "num_diffusion_timesteps": 1000,
-    "beta_min": 0.1,
-    "beta_max": 20.0,
-    "energy_preserving": False,
-    "batch_size": 256,
-    "dataset": "drugs",
-    "save_dir": "diffusion",
-    "omit_norm": False,
-}
-
 class Trainer(pl.LightningModule):
-    def __init__(self, hparams=default_hparams):
+    def __init__(self, hparams):
         super().__init__()
         self.save_hyperparameters(hparams)
 
         self._hparams = hparams
         
-        self.model = MODEL(
+        self.model = ScoreModelCoords(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             t_dim=hparams["tdim"],
             edge_dim=hparams["edim"],
@@ -102,7 +83,8 @@ class Trainer(pl.LightningModule):
         num_diffusion_timesteps: Optional[int] = None,
         save_traj: bool = False,
         bond_edge_index: OptTensor = None,
-        bond_edge_attr: OptTensor = None
+        bond_edge_attr: OptTensor = None,
+        verbose: bool = True
     ) -> Tuple[Tensor, List]:
                 
         if num_diffusion_timesteps is None:
@@ -166,8 +148,10 @@ class Trainer(pl.LightningModule):
         pos_mean_traj = []
         
         chain = range(num_diffusion_timesteps)
-        print(chain)
-        for timestep in tqdm(reversed(chain), total=num_diffusion_timesteps):
+        if verbose:
+            print(chain)
+        iterator = tqdm(reversed(chain), total=num_diffusion_timesteps) if verbose else reversed(chain)
+        for timestep in iterator:
             t = torch.full(size=(bs, ), fill_value=timestep, dtype=torch.long, device=pos.device)
             temb = self.timesteps_embedder[t][batch]
             out = self.model(

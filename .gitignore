@@ -10,6 +10,8 @@ dist
 # setuptools_scm
 e3moldiffusion/_version.py
 
+e3moldiffusion/potential.py
+geom/train_potential.py
 geom/data/*
 !geom/data/.gitkeep
 geom/slurm_outs/*

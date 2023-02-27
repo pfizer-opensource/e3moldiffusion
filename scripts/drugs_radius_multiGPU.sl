@@ -1,6 +1,6 @@
 #!/bin/bash -l
 
-#SBATCH -J drugs_multiGPU
+#SBATCH -J drugs_radius
 #SBATCH --mail-user=tuan.le@pfizer.com 
 #SBATCH --mail-type=ALL
 #SBATCH --partition=gpu_medium
@@ -8,9 +8,9 @@
 #SBATCH --time=1-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=16G
-#SBATCH --gres=gpu:v100:4
+#SBATCH --gres=gpu:v100:2
 #SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_multiGPU_%j.out
 #SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_multiGPU_%j.err
 
@@ -23,7 +23,7 @@ echo "runnning multi-gpu experiment"
 
 
 args=(
-    --gpus 4 --id 1
+    --gpus 2 --id 2
     --dataset drugs
     --max_num_conformers 30
     --num_workers 4
@@ -31,7 +31,8 @@ args=(
     --num_epochs 100
     --sdim 128 --vdim 32 --tdim 128 --num_layers 5 
     --lr 5e-4 --batch_size 256
-    --fully_connected 
+    --cutoff 7.0
+    # --fully_connected 
     --use_bond_features
     --edim 32
     --use_all_atom_features
@@ -41,7 +42,7 @@ args=(
     --beta_min 1e-4
     --beta_max 2e-2
     --num_diffusion_timesteps 300
-    --load_ckpt /home/let55/workspace/projects/e3moldiffusion/geom/logs/drugs/run1/last.ckpt
+    --load_ckpt /home/let55/workspace/projects/e3moldiffusion/geom/logs/drugs/run2/last.ckpt
     )
 
 

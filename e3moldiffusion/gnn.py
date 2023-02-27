@@ -1,5 +1,5 @@
 import math
-from typing import Tuple
+from typing import Tuple, Dict
 
 import torch
 import torch.nn.functional as F
@@ -132,6 +132,69 @@ class EQGATEncoder(nn.Module):
         return out
     
     
+class EncoderGNN(nn.Module):
+    def __init__(self,
+                 hn_dim: Tuple[int, int] = (64, 16),
+                 edge_dim: int = 16,
+                 num_layers: int = 5,
+                 use_norm: bool = True,
+                 use_cross_product: bool = False,
+                 vector_aggr: str = "mean",
+                 **kwargs
+                 ):
+        super(EncoderGNN, self).__init__()
+
+        if edge_dim is not None:
+            self.edge_dim = edge_dim
+        else:
+            self.edge_dim = 0
+
+        self.sdim, self.vdim = hn_dim
+
+        self.convs = nn.ModuleList([
+            EQGATConv(in_dims=hn_dim,
+                      out_dims=hn_dim,
+                      edge_dim=self.edge_dim,
+                      has_v_in=i>0,
+                      use_mlp_update= i < (num_layers - 1),
+                      vector_aggr=vector_aggr,
+                      use_cross_product=use_cross_product
+                      )
+            for i in range(num_layers)
+        ])
+
+        self.use_norm = use_norm
+        self.norms = nn.ModuleList([
+            LayerNorm(dims=hn_dim) if use_norm else nn.Identity()
+            for _ in range(num_layers)
+        ])
+        
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        for conv, norm in zip(self.convs, self.norms):
+            conv.reset_parameters()
+            if self.use_norm:
+                norm.reset_parameters()
+                
+    def forward(self,
+                s: Tensor,
+                v: Tensor,
+                edge_index: Tensor,
+                edge_attr: Tuple[Tensor, Tensor, OptTensor],
+                batch: Tensor = None) -> Dict:
+
+      
+        for i in range(len(self.convs)):
+            if self.use_norm:
+                s, v = self.norms[i](x=(s, v), batch=batch)
+            s, v = self.convs[i](x=(s, v), edge_index=edge_index, edge_attr=edge_attr)
+
+        out = {"s": s, "v": v}
+        return out
+
+
+
 class ScoreModelCoords(nn.Module):
     def __init__(self,
                  hn_dim: Tuple[int, int] = (64, 16),
@@ -243,6 +306,7 @@ class ScoreModelCoords(nn.Module):
         out = self.coords_score(v).squeeze()
         out = out + dr        
         return out
+
 
 
 if __name__ == '__main__':
