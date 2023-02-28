@@ -56,7 +56,10 @@ class AtomEmbedding(nn.Module):
 default_hparams: dict = {
     "sdim": 128,
     "tdim": 64,
+    "rbf_dim": 32,
     "vdim": 16,
+    "edim": 0,
+    "cutoff": 10.0,
     "num_layers": 5,
     "omit_norm": False,
     "omit_cross_product": False,
@@ -72,7 +75,7 @@ default_hparams: dict = {
 
 class CoordsAtomScoreTrainer(pl.LightningModule):
     def __init__(self, hparams: dict = default_hparams) -> None:
-        super().__init__()
+        super(CoordsAtomScoreTrainer, self).__init__()
 
         self.save_hyperparameters(hparams)
         
@@ -87,6 +90,8 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
 
         self.gnn = EncoderGNN(
             hn_dim=(self.hparams.sdim, self.hparams.vdim),
+            cutoff=self.hparams.cutoff,
+            rbf_dim=self.hparams.rbf_dim,
             edge_dim=0,
             num_layers=self.hparams.num_layers,
             use_norm=not self.hparams.omit_norm,
@@ -320,9 +325,13 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
 
 
 if __name__ == "__main__":
+    
     default_hparams: dict = {
         "sdim": 128,
         "tdim": 64,
+        "rbf_dim": 32,
+        "cutoff": 10.0,
+        "edim": 0,
         "vdim": 16,
         "num_layers": 5,
         "omit_norm": False,

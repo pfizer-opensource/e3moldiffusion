@@ -21,57 +21,6 @@ def get_timestep_embedding(timesteps: torch.Tensor, embedding_dim: int):
     emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
     return emb
 
-
-class ChebyshevExpansion(nn.Module):
-    def __init__(self, max_value: float = 1.0, embedding_dim: int = 20):
-        super(ChebyshevExpansion, self).__init__()
-        self.embedding_dim = embedding_dim
-        self.max_value = max_value
-        self.shift_scale = lambda x: 2 * x / max_value - 1.0
-
-    @staticmethod
-    def chebyshev_recursion(x, n):
-        if x.ndim == 1:
-            x = x.unsqueeze(-1)
-        if not n > 2:
-            print(f"Naural exponent n={n} has to be > 2.")
-            print("Exiting code.")
-            exit()
-
-        t_n_1 = torch.ones_like(x)
-        t_n = x
-        ts = [t_n_1, t_n]
-        for _ in range(n - 2):
-            t_n_new = 2 * x * t_n - t_n_1
-            t_n_1 = t_n
-            t_n = t_n_new
-            ts.append(t_n_new)
-            
-        basis_functions = torch.cat(ts, dim=-1)
-        return basis_functions
-    
-    def forward(self, x: Tensor) -> Tensor:
-        x = self.shift_scale(x)
-        x = self.chebyshev_recursion(x, n=self.embedding_dim)
-        return x
-    
-    @classmethod
-    def plot_chebyshev_functions(self, max_value: float = 1.0, embedding_dim: Optional[int] = 20):
-        import matplotlib.pyplot as plt
-        if embedding_dim is None:
-            embedding_dim = self.embedding_dim     
-        t = torch.linspace(0, max_value, 1000)
-        basis_functions = self(x=t)
-        for basis in range(basis_functions.size(1)):
-            plt.plot(t, basis_functions[:, basis].cpu().numpy(), label=r"b_{}".format(basis))
-        plt.legend()
-        plt.show()
-        return None
-    
-    def __repr__(self):
-        return f"{self.__class__.__name__}(embedding_dim={self.embedding_dim}, max_value={self.max_value})"
-
-
 def get_ddpm_params(
     beta_min: float = 0.1, beta_max: float = 20.0, num_scales: int = 1000
 ) -> dict:

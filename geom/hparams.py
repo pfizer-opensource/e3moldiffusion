@@ -52,6 +52,7 @@ def add_arguments(parser):
     parser.add_argument("--sdim", default=128, type=int)
     parser.add_argument("--vdim", default=32, type=int)
     parser.add_argument("--edim", default=32, type=int)
+    parser.add_argument("--rbf_dim", default=32, type=int)
     parser.add_argument("--tdim", default=128, type=int)
     parser.add_argument("--vector_aggr", default="mean", type=str)
     parser.add_argument("--num_layers", default=4, type=int)
@@ -59,7 +60,7 @@ def add_arguments(parser):
     parser.add_argument("--use_bond_features", default=False, action="store_true")
     parser.add_argument("--use_all_atom_features", default=False, action="store_true")
     parser.add_argument("--fully_connected", default=False, action="store_true")
-    parser.add_argument("--cutoff", default=5.0, type=float)
+    parser.add_argument("--cutoff", default=7.5, type=float)
     parser.add_argument("--max_num_neighbors", default=128, type=int)
 
     parser.add_argument("--omit_cross_product", default=False, action="store_true")

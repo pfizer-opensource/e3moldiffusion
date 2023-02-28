@@ -8,7 +8,7 @@ from torch_geometric.nn.inits import reset
 from torch_geometric.typing import OptTensor
 from torch_scatter import scatter
 
-from e3moldiffusion.convs import EQGATConv
+from e3moldiffusion.convs import EQGATConv, EQGATChebRBFConv
 from e3moldiffusion.modules import DenseLayer, GatedEquivBlock, LayerNorm
 from e3moldiffusion.molfeat import AtomEncoder, BondEncoder
 
@@ -135,7 +135,8 @@ class EQGATEncoder(nn.Module):
 class EncoderGNN(nn.Module):
     def __init__(self,
                  hn_dim: Tuple[int, int] = (64, 16),
-                 edge_dim: int = 16,
+                 rbf_dim: int = 64,
+                 cutoff: float = 10.0,
                  num_layers: int = 5,
                  use_norm: bool = True,
                  use_cross_product: bool = False,
@@ -144,22 +145,19 @@ class EncoderGNN(nn.Module):
                  ):
         super(EncoderGNN, self).__init__()
 
-        if edge_dim is not None:
-            self.edge_dim = edge_dim
-        else:
-            self.edge_dim = 0
 
         self.sdim, self.vdim = hn_dim
 
         self.convs = nn.ModuleList([
-            EQGATConv(in_dims=hn_dim,
-                      out_dims=hn_dim,
-                      edge_dim=self.edge_dim,
-                      has_v_in=i>0,
-                      use_mlp_update= i < (num_layers - 1),
-                      vector_aggr=vector_aggr,
-                      use_cross_product=use_cross_product
-                      )
+            EQGATChebRBFConv(in_dims=hn_dim,
+                             out_dims=hn_dim,
+                             rbf_dim=rbf_dim,
+                             cutoff=cutoff,
+                             has_v_in=i>0,
+                             use_mlp_update= i < (num_layers - 1),
+                             vector_aggr=vector_aggr,
+                             use_cross_product=use_cross_product
+                             )
             for i in range(num_layers)
         ])
 

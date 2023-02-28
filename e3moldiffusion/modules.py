@@ -161,3 +161,118 @@ class LayerNorm(nn.Module):
     def __repr__(self):
         return (f'{self.__class__.__name__}(dims={self.dims}, '
                 f'affine={self.affine})')
+        
+        
+class PolynomialCutoff(nn.Module):
+    def __init__(self, cutoff, p: int = 6):
+        super(PolynomialCutoff, self).__init__()
+        self.cutoff = cutoff
+        self.p = p
+
+    @staticmethod
+    def polynomial_cutoff(
+        r: Tensor,
+        rcut: float,
+        p: float = 6.0
+    ) -> Tensor:
+        """
+        Polynomial cutoff, as proposed in DimeNet: https://arxiv.org/abs/2003.03123
+        """
+        if not p >= 2.0:
+            print(f"Exponent p={p} has to be >= 2.")
+            print("Exiting code.")
+            exit()
+
+        rscaled = r / rcut
+
+        out = 1.0
+        out = out - (((p + 1.0) * (p + 2.0) / 2.0) * torch.pow(rscaled, p))
+        out = out + (p * (p + 2.0) * torch.pow(rscaled, p + 1.0))
+        out = out - ((p * (p + 1.0) / 2) * torch.pow(rscaled, p + 2.0))
+
+        return out * (rscaled < 1.0).float()
+
+    def forward(self, r):
+        return self.polynomial_cutoff(r=r, rcut=self.cutoff, p=self.p)
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(cutoff={self.cutoff}, p={self.p})"
+    
+
+class BesselExpansion(nn.Module):
+    def __init__(
+        self, max_value: float, K: int = 20
+    ):
+        super(BesselExpansion, self).__init__()
+        self.max_value = max_value
+        self.K = K
+        frequency = math.pi * torch.arange(start=1, end=K + 1)
+        self.register_buffer("frequency", frequency)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.frequency.data = math.pi * torch.arange(start=1, end=self.K + 1)
+
+    def forward(self, x: Tensor) -> Tensor:
+        """
+        Bessel RBF, as proposed in DimeNet: https://arxiv.org/abs/2003.03123
+        """
+        ax = x.unsqueeze(-1) / self.max_value
+        ax = ax * self.frequency
+        sinax = torch.sin(ax)
+        norm = torch.where(
+            x == 0.0, torch.tensor(1.0, dtype=x.dtype, device=x.device), x
+        )
+        out = sinax / norm[..., None]
+        out *= math.sqrt(2 / self.max_value)
+        return out
+
+
+class ChebyshevExpansion(nn.Module):
+    def __init__(self, max_value: float, embedding_dim: int):
+        super(ChebyshevExpansion, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.max_value = max_value
+        self.shift_scale = lambda x: 2 * x / max_value - 1.0
+
+    @staticmethod
+    def chebyshev_recursion(x, n):
+        if x.ndim == 1:
+            x = x.unsqueeze(-1)
+        if not n > 2:
+            print(f"Naural exponent n={n} has to be > 2.")
+            print("Exiting code.")
+            exit()
+
+        t_n_1 = torch.ones_like(x)
+        t_n = x
+        ts = [t_n_1, t_n]
+        for _ in range(n - 2):
+            t_n_new = 2 * x * t_n - t_n_1
+            t_n_1 = t_n
+            t_n = t_n_new
+            ts.append(t_n_new)
+            
+        basis_functions = torch.cat(ts, dim=-1)
+        return basis_functions
+    
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.shift_scale(x)
+        x = self.chebyshev_recursion(x, n=self.embedding_dim)
+        return x
+    
+    @classmethod
+    def plot_chebyshev_functions(self, max_value: float = 1.0, embedding_dim: Optional[int] = 20):
+        import matplotlib.pyplot as plt
+        if embedding_dim is None:
+            embedding_dim = self.embedding_dim     
+        t = torch.linspace(0, max_value, 1000)
+        basis_functions = self(x=t)
+        for basis in range(basis_functions.size(1)):
+            plt.plot(t, basis_functions[:, basis].cpu().numpy(), label=r"b_{}".format(basis))
+        plt.legend()
+        plt.show()
+        return None
+    
+    def __repr__(self):
+        return f"{self.__class__.__name__}(embedding_dim={self.embedding_dim}, max_value={self.max_value})"
