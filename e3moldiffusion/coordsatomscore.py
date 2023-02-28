@@ -258,7 +258,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         out_dict = self(x=batch.x, pos=batch.pos, t=t, edge_index=batch.edge_index_fc, batch=batch.batch)
         coords_loss = torch.pow(
             out_dict["noise_coords_pred"] - out_dict["noise_coords_true"], 2
-        ).sum(-1)
+        ).mean(-1)
         coords_loss = scatter_mean(
             coords_loss, index=batch.batch, dim=0, dim_size=batch_size
         )
@@ -266,8 +266,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         
         ohes_loss = torch.pow(
             out_dict["noise_ohes_pred"] - out_dict["noise_ohes_true"], 2
-        ).sum(-1) 
-        # ohes_loss = ohes_loss / MAX_NUM_ATOM_FEATURES
+        ).mean(-1) 
         ohes_loss = scatter_mean(
             ohes_loss, index=batch.batch, dim=0, dim_size=batch_size
         )
