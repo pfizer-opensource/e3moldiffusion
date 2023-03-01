@@ -144,7 +144,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         empirical_distribution_num_nodes: Tensor,
         verbose: bool = False,
         save_traj: bool = False
-    ) -> Tuple[Tensor, Tensor, Tensor, List]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         
         device = self.timesteps.data.device
         batch_num_nodes = torch.multinomial(input=empirical_distribution_num_nodes,
@@ -236,7 +236,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
                 atom_type_ohe_traj.append(ohe_integer)
                 
     
-        return pos, xohes, ohe_integer, [pos_traj, atom_type_traj, atom_type_ohe_traj]
+        return pos, xohes, ohe_integer, batch_num_nodes, [pos_traj, atom_type_traj, atom_type_ohe_traj]
 
     def forward(
         self, x: Tensor, pos: Tensor, t: Tensor, edge_index: Tensor, batch: Tensor
