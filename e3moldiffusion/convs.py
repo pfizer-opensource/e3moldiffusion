@@ -183,7 +183,7 @@ class EQGATConv(MessagePassing):
 
         return ns_j, nv_j
     
-class EQGATChebRBFConv(MessagePassing):
+class EQGATRBFConv(MessagePassing):
     """
     Slightly modified SO(3) equivariant graph attention convolution described in
     @inproceedings{
@@ -207,7 +207,7 @@ class EQGATChebRBFConv(MessagePassing):
         vector_aggr: str = "mean",
         use_cross_product: bool = True
     ):
-        super(EQGATChebRBFConv, self).__init__(
+        super(EQGATRBFConv, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
         )
         self.vector_aggr = vector_aggr
@@ -347,3 +347,4 @@ class EQGATChebRBFConv(MessagePassing):
             nv_j = nv0_j
 
         return ns_j, nv_j
+    

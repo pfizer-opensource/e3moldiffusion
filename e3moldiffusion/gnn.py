@@ -8,7 +8,7 @@ from torch_geometric.nn.inits import reset
 from torch_geometric.typing import OptTensor
 from torch_scatter import scatter
 
-from e3moldiffusion.convs import EQGATConv, EQGATChebRBFConv
+from e3moldiffusion.convs import EQGATConv, EQGATRBFConv
 from e3moldiffusion.modules import DenseLayer, GatedEquivBlock, LayerNorm
 from e3moldiffusion.molfeat import AtomEncoder, BondEncoder
 
@@ -149,7 +149,7 @@ class EncoderGNN(nn.Module):
         self.sdim, self.vdim = hn_dim
 
         self.convs = nn.ModuleList([
-            EQGATChebRBFConv(in_dims=hn_dim,
+            EQGATRBFConv(in_dims=hn_dim,
                              out_dims=hn_dim,
                              rbf_dim=rbf_dim,
                              cutoff=cutoff,

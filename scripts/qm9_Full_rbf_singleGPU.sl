@@ -2,9 +2,9 @@
 #SBATCH -J qm9_full_rbf
 #SBATCH --mail-user=tuan.le@pfizer.com 
 #SBATCH --mail-type=ALL
-#SBATCH --partition=gpu_short
+#SBATCH --partition=gpu_medium
 #SBATCH --constraint=weka
-#SBATCH --time=0-03:00:00
+#SBATCH --time=1-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
@@ -23,21 +23,21 @@ echo "runnning experiment"
 
 
 args=(
-    --gpus 1 --id 6
+    --gpus 1 --id 11
     --dataset qm9
     --max_num_conformers 30
     --num_workers 4
     --save_dir logs/qm9
-    --num_epochs 100
+    --num_epochs 500
     --sdim 128 
-    --rbf_dim 16
+    --rbf_dim 32
     --cutoff 10.0
-    --vdim 16
+    --vdim 32
     --tdim 64
     --num_layers 5 
     --lr 5e-4 
     --batch_size 256
-    --fully_connected 
+    # --fully_connected 
     --edim 0
     --omit_cross_product
     --vector_aggr mean
@@ -48,3 +48,4 @@ args=(
     )
 
 python train_full.py "${args[@]}"
+
