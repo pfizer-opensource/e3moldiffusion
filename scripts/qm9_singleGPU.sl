@@ -27,13 +27,15 @@ args=(
     --dataset qm9
     --max_num_conformers 30
     --num_workers 4
-    --save_dir logs/qm9
+    --save_dir logs/qm9_coords
     --num_epochs 100
     --sdim 64 --vdim 16 --tdim 64 --num_layers 4 
     --lr 5e-4 --batch_size 256
     --fully_connected 
     --use_bond_features
     --edim 16
+    --cutoff 5.0
+    --rbf_dim 16
     --use_all_atom_features
     --omit_cross_product
     --vector_aggr mean

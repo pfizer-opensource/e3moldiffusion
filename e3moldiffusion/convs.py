@@ -199,6 +199,7 @@ class EQGATRBFConv(MessagePassing):
         self,
         in_dims: Tuple[int, Optional[int]],
         out_dims: Tuple[int, Optional[int]],
+        edge_dim: Optional[int],
         rbf_dim: int,
         cutoff: float = 10.0,
         eps: float = 1e-6,
@@ -229,8 +230,13 @@ class EQGATRBFConv(MessagePassing):
     
         self.cutoff_fnc = PolynomialCutoff(cutoff=cutoff, p=6)
         self.rbf = BesselExpansion(cutoff, rbf_dim)
+        
+        if edge_dim is None or 0:
+            self.edge_dim = 0
+        else:
+            self.edge_dim = edge_dim
   
-        self.edge_net = nn.Sequential(DenseLayer(2 * self.si + rbf_dim + 1,
+        self.edge_net = nn.Sequential(DenseLayer(2 * self.si + self.edge_dim + rbf_dim + 1,
                                                  self.si,
                                                  bias=True, activation=nn.SiLU()
                                                  ),
@@ -307,7 +313,7 @@ class EQGATRBFConv(MessagePassing):
         dim_size: Optional[int]
     ) -> Tuple[Tensor, Tensor]:
 
-        d, r, _ = edge_attr
+        d, r, e = edge_attr
 
         # de = d.view(-1, 1)
         de = 1.0 / (1.0 + d.view(-1, 1))        
@@ -315,7 +321,10 @@ class EQGATRBFConv(MessagePassing):
         cutoff = self.cutoff_fnc(d).view(-1, 1)
         rbf = cutoff * rbf
 
-        aij = torch.cat([sa_i, sa_j, de, rbf], dim=-1)
+        if self.edge_dim == 0:
+            aij = torch.cat([sa_i, sa_j, de, rbf], dim=-1)
+        else:
+            aij = torch.cat([sa_i, sa_j, de, rbf, e], dim=-1)
 
         aij = self.edge_net(aij)
 

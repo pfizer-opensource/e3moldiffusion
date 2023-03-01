@@ -27,13 +27,15 @@ args=(
     --dataset drugs
     --max_num_conformers 30
     --num_workers 4
-    --save_dir logs/drugs
+    --save_dir logs/drugs_coords
     --num_epochs 100
-    --sdim 128 --vdim 32 --tdim 128 --num_layers 4 
+    --sdim 128 --vdim 32 --tdim 128 --num_layers 5
     --lr 5e-4 --batch_size 256
     --fully_connected 
     --use_bond_features
     --edim 32
+    --cutoff 10.0
+    --rbf_dim 16
     --use_all_atom_features
     --omit_cross_product
     --vector_aggr mean

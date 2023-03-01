@@ -1,5 +1,5 @@
 import math
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Optional
 
 import torch
 import torch.nn.functional as F
@@ -136,6 +136,7 @@ class EncoderGNN(nn.Module):
     def __init__(self,
                  hn_dim: Tuple[int, int] = (64, 16),
                  rbf_dim: int = 64,
+                 edge_dim: Optional[int] = None,
                  cutoff: float = 10.0,
                  num_layers: int = 5,
                  use_norm: bool = True,
@@ -150,14 +151,15 @@ class EncoderGNN(nn.Module):
 
         self.convs = nn.ModuleList([
             EQGATRBFConv(in_dims=hn_dim,
-                             out_dims=hn_dim,
-                             rbf_dim=rbf_dim,
-                             cutoff=cutoff,
-                             has_v_in=i>0,
-                             use_mlp_update= i < (num_layers - 1),
-                             vector_aggr=vector_aggr,
-                             use_cross_product=use_cross_product
-                             )
+                         out_dims=hn_dim,
+                         rbf_dim=rbf_dim,
+                         edge_dim=edge_dim,
+                         cutoff=cutoff,
+                         has_v_in=i>0,
+                         use_mlp_update= i < (num_layers - 1),
+                         vector_aggr=vector_aggr,
+                         use_cross_product=use_cross_product
+                         )
             for i in range(num_layers)
         ])
 
@@ -182,7 +184,6 @@ class EncoderGNN(nn.Module):
                 edge_attr: Tuple[Tensor, Tensor, OptTensor],
                 batch: Tensor = None) -> Dict:
 
-      
         for i in range(len(self.convs)):
             if self.use_norm:
                 s, v = self.norms[i](x=(s, v), batch=batch)
@@ -198,6 +199,8 @@ class ScoreModelCoords(nn.Module):
                  hn_dim: Tuple[int, int] = (64, 16),
                  t_dim: int = 64,
                  edge_dim: int = 16,
+                 rbf_dim: int = 16,
+                 cutoff: float = 10.0,
                  num_layers: int = 5,
                  use_norm: bool = True,
                  use_cross_product: bool = False,
@@ -211,10 +214,10 @@ class ScoreModelCoords(nn.Module):
                                         use_all_atom_features=use_all_atom_features,
                                         max_norm=1.0)
 
-        if edge_dim is not None:
-            self.edge_dim = edge_dim
-        else:
+        if edge_dim is None or 0:
             self.edge_dim = 0
+        else:
+            self.edge_dim = edge_dim
 
         if self.edge_dim:
             self.edge_encoder = BondEncoder(emb_dim=edge_dim, max_norm=1.0)
@@ -229,23 +232,16 @@ class ScoreModelCoords(nn.Module):
         
         self.sdim, self.vdim = hn_dim
 
-        self.convs = nn.ModuleList([
-            EQGATConv(in_dims=hn_dim,
-                      out_dims=hn_dim,
-                      edge_dim=self.edge_dim,
-                      has_v_in=i>0,
-                      use_mlp_update= i < (num_layers - 1),
-                      vector_aggr=vector_aggr,
-                      use_cross_product=use_cross_product
-                      )
-            for i in range(num_layers)
-        ])
-
-        self.use_norm = use_norm
-        self.norms = nn.ModuleList([
-            LayerNorm(dims=hn_dim) if use_norm else nn.Identity()
-            for _ in range(num_layers)
-        ])
+        self.gnn = EncoderGNN(
+            hn_dim=hn_dim,
+            cutoff=cutoff,
+            rbf_dim=rbf_dim,
+            edge_dim=edge_dim,
+            num_layers=num_layers,
+            use_norm=use_norm,
+            use_cross_product=use_cross_product,
+            vector_aggr=vector_aggr,
+        )
         
         self.distance_score = DenseLayer(in_features=hn_dim[0], out_features=1)
         self.coords_score = DenseLayer(in_features=hn_dim[1], out_features=1)
@@ -257,11 +253,8 @@ class ScoreModelCoords(nn.Module):
         reset(self.t_mapping)
         if self.edge_dim:
             self.edge_encoder.reset_parameters()
-        for conv, norm in zip(self.convs, self.norms):
-            conv.reset_parameters()
-            if self.use_norm:
-                norm.reset_parameters()
         
+        self.gnn.reset_parameters()
         self.distance_score.reset_parameters()
         self.coords_score.reset_parameters()
 
@@ -291,11 +284,11 @@ class ScoreModelCoords(nn.Module):
         s = s + temb
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
 
-        for i in range(len(self.convs)):
-            if self.use_norm:
-                s, v = self.norms[i](x=(s, v), batch=batch)
-            s, v = self.convs[i](x=(s, v), edge_index=edge_index, edge_attr=edge_attr_c)
-
+        out = self.gnn(
+            s=s, v=v, edge_index=edge_index, edge_attr=edge_attr_c, batch=batch
+        )
+        
+        s, v = out["s"], out["v"]
         s = F.silu(s)
         d = self.distance_score(s)
         d = d[source] + d[target]

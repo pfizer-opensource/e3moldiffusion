@@ -100,7 +100,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
             hn_dim=(self.hparams.sdim, self.hparams.vdim),
             cutoff=self.hparams.cutoff,
             rbf_dim=self.hparams.rbf_dim,
-            edge_dim=0,
+            edge_dim=None,
             num_layers=self.hparams.num_layers,
             use_norm=not self.hparams.omit_norm,
             use_cross_product=not self.hparams.omit_cross_product,
