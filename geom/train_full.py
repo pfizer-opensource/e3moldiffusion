@@ -54,7 +54,6 @@ if __name__ == "__main__":
         env_in_init=True,
         shuffle_train=True,
         max_num_conformers=hparams.max_num_conformers,
-        transform=MolFeaturization(order=3),
         pin_memory=True,
         persistent_workers=True
     )

@@ -56,6 +56,30 @@ DRUGS_smi_to_id = {s: i for i, s in enumerate(DRUGS_mapping)}
 DRUGS_id_to_smi = {i: s for s, i in DRUGS_smi_to_id.items()}
 DRUGS_pickles = [osp.join(osp.join(PATH, "drugs"), f) for f in DRUGS_pickles]
 
+def atom_type_config(dataset: str = "qm9"):
+    if dataset == "qm9":
+        mapping = {"H": 0, "C": 1, "N": 2, "O": 3, "F": 4}
+    elif dataset == "drugs":
+        mapping =  {
+        "B": 0,
+        "C": 1,
+        "N": 2,
+        "O": 3,
+        "F": 4,
+        "Al": 5,
+        "Si": 6,
+        "P": 7,
+        "S": 8,
+        "Cl": 9,
+        "As": 10,
+        "Br": 11,
+        "I": 12,
+        "Hg": 13,
+        "Bi": 14,
+    }
+    return mapping
+
+
 BOND_FEATURE_DIMS = get_bond_feature_dims()
 BOND_FEATURE_DIMS = BOND_FEATURE_DIMS[0]
 
@@ -147,13 +171,11 @@ class GetHigherOrderEdges:
 
 
 class MolFeaturization:
-    def __init__(self, order: int = 3):
+    def __init__(self, dataset: str = "qm9"):
         super().__init__()
-
-        self.order = order
-        self.higher_order = GetHigherOrderEdges(order=order)
-
-    @classmethod
+        assert dataset in ["qm9", "drugs"]  
+        self.mapping = atom_type_config(dataset=dataset)
+        
     def featurize_smiles_or_mol(
         self, smiles_mol: Union[str, Chem.Mol, dict]
     ) -> Optional[Data]:
@@ -169,6 +191,8 @@ class MolFeaturization:
             mol = smiles_mol
 
         data = smiles_or_mol_to_graph(smol=mol)
+        # not error-prone as of now...
+        data.xgeom = torch.tensor([self.mapping.get(el) for el in data.atom_elements])
 
         if mol.GetNumConformers() == 1:
             pos = torch.tensor(mol.GetConformer(0).GetPositions(), dtype=torch.float)
@@ -216,9 +240,7 @@ class MolFeaturization:
     def __call__(self, smiles_mol: Union[str, Chem.Mol, dict]) -> Data:
         data = self.featurize_smiles_or_mol(smiles_mol=smiles_mol["mol"])
         assert data is not None
-        # data = self.higher_order(data)
         data = self.fully_connected_edge_idx(data=data, without_self_loop=True)
-        # data = self.upper_edge_idx(data, order=self.order)
         data.energy = torch.tensor([smiles_mol["energy"]], dtype=torch.float32).view(
             -1, 1
         )
@@ -664,7 +686,6 @@ class GeomDataModule(LightningDataModule):
         self,
         batch_size: int = 256,
         num_workers: int = 4,
-        transform=MolFeaturization(order=3),
         dataset: str = "drugs",
         env_in_init: bool = False,
         shuffle_train: bool = True,
@@ -684,7 +705,7 @@ class GeomDataModule(LightningDataModule):
         self.shuffle_train = shuffle_train
         # self.subset_frac = subset_frac
         self.max_num_conformers = max_num_conformers
-        self.transform = transform
+        self.transform = MolFeaturization(dataset=dataset)
         self.pin_memory = pin_memory
         self.persistent_workers = persistent_workers
 

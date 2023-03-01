@@ -1,9 +1,14 @@
 from typing import Union
 
 import torch
+import rdkit
 from rdkit import Chem
+from rdkit.Chem import GetPeriodicTable
 from torch import nn
 from torch_geometric.data import Data
+
+
+PERIODIC_TABLE = GetPeriodicTable()
 
 # allowable multiple choice node and edge features
 allowable_features = {
@@ -41,6 +46,28 @@ allowable_features = {
     'possible_is_conjugated_list': [False, True],
 }
 
+def atom_type_config(dataset: str = "qm9"):
+    if dataset == "qm9":
+        mapping = {"H": 0, "C": 1, "N": 2, "O": 3, "F": 4}
+    elif dataset == "drugs":
+        mapping =  {
+        "B": 0,
+        "C": 1,
+        "N": 2,
+        "O": 3,
+        "F": 4,
+        "Al": 5,
+        "Si": 6,
+        "P": 7,
+        "S": 8,
+        "Cl": 9,
+        "As": 10,
+        "Br": 11,
+        "I": 12,
+        "Hg": 13,
+        "Bi": 14,
+    }
+    return mapping
 
 def safe_index(l, e):
     """
@@ -63,7 +90,7 @@ def atom_to_feature_vector(atom):
             safe_index(allowable_features['possible_degree_list'], atom.GetTotalDegree()),
             safe_index(allowable_features['possible_hybridization_list'], str(atom.GetHybridization())),
             allowable_features['possible_is_aromatic_list'].index(atom.GetIsAromatic()),
-            allowable_features['possible_is_in_ring_list'].index(atom.IsInRing()),
+            allowable_features['possible_is_in_ring_list'].index(atom.IsInRing())
             ]
     return atom_feature
 
@@ -76,7 +103,6 @@ def get_atom_feature_dims():
         allowable_features['possible_is_aromatic_list'],
         allowable_features['possible_is_in_ring_list']
         ]))
-
 
 def bond_to_feature_vector(bond):
     """
@@ -131,8 +157,11 @@ def smiles_or_mol_to_graph(smol: Union[str, Chem.Mol]):
 
     # atoms
     atom_features_list = []
+    atom_element_name_list = []
     for atom in mol.GetAtoms():
         atom_features_list.append(atom_to_feature_vector(atom))
+        atom_element_name_list.append(PERIODIC_TABLE.GetElementSymbol(atom.GetAtomicNum()))
+
     
     x = torch.tensor(atom_features_list, dtype=torch.int64)
     assert x.size(-1) == 5
@@ -160,7 +189,8 @@ def smiles_or_mol_to_graph(smol: Union[str, Chem.Mol]):
     if edge_index.numel() > 0:  # Sort indices.
         perm = (edge_index[0] * x.size(0) + edge_index[1]).argsort()
         edge_index, edge_attr = edge_index[:, perm], edge_attr[perm]
-    data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+    
+    data = Data(x=x, atom_elements = atom_element_name_list, edge_index=edge_index, edge_attr=edge_attr)
     return data
 
 
@@ -213,6 +243,7 @@ if __name__ == '__main__':
     data = smiles_or_mol_to_graph(smol)
     print(data)
     print(data.x)
+    print(data.atom_elements)
     
     atomencoder = AtomEncoder(emb_dim=16)
     bondencoder = BondEncoder(emb_dim=16)

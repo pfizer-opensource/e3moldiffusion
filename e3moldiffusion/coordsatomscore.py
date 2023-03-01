@@ -7,7 +7,9 @@ from torch_cluster import radius_graph
 
 from e3moldiffusion.gnn import EncoderGNN
 from e3moldiffusion.modules import DenseLayer, GatedEquivBlock
-from e3moldiffusion.molfeat import get_atom_feature_dims
+
+from e3moldiffusion.molfeat import atom_type_config
+
 from e3moldiffusion.sde import (
     DiscreteDDPM,
     VPAncestralSamplingPredictor,
@@ -16,9 +18,6 @@ from e3moldiffusion.sde import (
 from torch import Tensor, nn
 from torch_scatter import scatter_mean
 from torch_geometric.nn.inits import reset
-
-MAX_NUM_ATOM_FEATURES = get_atom_feature_dims()[0] + 1
-
 
 def zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0):
     out = x - scatter_mean(x, index=batch, dim=dim, dim_size=dim_size)[batch]
@@ -29,20 +28,25 @@ def assert_zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0, eps: float 
     out = scatter_mean(x, index=batch, dim=dim, dim_size=dim_size).mean()
     return abs(out) < eps
 
+def get_num_atom_types_geom(dataset: str):
+    assert dataset in ["qm9", "drugs"]
+    return len(atom_type_config(dataset=dataset))
+
 
 class AtomEmbedding(nn.Module):
-    def __init__(self, out_dim: int) -> None:
+    def __init__(self, num_atom_types: int, out_dim: int) -> None:
         super().__init__()
 
+        self.num_atom_types = num_atom_types
         self.out_dim = out_dim
-        embedding = torch.randn(MAX_NUM_ATOM_FEATURES, out_dim)
+        embedding = torch.randn(num_atom_types, out_dim)
         embedding /= embedding.norm(p=2, dim=-1, keepdim=True)
         self.embedding = nn.parameter.Parameter(embedding)
 
         self.reset_parameters()
 
     def reset_parameters(self):
-        self.embedding.data = torch.randn(MAX_NUM_ATOM_FEATURES, self.out_dim)
+        self.embedding.data = torch.randn(self.num_atom_types, self.out_dim)
         self.embedding.data /= self.embedding.data.norm(p=2, dim=-1, keepdim=True)
 
     def forward(self, x: Tensor, norm_gradient: bool = True) -> Tensor:
@@ -72,17 +76,20 @@ default_hparams: dict = {
     "patience": 5,
     "cooldown": 5,
     "factor": 0.75,
+    "dataset": "qm9"
 }
+
 
 class CoordsAtomScoreTrainer(pl.LightningModule):
     def __init__(self, hparams: dict = default_hparams) -> None:
         super(CoordsAtomScoreTrainer, self).__init__()
 
         self.save_hyperparameters(hparams)
+        self.hparams.num_atom_types = get_num_atom_types_geom(dataset=self.hparams.dataset)
         
         self.atom_time_mapping = nn.Sequential(
             DenseLayer(
-                self.hparams.tdim + MAX_NUM_ATOM_FEATURES,
+                self.hparams.tdim + self.hparams.num_atom_types,
                 self.hparams.sdim,
                 activation=nn.SiLU(),
             ),
@@ -100,7 +107,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
             vector_aggr=self.hparams.vector_aggr,
         )
 
-        self.atom_types_lin = DenseLayer(self.hparams.sdim, MAX_NUM_ATOM_FEATURES)
+        self.atom_types_lin = DenseLayer(self.hparams.sdim, self.hparams.num_atom_types)
         self.coords_lin = DenseLayer(self.hparams.vdim, 1, bias=False)
 
         timesteps = torch.arange(self.hparams.num_diffusion_timesteps, dtype=torch.long)
@@ -155,7 +162,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
         
         # initialize the atom-types 
-        xohes = torch.randn(pos.size(0), MAX_NUM_ATOM_FEATURES, device=device)
+        xohes = torch.randn(pos.size(0), self.hparams.num_atom_types, device=device)
         
         if self.hparams.fully_connected:
             # fully-connected graphs
@@ -234,12 +241,9 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
     def forward(
         self, x: Tensor, pos: Tensor, t: Tensor, edge_index: Tensor, batch: Tensor
     ):      
-        
-        # only select atom-types
-        x = x[:, 0]
-        
+                
         # one-hot-encode
-        xohe = F.one_hot(x, num_classes=MAX_NUM_ATOM_FEATURES).float()
+        xohe = F.one_hot(x, num_classes=self.hparams.num_atom_types).float()
         xohe = 0.25 * xohe
         
         if not self.hparams.fully_connected:
@@ -309,7 +313,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
             device=batch.x.device,
         )
 
-        out_dict = self(x=batch.x, pos=batch.pos, t=t, edge_index=batch.edge_index_fc, batch=batch.batch)
+        out_dict = self(x=batch.xgeom, pos=batch.pos, t=t, edge_index=batch.edge_index_fc, batch=batch.batch)
         coords_loss = torch.pow(
             out_dict["noise_coords_pred"] - out_dict["noise_coords_true"], 2
         ).mean(-1)
@@ -326,7 +330,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         )
         ohes_loss = torch.mean(ohes_loss, dim=0)
 
-        loss = 1/2 * (coords_loss + ohes_loss)
+        loss = coords_loss + ohes_loss
 
         self.log(
             f"{stage}/loss",
@@ -393,6 +397,7 @@ if __name__ == "__main__":
         "patience": 5,
         "cooldown": 5,
         "factor": 0.75,
+        "dataset": "qm9"   # "drugs"
     }
 
     trainer = CoordsAtomScoreTrainer(hparams=default_hparams)
