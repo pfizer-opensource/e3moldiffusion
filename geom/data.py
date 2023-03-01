@@ -61,21 +61,22 @@ def atom_type_config(dataset: str = "qm9"):
         mapping = {"H": 0, "C": 1, "N": 2, "O": 3, "F": 4}
     elif dataset == "drugs":
         mapping =  {
-        "B": 0,
-        "C": 1,
-        "N": 2,
-        "O": 3,
-        "F": 4,
-        "Al": 5,
-        "Si": 6,
-        "P": 7,
-        "S": 8,
-        "Cl": 9,
-        "As": 10,
-        "Br": 11,
-        "I": 12,
-        "Hg": 13,
-        "Bi": 14,
+        "H": 0,
+        "B": 1,
+        "C": 2,
+        "N": 3,
+        "O": 4,
+        "F": 5,
+        "Al": 6,
+        "Si": 7,
+        "P": 8,
+        "S": 9,
+        "Cl": 10,
+        "As": 11,
+        "Br": 12,
+        "I": 13,
+        "Hg": 14,
+        "Bi": 15,
     }
     return mapping
 
