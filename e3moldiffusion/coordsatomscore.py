@@ -137,7 +137,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         empirical_distribution_num_nodes: Tensor,
         verbose: bool = False,
         save_traj: bool = False
-    ) -> Tuple[Tensor, List]:
+    ) -> Tuple[Tensor, Tensor, Tensor, List]:
         
         device = self.timesteps.data.device
         batch_num_nodes = torch.multinomial(input=empirical_distribution_num_nodes,
@@ -180,6 +180,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
 
         pos_traj = []
         atom_type_traj = []
+        atom_type_ohe_traj = []
         chain = range(self.hparams.num_diffusion_timesteps)
     
         if verbose:
@@ -202,11 +203,10 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
             out = self.gnn(
                 s=s, v=v, edge_index=edge_index, edge_attr=edge_attr, batch=batch
             )
-            
             score_coords = self.coords_lin(out["v"]).squeeze()
             score_ohes = self.atom_types_lin(out["s"])
-            score_coords = zero_mean(score_coords, batch=batch, dim_size=bs, dim=0)
             
+            score_coords = zero_mean(score_coords, batch=batch, dim_size=bs, dim=0)
             noise_coords = torch.randn_like(pos)
             noise_coords = zero_mean(noise_coords, batch=batch, dim_size=bs, dim=0)
         
@@ -216,12 +216,20 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
             noise_ohes = torch.randn_like(xohes)
             xohes, _ = self.sampler.update_fn(x=xohes, score=score_ohes, t=t[batch], noise=noise_ohes)
             
+            if not self.hparams.fully_connected:
+                edge_index = radius_graph(x=pos, r=self.hparams.cutoff,
+                                          batch=batch, loop=False,
+                                          max_num_neighbors=self.hparams.max_num_neighbors)
+            
+            ohe_integer = torch.argmax(xohes, dim=-1)
+            
             if save_traj:
                 pos_traj.append(pos.detach())
                 atom_type_traj.append(xohes.detach())
-            
-            
-        return pos, [pos_traj, atom_type_traj]
+                atom_type_ohe_traj.append(ohe_integer)
+                
+    
+        return pos, xohes, ohe_integer, [pos_traj, atom_type_traj, atom_type_ohe_traj]
 
     def forward(
         self, x: Tensor, pos: Tensor, t: Tensor, edge_index: Tensor, batch: Tensor
