@@ -142,13 +142,18 @@ class EncoderGNN(nn.Module):
                  use_norm: bool = True,
                  use_cross_product: bool = False,
                  vector_aggr: str = "mean",
-                 **kwargs
+                 fully_connected: bool = False,
+                 local_global_model: bool = True
                  ):
         super(EncoderGNN, self).__init__()
 
 
+        self.num_layers = num_layers
+        self.fully_connected = fully_connected
+        self.local_global_model = local_global_model
+        
         self.sdim, self.vdim = hn_dim
-
+        
         self.convs = nn.ModuleList([
             EQGATRBFConv(in_dims=hn_dim,
                          out_dims=hn_dim,
@@ -180,18 +185,37 @@ class EncoderGNN(nn.Module):
     def forward(self,
                 s: Tensor,
                 v: Tensor,
-                edge_index: Tensor,
-                edge_attr: Tuple[Tensor, Tensor, OptTensor],
+                edge_index_local: Tensor,
+                edge_attr_local: Tuple[Tensor, Tensor, OptTensor],
+                edge_index_global: Tensor,
+                edge_attr_global: Tuple[Tensor, Tensor, OptTensor],
                 batch: Tensor = None) -> Dict:
 
         for i in range(len(self.convs)):
+            
+            if self.local_global_model:
+                if i == self.num_layers - 2:
+                    edge_index_in = edge_index_global
+                    edge_attr_in = edge_attr_global
+                else:
+                    edge_index_in = edge_index_local
+                    edge_attr_in = edge_attr_local
+            else:
+                if self.fully_connected:
+                    edge_index_in = edge_index_global
+                    edge_attr_in = edge_attr_global
+                else:
+                    edge_index_in = edge_index_local
+                    edge_attr_in = edge_attr_local
+                     
             if self.use_norm:
                 s, v = self.norms[i](x=(s, v), batch=batch)
-            s, v = self.convs[i](x=(s, v), edge_index=edge_index, edge_attr=edge_attr)
-
+                
+            s, v = self.convs[i](x=(s, v), edge_index=edge_index_in, edge_attr=edge_attr_in)
+            
         out = {"s": s, "v": v}
+        
         return out
-
 
 
 class ScoreModelCoords(nn.Module):
@@ -205,8 +229,9 @@ class ScoreModelCoords(nn.Module):
                  use_norm: bool = True,
                  use_cross_product: bool = False,
                  use_all_atom_features: bool = True,
-                 vector_aggr: str = "mean",
-                 **kwargs
+                 fully_connected: bool = False,
+                 local_global_model: bool = False,
+                 vector_aggr: str = "mean"
                  ):
         super(ScoreModelCoords, self).__init__()
 
@@ -241,6 +266,8 @@ class ScoreModelCoords(nn.Module):
             use_norm=use_norm,
             use_cross_product=use_cross_product,
             vector_aggr=vector_aggr,
+            fully_connected=fully_connected,
+            local_global_model=local_global_model
         )
         
         self.distance_score = DenseLayer(in_features=hn_dim[0], out_features=1)
@@ -262,30 +289,43 @@ class ScoreModelCoords(nn.Module):
                 x: Tensor,
                 t: Tensor,
                 pos: Tensor,
-                edge_index: Tensor,
-                edge_attr: OptTensor = None,
+                edge_index_local: Tensor,
+                edge_index_global: Tensor,
+                edge_attr_local: OptTensor = None,
+                edge_attr_global: OptTensor = None,
                 batch: OptTensor = None):
 
         if batch is None:
             batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)
-        batch_size = int(batch.max()) + 1
+     
+        if self.edge_dim > 0:
+            edge_attr_local = self.edge_encoder(edge_attr_local)
+            edge_attr_global = self.edge_encoder(edge_attr_global)
 
-        if edge_attr is not None:
-            edge_attr = self.edge_encoder(edge_attr)
-
-        source, target = edge_index
+        # local
+        source, target = edge_index_local
         r = pos[target] - pos[source]
         d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6).sqrt()
         r_norm = torch.div(r, d.unsqueeze(-1))
-        edge_attr_c = (d, r_norm, edge_attr)
-
+        edge_attr_local = (d, r_norm, edge_attr_local)
+        
+        # global
+        source, target = edge_index_global
+        r = pos[target] - pos[source]
+        d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6).sqrt()
+        r_norm = torch.div(r, d.unsqueeze(-1))
+        edge_attr_global = (d, r_norm, edge_attr_global)
+        
         s = self.atom_encoder(x)
         temb = self.t_mapping(t)[batch]
         s = s + temb
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
 
         out = self.gnn(
-            s=s, v=v, edge_index=edge_index, edge_attr=edge_attr_c, batch=batch
+            s=s, v=v,
+            edge_index_local=edge_index_local, edge_attr_local=edge_attr_local,
+            edge_index_global=edge_index_global, edge_attr_global=edge_attr_global,
+            batch=batch
         )
         
         s, v = out["s"], out["v"]

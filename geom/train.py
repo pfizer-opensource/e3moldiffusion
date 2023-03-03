@@ -19,6 +19,7 @@ from e3moldiffusion.gnn import ScoreModelCoords
 from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.typing import OptTensor
+from torch_geometric.utils import dense_to_sparse
 from torch_cluster import radius_graph
 from torch_sparse import coalesce
 from torch_scatter import scatter_mean
@@ -43,7 +44,9 @@ class Trainer(pl.LightningModule):
             use_norm=not hparams["omit_norm"],
             use_cross_product=not hparams["omit_cross_product"],
             use_all_atom_features=hparams["use_all_atom_features"],
-            vector_aggr=hparams["vector_aggr"]
+            vector_aggr=hparams["vector_aggr"],
+            fully_connected=hparams["fully_connected"],
+            local_global_model=hparams["local_global_model"]
         )
 
         timesteps = torch.arange(hparams["num_diffusion_timesteps"], dtype=torch.long)
@@ -70,7 +73,6 @@ class Trainer(pl.LightningModule):
             
         self.sampler = VPAncestralSamplingPredictor(sde=self.sde)
     
-    
     def coalesce_edges(self, edge_index, bond_edge_index, bond_edge_attr, n):
         # possibly combine the bond-edge-index with radius graph or fully-connected graph
         # Note: This scenario is useful when learning the 3D coordinates only. 
@@ -87,8 +89,6 @@ class Trainer(pl.LightningModule):
     def reverse_sampling(
         self,
         x: Tensor,
-        edge_index: OptTensor = None,
-        edge_attr: OptTensor = None,
         batch: OptTensor = None,
         num_diffusion_timesteps: Optional[int] = None,
         save_traj: bool = False,
@@ -115,39 +115,23 @@ class Trainer(pl.LightningModule):
                           dtype=self.model.atom_encoder.atom_embedding_list[0].weight.dtype)
         pos = pos - scatter_mean(pos, dim=0, index=batch, dim_size=bs)[batch]
         
-        if self.hparams.fully_connected:
-            if edge_index is None:
-                # fully-connected graphs
-                batch_num_nodes = torch.bincount(batch)
-                ptr = torch.cumsum(batch_num_nodes, dim=0)
-                ptr = torch.concat([torch.zeros(1, device=ptr.device, dtype=ptr.dtype), ptr[:-1]], dim=0)       
-                edge_index_list = []
-                for offset, n in zip(ptr.cpu().tolist(), batch_num_nodes.cpu().tolist()):
-                    row = torch.arange(n, dtype=torch.long)
-                    col = torch.arange(n, dtype=torch.long)
-                    row = row.view(-1, 1).repeat(1, n).view(-1)
-                    col = col.repeat(n)
-                    edge_index = torch.stack([row, col], dim=0)
-                    mask = edge_index[0] != edge_index[1]
-                    edge_index = edge_index[:, mask]
-                    edge_index += offset
-                    edge_index_list.append(edge_index)
-                edge_index = torch.concat(edge_index_list, dim=-1).to(x.device)
-        else:
-            edge_index = radius_graph(x=pos,
-                                      r=self.hparams.cutoff,
-                                      batch=batch,
-                                      max_num_neighbors=self.hparams.max_num_neighbors)
+        edge_index_local = radius_graph(x=pos,
+                                        r=self.hparams.cutoff,
+                                        batch=batch, 
+                                        max_num_neighbors=self.hparams.max_num_neighbors)
         
-        if self.hparams.use_bond_features:
-            edge_index, edge_attr = self.coalesce_edges(edge_index=edge_index,
-                                                        bond_edge_index=bond_edge_index, bond_edge_attr=bond_edge_attr,
-                                                        n=pos.size(0)
-                                                        )
+        edge_index_global = torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
+        edge_index_global, _ = dense_to_sparse(edge_index_global)
 
-            
-        if self.hparams.energy_preserving:
-            pos.requires_grad_()
+        if self.hparams.use_bond_features:
+            edge_index_local, edge_attr_local = self.coalesce_edges(edge_index=edge_index_local,
+                                                                    bond_edge_index=bond_edge_index,
+                                                                    bond_edge_attr=bond_edge_attr,
+                                                                    n=pos.size(0))
+            edge_index_global, edge_attr_global = self.coalesce_edges(edge_index=edge_index_global,
+                                                                      bond_edge_index=bond_edge_index,
+                                                                      bond_edge_attr=bond_edge_attr,
+                                                                      n=pos.size(0))
 
         pos_sde_traj = []
         pos_mean_traj = []
@@ -163,20 +147,12 @@ class Trainer(pl.LightningModule):
                 x=x,
                 t=temb,
                 pos=pos,
-                edge_index=edge_index,
-                edge_attr=edge_attr,
+                edge_index_local=edge_index_local,
+                edge_index_global=edge_index_global,
+                edge_attr_local=edge_attr_local if self.hparams.use_bond_features else None,
+                edge_attr_global=edge_attr_global if self.hparams.use_bond_features else None,
                 batch=batch,
             )
-            if self.hparams.energy_preserving:
-                grad_outputs: List[OptTensor] = [torch.ones_like(out)]
-                out = torch.autograd.grad(
-                    outputs=[out],
-                    inputs=[pos],
-                    grad_outputs=grad_outputs,
-                    create_graph=True,
-                    retain_graph=True,
-                )[0]
-        
             noise = torch.randn_like(pos)
             noise = noise - scatter_mean(noise, index=batch, dim=0, dim_size=bs)[batch]
         
@@ -185,18 +161,15 @@ class Trainer(pl.LightningModule):
             pos_mean = pos_mean - scatter_mean(pos_mean, index=batch, dim=0, dim_size=bs)[batch]
 
             if not self.hparams.fully_connected:
-                edge_index = radius_graph(x=pos.detach(),
-                                          r=self.hparams.cutoff,
-                                          batch=batch,
-                                          max_num_neighbors=self.hparams.max_num_neighbors
-                                          )
+                edge_index_local = radius_graph(x=pos.detach(),
+                                                r=self.hparams.cutoff,
+                                                batch=batch, 
+                                                max_num_neighbors=self.hparams.max_num_neighbors)
                 if self.hparams.use_bond_features:
-                    edge_index, edge_attr = self.coalesce_edges(edge_index=edge_index,
-                                                                bond_edge_index=bond_edge_index, bond_edge_attr=bond_edge_attr,
-                                                                n=pos.size(0)
-                                                                )
-            
-                    
+                    edge_index_local, edge_attr_local = self.coalesce_edges(edge_index=edge_index_local,
+                                                                            bond_edge_index=bond_edge_index,
+                                                                            bond_edge_attr=bond_edge_attr,
+                                                                            n=pos.size(0))
             if save_traj:
                 pos_sde_traj.append(pos.detach())
                 pos_mean_traj.append(pos_mean.detach())
@@ -207,7 +180,6 @@ class Trainer(pl.LightningModule):
         node_feat: Tensor = batch.x
         pos: Tensor = batch.pos
         data_batch: Tensor = batch.batch
-        ptr = batch.ptr
         bond_edge_index = batch.edge_index
         bond_edge_attr = batch.edge_attr
 
@@ -232,72 +204,40 @@ class Trainer(pl.LightningModule):
         # perturb
         pos_perturbed = mean + std * noise
         
-        if self.hparams.fully_connected:
-            edge_index = batch.edge_index_fc
-            if edge_index is None:
-                # fully-connected graphs
-                batch_num_nodes = torch.bincount(data_batch)
-                edge_index_list = []
-                for offset, n in zip(ptr.cpu().tolist(), batch_num_nodes.cpu().tolist()):
-                    row = torch.arange(n, dtype=torch.long)
-                    col = torch.arange(n, dtype=torch.long)
-                    row = row.view(-1, 1).repeat(1, n).view(-1)
-                    col = col.repeat(n)
-                    edge_index = torch.stack([row, col], dim=0)
-                    mask = edge_index[0] != edge_index[1]
-                    edge_index = edge_index[:, mask]
-                    edge_index += offset
-                    edge_index_list.append(edge_index)
-                edge_index = torch.concat(edge_index_list, dim=-1).to(node_feat.device)     
-        else:
-            edge_index = radius_graph(x=pos_perturbed,
-                                      r=self.hparams.cutoff,
-                                      batch=data_batch,
-                                      max_num_neighbors=self.hparams.max_num_neighbors
-                                      )
+        edge_index_local = radius_graph(x=pos_perturbed,
+                                        r=self.hparams.cutoff,
+                                        batch=data_batch,
+                                        max_num_neighbors=self.hparams.max_num_neighbors
+                                        )
+        edge_index_global = batch.edge_index_fc
         
         if self.hparams.use_bond_features:
-            edge_index, edge_attr = self.coalesce_edges(edge_index=edge_index,
-                                                        bond_edge_index=bond_edge_index, bond_edge_attr=bond_edge_attr,
-                                                        n=pos.size(0)
-                                                        )
+            edge_index_local, edge_attr_local = self.coalesce_edges(edge_index=edge_index_local,
+                                                                    bond_edge_index=bond_edge_index, bond_edge_attr=bond_edge_attr,
+                                                                    n=pos.size(0))
+            edge_index_global, edge_attr_global = self.coalesce_edges(edge_index=edge_index_global,
+                                                                      bond_edge_index=bond_edge_index, bond_edge_attr=bond_edge_attr,
+                                                                      n=pos.size(0))
             
-        if self.hparams.energy_preserving:
-            pos_perturbed.requires_grad = True
-
         out = self.model(
             x=node_feat,
             t=timestep_embs,
             pos=pos_perturbed,
-            edge_index=edge_index,
-            edge_attr=edge_attr if self.hparams.use_bond_features else None,
+            edge_index_local=edge_index_local,
+            edge_index_global=edge_index_global,
+            edge_attr_local=edge_attr_local if self.hparams.use_bond_features else None,
+            edge_attr_global=edge_attr_global if self.hparams.use_bond_features else None,
             batch=data_batch,
         )
-
-        if self.hparams.energy_preserving:
-            grad_outputs: List[OptTensor] = [torch.ones_like(out)]
-            energy_norm = torch.pow(out, 2).sum(-1).mean(0)
-            out = torch.autograd.grad(
-                outputs=[out],
-                inputs=[pos_perturbed],
-                grad_outputs=grad_outputs,
-                create_graph=True,
-                retain_graph=True,
-            )[0]
-        else:
-            energy_norm = 0.0
 
         # center the predictions as ground truth noise is also centered
         out_mean = scatter_mean(out, index=data_batch, dim=0, dim_size=bs)
         out = out - out_mean[data_batch]
 
-        out_dict = {"pred_noise": out, "true_noise": noise, "energy_norm": energy_norm}
+        out_dict = {"pred_noise": out, "true_noise": noise}
         return out_dict
     
-    def step_fnc(self, batch, batch_idx, stage):
-        if stage == "val" and self.hparams.energy_preserving:
-            torch.set_grad_enabled(True)
-            
+    def step_fnc(self, batch, batch_idx, stage):         
         batch_size = int(batch.batch.max()) + 1
         if self.hparams.continuous:
             t = torch.rand(size=(batch_size, ), dtype=batch.pos.dtype, device=batch.pos.device)
@@ -312,7 +252,6 @@ class Trainer(pl.LightningModule):
         loss = torch.pow(out_dict["pred_noise"] - out_dict["true_noise"], 2).sum(-1)
         loss = scatter_mean(loss, index=batch.batch, dim=0, dim_size=batch_size)
         loss = torch.mean(loss, dim=0) 
-        loss = loss + 1e-2 * out_dict["energy_norm"]
         
         if stage == "val":
             sync_dist =  self.hparams.gpus > 1
@@ -350,7 +289,6 @@ class Trainer(pl.LightningModule):
             "monitor": "val/loss",
         }
         return [optimizer], [scheduler]
-
 
 if __name__ == "__main__":
     from geom.data import GeomDataModule

@@ -60,6 +60,7 @@ def add_arguments(parser):
     parser.add_argument("--use_bond_features", default=False, action="store_true")
     parser.add_argument("--use_all_atom_features", default=False, action="store_true")
     parser.add_argument("--fully_connected", default=False, action="store_true")
+    parser.add_argument("--local_global_model", default=False, action="store_true")
     parser.add_argument("--cutoff", default=7.5, type=float)
     parser.add_argument("--max_num_neighbors", default=128, type=int)
 

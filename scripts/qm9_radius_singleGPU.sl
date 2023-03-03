@@ -2,9 +2,9 @@
 #SBATCH -J qm9_coords_radius
 #SBATCH --mail-user=tuan.le@pfizer.com 
 #SBATCH --mail-type=ALL
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu_short
 #SBATCH --constraint=weka
-#SBATCH --time=1-00:00:00
+#SBATCH --time=0-01:30:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
@@ -18,19 +18,20 @@
 ls /hpfs/projects/mlcs/e3moldiffusion
 
 cd /gpfs/workspace/users/let55/projects/e3moldiffusion/geom
-source activate e3moldiffusion
+conda activate e3moldiffusion
 echo "runnning experiment"
 
 args=(
-    --gpus 1 --id 1
+    --gpus 1 --id 2
     --dataset qm9
     --max_num_conformers 30
     --num_workers 4
     --save_dir logs/qm9_coords
-    --num_epochs 100
+    --num_epochs 20
     --sdim 64 --vdim 16 --tdim 64 --num_layers 4 
     --lr 5e-4 --batch_size 256
     # --fully_connected 
+    --local_global_model
     --use_bond_features
     --edim 16
     --cutoff 5.0

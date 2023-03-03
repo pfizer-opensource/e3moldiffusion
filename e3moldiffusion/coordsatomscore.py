@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from typing import List, Tuple
 from torch_cluster import radius_graph
+from torch_geometric.utils import dense_to_sparse
 
 from e3moldiffusion.gnn import EncoderGNN
 from e3moldiffusion.modules import DenseLayer, GatedEquivBlock
@@ -105,6 +106,8 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
             use_norm=not self.hparams.omit_norm,
             use_cross_product=not self.hparams.omit_cross_product,
             vector_aggr=self.hparams.vector_aggr,
+            fully_connected=self.hparams.fully_connected,
+            local_global_model=self.hparams.local_global_model
         )
 
         self.atom_types_lin = DenseLayer(self.hparams.sdim, self.hparams.num_atom_types)
@@ -164,26 +167,13 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         # initialize the atom-types 
         xohes = torch.randn(pos.size(0), self.hparams.num_atom_types, device=device)
         
-        if self.hparams.fully_connected:
-            # fully-connected graphs
-            ptr = torch.cumsum(batch_num_nodes, dim=0)
-            ptr = torch.concat([torch.zeros(1, device=ptr.device, dtype=ptr.dtype), ptr[:-1]], dim=0)       
-            edge_index_list = []
-            for offset, n in zip(ptr.cpu().tolist(), batch_num_nodes.cpu().tolist()):
-                row = torch.arange(n, dtype=torch.long)
-                col = torch.arange(n, dtype=torch.long)
-                row = row.view(-1, 1).repeat(1, n).view(-1)
-                col = col.repeat(n)
-                edge_index = torch.stack([row, col], dim=0)
-                mask = edge_index[0] != edge_index[1]
-                edge_index = edge_index[:, mask]
-                edge_index += offset
-                edge_index_list.append(edge_index)
-            edge_index = torch.concat(edge_index_list, dim=-1).to(device)
-        else:
-            edge_index = radius_graph(x=pos, r=self.hparams.cutoff,
-                                      batch=batch, loop=False,
-                                      max_num_neighbors=self.hparams.max_num_neighbors)
+        edge_index_local = radius_graph(x=pos,
+                                        r=self.hparams.cutoff,
+                                        batch=batch, 
+                                        max_num_neighbors=self.hparams.max_num_neighbors)
+        
+        edge_index_global = torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
+        edge_index_global, _ = dense_to_sparse(edge_index_global)
 
         pos_traj = []
         atom_type_traj = []
@@ -197,18 +187,29 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
             t = torch.full(size=(bs, ), fill_value=timestep, dtype=torch.long, device=pos.device)
             temb = self.timesteps_embedder[t][batch]
             
-            # currently a bit inefficently reimplmented
-            source, target = edge_index
+            # local
+            source, target = edge_index_local
             r = pos[target] - pos[source]
-            d = torch.pow(r, 2).sum(-1).sqrt().clamp(min=1e-6)
+            d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6).sqrt()
             r_norm = torch.div(r, d.unsqueeze(-1))
-            edge_attr = (d, r_norm, None)
+            edge_attr_local = (d, r_norm, None)
+            
+            # global
+            source, target = edge_index_global
+            r = pos[target] - pos[source]
+            d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6).sqrt()
+            r_norm = torch.div(r, d.unsqueeze(-1))
+            edge_attr_global = (d, r_norm, None)
+            
             s_merged = torch.concat([xohes, temb], dim=-1)
             # gnn input
             s = self.atom_time_mapping(s_merged)
             v = torch.zeros(size=(pos.size(0), 3, self.hparams.vdim), device=s.device)
             out = self.gnn(
-                s=s, v=v, edge_index=edge_index, edge_attr=edge_attr, batch=batch
+                s=s, v=v,
+                edge_index_local=edge_index_local, edge_attr_local=edge_attr_local,
+                edge_index_global=edge_index_global, edge_attr_global=edge_attr_global,
+                batch=batch
             )
             score_coords = self.coords_lin(out["v"]).squeeze()
             score_ohes = self.atom_types_lin(out["s"])
@@ -224,9 +225,10 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
             xohes, _ = self.sampler.update_fn(x=xohes, score=score_ohes, t=t[batch], noise=noise_ohes)
             
             if not self.hparams.fully_connected:
-                edge_index = radius_graph(x=pos, r=self.hparams.cutoff,
-                                          batch=batch, loop=False,
-                                          max_num_neighbors=self.hparams.max_num_neighbors)
+                edge_index_local = radius_graph(x=pos.detach(),
+                                                r=self.hparams.cutoff,
+                                                batch=batch, 
+                                                max_num_neighbors=self.hparams.max_num_neighbors)
             
             ohe_integer = torch.argmax(xohes, dim=-1)
             
@@ -235,11 +237,10 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
                 atom_type_traj.append(xohes.detach())
                 atom_type_ohe_traj.append(ohe_integer)
                 
-    
         return pos, xohes, ohe_integer, batch_num_nodes, [pos_traj, atom_type_traj, atom_type_ohe_traj]
 
     def forward(
-        self, x: Tensor, pos: Tensor, t: Tensor, edge_index: Tensor, batch: Tensor
+        self, x: Tensor, pos: Tensor, t: Tensor, edge_index_global: Tensor,  batch: Tensor
     ):      
                 
         # one-hot-encode
@@ -247,11 +248,10 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         xohe = 0.25 * xohe
         
         if not self.hparams.fully_connected:
-            edge_index = radius_graph(x=pos, r=self.hparams.cutoff,
-                                      batch=batch, loop=False,
-                                      max_num_neighbors=self.hparams.max_num_neighbors)
-            
-        source, target = edge_index
+            edge_index_local = radius_graph(x=pos, r=self.hparams.cutoff,
+                                            batch=batch, loop=False,
+                                            max_num_neighbors=self.hparams.max_num_neighbors)
+ 
         batch_size = int(batch.max()) + 1
         temb = self.timesteps_embedder[t][batch]
 
@@ -266,16 +266,26 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
 
+
+        # local
+        source, target = edge_index_local
+        r = pos_perturbed[target] - pos_perturbed[source]
+        d = torch.pow(r, 2).sum(-1).sqrt().clamp(min=1e-6)
+        r_norm = torch.div(r, d.unsqueeze(-1))
+        edge_attr_local = (d, r_norm, None)
+        
+        # global
+        source, target = edge_index_global
+        r = pos[target] - pos[source]
+        d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6).sqrt()
+        r_norm = torch.div(r, d.unsqueeze(-1))
+        edge_attr_global = (d, r_norm, None)
+        
         # sample noise for OHEs in {0, 1}^NUM_CLASSES
         noise_ohes_true = torch.randn_like(xohe)
         mean_ohes, std_ohes = self.sde.marginal_prob(x=xohe, t=t[batch])
         # perturb OHEs
         ohes_perturbed = mean_ohes + std_ohes * noise_ohes_true
-
-        r = pos_perturbed[target] - pos_perturbed[source]
-        d = torch.pow(r, 2).sum(-1).sqrt().clamp(min=1e-6)
-        r_norm = torch.div(r, d.unsqueeze(-1))
-        edge_attr = (d, r_norm, None)
 
         s_merged = torch.concat([ohes_perturbed, temb], dim=-1)
         
@@ -284,7 +294,10 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         v = torch.zeros(size=(x.size(0), 3, self.hparams.vdim), device=s.device)
 
         out = self.gnn(
-            s=s, v=v, edge_index=edge_index, edge_attr=edge_attr, batch=batch
+            s=s, v=v,
+            edge_index_local=edge_index_local, edge_attr_local=edge_attr_local,
+            edge_index_global=edge_index_global, edge_attr_global=edge_attr_global,
+            batch=batch
         )
         
         noise_coords_pred = self.coords_lin(out["v"]).squeeze()
@@ -313,7 +326,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
             device=batch.x.device,
         )
 
-        out_dict = self(x=batch.xgeom, pos=batch.pos, t=t, edge_index=batch.edge_index_fc, batch=batch.batch)
+        out_dict = self(x=batch.xgeom, pos=batch.pos, t=t, edge_index_global=batch.edge_index_fc, batch=batch.batch)
         coords_loss = torch.pow(
             out_dict["noise_coords_pred"] - out_dict["noise_coords_true"], 2
         ).mean(-1)
