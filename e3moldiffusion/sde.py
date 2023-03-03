@@ -413,16 +413,38 @@ if __name__ == "__main__":
     from torch_scatter import scatter_mean
 
     T = 1000
-    schedule = "linear"
+    schedule = "cosine"
     
     sde = DiscreteDDPM(beta_min=1e-4,
-                       beta_max=1e-2,
+                       beta_max=2e-2,
                        N=T,
                        scaled_reverse_posterior_sigma=True, 
                        schedule=schedule)
     
     sde.plot_signal_to_noise()
+    
+    plt.plot(range(len(sde.discrete_betas)), sde.discrete_betas, label="betas")
+    plt.plot(range(len(sde.alphas)), sde.alphas, label="alphas")
+    plt.xlabel("t")
+    plt.legend()
+    plt.show()
+    
+    signal = sde.sqrt_alphas_cumprod
+    noise = sde.sqrt_1m_alphas_cumprod
+    
+    D = 5
+    indexes = len(signal) // D
+    truncated_timesteps = np.array([i * indexes for i in range(0, D + 1)])
+    signal_indexes = signal[truncated_timesteps - 1]
+    noise_indexes = noise[truncated_timesteps - 1]
 
+    plt.plot(range(len(signal)), signal, label="signal")
+    plt.plot(range(len(noise)), noise, label="noise")
+    plt.scatter(np.array(truncated_timesteps), signal_indexes)
+    plt.scatter(np.array(truncated_timesteps), noise_indexes)
+    plt.legend()
+    plt.show()
+    
     # in case we have a batch of 16 point clouds
     bs = 16
 

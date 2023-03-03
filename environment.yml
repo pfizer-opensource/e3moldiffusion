@@ -15,6 +15,7 @@ dependencies:
   - pyg::pyg==2.0.4
   - conda-forge::pytorch-lightning=1.7.4
   - conda-forge::jupyter
+  - conda-forge::xtb-python
   - pip:
       - ase
       - py3Dmol
