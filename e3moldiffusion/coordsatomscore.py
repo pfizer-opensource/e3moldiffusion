@@ -266,7 +266,6 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
 
-
         # local
         source, target = edge_index_local
         r = pos_perturbed[target] - pos_perturbed[source]
@@ -276,7 +275,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         
         # global
         source, target = edge_index_global
-        r = pos[target] - pos[source]
+        r = pos_perturbed[target] - pos_perturbed[source]
         d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6).sqrt()
         r_norm = torch.div(r, d.unsqueeze(-1))
         edge_attr_global = (d, r_norm, None)

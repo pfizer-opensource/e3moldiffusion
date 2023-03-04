@@ -249,7 +249,7 @@ class Trainer(pl.LightningModule):
                               dtype=torch.long, device=batch.x.device)
             
         out_dict = self(batch=batch, t=t)
-        loss = torch.pow(out_dict["pred_noise"] - out_dict["true_noise"], 2).sum(-1)
+        loss = torch.pow(out_dict["pred_noise"] - out_dict["true_noise"], 2).mean(-1)
         loss = scatter_mean(loss, index=batch.batch, dim=0, dim_size=batch_size)
         loss = torch.mean(loss, dim=0) 
         
