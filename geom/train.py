@@ -354,7 +354,8 @@ if __name__ == "__main__":
         precision=hparams.precision,
         num_sanity_val_steps=2,
         max_epochs=hparams.num_epochs,
-        detect_anomaly=hparams.detect_anomaly
+        detect_anomaly=hparams.detect_anomaly,
+        max_time=hparams.max_time
     )
 
     pl.seed_everything(seed=0, workers=hparams.gpus > 1)

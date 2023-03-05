@@ -82,4 +82,7 @@ def add_arguments(parser):
     )
     parser.add_argument("--num_diffusion_timesteps", default=300, type=int)
 
+    parser.add_argument("--max_time", type=str, default=None)
+
+
     return parser

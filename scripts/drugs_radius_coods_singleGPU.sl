@@ -2,7 +2,7 @@
 #SBATCH -J drugs_coords_radius
 #SBATCH --mail-user=tuan.le@pfizer.com 
 #SBATCH --mail-type=ALL
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu_medium
 #SBATCH --constraint=weka
 #SBATCH --time=1-00:00:00
 #SBATCH --nodes=1
@@ -23,19 +23,23 @@ echo "runnning experiment"
 
 
 args=(
-    --gpus 1 --id 1
+    --gpus 1 --id 3
     --dataset drugs
     --max_num_conformers 30
     --num_workers 4
     --save_dir logs/drugs_coords
     --num_epochs 100
-    --sdim 128 --vdim 32 --tdim 128 --num_layers 5
-    --lr 5e-4 --batch_size 256
-    # --fully_connected 
-    --use_bond_features
-    --edim 32
+    --sdim 128 
+    --vdim 16 
+    --tdim 64 
+    --num_layers 5
+    --edim 16
     --cutoff 10.0
     --rbf_dim 16
+    --lr 5e-4 --batch_size 256
+    # --fully_connected 
+    --local_global_model
+    --use_bond_features
     --use_all_atom_features
     --omit_cross_product
     --vector_aggr mean
@@ -43,6 +47,8 @@ args=(
     --beta_min 1e-4
     --beta_max 2e-2
     --num_diffusion_timesteps 300
+    --max_time 00:24:00:00
+    --load_ckpt /home/let55/workspace/projects/e3moldiffusion/geom/logs/drugs_coords/run3/last.ckpt
     )
 
 python train.py "${args[@]}"

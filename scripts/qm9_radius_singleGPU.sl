@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH -J qm9_coords_radius
-#SBATCH --mail-user=tuan.le@pfizer.com 
+#SBATCH --mail-user=tuan.le@pfizer.com
 #SBATCH --mail-type=ALL
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu_medium
 #SBATCH --constraint=weka
-#SBATCH --time=1-12:00:00
+#SBATCH --time=0-12:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
@@ -18,11 +18,11 @@
 ls /hpfs/projects/mlcs/e3moldiffusion
 
 cd /gpfs/workspace/users/let55/projects/e3moldiffusion/geom
-conda activate e3moldiffusion
+source activate e3moldiffusion
 echo "runnning experiment"
 
 args=(
-    --gpus 1 --id 3
+    --gpus 1 --id 2
     --dataset qm9
     --max_num_conformers 30
     --num_workers 4
@@ -43,6 +43,8 @@ args=(
     --beta_min 1e-4
     --beta_max 2e-2
     --num_diffusion_timesteps 300
+    --max_time 00:20:00:00
+    --load_ckpt /home/let55/workspace/projects/e3moldiffusion/geom/logs/qm9_coords/run2/last.ckpt
     )
 
 python train.py "${args[@]}"
