@@ -233,15 +233,16 @@ class Trainer(pl.LightningModule):
             pos_mean = pos_mean - scatter_mean(pos_mean, index=batch, dim=0, dim_size=bs)[batch]
 
             if not self.hparams.fully_connected:
-                edge_index_local = radius_graph(x=pos.detach(),
-                                                r=self.hparams.cutoff,
-                                                batch=batch, 
-                                                max_num_neighbors=self.hparams.max_num_neighbors)
-                if self.hparams.use_bond_features:
-                    edge_index_local, edge_attr_local = self.coalesce_edges(edge_index=edge_index_local,
-                                                                            bond_edge_index=bond_edge_index,
-                                                                            bond_edge_attr=bond_edge_attr,
-                                                                            n=pos.size(0))
+                if self.radius_graph:
+                    edge_index_local = radius_graph(x=pos.detach(),
+                                                    r=self.hparams.cutoff,
+                                                    batch=batch, 
+                                                    max_num_neighbors=self.hparams.max_num_neighbors)
+                    if self.hparams.use_bond_features:
+                        edge_index_local, edge_attr_local = self.coalesce_edges(edge_index=edge_index_local,
+                                                                                bond_edge_index=bond_edge_index,
+                                                                                bond_edge_attr=bond_edge_attr,
+                                                                                n=pos.size(0))
             if save_traj:
                 pos_sde_traj.append(pos.detach())
                 pos_mean_traj.append(pos_mean.detach())
