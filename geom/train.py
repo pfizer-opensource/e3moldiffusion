@@ -367,7 +367,7 @@ class Trainer(pl.LightningModule):
             "scheduler": lr_scheduler,
             "interval": "epoch",
             "frequency": self.hparams.frequency,
-            "monitor": "val/loss",
+            "monitor": "val/coords_loss",
         }
         return [optimizer], [scheduler]
 
@@ -389,7 +389,7 @@ if __name__ == "__main__":
     checkpoint_callback = ModelCheckpoint(
         dirpath=hparams.save_dir + f"/run{hparams.id}/",
         save_top_k=1,
-        monitor="val/loss",
+        monitor="val/coords_loss",
         save_last=True,
     )
     lr_logger = LearningRateMonitor()
