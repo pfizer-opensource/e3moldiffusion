@@ -3,9 +3,9 @@
 #SBATCH -J drugs_coords_multiGPU
 #SBATCH --mail-user=tuan.le@pfizer.com 
 #SBATCH --mail-type=ALL
-#SBATCH --partition=gpu_medium
+#SBATCH --partition=gpu
 #SBATCH --constraint=weka
-#SBATCH --time=1-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
@@ -24,17 +24,17 @@ echo "runnning multi-gpu experiment"
 
 args=(
     --gpus 4
-    --id 11
+    --id 12
     --dataset drugs
     --max_num_conformers 30
     --num_workers 4
     --save_dir logs/drugs_coords
     --num_epochs 100
     --sdim 64 --vdim 16 --tdim 64 --edim 16 --rbf_dim 16 --num_layers 5
-    --cutoff 10.0
+    --cutoff 5.0
     --lr 5e-4
     --batch_size 256
-    --local_global_model
+    # --local_global_model
     --use_bond_features
     --use_all_atom_features
     --omit_cross_product
@@ -43,7 +43,7 @@ args=(
     --beta_min 1e-4
     --beta_max 2e-2
     --num_diffusion_timesteps 300
-    --max_time 00:23:45:00
+    --max_time 01:23:45:00
     )
 
 srun python train.py "${args[@]}"
