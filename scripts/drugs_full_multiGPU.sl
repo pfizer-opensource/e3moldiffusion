@@ -1,6 +1,6 @@
 #!/bin/bash -l
 
-#SBATCH -J drugs_multiGPU
+#SBATCH -J drugs_full_multiGPU
 #SBATCH --mail-user=tuan.le@pfizer.com 
 #SBATCH --mail-type=ALL
 #SBATCH --partition=gpu_medium
@@ -11,8 +11,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem-per-cpu=16G
 #SBATCH --gres=gpu:v100:4
-#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_multiGPU_%j.out
-#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_multiGPU_%j.err
+#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_full_multiGPU_%j.out
+#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_full_multiGPU_%j.err
 
 # attempting to access the data directory
 ls /hpfs/projects/mlcs/e3moldiffusion
@@ -22,18 +22,21 @@ source activate e3moldiffusion
 echo "runnning multi-gpu experiment"
 
 
+
 args=(
-    --gpus 4 --id 1
+    --gpus 4
+    --id 11
     --dataset drugs
     --max_num_conformers 30
     --num_workers 4
     --save_dir logs/drugs
     --num_epochs 100
-    --sdim 128 --vdim 32 --tdim 128 --num_layers 5 
-    --lr 5e-4 --batch_size 256
-    --fully_connected 
+    --sdim 128 --vdim 32 --tdim 64 --edim 16 --rbf_dim 16 --num_layers 6 
+    --cutoff 10.0
+    --lr 5e-4
+    --batch_size 256
+    --local_global_model
     --use_bond_features
-    --edim 32
     --use_all_atom_features
     --omit_cross_product
     --vector_aggr mean
@@ -41,8 +44,7 @@ args=(
     --beta_min 1e-4
     --beta_max 2e-2
     --num_diffusion_timesteps 300
-    --load_ckpt /home/let55/workspace/projects/e3moldiffusion/geom/logs/drugs/run1/last.ckpt
+    --max_time 00:23:50:00
     )
 
-
-srun python train.py "${args[@]}"
+srun python train_full.py "${args[@]}"

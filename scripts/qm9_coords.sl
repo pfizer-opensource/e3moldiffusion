@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH -J drugs_coords_radius
-#SBATCH --mail-user=tuan.le@pfizer.com 
+#SBATCH -J qm9_coords
+#SBATCH --mail-user=tuan.le@pfizer.com
 #SBATCH --mail-type=ALL
 #SBATCH --partition=gpu_medium
 #SBATCH --constraint=weka
@@ -10,9 +10,9 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=4G
 #SBATCH --cpus-per-task=4
-#SBATCH --gres=gpu:v100:1
-#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_coords_radius_%j.out
-#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_coords_radius_%j.err
+#SBATCH --gres=gpu:1 
+#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/qm9_coords_%j.out
+#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/qm9_coords_%j.err
 
 # attempting to access the data directory
 ls /hpfs/projects/mlcs/e3moldiffusion
@@ -21,23 +21,18 @@ cd /gpfs/workspace/users/let55/projects/e3moldiffusion/geom
 source activate e3moldiffusion
 echo "runnning experiment"
 
-
 args=(
-    --gpus 1 --id 3
-    --dataset drugs
+    --gpus 1
+    --id 10
+    --dataset qm9
     --max_num_conformers 30
     --num_workers 4
-    --save_dir logs/drugs_coords
+    --save_dir logs/qm9_coords
     --num_epochs 100
-    --sdim 128 
-    --vdim 16 
-    --tdim 64 
-    --num_layers 5
-    --edim 16
-    --cutoff 10.0
-    --rbf_dim 16
-    --lr 5e-4 --batch_size 256
-    # --fully_connected 
+    --sdim 64 --vdim 16 --tdim 64 --edim 16 --rbf_dim 16 --num_layers 4 
+    --cutoff 7.5
+    --lr 5e-4
+    --batch_size 256
     --local_global_model
     --use_bond_features
     --use_all_atom_features
@@ -47,8 +42,7 @@ args=(
     --beta_min 1e-4
     --beta_max 2e-2
     --num_diffusion_timesteps 300
-    --max_time 00:24:00:00
-    --load_ckpt /home/let55/workspace/projects/e3moldiffusion/geom/logs/drugs_coords/run3/last.ckpt
+    --max_time 00:23:50:00
     )
 
 python train.py "${args[@]}"

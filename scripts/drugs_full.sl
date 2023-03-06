@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH -J drugs_full_rbf
-#SBATCH --mail-user=tuan.le@pfizer.com 
+#SBATCH -J drugs_full
+#SBATCH --mail-user=tuan.le@pfizer.com
 #SBATCH --mail-type=ALL
 #SBATCH --partition=gpu_medium
 #SBATCH --constraint=weka
@@ -11,8 +11,8 @@
 #SBATCH --mem-per-cpu=4G
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1 
-#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_full_rbf_%j.out
-#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_full_rbf_%j.err
+#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_full_%j.out
+#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_full_%j.err
 
 # attempting to access the data directory
 ls /hpfs/projects/mlcs/e3moldiffusion
@@ -21,34 +21,28 @@ cd /gpfs/workspace/users/let55/projects/e3moldiffusion/geom
 source activate e3moldiffusion
 echo "runnning experiment"
 
-
 args=(
-    --gpus 1 --id 3
+    --gpus 1
+    --id 10
     --dataset drugs
     --max_num_conformers 30
     --num_workers 4
     --save_dir logs/drugs
-    --num_epochs 500
-    --sdim 128 
-    --vdim 16 
-    --tdim 64 
-    --num_layers 5
-    --edim 0
+    --num_epochs 100
+    --sdim 128 --vdim 32 --tdim 64 --edim 0 --rbf_dim 16 --num_layers 6 
     --cutoff 10.0
-    --rbf_dim 16
-    --lr 5e-4 
+    --lr 5e-4
     --batch_size 256
-    # --fully_connected 
     --local_global_model
+    # --use_bond_features
+    # --use_all_atom_features
     --omit_cross_product
     --vector_aggr mean
     --schedule cosine
     --beta_min 1e-4
     --beta_max 2e-2
     --num_diffusion_timesteps 300
-    --max_time 00:24:00:00
-    --load_ckpt /home/let55/workspace/projects/e3moldiffusion/geom/logs/drugs/run3/last.ckpt
+    --max_time 00:23:50:00
     )
 
 python train_full.py "${args[@]}"
-

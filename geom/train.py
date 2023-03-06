@@ -339,7 +339,7 @@ class Trainer(pl.LightningModule):
             sync_dist = False
             
         self.log(
-            f"{stage}/loss",
+            f"{stage}/coords_loss",
             loss,
             on_step=True,
             batch_size=batch_size,
