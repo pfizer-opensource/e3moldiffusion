@@ -42,7 +42,7 @@ args=(
     --beta_min 1e-4
     --beta_max 2e-2
     --num_diffusion_timesteps 300
-    --max_time 00:23:45:00
+    --max_time 01:23:45:00
     )
 
 srun python train_full.py "${args[@]}"
