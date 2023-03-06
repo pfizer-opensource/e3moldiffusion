@@ -3,9 +3,9 @@
 #SBATCH -J drugs_full_multiGPU
 #SBATCH --mail-user=tuan.le@pfizer.com 
 #SBATCH --mail-type=ALL
-#SBATCH --partition=gpu_medium
+#SBATCH --partition=gpu
 #SBATCH --constraint=weka
-#SBATCH --time=1-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
@@ -21,8 +21,6 @@ cd /gpfs/workspace/users/let55/projects/e3moldiffusion/geom
 source activate e3moldiffusion
 echo "runnning multi-gpu experiment"
 
-
-
 args=(
     --gpus 4
     --id 11
@@ -31,13 +29,13 @@ args=(
     --num_workers 4
     --save_dir logs/drugs
     --num_epochs 100
-    --sdim 128 --vdim 32 --tdim 64 --edim 16 --rbf_dim 16 --num_layers 6 
+    --sdim 128 --vdim 32 --tdim 64 --edim 0 --rbf_dim 32 --num_layers 6
     --cutoff 10.0
     --lr 5e-4
     --batch_size 256
     --local_global_model
-    --use_bond_features
-    --use_all_atom_features
+    #--use_bond_features
+    #--use_all_atom_features
     --omit_cross_product
     --vector_aggr mean
     --schedule cosine
