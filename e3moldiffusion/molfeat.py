@@ -243,6 +243,9 @@ if __name__ == '__main__':
     print(data.x)
     print(data.atom_elements)
     
+    smol1 = "CC(=O)Oc1ccccc1C(=O)O"
+    smol2 = "CCCc1nn(C)c2c(=O)[nH]c(-c3cc(S(=O)(=O)N4CCN(C)CC4)ccc3OCC)nc12"
+
     atomencoder = AtomEncoder(emb_dim=16)
     bondencoder = BondEncoder(emb_dim=16)
     
