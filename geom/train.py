@@ -39,9 +39,10 @@ def triple_order_edges(bond_edge_index: Tensor,
                        check_coalesce: bool = False) -> Tuple[Tensor, Tensor]:
     
     # store in big block-triangular matrix
-    dense_adj = torch.zeros(size=(len(batch), len(batch)), dtype=torch.float32, device=bond_edge_index.device)
-    dense_adj[bond_edge_index[0, :], bond_edge_index[1, :]] = 1.0
-    no_self_loop = torch.ones(dense_adj.size(0), dense_adj.size(1)).fill_diagonal_(0.0)
+    dense_adj = to_dense_adj(edge_index=bond_edge_index).squeeze(0)
+    no_self_loop = torch.ones((dense_adj.size(0), dense_adj.size(1)),
+                              dtype=torch.float32,
+                              device=bond_edge_index.device).fill_diagonal_(0.0)
     adj1 = dense_adj * no_self_loop
     adj2 = binarize(adj1 @ adj1) * no_self_loop
     new_ids_2 = (1.0 - adj1) * adj2
@@ -69,7 +70,7 @@ def triple_order_edges(bond_edge_index: Tensor,
     ext_edge_attr = torch.concat([bond_edge_attr,
                                   edge_attr_two_hop,
                                   edge_attr_three_hop],
-                                dim=-1)
+                                dim=0)
     
     if check_coalesce:
         # make sure there are no "duplicates", i.e. length does not change after aggr.
@@ -417,8 +418,8 @@ if __name__ == "__main__":
     )
 
     trainer = pl.Trainer(
-        accelerator="gpu",
-        devices=hparams.gpus,
+        accelerator="gpu" if hparams.gpus else "cpu",
+        devices=hparams.gpus if hparams.gpus else None,
         strategy=strategy,
         logger=tb_logger,
         enable_checkpointing=True,

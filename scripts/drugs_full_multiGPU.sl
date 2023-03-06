@@ -8,8 +8,8 @@
 #SBATCH --time=1-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem-per-cpu=16G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem-per-cpu=4G
 #SBATCH --gres=gpu:v100:4
 #SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_full_multiGPU_%j.out
 #SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_full_multiGPU_%j.err
@@ -44,7 +44,7 @@ args=(
     --beta_min 1e-4
     --beta_max 2e-2
     --num_diffusion_timesteps 300
-    --max_time 00:23:50:00
+    --max_time 00:23:45:00
     )
 
 srun python train_full.py "${args[@]}"
