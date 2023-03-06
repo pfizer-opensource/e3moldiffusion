@@ -6,6 +6,7 @@ from rdkit import Chem
 from rdkit.Chem import GetPeriodicTable
 from torch import nn
 from torch_geometric.data import Data
+from torch_geometric.data import Data, Batch
 
 
 PERIODIC_TABLE = GetPeriodicTable()
@@ -246,6 +247,11 @@ if __name__ == '__main__':
     smol1 = "CC(=O)Oc1ccccc1C(=O)O"
     smol2 = "CCCc1nn(C)c2c(=O)[nH]c(-c3cc(S(=O)(=O)N4CCN(C)CC4)ccc3OCC)nc12"
 
+    datalist = [smiles_or_mol_to_graph(s) for s in [smol, smol1, smol2]]
+    data = Batch.from_data_list(datalist)
+    bond_edge_index, bond_edge_attr, batch = data.edge_index, data.edge_attr, data.batch
+    
+    
     atomencoder = AtomEncoder(emb_dim=16)
     bondencoder = BondEncoder(emb_dim=16)
     
