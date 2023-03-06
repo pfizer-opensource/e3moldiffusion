@@ -224,10 +224,7 @@ class BondEncoder(nn.Module):
     def __init__(self, emb_dim, max_norm: float = 10.0):
         super(BondEncoder, self).__init__()
         FULL_BOND_FEATURE_DIMS = get_bond_feature_dims()
-        # before: used higher-order graphs, i.e. edges are constructed within 3 hop-neighbourhood.
-        # self.bond_embedding = nn.Embedding(FULL_BOND_FEATURE_DIMS[0] + 3, emb_dim, max_norm=max_norm)
-        # now: only rely on bond-graph based on topology and potentially include the radius-edge-index
-        self.bond_embedding = nn.Embedding(FULL_BOND_FEATURE_DIMS[0] + 2, emb_dim, max_norm=max_norm)
+        self.bond_embedding = nn.Embedding(FULL_BOND_FEATURE_DIMS[0] + 3, emb_dim, max_norm=max_norm)
         self.reset_parameters()
     def reset_parameters(self):
         nn.init.xavier_uniform_(self.bond_embedding.weight.data)
