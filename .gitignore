@@ -22,3 +22,6 @@ sample_data/*
 .vscode/
 
 # scripts/experiment*.sl
+
+geom/.ipynb_checkpoints/
+geom/trajs/*
