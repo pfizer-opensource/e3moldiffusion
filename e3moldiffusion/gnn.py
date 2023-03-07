@@ -143,7 +143,7 @@ class EncoderGNN(nn.Module):
                  use_cross_product: bool = False,
                  vector_aggr: str = "mean",
                  fully_connected: bool = False,
-                 local_global_model: bool = True
+                 local_global_model: bool = False
                  ):
         super(EncoderGNN, self).__init__()
 
@@ -257,6 +257,9 @@ class ScoreModelCoords(nn.Module):
         
         self.sdim, self.vdim = hn_dim
 
+        self.local_global_model = local_global_model
+        self.fully_connected = fully_connected
+        
         self.gnn = EncoderGNN(
             hn_dim=hn_dim,
             cutoff=cutoff,
@@ -299,6 +302,7 @@ class ScoreModelCoords(nn.Module):
         if self.edge_dim > 0:
             edge_attr_local = self.edge_encoder(edge_attr_local)
             edge_attr_global = self.edge_encoder(edge_attr_global)
+         
 
         # local
         source, target = edge_index_local

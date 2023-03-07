@@ -110,7 +110,7 @@ class Trainer(pl.LightningModule):
         )
     
         self.radius_graph = False
-        self.triple_order = False
+        self.triple_order = True
         
         timesteps = torch.arange(hparams["num_diffusion_timesteps"], dtype=torch.long)
         timesteps_embedder = get_timestep_embedding(
@@ -337,7 +337,7 @@ class Trainer(pl.LightningModule):
         out_dict = self(batch=batch, t=t)
         loss = torch.pow(out_dict["pred_noise"] - out_dict["true_noise"], 2).mean(-1)
         loss = scatter_mean(loss, index=batch.batch, dim=0, dim_size=batch_size)
-        loss = torch.mean(loss, dim=0) 
+        loss = torch.mean(loss, dim=0)
         
         if stage == "val":
             sync_dist =  self.hparams.gpus > 1
