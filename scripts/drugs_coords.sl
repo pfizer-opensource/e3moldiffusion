@@ -29,11 +29,12 @@ args=(
     --num_workers 4
     --save_dir logs/drugs_coords
     --num_epochs 100
-    --sdim 64 --vdim 16 --tdim 64 --edim 16 --rbf_dim 16 --num_layers 6
-    --cutoff 7.5
+    --sdim 128 --vdim 32 --tdim 128 --edim 32 --rbf_dim 32 --num_layers 5
+    --cutoff 7.50
     --lr 5e-4
     --batch_size 256
     # --local_global_model
+    --fully_connected
     --use_bond_features
     --use_all_atom_features
     --omit_cross_product

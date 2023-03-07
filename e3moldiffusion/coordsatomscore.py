@@ -328,7 +328,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         out_dict = self(x=batch.xgeom, pos=batch.pos, t=t, edge_index_global=batch.edge_index_fc, batch=batch.batch)
         coords_loss = torch.pow(
             out_dict["noise_coords_pred"] - out_dict["noise_coords_true"], 2
-        ).mean(-1)
+        ).sum(-1)
         coords_loss = scatter_mean(
             coords_loss, index=batch.batch, dim=0, dim_size=batch_size
         )

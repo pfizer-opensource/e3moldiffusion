@@ -110,7 +110,7 @@ class Trainer(pl.LightningModule):
         )
     
         self.radius_graph = False
-        self.triple_order = True
+        self.triple_order = False
         
         timesteps = torch.arange(hparams["num_diffusion_timesteps"], dtype=torch.long)
         timesteps_embedder = get_timestep_embedding(
@@ -280,7 +280,7 @@ class Trainer(pl.LightningModule):
         pos_perturbed = mean + std * noise
         
         if self.radius_graph:
-            edge_index_local = radius_graph(x=pos,
+            edge_index_local = radius_graph(x=pos_perturbed,
                                             r=self.hparams.cutoff,
                                             batch=batch,
                                             max_num_neighbors=self.hparams.max_num_neighbors
@@ -335,7 +335,7 @@ class Trainer(pl.LightningModule):
                               dtype=torch.long, device=batch.x.device)
             
         out_dict = self(batch=batch, t=t)
-        loss = torch.pow(out_dict["pred_noise"] - out_dict["true_noise"], 2).mean(-1)
+        loss = torch.pow(out_dict["pred_noise"] - out_dict["true_noise"], 2).sum(-1)
         loss = scatter_mean(loss, index=batch.batch, dim=0, dim_size=batch_size)
         loss = torch.mean(loss, dim=0)
         

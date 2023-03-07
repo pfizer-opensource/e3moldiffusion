@@ -190,9 +190,8 @@ class EncoderGNN(nn.Module):
                 edge_index_global: Tensor,
                 edge_attr_global: Tuple[Tensor, Tensor, OptTensor],
                 batch: Tensor = None) -> Dict:
-
-        for i in range(len(self.convs)):
-            
+        
+        for i in range(len(self.convs)):    
             if self.local_global_model:
                 if i == self.num_layers - 2:
                     edge_index_in = edge_index_global
@@ -207,12 +206,12 @@ class EncoderGNN(nn.Module):
                 else:
                     edge_index_in = edge_index_local
                     edge_attr_in = edge_attr_local
-                     
+
             if self.use_norm:
                 s, v = self.norms[i](x=(s, v), batch=batch)
                 
             s, v = self.convs[i](x=(s, v), edge_index=edge_index_in, edge_attr=edge_attr_in)
-            
+                        
         out = {"s": s, "v": v}
         
         return out
@@ -286,6 +285,14 @@ class ScoreModelCoords(nn.Module):
         self.gnn.reset_parameters()
         self.coords_score.reset_parameters()
 
+    def calculate_edge_attrs(self, edge_index: Tensor, edge_attr: OptTensor, pos: Tensor):
+        source, target = edge_index
+        r = pos[target] - pos[source]
+        d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6).sqrt()
+        r_norm = torch.div(r, d.unsqueeze(-1))
+        edge_attr = (d, r_norm, edge_attr)
+        return edge_attr
+    
     def forward(self,
                 x: Tensor,
                 t: Tensor,
@@ -303,21 +310,11 @@ class ScoreModelCoords(nn.Module):
             edge_attr_local = self.edge_encoder(edge_attr_local)
             edge_attr_global = self.edge_encoder(edge_attr_global)
          
-
         # local
-        source, target = edge_index_local
-        r = pos[target] - pos[source]
-        d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6).sqrt()
-        r_norm = torch.div(r, d.unsqueeze(-1))
-        edge_attr_local = (d, r_norm, edge_attr_local)
-        
+        edge_attr_local = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local, pos=pos)        
         # global
-        source, target = edge_index_global
-        r = pos[target] - pos[source]
-        d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6).sqrt()
-        r_norm = torch.div(r, d.unsqueeze(-1))
-        edge_attr_global = (d, r_norm, edge_attr_global)
-        
+        edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global, pos=pos)
+
         s = self.atom_encoder(x)
         temb = self.t_mapping(t)[batch]
         s = s + temb

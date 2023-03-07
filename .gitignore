@@ -27,3 +27,5 @@ geom/.ipynb_checkpoints/
 geom/trajs/*
 geom/my_movie.gif
 geom/vis.ipynb
+
+geom/evaluation/
