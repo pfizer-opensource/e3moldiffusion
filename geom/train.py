@@ -108,9 +108,10 @@ class Trainer(pl.LightningModule):
             fully_connected=hparams["fully_connected"],
             local_global_model=hparams["local_global_model"]
         )
-        
+    
         self.radius_graph = False
-
+        self.triple_order = False
+        
         timesteps = torch.arange(hparams["num_diffusion_timesteps"], dtype=torch.long)
         timesteps_embedder = get_timestep_embedding(
             timesteps=timesteps, embedding_dim=hparams["tdim"]
@@ -183,12 +184,13 @@ class Trainer(pl.LightningModule):
                                             batch=batch,
                                             max_num_neighbors=self.hparams.max_num_neighbors
                                             )
-        else:
+        elif self.triple_order:
             edge_index_local, edge_attr_local = triple_order_edges(bond_edge_index=bond_edge_index,
                                                                    bond_edge_attr=bond_edge_attr,
                                                                    batch=batch, check_coalesce=False
                                                                    )
-        
+        else:
+            edge_index_local, edge_attr_local = bond_edge_index, bond_edge_attr
         
         edge_index_global = torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
         edge_index_global, _ = dense_to_sparse(edge_index_global)
@@ -278,16 +280,18 @@ class Trainer(pl.LightningModule):
         pos_perturbed = mean + std * noise
         
         if self.radius_graph:
-            edge_index_local = radius_graph(x=pos_perturbed,
+            edge_index_local = radius_graph(x=pos,
                                             r=self.hparams.cutoff,
-                                            batch=data_batch,
+                                            batch=batch,
                                             max_num_neighbors=self.hparams.max_num_neighbors
                                             )
-        else:
+        elif self.triple_order:
             edge_index_local, edge_attr_local = triple_order_edges(bond_edge_index=bond_edge_index,
                                                                    bond_edge_attr=bond_edge_attr,
                                                                    batch=batch, check_coalesce=False
                                                                    )
+        else:
+            edge_index_local, edge_attr_local = bond_edge_index, bond_edge_attr
         
         edge_index_global = batch.edge_index_fc
         

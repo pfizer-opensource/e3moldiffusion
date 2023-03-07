@@ -41,20 +41,20 @@ DATA_PATH = osp.join(PROCESS_PATH, "data")
 if not osp.exists(DATA_PATH):
     os.makedirs(DATA_PATH)
 
-QM9_summary = json.load(open(osp.join(PATH, "summary_qm9.json")))
-DRUGS_summary = json.load(open(osp.join(PATH, "summary_drugs.json")))
+QM9_summary = json.load(open(osp.join(DB_READ_PATH, "rdkit_folder", "summary_qm9.json")))
+DRUGS_summary = json.load(open(osp.join(DB_READ_PATH, "rdkit_folder", "summary_drugs.json")))
 
-QM9_pickles = os.listdir(osp.join(PATH, "qm9"))
+QM9_pickles = os.listdir(osp.join(DB_READ_PATH, "rdkit_folder", "qm9"))
 QM9_mapping = [osp.splitext(f)[0] for f in QM9_pickles]
 QM9_smi_to_id = {s: i for i, s in enumerate(QM9_mapping)}
 QM9_id_to_smi = {i: s for s, i in QM9_smi_to_id.items()}
-QM9_pickles = [osp.join(osp.join(PATH, "qm9"), f) for f in QM9_pickles]
+QM9_pickles = [osp.join(osp.join(DB_READ_PATH, "rdkit_folder", "qm9"), f) for f in QM9_pickles]
 
-DRUGS_pickles = os.listdir(osp.join(PATH, "drugs"))
+DRUGS_pickles = os.listdir(osp.join(DB_READ_PATH, "rdkit_folder", "drugs"))
 DRUGS_mapping = [osp.splitext(f)[0] for f in DRUGS_pickles]
 DRUGS_smi_to_id = {s: i for i, s in enumerate(DRUGS_mapping)}
 DRUGS_id_to_smi = {i: s for s, i in DRUGS_smi_to_id.items()}
-DRUGS_pickles = [osp.join(osp.join(PATH, "drugs"), f) for f in DRUGS_pickles]
+DRUGS_pickles = [osp.join(osp.join(DB_READ_PATH, "rdkit_folder", "drugs"), f) for f in DRUGS_pickles]
 
 def atom_type_config(dataset: str = "qm9"):
     if dataset == "qm9":

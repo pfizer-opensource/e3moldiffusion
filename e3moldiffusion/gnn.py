@@ -270,7 +270,6 @@ class ScoreModelCoords(nn.Module):
             local_global_model=local_global_model
         )
         
-        self.distance_score = DenseLayer(in_features=hn_dim[0], out_features=1)
         self.coords_score = DenseLayer(in_features=hn_dim[1], out_features=1)
 
         self.reset_parameters()
@@ -282,7 +281,6 @@ class ScoreModelCoords(nn.Module):
             self.edge_encoder.reset_parameters()
         
         self.gnn.reset_parameters()
-        self.distance_score.reset_parameters()
         self.coords_score.reset_parameters()
 
     def forward(self,
@@ -327,17 +325,9 @@ class ScoreModelCoords(nn.Module):
             edge_index_global=edge_index_global, edge_attr_global=edge_attr_global,
             batch=batch
         )
+        out = self.coords_score(out["v"]).squeeze()        
         
-        s, v = out["s"], out["v"]
-        s = F.silu(s)
-        d = self.distance_score(s)
-        d = d[source] + d[target]
-        dr = d * r
-        dr = scatter(src=dr, index=target, dim=0, dim_size=s.size(0), reduce="add").squeeze()
-        out = self.coords_score(v).squeeze()
-        out = out + dr        
         return out
-
 
 
 if __name__ == '__main__':
