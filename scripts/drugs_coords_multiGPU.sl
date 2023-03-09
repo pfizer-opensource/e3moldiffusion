@@ -24,7 +24,7 @@ echo "runnning multi-gpu experiment"
 
 args=(
     --gpus 4
-    --id 1
+    --id 3
     --dataset drugs
     --max_num_conformers 30
     --num_workers 4
@@ -35,6 +35,7 @@ args=(
     --lr 5e-4
     --batch_size 256
     --local_global_model
+    --dist_score
     # --fully_connected
     --use_bond_features
     --use_all_atom_features

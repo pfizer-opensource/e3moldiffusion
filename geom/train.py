@@ -106,7 +106,8 @@ class Trainer(pl.LightningModule):
             use_all_atom_features=hparams["use_all_atom_features"],
             vector_aggr=hparams["vector_aggr"],
             fully_connected=hparams["fully_connected"],
-            local_global_model=hparams["local_global_model"]
+            local_global_model=hparams["local_global_model"],
+            dist_score=hparams["dist_score"]
         )
     
         self.radius_graph = False

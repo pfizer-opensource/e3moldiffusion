@@ -112,7 +112,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
 
         self.atom_types_lin = DenseLayer(self.hparams.sdim, self.hparams.num_atom_types)
         self.coords_lin = DenseLayer(self.hparams.vdim, 1, bias=False)
-
+    
         timesteps = torch.arange(self.hparams.num_diffusion_timesteps, dtype=torch.long)
         timesteps_embedder = get_timestep_embedding(
             timesteps=timesteps, embedding_dim=self.hparams.tdim

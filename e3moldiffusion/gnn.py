@@ -230,7 +230,8 @@ class ScoreModelCoords(nn.Module):
                  use_all_atom_features: bool = True,
                  fully_connected: bool = False,
                  local_global_model: bool = False,
-                 vector_aggr: str = "mean"
+                 vector_aggr: str = "mean",
+                 dist_score: bool = False
                  ):
         super(ScoreModelCoords, self).__init__()
 
@@ -274,6 +275,11 @@ class ScoreModelCoords(nn.Module):
         
         self.coords_score = DenseLayer(in_features=hn_dim[1], out_features=1)
 
+        if dist_score:
+            self.dist_score = DenseLayer(in_features=hn_dim[0], out_features=1)
+        else:
+            self.dist_score = None
+            
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -284,6 +290,8 @@ class ScoreModelCoords(nn.Module):
         
         self.gnn.reset_parameters()
         self.coords_score.reset_parameters()
+        if self.dist_score is not None:
+            self.dist_score.reset_parameters()
 
     def calculate_edge_attrs(self, edge_index: Tensor, edge_attr: OptTensor, pos: Tensor):
         source, target = edge_index
@@ -326,9 +334,20 @@ class ScoreModelCoords(nn.Module):
             edge_index_global=edge_index_global, edge_attr_global=edge_attr_global,
             batch=batch
         )
-        out = self.coords_score(out["v"]).squeeze()        
         
-        return out
+        score = self.coords_score(out["v"]).squeeze()        
+        
+        if self.dist_score is not None:
+            source, target = edge_index_global
+            r = pos[source] - pos[target]
+            sd = F.silu(out["s"])
+            sd = self.dist_score(sd)
+            sd = sd[source] + sd[target]
+            sr = sd * r
+            sr = scatter(src=sr, index=target, dim=0, dim_size=s.size(0), reduce="add").squeeze()
+            score = score + sr 
+             
+        return score
 
 
 if __name__ == '__main__':

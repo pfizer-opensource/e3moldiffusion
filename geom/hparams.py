@@ -63,6 +63,7 @@ def add_arguments(parser):
     parser.add_argument("--local_global_model", default=False, action="store_true")
     parser.add_argument("--cutoff", default=7.5, type=float)
     parser.add_argument("--max_num_neighbors", default=128, type=int)
+    parser.add_argument("--dist_score", default=False, action="store_true")
 
     parser.add_argument("--omit_cross_product", default=False, action="store_true")
     parser.add_argument("--continuous", default=False, action="store_true",
