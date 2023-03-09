@@ -9,7 +9,8 @@ import click
 @click.option("--batch_size", "-b", default=256)
 @click.option("--max_num_conformers", "-m", default=30)
 @click.option("--num_workers", "-n", default=4)
-def main(dataset: str = "drugs", batch_size: int = 256, num_workers: int = 4,  max_num_conformers: int = 30):
+@click.option("--split", "-s", default="validation")
+def main(dataset: str = "drugs", batch_size: int = 256, num_workers: int = 4,  max_num_conformers: int = 30, split: str = "validation"):
    print("Initializing Dataset")
    datamodule = GeomDataModule(
        batch_size=batch_size,
@@ -25,15 +26,19 @@ def main(dataset: str = "drugs", batch_size: int = 256, num_workers: int = 4,  m
    print(f"Train set size {len(datamodule.train_dataset)}")
    print(f"Val set size {len(datamodule.val_dataset)}")
    print(f"Test set size {len(datamodule.test_dataset)}")
-   data = datamodule.train_dataset[0]
-   loader = iter(datamodule.train_dataloader(shuffle=True))
-   data = next(loader)
    
-   print("Only iterating over validation loader")
-   loader = datamodule.val_dataloader(shuffle=True)
-   for data in tqdm(loader, total=len(loader)):
+   if split == "validation":
+       loader = datamodule.val_dataloader(shuffle=False)
+   elif split == "training":
+       loader = datamodule.train_dataloader(shuffle=False)
+   elif split == "test":
+       loader = datamodule.test_dataloader(shuffle=False)
+   else:
+       raise ValueError 
+   
+   print(f"Iterating over {split} loader")
+   for _ in tqdm(loader, total=len(loader)):
       pass
-    
     
 if __name__ == "__main__":
     main()

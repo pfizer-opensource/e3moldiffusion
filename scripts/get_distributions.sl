@@ -1,18 +1,18 @@
 #!/bin/bash
-#SBATCH -J dataloading
+#SBATCH -J dataset_distibutions
 #SBATCH --mail-user=tuan.le@pfizer.com
 #SBATCH --mail-type=ALL
 #SBATCH --partition=gpu_short
 #SBATCH --constraint=weka
-#SBATCH --time=0-01:00:00
+#SBATCH --time=0-03:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --mem-per-cpu=4G
-#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=8G
+#SBATCH --cpus-per-task=12
 #SBATCH --gres=gpu:1 
-#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/dataloading_%j.out
-#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/dataloading_%j.err
+#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/dataset_stats_%j.out
+#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/dataset_stats_%j.err
 
 # attempting to access the data directory
 ls /hpfs/projects/mlcs/e3moldiffusion
@@ -22,9 +22,10 @@ source activate e3moldiffusion
 args=(
     --dataset drugs
     --batch_size 256
-    --num_workers 4
+    --num_workers 12
     --max_num_conformers 30
-    --split validation
+    --pin_memory True
+    --persistent_workers True
 )
 
-python debug_dataloading.py "${args[@]}"
+python get_distributions.py "${args[@]}"
