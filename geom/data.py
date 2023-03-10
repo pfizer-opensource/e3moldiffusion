@@ -172,9 +172,15 @@ class GetHigherOrderEdges:
 
 
 class MolFeaturization:
-    def __init__(self, dataset: str = "qm9"):
+    def __init__(self, dataset: str = "qm9",
+                 create_bond_graph: bool = True,
+                 save_smiles: bool = True,
+                 fully_connected_edge_index=True):
         super().__init__()
         assert dataset in ["qm9", "drugs"]  
+        self.create_bond_graph = create_bond_graph
+        self.save_smiles = save_smiles
+        self.get_fully_connected_edge_idx = fully_connected_edge_index
         self.mapping = atom_type_config(dataset=dataset)
         
     def featurize_smiles_or_mol(
@@ -191,7 +197,7 @@ class MolFeaturization:
         elif isinstance(smiles_mol, Chem.Mol):
             mol = smiles_mol
 
-        data = smiles_or_mol_to_graph(smol=mol)
+        data = smiles_or_mol_to_graph(smol=mol, create_bond_graph=self.create_bond_graph)
         # not error-prone as of now...
         data.xgeom = torch.tensor([self.mapping.get(el) for el in data.atom_elements])
 
@@ -200,11 +206,14 @@ class MolFeaturization:
         else:
             pos = None
 
-        # canonical smi
-        try:
-            smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
-        except:
-            smiles = Chem.MolToSmiles(mol)
+        if self.save_smiles:
+            # canonical smi
+            try:
+                smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
+            except:
+                smiles = Chem.MolToSmiles(mol)
+        else:
+            smiles = None
 
         data.pos = pos
         data.mol = mol
@@ -241,7 +250,10 @@ class MolFeaturization:
     def __call__(self, smiles_mol: Union[str, Chem.Mol, dict]) -> Data:
         data = self.featurize_smiles_or_mol(smiles_mol=smiles_mol["mol"])
         assert data is not None
-        data = self.fully_connected_edge_idx(data=data, without_self_loop=True)
+        
+        if self.get_fully_connected_edge_idx:
+            data = self.fully_connected_edge_idx(data=data, without_self_loop=True)
+            
         data.energy = torch.tensor([smiles_mol["energy"]], dtype=torch.float32).view(
             -1, 1
         )
@@ -694,6 +706,10 @@ class GeomDataModule(LightningDataModule):
         max_num_conformers: int = 30,   # -1 means all
         pin_memory: bool = True,
         persistent_workers: bool = True,
+        transform_args: dict = {"create_bond_graph": True,
+                                "save_smiles": True,
+                                "fully_connected_edge_index": True
+                                }
     ):
         super().__init__()
         assert dataset in ["qm9", "drugs"]
@@ -706,7 +722,7 @@ class GeomDataModule(LightningDataModule):
         self.shuffle_train = shuffle_train
         # self.subset_frac = subset_frac
         self.max_num_conformers = max_num_conformers
-        self.transform = MolFeaturization(dataset=dataset)
+        self.transform = MolFeaturization(dataset=dataset, **transform_args)
         self.pin_memory = pin_memory
         self.persistent_workers = persistent_workers
 

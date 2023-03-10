@@ -110,7 +110,7 @@ class Trainer(pl.LightningModule):
             dist_score=hparams["dist_score"]
         )
     
-        self.radius_graph = False
+        self.radius_graph = True # False
         self.triple_order = False
         
         timesteps = torch.arange(hparams["num_diffusion_timesteps"], dtype=torch.long)
@@ -283,7 +283,7 @@ class Trainer(pl.LightningModule):
         if self.radius_graph:
             edge_index_local = radius_graph(x=pos_perturbed,
                                             r=self.hparams.cutoff,
-                                            batch=batch,
+                                            batch=data_batch,
                                             max_num_neighbors=self.hparams.max_num_neighbors
                                             )
         elif self.triple_order:
@@ -295,7 +295,10 @@ class Trainer(pl.LightningModule):
             edge_index_local, edge_attr_local = bond_edge_index, bond_edge_attr
         
         edge_index_global = batch.edge_index_fc
-        
+        if edge_index_global is None:
+            edge_index_global = torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
+            edge_index_global, _ = dense_to_sparse(edge_index_global)
+
         if self.hparams.use_bond_features:
             if self.radius_graph:
                 edge_index_local, edge_attr_local = self.coalesce_edges(edge_index=edge_index_local,
@@ -414,7 +417,11 @@ if __name__ == "__main__":
         shuffle_train=True,
         max_num_conformers=hparams.max_num_conformers,
         pin_memory=True,
-        persistent_workers=True
+        persistent_workers=True,
+        transform_args = {"create_bond_graph": True,
+                          "save_smiles": False,
+                          "fully_connected_edge_index": False
+                         }
     )
 
     strategy = (

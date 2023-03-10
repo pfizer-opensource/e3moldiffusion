@@ -151,7 +151,7 @@ def bond_feature_vector_to_dict(bond_feature):
     return feature_dict
 
 
-def smiles_or_mol_to_graph(smol: Union[str, Chem.Mol]):
+def smiles_or_mol_to_graph(smol: Union[str, Chem.Mol], create_bond_graph: bool = True):
     if isinstance(smol, str):
         mol = Chem.MolFromSmiles(smol)
     else:
@@ -170,27 +170,30 @@ def smiles_or_mol_to_graph(smol: Union[str, Chem.Mol]):
     # only take atom element
     # x = x[:, 0].view(-1, 1)
 
-    # bonds
-    edges_list = []
-    edge_features_list = []
-    for bond in mol.GetBonds():
-        i = bond.GetBeginAtomIdx()
-        j = bond.GetEndAtomIdx()
-        edge_feature = bond_to_feature_vector(bond)
-        # add edges in both directions
-        edges_list.append((i, j))
-        edge_features_list.append(edge_feature[0])
-        edges_list.append((j, i))
-        edge_features_list.append(edge_feature[0])
+    if create_bond_graph:
+        # bonds
+        edges_list = []
+        edge_features_list = []
+        for bond in mol.GetBonds():
+            i = bond.GetBeginAtomIdx()
+            j = bond.GetEndAtomIdx()
+            edge_feature = bond_to_feature_vector(bond)
+            # add edges in both directions
+            edges_list.append((i, j))
+            edge_features_list.append(edge_feature[0])
+            edges_list.append((j, i))
+            edge_features_list.append(edge_feature[0])
 
-    # data.edge_index: Graph connectivity in COO format with shape [2, num_edges]
-    edge_index = torch.tensor(edges_list, dtype=torch.int64).T
-    # data.edge_attr: Edge feature matrix with shape [num_edges]
-    edge_attr = torch.tensor(edge_features_list, dtype=torch.int64)
+        # data.edge_index: Graph connectivity in COO format with shape [2, num_edges]
+        edge_index = torch.tensor(edges_list, dtype=torch.int64).T
+        # data.edge_attr: Edge feature matrix with shape [num_edges]
+        edge_attr = torch.tensor(edge_features_list, dtype=torch.int64)
 
-    if edge_index.numel() > 0:  # Sort indices.
-        perm = (edge_index[0] * x.size(0) + edge_index[1]).argsort()
-        edge_index, edge_attr = edge_index[:, perm], edge_attr[perm]
+        if edge_index.numel() > 0:  # Sort indices.
+            perm = (edge_index[0] * x.size(0) + edge_index[1]).argsort()
+            edge_index, edge_attr = edge_index[:, perm], edge_attr[perm]
+    else:
+        edge_index = edge_attr = None
     
     data = Data(x=x, atom_elements = atom_element_name_list, edge_index=edge_index, edge_attr=edge_attr)
     return data

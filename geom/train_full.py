@@ -55,7 +55,11 @@ if __name__ == "__main__":
         shuffle_train=True,
         max_num_conformers=hparams.max_num_conformers,
         pin_memory=True,
-        persistent_workers=True
+        persistent_workers=True,
+        transform_args = {"create_bond_graph": False,
+                          "save_smiles": False,
+                          "fully_connected_edge_index": False
+                          }
     )
 
     strategy = (

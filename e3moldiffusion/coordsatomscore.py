@@ -16,6 +16,8 @@ from e3moldiffusion.sde import (
     VPAncestralSamplingPredictor,
     get_timestep_embedding,
 )
+from torch_geometric.typing import OptTensor
+
 from torch import Tensor, nn
 from torch_scatter import scatter_mean
 from torch_geometric.nn.inits import reset
@@ -240,9 +242,13 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         return pos, xohes, ohe_integer, batch_num_nodes, [pos_traj, atom_type_traj, atom_type_ohe_traj]
 
     def forward(
-        self, x: Tensor, pos: Tensor, t: Tensor, edge_index_global: Tensor,  batch: Tensor
+        self, x: Tensor, pos: Tensor, t: Tensor, edge_index_global: OptTensor,  batch: Tensor
     ):      
-                
+        
+        if edge_index_global is None:
+            edge_index_global = torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
+            edge_index_global, _ = dense_to_sparse(edge_index_global)
+            
         # one-hot-encode
         xohe = F.one_hot(x, num_classes=self.hparams.num_atom_types).float()
         xohe = 0.25 * xohe
@@ -325,7 +331,10 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
             device=batch.x.device,
         )
 
-        out_dict = self(x=batch.xgeom, pos=batch.pos, t=t, edge_index_global=batch.edge_index_fc, batch=batch.batch)
+        out_dict = self(x=batch.xgeom, pos=batch.pos, t=t,
+                        edge_index_global=batch.edge_index_fc,
+                        batch=batch.batch)
+        
         coords_loss = torch.pow(
             out_dict["noise_coords_pred"] - out_dict["noise_coords_true"], 2
         ).sum(-1)
