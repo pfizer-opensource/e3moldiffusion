@@ -110,7 +110,7 @@ class Trainer(pl.LightningModule):
             dist_score=hparams["dist_score"]
         )
     
-        self.radius_graph = True # False
+        self.radius_graph = False
         self.triple_order = False
         
         timesteps = torch.arange(hparams["num_diffusion_timesteps"], dtype=torch.long)
@@ -294,10 +294,13 @@ class Trainer(pl.LightningModule):
         else:
             edge_index_local, edge_attr_local = bond_edge_index, bond_edge_attr
         
-        edge_index_global = batch.edge_index_fc
-        if edge_index_global is None:
-            edge_index_global = torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
+        
+        if not hasattr(batch, "edge_index_fc"):
+            edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
             edge_index_global, _ = dense_to_sparse(edge_index_global)
+        else:
+            edge_index_global = batch.edge_index_fc
+
 
         if self.hparams.use_bond_features:
             if self.radius_graph:
