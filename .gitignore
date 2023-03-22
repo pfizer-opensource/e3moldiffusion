@@ -29,3 +29,6 @@ geom/my_movie.gif
 geom/vis.ipynb
 
 geom/evaluation/
+geom/train_gan.py
+
+fullerene/

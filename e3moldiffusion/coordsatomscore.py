@@ -332,7 +332,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         )
 
         out_dict = self(x=batch.xgeom, pos=batch.pos, t=t,
-                        edge_index_global=batch.edge_index_fc,
+                        edge_index_global=None,
                         batch=batch.batch)
         
         coords_loss = torch.pow(
