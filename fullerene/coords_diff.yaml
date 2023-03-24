@@ -1,0 +1,54 @@
+gpus: 1
+num_epochs: 3000
+
+model: eqgat
+
+#EQGAT
+sdim: 128
+vdim: 128
+edim: 32
+tdim: 128
+omit_norm: false
+use_bond_features: true
+use_all_atom_features: true
+fully_connected: false
+omit_cross_product: true
+use_rbf: true 
+vector_aggr: mean
+
+#DATA
+dataset: Fullerene
+dataset_arg: {dataset: hexane}
+dataset_root: /Users/tuanle/Desktop/projects/e3moldiffusion/catcher/data/Hexane
+
+derivative: false
+#Change for diffusion to VectorCategorical!
+output_model: VectorCategorical
+
+#DIFFUSION
+remove_hs: false
+condition_time: true
+gradient_clipping: true
+num_diffusion_timesteps: 300
+n_stability_samples: 1000
+noise_schedule: cosine
+noise_precision: 1.e-5
+loss_type: l2
+
+test_size: null
+train_size: 0.8
+val_size: 0.1
+batch_size: 64
+inference_batch_size: 64
+
+log_dir: logs/
+lr: 5.e-4
+lr_factor: 0.5
+lr_patience: 15
+max_num_neighbors: 100
+max_z: 100
+
+weight_decay: 0.0
+
+num_workers: 12
+precision: 32
