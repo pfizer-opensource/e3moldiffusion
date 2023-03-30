@@ -413,7 +413,7 @@ if __name__ == "__main__":
     from torch_scatter import scatter_mean
 
     T = 1000
-    schedule = "cosine"
+    schedule = "polynomial"
     
     sde = DiscreteDDPM(beta_min=1e-4,
                        beta_max=2e-2,

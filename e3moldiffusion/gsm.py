@@ -12,6 +12,11 @@ from e3moldiffusion.convs import EQGATRBFConv
 from e3moldiffusion.modules import DenseLayer, GatedEquivBlock
 from e3moldiffusion.molfeat import AtomEncoder, BondEncoder
 from e3moldiffusion.gnn import EncoderGNN
+from e3moldiffusion.potential import SimplePotential
+
+import functorch
+# https://pytorch.org/functorch/0.1.1/
+
 
 """ Model Script for Generalized Score Matching on Molecular Systems """
 
@@ -21,12 +26,15 @@ def keep_grad(output, input, grad_outputs=None):
 
 def exact_jacobian_trace(fx, x):
     vals = []
+    # [N, 3]
     for i in range(x.size(1)):
         fxi = fx[:, i]
         dfxi_dxi = keep_grad(fxi, x, torch.ones_like(fxi))[:, i][:, None]
         vals.append(dfxi_dxi)
     vals = torch.cat(vals, dim=1)
-    return vals.sum(dim=1)
+    vals = vals.sum(dim=1)
+    return vals
+
 
 class NonConservativeScoreNetwork(nn.Module):
     def __init__(self,
@@ -47,7 +55,7 @@ class NonConservativeScoreNetwork(nn.Module):
 
         self.atom_encoder = AtomEncoder(emb_dim=hn_dim[0],
                                         use_all_atom_features=use_all_atom_features,
-                                        max_norm=1.0)
+                                        max_norm=None)
 
         if edge_dim is None or 0:
             self.edge_dim = 0
@@ -55,7 +63,7 @@ class NonConservativeScoreNetwork(nn.Module):
             self.edge_dim = edge_dim
 
         if self.edge_dim:
-            self.edge_encoder = BondEncoder(emb_dim=edge_dim, max_norm=1.0)
+            self.edge_encoder = BondEncoder(emb_dim=edge_dim, max_norm=None)
         else:
             self.edge_encoder = None
         
@@ -84,6 +92,8 @@ class NonConservativeScoreNetwork(nn.Module):
         else:
             self.dist_score = None
             
+        self.conservative = True
+        
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -117,12 +127,13 @@ class NonConservativeScoreNetwork(nn.Module):
      
         if self.edge_dim > 0:
             edge_attr_local = self.edge_encoder(edge_attr_local)
-            edge_attr_global = self.edge_encoder(edge_attr_global)
+            # edge_attr_global = self.edge_encoder(edge_attr_global)
+            edge_attr_global = None
          
         # local
         edge_attr_local = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local, pos=pos)        
         # global
-        edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global, pos=pos)
+        # edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global, pos=pos)
 
         s = self.atom_encoder(x)
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
@@ -134,27 +145,99 @@ class NonConservativeScoreNetwork(nn.Module):
             batch=batch
         )
         
-        score = self.coords_score(out["v"]).squeeze()        
-        
-        if self.dist_score is not None:
-            source, target = edge_index_global
-            r = pos[source] - pos[target]
-            sd = F.silu(out["s"])
-            sd = self.dist_score(sd)
-            sd = sd[source] + sd[target]
-            sr = sd * r
-            sr = scatter(src=sr, index=target, dim=0, dim_size=s.size(0), reduce="add").squeeze()
-            score = score + sr 
-             
-        return score
+        if not self.conservative:
+            score = self.coords_score(out["v"]).squeeze()        
+            if self.dist_score is not None:
+                source, target = edge_index_global
+                r = pos[source] - pos[target]
+                sd = F.silu(out["s"])
+                sd = self.dist_score(sd)
+                sd = sd[source] + sd[target]
+                sr = sd * r
+                sr = scatter(src=sr, index=target, dim=0, dim_size=s.size(0), reduce="add").squeeze()
+                score = score + sr 
+        else:
+            energy = out["s"]
+            energy = self.dist_score(energy)
+            energy = scatter(energy, batch, dim=0, dim_size=int(batch.max() + 1), reduce="add")
+            # score = keep_grad(output=energy, input=pos, grad_outputs=torch.ones_like(energy))
+                
+        return energy
+    
+    
+class SimplePotentialScoreNetwork(nn.Module):
+    def __init__(self,
+                 hn_dim: Tuple[int, int] = (64, 16),
+                 edge_dim: int = 16,
+                 use_all_atom_features: bool = True,
+                 **kwargs,
+                 ):
+        super(SimplePotentialScoreNetwork, self).__init__()
 
+        self.atom_encoder = AtomEncoder(emb_dim=hn_dim[0],
+                                        use_all_atom_features=use_all_atom_features,
+                                        max_norm=None)
+
+        if edge_dim is None or 0:
+            self.edge_dim = 0
+        else:
+            self.edge_dim = edge_dim
+
+        if self.edge_dim:
+            self.edge_encoder = BondEncoder(emb_dim=edge_dim, max_norm=None)
+        else:
+            self.edge_encoder = None
+        
+        self.sdim, self.vdim = hn_dim
+        self.potential = SimplePotential(
+            node_dim=hn_dim[0], edge_dim=edge_dim, vdim=hn_dim[1]
+        )
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        pass  
+        
+    def forward(self,
+                x: Tensor,
+                pos: Tensor,
+                edge_index_local: Tensor,
+                edge_index_global: Tensor,
+                edge_attr_local: OptTensor = None,
+                edge_attr_global: OptTensor = None,
+                batch: OptTensor = None):
+
+        if batch is None:
+            batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)
+     
+        if self.edge_dim > 0:
+            edge_attr_local = self.edge_encoder(edge_attr_local)
+            # edge_attr_global = self.edge_encoder(edge_attr_global)
+            edge_attr_global = None
+         
+        s = self.atom_encoder(x)
+        
+        energy = self.potential(
+            x=s, pos=pos,
+            edge_index_local=edge_index_local,
+            edge_attr_local=edge_attr_local,
+            edge_index_global=edge_index_global,
+            edge_attr_global=edge_attr_global,
+            batch=batch,
+        )
+        
+        # score = keep_grad(output=energy, input=pos, grad_outputs=torch.ones_like(energy))
+        
+        return energy
+    
 
 if __name__ == "__main__":
     x = torch.randn(10, 3, requires_grad=True)
     net = nn.Sequential(DenseLayer(3, 3, activation=nn.SiLU()), DenseLayer(3, 3))
-    
     score = net(x)
     tr = exact_jacobian_trace(fx=score, x=x)
-    loss = score.pow(2).sum(-1).mean() + 2.0 * tr.mean()
-    print(loss)
+    snorm = score.pow(2).sum(-1).mean()
+    jctr = tr.mean()
+    print(f"snorm={snorm} , jctr={jctr}")
+    
+    
     

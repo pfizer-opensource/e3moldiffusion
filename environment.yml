@@ -17,6 +17,7 @@ dependencies:
   - conda-forge::jupyter
   - conda-forge::xtb-python
   - pip:
+      - functorch==0.1.1
       - ase
       - py3Dmol
       - lmdb

@@ -23,6 +23,9 @@ from torch_geometric.utils import dense_to_sparse
 from torch_sparse import coalesce
 from torch_scatter import scatter_mean, scatter_add
 
+import functorch
+# https://pytorch.org/functorch/0.1.1/
+
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 
@@ -108,6 +111,9 @@ class Trainer(pl.LightningModule):
         out_dict = self(batch=batch)
         score = out_dict["sx"]
         x = out_dict["x"]
+        
+        # sx is energy
+        
         
         # N = sum_i n_i
         jcb_tr = exact_jacobian_trace(fx=score, x=x) # [N,]
