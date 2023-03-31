@@ -229,9 +229,9 @@ class ScoreModelCoords(nn.Module):
                  use_cross_product: bool = False,
                  use_all_atom_features: bool = True,
                  fully_connected: bool = False,
-                 local_global_model: bool = False,
+                 local_global_model: bool = True,
                  vector_aggr: str = "mean",
-                 dist_score: bool = False
+                 dist_score: bool = True
                  ):
         super(ScoreModelCoords, self).__init__()
 
@@ -273,10 +273,10 @@ class ScoreModelCoords(nn.Module):
             local_global_model=local_global_model
         )
         
-        self.coords_score = DenseLayer(in_features=hn_dim[1], out_features=1)
+        self.coords_score = DenseLayer(in_features=hn_dim[1], out_features=1, bias=False)
 
         if dist_score:
-            self.dist_score = DenseLayer(in_features=hn_dim[0], out_features=1)
+            self.dist_score = DenseLayer(in_features=hn_dim[0], out_features=1, bias=True)
         else:
             self.dist_score = None
             
