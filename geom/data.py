@@ -759,8 +759,8 @@ class GeomDataModule(LightningDataModule):
         self.val_ids = val_ids.tolist()
                 
         if stage == "fit" or stage is None:
-            self.train_dataset = Subset(dataset=database, indices=self.train_ids[:1000])
-            self.val_dataset = Subset(dataset=database, indices=self.val_ids[:1000])
+            self.train_dataset = Subset(dataset=database, indices=self.train_ids)
+            self.val_dataset = Subset(dataset=database, indices=self.val_ids)
         if stage == "test" or stage is None:
             self.test_dataset = Subset(dataset=database, indices=self.test_ids)
             

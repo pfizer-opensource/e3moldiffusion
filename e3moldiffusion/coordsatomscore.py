@@ -101,7 +101,8 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
 
         self.gnn = EncoderGNN(
             hn_dim=(self.hparams.sdim, self.hparams.vdim),
-            cutoff=self.hparams.cutoff,
+            cutoff_local=self.hparams.cutoff_local,
+            cutoff_global=self.hparams.cutoff_global,
             rbf_dim=self.hparams.rbf_dim,
             edge_dim=None,
             num_layers=self.hparams.num_layers,
@@ -170,7 +171,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         xohes = torch.randn(pos.size(0), self.hparams.num_atom_types, device=device)
         
         edge_index_local = radius_graph(x=pos,
-                                        r=self.hparams.cutoff,
+                                        r=self.hparams.cutoff_local,
                                         batch=batch, 
                                         max_num_neighbors=self.hparams.max_num_neighbors)
         
@@ -228,7 +229,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
             
             if not self.hparams.fully_connected:
                 edge_index_local = radius_graph(x=pos.detach(),
-                                                r=self.hparams.cutoff,
+                                                r=self.hparams.cutoff_local,
                                                 batch=batch, 
                                                 max_num_neighbors=self.hparams.max_num_neighbors)
             
@@ -254,7 +255,7 @@ class CoordsAtomScoreTrainer(pl.LightningModule):
         xohe = 0.25 * xohe
         
         if not self.hparams.fully_connected:
-            edge_index_local = radius_graph(x=pos, r=self.hparams.cutoff,
+            edge_index_local = radius_graph(x=pos, r=self.hparams.cutoff_local,
                                             batch=batch, loop=False,
                                             max_num_neighbors=self.hparams.max_num_neighbors)
  

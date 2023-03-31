@@ -35,25 +35,16 @@ def add_arguments(parser):
 
     parser.add_argument("--load_ckpt", default="", type=str)
     parser.add_argument("--dataset", default="drugs", choices=["qm9", "drugs"])
-    #parser.add_argument(
-    #    "--subset_frac",
-    #    default=0.1,
-    #    type=float,
-    #    help="Fraction to train on only for experimenting. Defaults to 0.1",
-    #)
     parser.add_argument("--max_num_conformers", default=30, type=int,
                         help="Maximum number of conformers per molecule. \
                             Defaults to 30. Set to -1 for all conformers available in database"
                             )
-
     parser.add_argument("--accum_batch", default=None, type=int)
-
-    parser.add_argument("--energy_preserving", default=False, action="store_true")
-    parser.add_argument("--sdim", default=128, type=int)
-    parser.add_argument("--vdim", default=32, type=int)
-    parser.add_argument("--edim", default=32, type=int)
-    parser.add_argument("--rbf_dim", default=32, type=int)
-    parser.add_argument("--tdim", default=128, type=int)
+    parser.add_argument("--sdim", default=64, type=int)
+    parser.add_argument("--vdim", default=16, type=int)
+    parser.add_argument("--edim", default=16, type=int)
+    parser.add_argument("--rbf_dim", default=20, type=int)
+    parser.add_argument("--tdim", default=64, type=int)
     parser.add_argument("--vector_aggr", default="mean", type=str)
     parser.add_argument("--num_layers", default=4, type=int)
     parser.add_argument("--omit_norm", default=False, action="store_true")
@@ -61,13 +52,12 @@ def add_arguments(parser):
     parser.add_argument("--use_all_atom_features", default=False, action="store_true")
     parser.add_argument("--fully_connected", default=False, action="store_true")
     parser.add_argument("--local_global_model", default=False, action="store_true")
-    parser.add_argument("--cutoff", default=7.5, type=float)
 
     parser.add_argument("--cutoff_local", default=3.0, type=float)
     parser.add_argument("--cutoff_global", default=10.0, type=float)
     
     parser.add_argument("--max_num_neighbors", default=128, type=int)
-    parser.add_argument("--dist_score", default=False, action="store_true")
+    parser.add_argument("--conservative", default=False, action="store_true")
 
     parser.add_argument("--omit_cross_product", default=False, action="store_true")
     parser.add_argument("--continuous", default=False, action="store_true",
@@ -88,6 +78,5 @@ def add_arguments(parser):
     parser.add_argument("--num_diffusion_timesteps", default=300, type=int)
 
     parser.add_argument("--max_time", type=str, default=None)
-
 
     return parser

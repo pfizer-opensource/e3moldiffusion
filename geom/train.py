@@ -29,65 +29,6 @@ logging.getLogger("lightning").setLevel(logging.WARNING)
 
 BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 
-def binarize(x):
-        return torch.where(x > 0, torch.ones_like(x), torch.zeros_like(x))
-
-
-def triple_order_edges(bond_edge_index: Tensor,
-                       bond_edge_attr: Tensor,
-                       batch: Tensor,
-                       check_coalesce: bool = False) -> Tuple[Tensor, Tensor]:
-    
-    # store in big block-triangular matrix
-    dense_adj = to_dense_adj(edge_index=bond_edge_index).squeeze(0)
-    no_self_loop = torch.ones((dense_adj.size(0), dense_adj.size(1)),
-                              dtype=torch.float32,
-                              device=bond_edge_index.device).fill_diagonal_(0.0)
-    adj1 = dense_adj * no_self_loop
-    adj2 = binarize(adj1 @ adj1) * no_self_loop
-    new_ids_2 = (1.0 - adj1) * adj2
-    
-    edge_index_two_hop = new_ids_2.nonzero(as_tuple=False).T
-    edge_attr_two_hop = torch.ones(size=(edge_index_two_hop.size(-1), ),
-                                   dtype=torch.long,
-                                   device=bond_edge_index.device) * (BOND_FEATURE_DIMS + 2)
-    
-    adj3 = binarize(adj2 @ adj1) * no_self_loop
-    
-    new_ids_3 = (1.0 - adj1) * adj3
-    new_ids_3 = (1.0 - adj2) * new_ids_3 
-    
-    edge_index_three_hop = new_ids_3.nonzero(as_tuple=False).T
-    edge_attr_three_hop = torch.ones(size=(edge_index_three_hop.size(-1), ),
-                                     dtype=torch.long,
-                                     device=bond_edge_index.device) * (BOND_FEATURE_DIMS + 3)
-    
-    
-    ext_edge_index = torch.concat([bond_edge_index,
-                                   edge_index_two_hop,
-                                   edge_index_three_hop], 
-                                  dim=-1)
-    ext_edge_attr = torch.concat([bond_edge_attr,
-                                  edge_attr_two_hop,
-                                  edge_attr_three_hop],
-                                dim=0)
-    
-    if check_coalesce:
-        # make sure there are no "duplicates", i.e. length does not change after aggr.
-        ext_edge_index_c, ext_edge_attr_c = coalesce(ext_edge_index,
-                                                    ext_edge_attr,
-                                                    m=len(batch),
-                                                    n=len(batch))
-        assert ext_edge_index.size() == ext_edge_index_c.size()
-        assert ext_edge_attr.size() == ext_edge_attr_c.size()
-    
-    ext_edge_index, ext_edge_attr = sort_edge_index(edge_index=ext_edge_index,
-                                                    edge_attr=ext_edge_attr,
-                                                    num_nodes=len(batch),
-                                                    sort_by_row=False)
-    
-    return ext_edge_index, ext_edge_attr
-
 
 class Trainer(pl.LightningModule):
     def __init__(self, hparams):
@@ -98,7 +39,8 @@ class Trainer(pl.LightningModule):
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             t_dim=hparams["tdim"],
             edge_dim=hparams["edim"],
-            cutoff=hparams["cutoff"],
+            cutoff_local=hparams["cutoff_local"],
+            cutoff_global=hparams["cutoff_global"],
             rbf_dim=hparams["rbf_dim"],
             num_layers=hparams["num_layers"],
             use_norm=not hparams["omit_norm"],
@@ -107,12 +49,8 @@ class Trainer(pl.LightningModule):
             vector_aggr=hparams["vector_aggr"],
             fully_connected=hparams["fully_connected"],
             local_global_model=hparams["local_global_model"],
-            dist_score=hparams["dist_score"]
         )
-    
-        self.radius_graph = False
-        self.triple_order = False
-        
+           
         timesteps = torch.arange(hparams["num_diffusion_timesteps"], dtype=torch.long)
         timesteps_embedder = get_timestep_embedding(
             timesteps=timesteps, embedding_dim=hparams["tdim"]
@@ -132,7 +70,7 @@ class Trainer(pl.LightningModule):
             self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
                                     beta_max=hparams["beta_max"],
                                     N=hparams["num_diffusion_timesteps"],
-                                    scaled_reverse_posterior_sigma=True,
+                                    scaled_reverse_posterior_sigma=False,
                                     schedule=hparams["schedule"])
             
         self.sampler = VPAncestralSamplingPredictor(sde=self.sde)
@@ -179,30 +117,12 @@ class Trainer(pl.LightningModule):
                           dtype=self.model.atom_encoder.atom_embedding_list[0].weight.dtype)
         pos = pos - scatter_mean(pos, dim=0, index=batch, dim_size=bs)[batch]
         
-        if self.radius_graph:
-            edge_index_local = radius_graph(x=pos,
-                                            r=self.hparams.cutoff,
-                                            batch=batch,
-                                            max_num_neighbors=self.hparams.max_num_neighbors
-                                            )
-        elif self.triple_order:
-            edge_index_local, edge_attr_local = triple_order_edges(bond_edge_index=bond_edge_index,
-                                                                   bond_edge_attr=bond_edge_attr,
-                                                                   batch=batch, check_coalesce=False
-                                                                   )
-        else:
-            edge_index_local, edge_attr_local = bond_edge_index, bond_edge_attr
+        edge_index_local, edge_attr_local = bond_edge_index, bond_edge_attr
         
         edge_index_global = torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
         edge_index_global, _ = dense_to_sparse(edge_index_global)
 
-        if self.hparams.use_bond_features:
-            if self.radius_graph:
-                edge_index_local, edge_attr_local = self.coalesce_edges(edge_index=edge_index_local,
-                                                                        bond_edge_index=bond_edge_index,
-                                                                        bond_edge_attr=bond_edge_attr,
-                                                                        n=pos.size(0))
-                
+        if self.hparams.use_bond_features:    
             edge_index_global, edge_attr_global = self.coalesce_edges(edge_index=edge_index_global,
                                                                       bond_edge_index=bond_edge_index,
                                                                       bond_edge_attr=bond_edge_attr,
@@ -235,17 +155,6 @@ class Trainer(pl.LightningModule):
             pos = pos - scatter_mean(pos, index=batch, dim=0, dim_size=bs)[batch]
             pos_mean = pos_mean - scatter_mean(pos_mean, index=batch, dim=0, dim_size=bs)[batch]
 
-            if not self.hparams.fully_connected:
-                if self.radius_graph:
-                    edge_index_local = radius_graph(x=pos.detach(),
-                                                    r=self.hparams.cutoff,
-                                                    batch=batch, 
-                                                    max_num_neighbors=self.hparams.max_num_neighbors)
-                    if self.hparams.use_bond_features:
-                        edge_index_local, edge_attr_local = self.coalesce_edges(edge_index=edge_index_local,
-                                                                                bond_edge_index=bond_edge_index,
-                                                                                bond_edge_attr=bond_edge_attr,
-                                                                                n=pos.size(0))
             if save_traj:
                 pos_sde_traj.append(pos.detach())
                 pos_mean_traj.append(pos_mean.detach())
@@ -280,34 +189,14 @@ class Trainer(pl.LightningModule):
         # perturb
         pos_perturbed = mean + std * noise
         
-        if self.radius_graph:
-            edge_index_local = radius_graph(x=pos_perturbed,
-                                            r=self.hparams.cutoff,
-                                            batch=data_batch,
-                                            max_num_neighbors=self.hparams.max_num_neighbors
-                                            )
-        elif self.triple_order:
-            edge_index_local, edge_attr_local = triple_order_edges(bond_edge_index=bond_edge_index,
-                                                                   bond_edge_attr=bond_edge_attr,
-                                                                   batch=batch, check_coalesce=False
-                                                                   )
-        else:
-            edge_index_local, edge_attr_local = bond_edge_index, bond_edge_attr
-        
-        
+        edge_index_local, edge_attr_local = bond_edge_index, bond_edge_attr
         if not hasattr(batch, "edge_index_fc"):
             edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
             edge_index_global, _ = dense_to_sparse(edge_index_global)
         else:
             edge_index_global = batch.edge_index_fc
 
-
         if self.hparams.use_bond_features:
-            if self.radius_graph:
-                edge_index_local, edge_attr_local = self.coalesce_edges(edge_index=edge_index_local,
-                                                                        bond_edge_index=bond_edge_index, bond_edge_attr=bond_edge_attr,
-                                                                        n=pos.size(0))
-            
             edge_index_global, edge_attr_global = self.coalesce_edges(edge_index=edge_index_global,
                                                                       bond_edge_index=bond_edge_index, bond_edge_attr=bond_edge_attr,
                                                                       n=pos.size(0))
