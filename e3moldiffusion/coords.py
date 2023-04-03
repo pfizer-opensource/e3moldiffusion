@@ -3,12 +3,11 @@ from torch import nn, Tensor
 
 from typing import Optional, Tuple, Dict
 import torch.nn.functional as F 
-from torch_geometric.nn.inits import reset
 from torch_geometric.typing import OptTensor
 from torch_scatter import scatter
+from torch_geometric.nn.inits import reset
 
-
-from e3moldiffusion.molfeat import AtomEncoder, BondEncoder
+from e3moldiffusion.molfeat import BondEncoder
 from e3moldiffusion.modules import DenseLayer
 from e3moldiffusion.gnn import EncoderGNN
 
@@ -66,8 +65,8 @@ class ScoreHead(nn.Module):
         
 class ScoreModel(nn.Module):
     def __init__(self,
+                 num_atom_types: int,
                  hn_dim: Tuple[int, int] = (64, 16),
-                 t_dim: int = 64,
                  edge_dim: int = 16,
                  rbf_dim: int = 16,
                  cutoff_local: float = 3.0,
@@ -75,16 +74,20 @@ class ScoreModel(nn.Module):
                  num_layers: int = 5,
                  use_norm: bool = True,
                  use_cross_product: bool = False,
-                 use_all_atom_features: bool = True,
                  fully_connected: bool = False,
                  local_global_model: bool = True,
                  vector_aggr: str = "mean"
                  ):
         super(ScoreModel, self).__init__()
 
-        self.atom_encoder = AtomEncoder(emb_dim=hn_dim[0],
-                                        use_all_atom_features=use_all_atom_features,
-                                        max_norm=1.0)
+        self.atom_time_mapping = nn.Sequential(
+            DenseLayer(
+                num_atom_types + 1,
+                hn_dim[0],
+                activation=nn.SiLU(),
+            ),
+            DenseLayer(hn_dim[0], hn_dim[0]),
+        )
 
         if edge_dim is None or 0:
             self.edge_dim = 0
@@ -96,12 +99,6 @@ class ScoreModel(nn.Module):
         else:
             self.edge_encoder = None
 
-        self.t_dim = t_dim
-        self.t_mapping = nn.Sequential(
-            DenseLayer(t_dim, t_dim, activation=nn.SiLU()),
-            DenseLayer(t_dim, hn_dim[0], activation=nn.SiLU())
-            )
-        
         self.sdim, self.vdim = hn_dim
 
         self.local_global_model = local_global_model
@@ -126,8 +123,7 @@ class ScoreModel(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        self.atom_encoder.reset_parameters()
-        reset(self.t_mapping)
+        reset(self.atom_time_mapping)
         if self.edge_dim:
             self.edge_encoder.reset_parameters()
         self.gnn.reset_parameters()
@@ -163,9 +159,8 @@ class ScoreModel(nn.Module):
         # global
         edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global, pos=pos)
 
-        s = self.atom_encoder(x)
-        temb = self.t_mapping(t)[batch]
-        s = s + temb
+        sin = torch.cat([x, t], dim=-1)
+        s = self.atom_time_mapping(sin)
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
 
         out = self.gnn(

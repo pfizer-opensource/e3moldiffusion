@@ -29,20 +29,19 @@ args=(
     --num_workers 4
     --save_dir logs/drugs_coords
     --num_epochs 100
-    --sdim 128 --vdim 32 --tdim 128 --edim 32 --rbf_dim 32 --num_layers 5
+    --sdim 128 --vdim 32 --edim 32 --rbf_dim 32 --num_layers 5
     --cutoff_local 3.0
     --cutoff_global 10.0
     --lr 5e-4
     --batch_size 256
     --local_global_model
-    # --conservative
     --use_bond_features
-    --use_all_atom_features
     --omit_cross_product
     --vector_aggr mean
     --schedule cosine
-    --num_diffusion_timesteps 100
+    --num_diffusion_timesteps 300
     --max_time 0:23:45:00
     )
 
-python train.py "${args[@]}"
+python train_coords.py "${args[@]}"
+

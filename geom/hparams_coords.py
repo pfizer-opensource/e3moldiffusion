@@ -1,6 +1,8 @@
+## TODO Hparams for 3D Coords learning only
+
 import os
 
-DEFAULT_SAVE_DIR = os.path.join(os.getcwd(), "saves_diffusion0")
+DEFAULT_SAVE_DIR = os.path.join(os.getcwd(), "3DcoordsOnly_0")
 
 if not os.path.exists(DEFAULT_SAVE_DIR):
     os.makedirs(DEFAULT_SAVE_DIR)
@@ -44,20 +46,15 @@ def add_arguments(parser):
     parser.add_argument("--vdim", default=16, type=int)
     parser.add_argument("--edim", default=16, type=int)
     parser.add_argument("--rbf_dim", default=20, type=int)
-    parser.add_argument("--tdim", default=64, type=int)
     parser.add_argument("--vector_aggr", default="mean", type=str)
     parser.add_argument("--num_layers", default=4, type=int)
     parser.add_argument("--omit_norm", default=False, action="store_true")
     parser.add_argument("--use_bond_features", default=False, action="store_true")
-    parser.add_argument("--use_all_atom_features", default=False, action="store_true")
     parser.add_argument("--fully_connected", default=False, action="store_true")
     parser.add_argument("--local_global_model", default=False, action="store_true")
 
     parser.add_argument("--cutoff_local", default=3.0, type=float)
     parser.add_argument("--cutoff_global", default=10.0, type=float)
-    
-    parser.add_argument("--max_num_neighbors", default=128, type=int)
-    parser.add_argument("--conservative", default=False, action="store_true")
 
     parser.add_argument("--omit_cross_product", default=False, action="store_true")
     parser.add_argument("--continuous", default=False, action="store_true",

@@ -12,8 +12,8 @@ from pytorch_lightning.callbacks import (
     TQDMProgressBar,
 )
 from pytorch_lightning.loggers import TensorBoardLogger
-from e3moldiffusion.molfeat import get_bond_feature_dims
-from e3moldiffusion.sde import VPSDE, VPAncestralSamplingPredictor, get_timestep_embedding, DiscreteDDPM
+from e3moldiffusion.molfeat import get_bond_feature_dims, atom_type_config
+from e3moldiffusion.sde import VPSDE, VPAncestralSamplingPredictor, DiscreteDDPM
 from e3moldiffusion.coords import ScoreModel
 
 from torch import Tensor
@@ -26,8 +26,12 @@ from tqdm import tqdm
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 
-BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 
+def get_num_atom_types_geom(dataset: str):
+    assert dataset in ["qm9", "drugs"]
+    return len(atom_type_config(dataset=dataset))
+
+BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 
 class Trainer(pl.LightningModule):
     def __init__(self, hparams):
@@ -35,8 +39,8 @@ class Trainer(pl.LightningModule):
         self.save_hyperparameters(hparams)
         
         self.model = ScoreModel(
+            num_atom_types=get_num_atom_types_geom(dataset=hparams["dataset"]),
             hn_dim=(hparams["sdim"], hparams["vdim"]),
-            t_dim=hparams["tdim"],
             edge_dim=hparams["edim"],
             cutoff_local=hparams["cutoff_local"],
             cutoff_global=hparams["cutoff_global"],
@@ -44,20 +48,11 @@ class Trainer(pl.LightningModule):
             num_layers=hparams["num_layers"],
             use_norm=not hparams["omit_norm"],
             use_cross_product=not hparams["omit_cross_product"],
-            use_all_atom_features=hparams["use_all_atom_features"],
             vector_aggr=hparams["vector_aggr"],
             fully_connected=hparams["fully_connected"],
             local_global_model=hparams["local_global_model"],
         )
 
-        timesteps = torch.arange(hparams["num_diffusion_timesteps"], dtype=torch.long)
-        timesteps_embedder = get_timestep_embedding(
-            timesteps=timesteps, embedding_dim=hparams["tdim"]
-        ).to(torch.float32)
-
-        self.register_buffer("timesteps", tensor=timesteps)
-        self.register_buffer("timesteps_embedder", tensor=timesteps_embedder)
-        
         if hparams["continuous"]:
             # todo: double check continuous time
             raise NotImplementedError
@@ -136,7 +131,10 @@ class Trainer(pl.LightningModule):
         iterator = tqdm(reversed(chain), total=num_diffusion_timesteps) if verbose else reversed(chain)
         for timestep in iterator:
             t = torch.full(size=(bs, ), fill_value=timestep, dtype=torch.long, device=pos.device)
-            temb = self.timesteps_embedder[t][batch]
+            temb = t / self.hparams.num_diffusion_timesteps
+            temb = temb.unsqueeze(dim=1)
+            temb = temb.index_select(dim=0, index=batch)
+            
             out = self.model(
                 x=x,
                 t=temb,
@@ -169,12 +167,14 @@ class Trainer(pl.LightningModule):
 
         bs = int(data_batch.max()) + 1
         
-        if self.hparams.continuous:
-            t_ = (t * (self.sde.N - 1)).long()
-            timestep_embs = self.timesteps_embedder[t_][data_batch]
+        if not self.hparams.continuous:
+            temb = t.float() / self.hparams.num_diffusion_timesteps
+            temb = temb.clamp(min=self.hparams.eps_min)
         else:
-            timestep_embs = self.timesteps_embedder[t][data_batch]
+            temb = t
             
+        temb = temb.unsqueeze(dim=1)
+        
         # center the true point cloud
         pos_centered = pos - scatter_mean(pos, index=data_batch, dim=0, dim_size=bs)[data_batch]
 
@@ -202,7 +202,7 @@ class Trainer(pl.LightningModule):
             
         out = self.model(
             x=node_feat,
-            t=timestep_embs,
+            t=temb,
             pos=pos_perturbed,
             edge_index_local=edge_index_local,
             edge_index_global=edge_index_global,
@@ -228,7 +228,9 @@ class Trainer(pl.LightningModule):
             t = torch.randint(low=0, high=self.hparams.num_diffusion_timesteps,
                               size=(batch_size,), 
                               dtype=torch.long, device=batch.x.device)
-            
+        
+        t = t.index_select(dim=0, index=batch.batch)
+        
         out_dict = self(batch=batch, t=t)
         loss = torch.pow(out_dict["pred_noise"] - out_dict["true_noise"], 2).sum(-1)
         loss = scatter_mean(loss, index=batch.batch, dim=0, dim_size=batch_size)
@@ -273,7 +275,7 @@ class Trainer(pl.LightningModule):
 
 if __name__ == "__main__":
     from geom.data import GeomDataModule
-    from geom.hparams import add_arguments
+    from geom.hparams_coords import add_arguments
 
     parser = ArgumentParser()
     parser = add_arguments(parser)
