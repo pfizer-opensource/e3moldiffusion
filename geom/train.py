@@ -14,13 +14,12 @@ from pytorch_lightning.callbacks import (
 from pytorch_lightning.loggers import TensorBoardLogger
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from e3moldiffusion.sde import VPSDE, VPAncestralSamplingPredictor, get_timestep_embedding, DiscreteDDPM
-from e3moldiffusion.gnn import ScoreModelCoords
+from e3moldiffusion.coords import ScoreModel
 
 from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.typing import OptTensor
-from torch_geometric.utils import dense_to_sparse, to_dense_adj, sort_edge_index
-from torch_cluster import radius_graph
+from torch_geometric.utils import dense_to_sparse
 from torch_sparse import coalesce
 from torch_scatter import scatter_mean
 from tqdm import tqdm
@@ -35,7 +34,7 @@ class Trainer(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(hparams)
         
-        self.model = ScoreModelCoords(
+        self.model = ScoreModel(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             t_dim=hparams["tdim"],
             edge_dim=hparams["edim"],
@@ -50,7 +49,7 @@ class Trainer(pl.LightningModule):
             fully_connected=hparams["fully_connected"],
             local_global_model=hparams["local_global_model"],
         )
-           
+
         timesteps = torch.arange(hparams["num_diffusion_timesteps"], dtype=torch.long)
         timesteps_embedder = get_timestep_embedding(
             timesteps=timesteps, embedding_dim=hparams["tdim"]
