@@ -11,6 +11,8 @@ from pytorch_lightning.callbacks import (
     ModelSummary,
     TQDMProgressBar,
 )
+import torch.nn.functional as F 
+
 from pytorch_lightning.loggers import TensorBoardLogger
 from e3moldiffusion.molfeat import get_bond_feature_dims, atom_type_config
 from e3moldiffusion.sde import VPSDE, VPAncestralSamplingPredictor, DiscreteDDPM
@@ -136,7 +138,7 @@ class Trainer(pl.LightningModule):
             temb = temb.index_select(dim=0, index=batch)
             
             out = self.model(
-                x=x,
+                x=F.one_hot(x, num_classes=self.hparams.num_atom_types).float(),
                 t=temb,
                 pos=pos,
                 edge_index_local=edge_index_local,
@@ -159,7 +161,7 @@ class Trainer(pl.LightningModule):
         return pos, [pos_sde_traj, pos_mean_traj]
 
     def forward(self, batch: Batch, t: Tensor):
-        node_feat: Tensor = batch.x
+        node_feat: Tensor = batch.xgeom
         pos: Tensor = batch.pos
         data_batch: Tensor = batch.batch
         bond_edge_index = batch.edge_index
@@ -201,7 +203,7 @@ class Trainer(pl.LightningModule):
                                                                       n=pos.size(0))
             
         out = self.model(
-            x=node_feat,
+            x=F.one_hot(node_feat, num_classes=self.hparams.num_atom_types).float(),
             t=temb,
             pos=pos_perturbed,
             edge_index_local=edge_index_local,
