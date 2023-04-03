@@ -39,9 +39,9 @@ class Trainer(pl.LightningModule):
     def __init__(self, hparams):
         super().__init__()
         self.save_hyperparameters(hparams)
-        
+        self.hparams.num_atom_types = get_num_atom_types_geom(dataset=hparams["dataset"])
         self.model = ScoreModel(
-            num_atom_types=get_num_atom_types_geom(dataset=hparams["dataset"]),
+            num_atom_types=self.hparams.num_atom_types,
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             edge_dim=hparams["edim"],
             cutoff_local=hparams["cutoff_local"],
@@ -127,6 +127,8 @@ class Trainer(pl.LightningModule):
         pos_sde_traj = []
         pos_mean_traj = []
         
+        xohe = F.one_hot(x, num_classes=self.hparams.num_atom_types).float()
+        
         chain = range(num_diffusion_timesteps)
         if verbose:
             print(chain)
@@ -138,7 +140,7 @@ class Trainer(pl.LightningModule):
             temb = temb.index_select(dim=0, index=batch)
             
             out = self.model(
-                x=F.one_hot(x, num_classes=self.hparams.num_atom_types).float(),
+                x=xohe,
                 t=temb,
                 pos=pos,
                 edge_index_local=edge_index_local,
