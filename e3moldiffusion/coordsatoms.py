@@ -39,6 +39,7 @@ class ScoreHead(nn.Module):
         
         s, v = self.outhead(x=(s, v))
         s, d = s.split([self.num_atom_types, 1], dim=-1)
+        d = d[source] + d[target]
         r = pos[source] - pos[target]
         sr = d * r
         sr = scatter_add(src=sr, index=target, dim=0, dim_size=s.size(0))

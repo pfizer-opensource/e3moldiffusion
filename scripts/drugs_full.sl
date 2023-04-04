@@ -29,17 +29,15 @@ args=(
     --num_workers 4
     --save_dir logs/drugs
     --num_epochs 100
-    --sdim 128 --vdim 32 --rbf_dim 20 --num_layers 5 
+    --sdim 128 --vdim 32 --rbf_dim 32 --num_layers 5 
     --cutoff_local 3.0
-    --cutoff_global 7.0
+    --cutoff_global 10.0
     --lr 5e-4
-    --batch_size 128
+    --batch_size 256
     --local_global_model
     --omit_cross_product
     --vector_aggr mean
     --schedule cosine
-    --beta_min 1e-4
-    --beta_max 2e-2
     --num_diffusion_timesteps 300
     --max_time 00:23:50:00
     )

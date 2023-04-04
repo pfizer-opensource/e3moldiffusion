@@ -50,7 +50,6 @@ class Trainer(pl.LightningModule):
         self.model = ScoreModel(
             num_atom_types=self.hparams.num_atom_types,
             hn_dim=(hparams["sdim"], hparams["vdim"]),
-            edge_dim=0,
             cutoff_local=hparams["cutoff_local"],
             cutoff_global=hparams["cutoff_global"],
             rbf_dim=hparams["rbf_dim"],
@@ -340,7 +339,7 @@ if __name__ == "__main__":
         hparams.save_dir + f"/run{hparams.id}/", default_hp_metric=False
     )
 
-    model = CoordsAtomScoreTrainer(hparams=hparams.__dict__)
+    model = Trainer(hparams=hparams.__dict__)
 
     print(f"Loading {hparams.dataset} Datamodule.")
     datamodule = GeomDataModule(

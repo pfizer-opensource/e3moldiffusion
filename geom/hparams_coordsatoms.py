@@ -40,6 +40,8 @@ def add_arguments(parser):
                             Defaults to 30. Set to -1 for all conformers available in database"
                             )
     parser.add_argument("--accum_batch", default=None, type=int)
+    parser.add_argument("--max_num_neighbors", default=128, type=int)
+
     parser.add_argument("--sdim", default=128, type=int)
     parser.add_argument("--vdim", default=32, type=int)
     parser.add_argument("--rbf_dim", default=20, type=int)
