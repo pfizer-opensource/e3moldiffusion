@@ -23,19 +23,18 @@ echo "runnning experiment"
 
 args=(
     --gpus 1
-    --id 12
+    --id 0
     --dataset drugs
     --max_num_conformers 30
     --num_workers 4
     --save_dir logs/drugs
     --num_epochs 100
-    --sdim 256 --vdim 256 --tdim 128 --edim 0 --rbf_dim 32 --num_layers 5 
-    --cutoff 10.0
+    --sdim 128 --vdim 32 --rbf_dim 20 --num_layers 5 
+    --cutoff_local 3.0
+    --cutoff_global 7.0
     --lr 5e-4
     --batch_size 128
     --local_global_model
-    # --use_bond_features
-    # --use_all_atom_features
     --omit_cross_product
     --vector_aggr mean
     --schedule cosine
@@ -45,4 +44,4 @@ args=(
     --max_time 00:23:50:00
     )
 
-python train_full.py "${args[@]}"
+python train_coordsatoms.py "${args[@]}"

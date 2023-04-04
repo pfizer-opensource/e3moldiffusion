@@ -1,6 +1,6 @@
 import os
 
-DEFAULT_SAVE_DIR = os.path.join(os.getcwd(), "3Dcoords_0")
+DEFAULT_SAVE_DIR = os.path.join(os.getcwd(), "3DcoordsAtoms_0")
 
 if not os.path.exists(DEFAULT_SAVE_DIR):
     os.makedirs(DEFAULT_SAVE_DIR)
@@ -40,14 +40,12 @@ def add_arguments(parser):
                             Defaults to 30. Set to -1 for all conformers available in database"
                             )
     parser.add_argument("--accum_batch", default=None, type=int)
-    parser.add_argument("--sdim", default=64, type=int)
-    parser.add_argument("--vdim", default=16, type=int)
-    parser.add_argument("--edim", default=16, type=int)
+    parser.add_argument("--sdim", default=128, type=int)
+    parser.add_argument("--vdim", default=32, type=int)
     parser.add_argument("--rbf_dim", default=20, type=int)
     parser.add_argument("--vector_aggr", default="mean", type=str)
-    parser.add_argument("--num_layers", default=4, type=int)
+    parser.add_argument("--num_layers", default=5, type=int)
     parser.add_argument("--omit_norm", default=False, action="store_true")
-    parser.add_argument("--use_bond_features", default=False, action="store_true")
     parser.add_argument("--fully_connected", default=False, action="store_true")
     parser.add_argument("--local_global_model", default=False, action="store_true")
 

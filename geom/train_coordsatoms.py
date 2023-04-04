@@ -14,26 +14,33 @@ from pytorch_lightning.callbacks import (
 import torch.nn.functional as F 
 
 from pytorch_lightning.loggers import TensorBoardLogger
-from e3moldiffusion.molfeat import get_bond_feature_dims, atom_type_config
+from e3moldiffusion.molfeat import atom_type_config
 from e3moldiffusion.sde import VPSDE, VPAncestralSamplingPredictor, DiscreteDDPM
-from e3moldiffusion.coords import ScoreModel
+from e3moldiffusion.coordsatoms import ScoreModel
 
 from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.typing import OptTensor
+from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse
-from torch_sparse import coalesce
 from torch_scatter import scatter_mean
 from tqdm import tqdm
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 
-
 def get_num_atom_types_geom(dataset: str):
     assert dataset in ["qm9", "drugs"]
     return len(atom_type_config(dataset=dataset))
 
-BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
+
+def zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0):
+    out = x - scatter_mean(x, index=batch, dim=dim, dim_size=dim_size)[batch]
+    return out
+
+def assert_zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0, eps: float = 1e-6):
+    out = scatter_mean(x, index=batch, dim=dim, dim_size=dim_size).mean()
+    return abs(out) < eps
+
 
 class Trainer(pl.LightningModule):
     def __init__(self, hparams):
@@ -43,7 +50,7 @@ class Trainer(pl.LightningModule):
         self.model = ScoreModel(
             num_atom_types=self.hparams.num_atom_types,
             hn_dim=(hparams["sdim"], hparams["vdim"]),
-            edge_dim=hparams["edim"],
+            edge_dim=0,
             cutoff_local=hparams["cutoff_local"],
             cutoff_global=hparams["cutoff_global"],
             rbf_dim=hparams["rbf_dim"],
@@ -70,108 +77,101 @@ class Trainer(pl.LightningModule):
                                     schedule=hparams["schedule"])
             
         self.sampler = VPAncestralSamplingPredictor(sde=self.sde)
+     
     
-    def coalesce_edges(self, edge_index, bond_edge_index, bond_edge_attr, n):
-        # possibly combine the bond-edge-index with radius graph or fully-connected graph
-        # Note: This scenario is useful when learning the 3D coordinates only. 
-        # From an optimization perspective, atoms that are connected by topology should have certain distance values. 
-        # Since the atom types are fixed here, we know which molecule we want to generate a 3D configuration from, so the edge-index will help as inductive bias
-        edge_attr = torch.full(size=(edge_index.size(-1), ), fill_value=BOND_FEATURE_DIMS + 1, device=edge_index.device, dtype=torch.long)
-        # combine
-        edge_index = torch.cat([edge_index, bond_edge_index], dim=-1)
-        edge_attr =  torch.cat([edge_attr, bond_edge_attr], dim=0)
-        # coalesce, i.e. reduce and remove duplicate entries by taking the minimum value, making sure that the bond-features are included
-        edge_index, edge_attr = coalesce(index=edge_index, value=edge_attr, m=n, n=n, op="min")
-        return edge_index, edge_attr
-        
     def reverse_sampling(
         self,
-        x: Tensor,
-        batch: OptTensor = None,
-        num_diffusion_timesteps: Optional[int] = None,
-        save_traj: bool = False,
-        bond_edge_index: OptTensor = None,
-        bond_edge_attr: OptTensor = None,
-        verbose: bool = True
-    ) -> Tuple[Tensor, List]:
-                
-        if num_diffusion_timesteps is None:
-            num_diffusion_timesteps = self.hparams.num_diffusion_timesteps
-
-        if batch is None:
-            batch = torch.zeros(len(x), device=x.device, dtype=torch.long)
-
-        if self.hparams.use_bond_features:
-            assert bond_edge_index is not None
-            assert bond_edge_attr is not None
-            
-        bs = int(batch.max()) + 1
-                
-        # initialiaze the 0-mean point cloud from N(0, I)
-        pos = torch.randn(x.size(0), 3,
-                          device=x.device,
-                          dtype=self.model.atom_encoder.atom_embedding_list[0].weight.dtype)
-        pos = pos - scatter_mean(pos, dim=0, index=batch, dim_size=bs)[batch]
+        num_graphs: int,
+        empirical_distribution_num_nodes: Tensor,
+        verbose: bool = False,
+        save_traj: bool = False
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         
-        edge_index_local, edge_attr_local = bond_edge_index, bond_edge_attr
+        device = self.timesteps.data.device
+        batch_num_nodes = torch.multinomial(input=empirical_distribution_num_nodes,
+                                            num_samples=num_graphs, replacement=True).to(device)
+        batch_num_nodes = batch_num_nodes.clamp(min=1)
+        batch = torch.arange(num_graphs, device=device).repeat_interleave(batch_num_nodes, dim=0)
+        bs = int(batch.max()) + 1
+        
+        # initialiaze the 0-mean point cloud from N(0, I)
+        pos = torch.randn(len(batch), 3,
+                          device=device,
+                          dtype=torch.get_default_dtype()
+                          )
+        pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
+        
+        # initialize the atom-types 
+        xohes = torch.randn(pos.size(0), self.hparams.num_atom_types, device=device)
+        
+        edge_index_local = radius_graph(x=pos,
+                                        r=self.hparams.cutoff_local,
+                                        batch=batch, 
+                                        max_num_neighbors=self.hparams.max_num_neighbors)
         
         edge_index_global = torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
         edge_index_global, _ = dense_to_sparse(edge_index_global)
 
-        if self.hparams.use_bond_features:    
-            edge_index_global, edge_attr_global = self.coalesce_edges(edge_index=edge_index_global,
-                                                                      bond_edge_index=bond_edge_index,
-                                                                      bond_edge_attr=bond_edge_attr,
-                                                                      n=pos.size(0))
-
-        pos_sde_traj = []
-        pos_mean_traj = []
-        
-        xohe = F.one_hot(x, num_classes=self.hparams.num_atom_types).float()
-        
-        chain = range(num_diffusion_timesteps)
+        pos_traj = []
+        atom_type_traj = []
+        atom_type_ohe_traj = []
+        chain = range(self.hparams.num_diffusion_timesteps)
+    
         if verbose:
             print(chain)
-        iterator = tqdm(reversed(chain), total=num_diffusion_timesteps) if verbose else reversed(chain)
+        iterator = tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         for timestep in iterator:
             t = torch.full(size=(bs, ), fill_value=timestep, dtype=torch.long, device=pos.device)
+            t = t.index_select(dim=0, index=batch)
             temb = t / self.hparams.num_diffusion_timesteps
             temb = temb.unsqueeze(dim=1)
-            temb = temb.index_select(dim=0, index=batch)
             
             out = self.model(
-                x=xohe,
+                x=xohes,
                 t=temb,
                 pos=pos,
                 edge_index_local=edge_index_local,
                 edge_index_global=edge_index_global,
-                edge_attr_local=edge_attr_local if self.hparams.use_bond_features else None,
-                edge_attr_global=edge_attr_global if self.hparams.use_bond_features else None,
+                edge_attr_local=None,
+                edge_attr_global=None,
                 batch=batch,
             )
-            noise = torch.randn_like(pos)
-            noise = noise - scatter_mean(noise, index=batch, dim=0, dim_size=bs)[batch]
+             
+            score_coords = out["score_coords"]
+            score_ohes = out["score_atoms"]
+            
+            score_coords = zero_mean(score_coords, batch=batch, dim_size=bs, dim=0)
+            noise_coords = torch.randn_like(pos)
+            noise_coords = zero_mean(noise_coords, batch=batch, dim_size=bs, dim=0)
         
-            pos, pos_mean = self.sampler.update_fn(x=pos, score=out, t=t[batch], noise=noise)
-            pos = pos - scatter_mean(pos, index=batch, dim=0, dim_size=bs)[batch]
-            pos_mean = pos_mean - scatter_mean(pos_mean, index=batch, dim=0, dim_size=bs)[batch]
-
+            pos, _ = self.sampler.update_fn(x=pos, score=score_coords, t=t, noise=noise_coords)
+            pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
+            
+            noise_ohes = torch.randn_like(xohes)
+            xohes, _ = self.sampler.update_fn(x=xohes, score=score_ohes, t=t, noise=noise_ohes)
+            
+            if not self.hparams.fully_connected:
+                edge_index_local = radius_graph(x=pos.detach(),
+                                                r=self.hparams.cutoff_local,
+                                                batch=batch, 
+                                                max_num_neighbors=self.hparams.max_num_neighbors)
+            
+            ohe_integer = torch.argmax(xohes, dim=-1)
+            
             if save_traj:
-                pos_sde_traj.append(pos.detach())
-                pos_mean_traj.append(pos_mean.detach())
-
-        return pos, [pos_sde_traj, pos_mean_traj]
-
+                pos_traj.append(pos.detach())
+                atom_type_traj.append(xohes.detach())
+                atom_type_ohe_traj.append(ohe_integer)
+                
+        return pos, xohes, ohe_integer, batch_num_nodes, [pos_traj, atom_type_traj, atom_type_ohe_traj]
+    
     def forward(self, batch: Batch, t: Tensor):
         node_feat: Tensor = batch.xgeom
         pos: Tensor = batch.pos
         data_batch: Tensor = batch.batch
-        bond_edge_index = batch.edge_index
-        bond_edge_attr = batch.edge_attr
-
-        assert pos.shape[0] == t.shape[0]
-
         bs = int(data_batch.max()) + 1
+        
+        assert pos.shape[0] == t.shape[0]
         
         if not self.hparams.continuous:
             temb = t.float() / self.hparams.num_diffusion_timesteps
@@ -181,50 +181,62 @@ class Trainer(pl.LightningModule):
             
         temb = temb.unsqueeze(dim=1)
         
+        # Coords: point cloud in R^3
+        # sample noise for coords and recenter
+        noise_coords_true = torch.randn_like(pos)
+        noise_coords_true = zero_mean(noise_coords_true, batch=data_batch, dim_size=bs, dim=0)
         # center the true point cloud
-        pos_centered = pos - scatter_mean(pos, index=data_batch, dim=0, dim_size=bs)[data_batch]
-
-        # sample 0-COM noise
-        noise = torch.randn_like(pos)
-        noise = noise - scatter_mean(noise, index=data_batch, dim=0, dim_size=bs)[data_batch]
+        pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
+        # get signal and noise coefficients for coords
+        mean_coords, std_coords = self.sde.marginal_prob(x=pos_centered, t=t)
+        # perturb coords
+        pos_perturbed = mean_coords + std_coords * noise_coords_true
         
-        # get mean and std of pos_t | pos_0
-        mean, std = self.sde.marginal_prob(x=pos_centered, t=t)
+        # one-hot-encode
+        xohe = F.one_hot(node_feat, num_classes=self.hparams.num_atom_types).float()
+        xohe = 0.25 * xohe
+        # sample noise for OHEs in {0, 1}^NUM_CLASSES
+        noise_ohes_true = torch.randn_like(xohe)
+        mean_ohes, std_ohes = self.sde.marginal_prob(x=xohe, t=t)
+        # perturb OHEs
+        ohes_perturbed = mean_ohes + std_ohes * noise_ohes_true
         
-        # perturb
-        pos_perturbed = mean + std * noise
+        edge_index_local = radius_graph(x=pos_perturbed,
+                                        r=self.hparams.cutoff_local,
+                                        batch=data_batch, 
+                                        max_num_neighbors=self.hparams.max_num_neighbors)
         
-        edge_index_local, edge_attr_local = bond_edge_index, bond_edge_attr
         if not hasattr(batch, "edge_index_fc"):
             edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
             edge_index_global, _ = dense_to_sparse(edge_index_global)
         else:
             edge_index_global = batch.edge_index_fc
 
-        if self.hparams.use_bond_features:
-            edge_index_global, edge_attr_global = self.coalesce_edges(edge_index=edge_index_global,
-                                                                      bond_edge_index=bond_edge_index, bond_edge_attr=bond_edge_attr,
-                                                                      n=pos.size(0))
-            
         out = self.model(
-            x=F.one_hot(node_feat, num_classes=self.hparams.num_atom_types).float(),
+            x=ohes_perturbed,
             t=temb,
             pos=pos_perturbed,
             edge_index_local=edge_index_local,
             edge_index_global=edge_index_global,
-            edge_attr_local=edge_attr_local if self.hparams.use_bond_features else None,
-            edge_attr_global=edge_attr_global if self.hparams.use_bond_features else None,
+            edge_attr_local=None,
+            edge_attr_global=None,
             batch=data_batch,
         )
 
-        # center the predictions as ground truth noise is also centered
-        out_mean = scatter_mean(out, index=data_batch, dim=0, dim_size=bs)
-        out = out - out_mean[data_batch]
-
-        out_dict = {"pred_noise": out, "true_noise": noise}
-        return out_dict
+        noise_ohes_pred = out["score_atoms"]
+        noise_coords_pred = zero_mean(out["score_coords"], batch=data_batch, dim_size=bs, dim=0)
+        
+        out = {
+            "noise_coords_pred": noise_coords_pred,
+            "noise_coords_true": noise_coords_true,
+            "noise_ohes_pred": noise_ohes_pred,
+            "noise_ohes_true": noise_ohes_true,
+            "true_class": node_feat,
+        }
+        
+        return out
     
-    def step_fnc(self, batch, batch_idx, stage):         
+    def step_fnc(self, batch, batch_idx, stage: str):
         batch_size = int(batch.batch.max()) + 1
         if self.hparams.continuous:
             t = torch.rand(size=(batch_size, ), dtype=batch.pos.dtype, device=batch.pos.device)
@@ -238,50 +250,73 @@ class Trainer(pl.LightningModule):
         t = t.index_select(dim=0, index=batch.batch)
         
         out_dict = self(batch=batch, t=t)
-        loss = torch.pow(out_dict["pred_noise"] - out_dict["true_noise"], 2).sum(-1)
-        loss = scatter_mean(loss, index=batch.batch, dim=0, dim_size=batch_size)
-        loss = torch.mean(loss, dim=0)
         
-        if stage == "val":
-            sync_dist =  self.hparams.gpus > 1
-        else:
-            sync_dist = False
-            
+        coords_loss = torch.pow(
+            out_dict["noise_coords_pred"] - out_dict["noise_coords_true"], 2
+        ).sum(-1)
+        coords_loss = scatter_mean(
+            coords_loss, index=batch.batch, dim=0, dim_size=batch_size
+        )
+        coords_loss = torch.mean(coords_loss, dim=0)
+        
+        ohes_loss = torch.pow(
+            out_dict["noise_ohes_pred"] - out_dict["noise_ohes_true"], 2
+        ).mean(-1) 
+        ohes_loss = scatter_mean(
+            ohes_loss, index=batch.batch, dim=0, dim_size=batch_size
+        )
+        ohes_loss = torch.mean(ohes_loss, dim=0)
+
+        loss = coords_loss + ohes_loss
+
         self.log(
-            f"{stage}/coords_loss",
+            f"{stage}/loss",
             loss,
             on_step=True,
             batch_size=batch_size,
-            sync_dist=sync_dist
+        )
+
+        self.log(
+            f"{stage}/coords_loss",
+            coords_loss,
+            on_step=True,
+            batch_size=batch_size,
+        )
+
+        self.log(
+            f"{stage}/ohes_loss",
+            ohes_loss,
+            on_step=True,
+            batch_size=batch_size,
         )
         return loss
-        
+
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
-    
+
     def validation_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="val")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hparams.lr)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer=optimizer,
             patience=self.hparams.patience,
             cooldown=self.hparams.cooldown,
             factor=self.hparams.factor,
         )
-        # ToDo ExponentialLR 
         scheduler = {
             "scheduler": lr_scheduler,
             "interval": "epoch",
-            "frequency": self.hparams.frequency,
-            "monitor": "val/coords_loss",
+            "frequency": 1,
+            "monitor": "val/loss",
         }
         return [optimizer], [scheduler]
+    
 
 if __name__ == "__main__":
     from geom.data import GeomDataModule
-    from geom.hparams_coords import add_arguments
+    from geom.hparams_coordsatoms import add_arguments
 
     parser = ArgumentParser()
     parser = add_arguments(parser)
@@ -297,7 +332,7 @@ if __name__ == "__main__":
     checkpoint_callback = ModelCheckpoint(
         dirpath=hparams.save_dir + f"/run{hparams.id}/",
         save_top_k=1,
-        monitor="val/coords_loss",
+        monitor="val/loss",
         save_last=True,
     )
     lr_logger = LearningRateMonitor()
@@ -305,7 +340,7 @@ if __name__ == "__main__":
         hparams.save_dir + f"/run{hparams.id}/", default_hp_metric=False
     )
 
-    model = Trainer(hparams=hparams.__dict__)
+    model = CoordsAtomScoreTrainer(hparams=hparams.__dict__)
 
     print(f"Loading {hparams.dataset} Datamodule.")
     datamodule = GeomDataModule(
@@ -317,10 +352,10 @@ if __name__ == "__main__":
         max_num_conformers=hparams.max_num_conformers,
         pin_memory=True,
         persistent_workers=True,
-        transform_args = {"create_bond_graph": True,
+        transform_args = {"create_bond_graph": False,
                           "save_smiles": False,
                           "fully_connected_edge_index": False
-                         }
+                          }
     )
 
     strategy = (
@@ -330,8 +365,8 @@ if __name__ == "__main__":
     )
 
     trainer = pl.Trainer(
-        accelerator="gpu" if hparams.gpus else "cpu",
-        devices=hparams.gpus if hparams.gpus else None,
+        accelerator="gpu",
+        devices=hparams.gpus,
         strategy=strategy,
         logger=tb_logger,
         enable_checkpointing=True,
