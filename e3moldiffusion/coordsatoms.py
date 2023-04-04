@@ -4,8 +4,6 @@ from typing import List, Tuple, Dict
 
 from e3moldiffusion.gnn import EncoderGNN
 from e3moldiffusion.modules import DenseLayer, GatedEquivBlock
-
-from e3moldiffusion.molfeat import atom_type_config
 from torch_geometric.typing import OptTensor
 
 from torch import Tensor, nn
