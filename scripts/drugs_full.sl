@@ -30,7 +30,7 @@ args=(
     --save_dir logs/drugs
     --num_epochs 100
     --sdim 128 --vdim 32 --rbf_dim 32 --num_layers 5 
-    --cutoff_local 3.0
+    --cutoff_local 5.0
     --cutoff_global 10.0
     --lr 5e-4
     --batch_size 256

@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from typing import List, Tuple, Dict
 
 from e3moldiffusion.gnn import EncoderGNN
-from e3moldiffusion.modules import DenseLayer, GatedEquivBlock
+from e3moldiffusion.modules import DenseLayer
 from torch_geometric.typing import OptTensor
 
 from torch import Tensor, nn
@@ -19,27 +19,23 @@ class ScoreHead(nn.Module):
         self.sdim, self.vdim = hn_dim
         self.num_atom_types = num_atom_types
         
-        self.outhead = GatedEquivBlock(in_dims=hn_dim,
-                                       out_dims=(num_atom_types, 1),
-                                       use_mlp=True)
+        self.coords_lin = DenseLayer(in_features=self.vdim, out_features=1, bias=False)
+        self.atoms_lin = DenseLayer(in_features=self.sdim, out_features=num_atom_types, bias=False)
         self.reset_parameters()
         
     def reset_parameters(self):
-        self.outhead.reset_parameters()
-    
+        self.coords_lin.reset_parameters()
+        self.atoms_lin.reset_parameters()
+        
     def forward(self,
-                x: Dict[Tensor, Tensor],
-                pos: Tensor,
-                batch: Tensor,
-                edge_index_global: Tensor) -> Dict:
+                x: Dict[Tensor, Tensor]
+                ) -> Dict:
         
         s, v = x["s"], x["v"]
-        s = F.silu(s)
-        s, v = self.outhead(x=(s, v))
+     
+        score_coords = self.coords_lin(v).squeeze()
+        score_atoms = self.atoms_lin(s)
         
-        score_coords = v.squeeze()
-        score_atoms = s
-            
         out = {"score_coords": score_coords, "score_atoms": score_atoms}
         
         return out
@@ -50,7 +46,7 @@ class ScoreModel(nn.Module):
                  num_atom_types: int,
                  hn_dim: Tuple[int, int] = (64, 16),
                  rbf_dim: int = 16,
-                 cutoff_local: float = 3.0,
+                 cutoff_local: float = 5.0,
                  cutoff_global: float = 10.0,
                  num_layers: int = 5,
                  use_norm: bool = True,
@@ -135,7 +131,7 @@ class ScoreModel(nn.Module):
             batch=batch
         )
         
-        score = self.score_head(x=out, pos=pos, batch=batch, edge_index_global=edge_index_global)
+        score = self.score_head(x=out)
              
         return score
     
