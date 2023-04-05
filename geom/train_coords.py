@@ -110,7 +110,7 @@ class Trainer(pl.LightningModule):
         # initialiaze the 0-mean point cloud from N(0, I)
         pos = torch.randn(x.size(0), 3,
                           device=x.device,
-                          dtype=self.model.atom_encoder.atom_embedding_list[0].weight.dtype)
+                          dtype=torch.get_default_dtype())
         pos = pos - scatter_mean(pos, dim=0, index=batch, dim_size=bs)[batch]
         
         edge_index_local, edge_attr_local = bond_edge_index, bond_edge_attr
