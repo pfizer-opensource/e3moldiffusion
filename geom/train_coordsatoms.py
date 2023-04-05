@@ -223,7 +223,8 @@ class Trainer(pl.LightningModule):
         )
 
         noise_ohes_pred = out["score_atoms"]
-        noise_coords_pred = zero_mean(out["score_coords"], batch=data_batch, dim_size=bs, dim=0)
+        noise_coords_pred = out["score_coords"]
+        noise_coords_pred = zero_mean(noise_coords_pred, batch=data_batch, dim_size=bs, dim=0)
         
         out = {
             "noise_coords_pred": noise_coords_pred,
