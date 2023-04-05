@@ -20,7 +20,7 @@ class ScoreHead(nn.Module):
         self.num_atom_types = num_atom_types
         
         self.outhead = GatedEquivBlock(in_dims=hn_dim,
-                                       out_dims=(num_atom_types + 1, 1),
+                                       out_dims=(num_atom_types, 1),
                                        use_mlp=True)
         self.reset_parameters()
         
@@ -33,18 +33,11 @@ class ScoreHead(nn.Module):
                 batch: Tensor,
                 edge_index_global: Tensor) -> Dict:
         
-        source, target = edge_index_global
         s, v = x["s"], x["v"]
         s = F.silu(s)
-        
         s, v = self.outhead(x=(s, v))
-        s, d = s.split([self.num_atom_types, 1], dim=-1)
-        d = d[source] + d[target]
-        r = pos[source] - pos[target]
-        sr = d * r
-        sr = scatter_add(src=sr, index=target, dim=0, dim_size=s.size(0))
         
-        score_coords = v.squeeze() + sr
+        score_coords = v.squeeze()
         score_atoms = s
             
         out = {"score_coords": score_coords, "score_atoms": score_atoms}
