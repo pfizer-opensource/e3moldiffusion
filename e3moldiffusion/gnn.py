@@ -29,12 +29,14 @@ class EncoderGNN(nn.Module):
         
         self.sdim, self.vdim = hn_dim
         
+        
         self.convs = nn.ModuleList([
             EQGATRBFConv(in_dims=hn_dim,
                          out_dims=hn_dim,
                          rbf_dim=rbf_dim,
                          edge_dim=edge_dim,
                          cutoff=cutoff_global if (i == self.num_layers - 2 and local_global_model) else cutoff_local,
+                         use_cutoff_fnc=False if (i == self.num_layers - 2 and local_global_model) else True,
                          has_v_in=i>0,
                          use_mlp_update= i < (num_layers - 1),
                          vector_aggr=vector_aggr,

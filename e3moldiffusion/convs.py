@@ -202,6 +202,7 @@ class EQGATRBFConv(MessagePassing):
         edge_dim: Optional[int],
         rbf_dim: int,
         cutoff: float = 10.0,
+        use_cutoff_fnc: bool = True,
         eps: float = 1e-6,
         has_v_in: bool = False,
         use_mlp_update: bool = True,
@@ -227,7 +228,8 @@ class EQGATRBFConv(MessagePassing):
 
         self.rbf_dim = rbf_dim
         self.cutoff = cutoff
-    
+
+        self.use_cutoff_fnc = use_cutoff_fnc
         self.cutoff_fnc = PolynomialCutoff(cutoff=cutoff, p=6)
         self.rbf = BesselExpansion(cutoff, rbf_dim)
         
@@ -318,8 +320,9 @@ class EQGATRBFConv(MessagePassing):
         # de = d.view(-1, 1)
         de = 1.0 / (1.0 + d.view(-1, 1))        
         rbf = self.rbf(d)
-        cutoff = self.cutoff_fnc(d).view(-1, 1)
-        rbf = cutoff * rbf
+        if self.use_cutoff_fnc:
+            cutoff = self.cutoff_fnc(d).view(-1, 1)
+            rbf = cutoff * rbf
 
         if self.edge_dim == 0:
             aij = torch.cat([sa_i, sa_j, de, rbf], dim=-1)
