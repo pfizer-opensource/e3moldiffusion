@@ -35,8 +35,8 @@ class EncoderGNN(nn.Module):
                          out_dims=hn_dim,
                          rbf_dim=rbf_dim,
                          edge_dim=edge_dim,
-                         cutoff=cutoff_global if (i == self.num_layers - 2 and local_global_model) else cutoff_local,
-                         use_cutoff_fnc=False if (i == self.num_layers - 2 and local_global_model) else True,
+                         cutoff=cutoff_global if ((i == self.num_layers - 2 or i == 0) and local_global_model) else cutoff_local,
+                         use_cutoff_fnc=False if ((i == self.num_layers - 2 or i == 0) and local_global_model) else True,
                          has_v_in=i>0,
                          use_mlp_update= i < (num_layers - 1),
                          vector_aggr=vector_aggr,
@@ -70,7 +70,7 @@ class EncoderGNN(nn.Module):
         
         for i in range(len(self.convs)):    
             if self.local_global_model:
-                if i == self.num_layers - 2:
+                if i == self.num_layers - 2 or i == 0:
                     edge_index_in = edge_index_global
                     edge_attr_in = edge_attr_global
                 else:

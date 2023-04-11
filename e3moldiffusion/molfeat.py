@@ -224,8 +224,20 @@ class AtomEncoder(nn.Module):
             x_embedding += self.atom_embedding_list[i](x[:, i])
         return x_embedding
 
+class BondEncoderOHE(nn.Module):
+    def __init__(self, emb_dim, max_num_classes: int):
+        super(BondEncoderOHE, self).__init__()
+        self.linear = nn.Linear(max_num_classes, emb_dim)
+        self.reset_parameters()
+    def reset_parameters(self):
+        self.linear.reset_parameters
+    def forward(self, edge_attr):
+        bond_embedding = self.linear(edge_attr)
+        return bond_embedding
+    
+    
 class BondEncoder(nn.Module):
-    def __init__(self, emb_dim, max_norm: float = 10.0):
+    def __init__(self, emb_dim):
         super(BondEncoder, self).__init__()
         FULL_BOND_FEATURE_DIMS = get_bond_feature_dims()
         self.bond_embedding = nn.Embedding(FULL_BOND_FEATURE_DIMS[0] + 3, emb_dim, max_norm=max_norm)
@@ -235,6 +247,7 @@ class BondEncoder(nn.Module):
     def forward(self, edge_attr):
         bond_embedding = self.bond_embedding(edge_attr)
         return bond_embedding
+    
     
 if __name__ == '__main__':
     FULL_BOND_FEATURE_DIMS = get_bond_feature_dims()
