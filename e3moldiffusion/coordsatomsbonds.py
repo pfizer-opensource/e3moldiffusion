@@ -10,7 +10,7 @@ from torch import Tensor, nn
 from torch_scatter import scatter_add
 from torch_geometric.nn.inits import reset
 
-# Score Model that is trained to learn 3D coords and Atom-Types
+# Score Model that is trained to learn 3D coords, Atom-Types and Bond-Types
 
 
 class ScoreHead(nn.Module):
@@ -27,6 +27,7 @@ class ScoreHead(nn.Module):
     def reset_parameters(self):
         self.coords_lin.reset_parameters()
         self.atoms_lin.reset_parameters()
+        self.bonds_lin.reset_parameters()
         
     def forward(self,
                 x: Dict[Tensor, Tensor],
@@ -48,47 +49,6 @@ class ScoreHead(nn.Module):
         return out
 
 
-class ScoreHeadNew(nn.Module):
-    def __init__(self, hn_dim: Tuple[int, int], num_atom_types: int) -> None:
-        super(ScoreHeadNew, self).__init__()
-        self.sdim, self.vdim = hn_dim
-        self.num_atom_types = num_atom_types
-        
-        self.coords_lin = DenseLayer(in_features=self.vdim, out_features=1, bias=False)
-        self.atoms_net = nn.Sequential(DenseLayer(in_features=self.sdim, out_features=self.sdim, activation=nn.SiLU()),
-                                       DenseLayer(in_features=self.sdim, out_features=num_atom_types+1, bias=False)
-                                       )
-        self.reset_parameters()
-        
-    def reset_parameters(self):
-        self.coords_lin.reset_parameters()
-        self.atoms_net[0].reset_parameters()
-        self.atoms_net[1].reset_parameters()
-        
-    def forward(self,
-                x: Dict[Tensor, Tensor],
-                pos: Tensor,
-                batch: Tensor,
-                edge_index_global: Tensor
-                ) -> Dict:
-        
-        s, v = x["s"], x["v"]
-        s = F.silu(s)
-        
-        score_atoms, d = self.atoms_net(s).split([self.num_atom_types, 1], dim=1)
-        source, target = edge_index_global
-        d = d[source] + d[target]
-        r = pos[source] - pos[target]
-        sr = d * r
-        sr = scatter_add(src=sr, index=target, dim=0, dim_size=s.size(0))
-     
-        score_coords = self.coords_lin(v).squeeze()
-        score_coords = score_coords + sr
-        
-        out = {"score_coords": score_coords, "score_atoms": score_atoms}
-        
-        return out
-    
 class ScoreModel(nn.Module):
     def __init__(self,
                  num_atom_types: int,
@@ -106,27 +66,16 @@ class ScoreModel(nn.Module):
                  ) -> None:
         super(ScoreModel, self).__init__()
         
-        self.time_embedding = DenseLayer(1, hn_dim[0])
+        self.time_mapping = DenseLayer(1, hn_dim[0])   
+        self.atom_mapping = DenseLayer(num_atom_types, hn_dim[0])
+        self.bond_mapping = DenseLayer(num_bond_types, hn_dim[0])
         
-        self.atom_mapping = nn.Sequential(
-            DenseLayer(
-                num_atom_types,
-                hn_dim[0],
-                activation=nn.SiLU(),
-            ),
-            DenseLayer(hn_dim[0], hn_dim[0]),
-        )
+        self.atom_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
+        self.bond_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
+        
+        
         self.sdim, self.vdim = hn_dim
         
-        self.bond_mapping = nn.Sequential(
-            DenseLayer(
-                num_bond_types,
-                hn_dim[0],
-                activation=nn.SiLU(),
-            ),
-            DenseLayer(hn_dim[0], hn_dim[0]),
-        )
-
         self.local_global_model = local_global_model
         self.fully_connected = fully_connected
         
@@ -144,12 +93,16 @@ class ScoreModel(nn.Module):
             local_global_model=local_global_model
         )
         
-        self.score_head = ScoreHead(hn_dim=hn_dim, num_atom_types=num_atom_types)
+        self.score_head = ScoreHead(hn_dim=hn_dim, num_atom_types=num_atom_types, num_bond_types=num_bond_types)
         
         self.reset_parameters()
 
     def reset_parameters(self):
-        reset(self.atom_time_mapping)
+        self.atom_mapping.reset_parameters()
+        self.bond_mapping.reset_parameters()
+        self.time_mapping.reset_parameters()
+        self.atom_time_mapping.reset_parameters()
+        self.bond_time_mapping.reset_parameters()
         self.gnn.reset_parameters()
         self.score_head.reset_parameters()
         
@@ -170,23 +123,24 @@ class ScoreModel(nn.Module):
         edge_index_global: Tensor,
         edge_attr_local: OptTensor = None,
         edge_attr_global: OptTensor = None,
-        batch: OptTensor = None) -> Dict[Tensor, Tensor]:
+        batch: OptTensor = None,
+        batch_edge: OptTensor = None) -> Dict[Tensor, Tensor]:
         
         # t: (batch_size,)
-        temb = self.time_embedding(t)
-        tnode = temb[batch]
+        t = self.time_mapping(t)
+        tnode = t[batch]
         
         # edge_index_global (2, E*)
-        tedge = None
+        tedge = t[batch_edge]
          
         if batch is None:
             batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)
      
-       
         s = self.atom_mapping(x)
-        s = s + tnode
+        s = self.atom_time_mapping(F.silu(s + tnode))
+        
         e = self.bond_mapping(edge_attr_global)
-        e = e + tedge
+        e = self.bond_time_mapping(F.silu(e + tedge))
         
          # local
         edge_attr_local = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local, pos=pos)        
