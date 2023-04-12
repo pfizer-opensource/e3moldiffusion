@@ -92,6 +92,8 @@ class Trainer(pl.LightningModule):
         save_traj: bool = False
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         
+        raise NotImplementedError
+    
         device = self.timesteps.data.device
         batch_num_nodes = torch.multinomial(input=empirical_distribution_num_nodes,
                                             num_samples=num_graphs, replacement=True).to(device)
