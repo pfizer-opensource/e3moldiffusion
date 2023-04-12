@@ -40,10 +40,10 @@ class Trainer(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(hparams)
         self.hparams.num_atom_types = get_num_atom_types_geom(dataset=hparams["dataset"])
-        self.hparams.num_bond_types = BOND_FEATURE_DIMS + 2
+        self.hparams.num_bond_types = BOND_FEATURE_DIMS + 1
         self.model = ScoreModel(
             num_atom_types=self.hparams.num_atom_types,
-            num_bond_types=BOND_FEATURE_DIMS + 2,
+            num_bond_types=BOND_FEATURE_DIMS + 1,
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             edge_dim=hparams["edim"],
             cutoff_local=hparams["cutoff_local"],
@@ -78,7 +78,7 @@ class Trainer(pl.LightningModule):
         # Note: This scenario is useful when learning the 3D coordinates only. 
         # From an optimization perspective, atoms that are connected by topology should have certain distance values. 
         # Since the atom types are fixed here, we know which molecule we want to generate a 3D configuration from, so the edge-index will help as inductive bias
-        edge_attr = torch.full(size=(edge_index.size(-1), ), fill_value=BOND_FEATURE_DIMS + 1, device=edge_index.device, dtype=torch.long)
+        edge_attr = torch.full(size=(edge_index.size(-1), ), fill_value=BOND_FEATURE_DIMS, device=edge_index.device, dtype=torch.long)
         # combine
         edge_index = torch.cat([edge_index, bond_edge_index], dim=-1)
         edge_attr =  torch.cat([edge_attr, bond_edge_attr], dim=0)
@@ -130,9 +130,8 @@ class Trainer(pl.LightningModule):
         pos_mean_traj = []
         
         xohe = F.one_hot(x, num_classes=self.hparams.num_atom_types).float()
-        edge_attr_local = F.one_hot(edge_attr_local, num_classes=BOND_FEATURE_DIMS + 2).float()
-        edge_attr_global = F.one_hot(edge_attr_global, num_classes=BOND_FEATURE_DIMS + 2).float()
-
+        edge_attr_local = F.one_hot(edge_attr_local, num_classes=BOND_FEATURE_DIMS + 1).float()
+        edge_attr_global = F.one_hot(edge_attr_global, num_classes=BOND_FEATURE_DIMS + 1).float()
 
         chain = range(num_diffusion_timesteps)
         if verbose:
@@ -210,8 +209,8 @@ class Trainer(pl.LightningModule):
                                                                       n=pos.size(0))
         
         xohe = F.one_hot(node_feat, num_classes=self.hparams.num_atom_types).float()
-        edge_attr_local = F.one_hot(edge_attr_local, num_classes=BOND_FEATURE_DIMS + 2).float()
-        edge_attr_global = F.one_hot(edge_attr_global, num_classes=BOND_FEATURE_DIMS + 2).float()
+        edge_attr_local = F.one_hot(edge_attr_local, num_classes=BOND_FEATURE_DIMS + 1).float()
+        edge_attr_global = F.one_hot(edge_attr_global, num_classes=BOND_FEATURE_DIMS + 1).float()
         
         out = self.model(
             x=xohe,
