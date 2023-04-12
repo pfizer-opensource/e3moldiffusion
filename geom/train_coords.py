@@ -128,7 +128,10 @@ class Trainer(pl.LightningModule):
         pos_mean_traj = []
         
         xohe = F.one_hot(x, num_classes=self.hparams.num_atom_types).float()
-        
+        edge_attr_local = F.one_hot(edge_attr_local, num_classes=BOND_FEATURE_DIMS + 1).float()
+        edge_attr_global = F.one_hot(edge_attr_global, num_classes=BOND_FEATURE_DIMS + 1).float()
+
+
         chain = range(num_diffusion_timesteps)
         if verbose:
             print(chain)
@@ -205,9 +208,13 @@ class Trainer(pl.LightningModule):
             edge_index_global, edge_attr_global = self.coalesce_edges(edge_index=edge_index_global,
                                                                       bond_edge_index=bond_edge_index, bond_edge_attr=bond_edge_attr,
                                                                       n=pos.size(0))
-            
+        
+        xohe = F.one_hot(node_feat, num_classes=self.hparams.num_atom_types).float()
+        edge_attr_local = F.one_hot(edge_attr_local, num_classes=BOND_FEATURE_DIMS + 1).float()
+        edge_attr_global = F.one_hot(edge_attr_global, num_classes=BOND_FEATURE_DIMS + 1).float()
+        
         out = self.model(
-            x=F.one_hot(node_feat, num_classes=self.hparams.num_atom_types).float(),
+            x=xohe,
             t=temb,
             pos=pos_perturbed,
             edge_index_local=edge_index_local,

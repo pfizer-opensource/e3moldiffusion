@@ -7,7 +7,6 @@ from torch_geometric.typing import OptTensor
 from torch_scatter import scatter
 from torch_geometric.nn.inits import reset
 
-from e3moldiffusion.molfeat import BondEncoder
 from e3moldiffusion.modules import DenseLayer
 from e3moldiffusion.gnn import EncoderGNN
 
@@ -66,6 +65,7 @@ class ScoreHead(nn.Module):
 class ScoreModel(nn.Module):
     def __init__(self,
                  num_atom_types: int,
+                 num_bond_types: int,
                  hn_dim: Tuple[int, int] = (64, 16),
                  edge_dim: int = 16,
                  rbf_dim: int = 16,
@@ -90,9 +90,9 @@ class ScoreModel(nn.Module):
             self.edge_dim = edge_dim
 
         if self.edge_dim:
-            self.edge_encoder = BondEncoder(emb_dim=edge_dim, max_norm=1.0)
+            self.bond_mapping = DenseLayer(num_bond_types, edge_dim)
         else:
-            self.edge_encoder = None
+            self.bond_mapping = None
 
         self.sdim, self.vdim = hn_dim
 
@@ -122,7 +122,7 @@ class ScoreModel(nn.Module):
         self.time_mapping.reset_parameters()
         self.atom_time_mapping.reset_parameters()
         if self.edge_dim:
-            self.edge_encoder.reset_parameters()
+            self.bond_mapping.reset_parameters()
         self.gnn.reset_parameters()
         self.score_head.reset_parameters()
         
@@ -148,8 +148,8 @@ class ScoreModel(nn.Module):
             batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)
      
         if self.edge_dim > 0:
-            edge_attr_local = self.edge_encoder(edge_attr_local)
-            edge_attr_global = self.edge_encoder(edge_attr_global)
+            edge_attr_local = self.bond_mapping(edge_attr_local)
+            edge_attr_global = self.bond_mapping(edge_attr_global)
          
         # local
         edge_attr_local = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local, pos=pos)        
