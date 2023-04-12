@@ -40,10 +40,10 @@ class Trainer(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(hparams)
         self.hparams.num_atom_types = get_num_atom_types_geom(dataset=hparams["dataset"])
-        self.hparams.num_bond_types = BOND_FEATURE_DIMS + 1
+        self.hparams.num_bond_types = BOND_FEATURE_DIMS + 2
         self.model = ScoreModel(
             num_atom_types=self.hparams.num_atom_types,
-            num_bond_types=BOND_FEATURE_DIMS + 1,
+            num_bond_types=BOND_FEATURE_DIMS + 2,
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             edge_dim=hparams["edim"],
             cutoff_local=hparams["cutoff_local"],
@@ -130,8 +130,8 @@ class Trainer(pl.LightningModule):
         pos_mean_traj = []
         
         xohe = F.one_hot(x, num_classes=self.hparams.num_atom_types).float()
-        edge_attr_local = F.one_hot(edge_attr_local, num_classes=BOND_FEATURE_DIMS + 1).float()
-        edge_attr_global = F.one_hot(edge_attr_global, num_classes=BOND_FEATURE_DIMS + 1).float()
+        edge_attr_local = F.one_hot(edge_attr_local, num_classes=BOND_FEATURE_DIMS + 2).float()
+        edge_attr_global = F.one_hot(edge_attr_global, num_classes=BOND_FEATURE_DIMS + 2).float()
 
 
         chain = range(num_diffusion_timesteps)
@@ -210,8 +210,8 @@ class Trainer(pl.LightningModule):
                                                                       n=pos.size(0))
         
         xohe = F.one_hot(node_feat, num_classes=self.hparams.num_atom_types).float()
-        edge_attr_local = F.one_hot(edge_attr_local, num_classes=BOND_FEATURE_DIMS + 1).float()
-        edge_attr_global = F.one_hot(edge_attr_global, num_classes=BOND_FEATURE_DIMS + 1).float()
+        edge_attr_local = F.one_hot(edge_attr_local, num_classes=BOND_FEATURE_DIMS + 2).float()
+        edge_attr_global = F.one_hot(edge_attr_global, num_classes=BOND_FEATURE_DIMS + 2).float()
         
         out = self.model(
             x=xohe,
