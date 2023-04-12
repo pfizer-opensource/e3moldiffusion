@@ -19,7 +19,8 @@ class ScoreHead(nn.Module):
         self.sdim, self.vdim = hn_dim
         self.num_atom_types = num_atom_types
         
-        self.bonds_lin = DenseLayer(in_features=self.sdim, out_features=num_bond_types, bias=False)
+        self.bonds_lin_0 = DenseLayer(in_features=self.sdim, out_features=self.sdim, bias=False)
+        self.bonds_lin_1 = DenseLayer(in_features=self.sdim, out_features=num_bond_types, bias=False)
         self.coords_lin = DenseLayer(in_features=self.vdim, out_features=1, bias=False)
         self.atoms_lin = DenseLayer(in_features=self.sdim, out_features=num_atom_types, bias=False)
         self.reset_parameters()
@@ -27,7 +28,8 @@ class ScoreHead(nn.Module):
     def reset_parameters(self):
         self.coords_lin.reset_parameters()
         self.atoms_lin.reset_parameters()
-        self.bonds_lin.reset_parameters()
+        self.bonds_lin_0.reset_parameters()
+        self.bonds_lin_1.reset_parameters()
         
     def forward(self,
                 x: Dict[Tensor, Tensor],
@@ -39,7 +41,8 @@ class ScoreHead(nn.Module):
         s, v = x["s"], x["v"]
         
         j, i = edge_index_global
-        eps_ij = self.bonds_lin(s[i] + s[j])
+        eps_ij = F.silu(self.bonds_lin_0(s[i] + s[j]))
+        eps_ij = self.bonds_lin_1(eps_ij)
      
         score_coords = self.coords_lin(v).squeeze()
         score_atoms = self.atoms_lin(s)

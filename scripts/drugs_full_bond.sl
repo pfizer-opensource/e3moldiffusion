@@ -11,8 +11,8 @@
 #SBATCH --mem-per-cpu=4G
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1 
-#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/01_drugs_full_%j.out
-#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/01_drugs_full_%j.err
+#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/01_drugs_fullatombond_%j.out
+#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/01_drugs_fullatombond_%j.err
 
 # attempting to access the data directory
 ls /hpfs/projects/mlcs/e3moldiffusion
@@ -33,7 +33,7 @@ args=(
     --cutoff_local 5.0
     --cutoff_global 10.0
     --lr 5e-4
-    --batch_size 256
+    --batch_size 128
     --local_global_model
     --omit_cross_product
     --vector_aggr mean
