@@ -207,8 +207,8 @@ class EQGATRBFConv(MessagePassing):
         has_v_in: bool = False,
         use_mlp_update: bool = True,
         vector_aggr: str = "mean",
-        use_cross_product: bool = True
-    ):
+        use_cross_product: bool = True,
+        ):
         super(EQGATRBFConv, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
         )
@@ -225,7 +225,7 @@ class EQGATRBFConv(MessagePassing):
         else:
             self.v_mul = 1
             self.vector_net = nn.Identity()
-
+            
         self.rbf_dim = rbf_dim
         self.cutoff = cutoff
 
@@ -237,7 +237,7 @@ class EQGATRBFConv(MessagePassing):
             self.edge_dim = 0
         else:
             self.edge_dim = edge_dim
-  
+            
         self.edge_net = nn.Sequential(DenseLayer(2 * self.si + self.edge_dim + rbf_dim + 1,
                                                  self.si,
                                                  bias=True, activation=nn.SiLU()

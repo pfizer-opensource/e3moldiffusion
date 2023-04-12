@@ -14,7 +14,7 @@ from pytorch_lightning.callbacks import (
 import torch.nn.functional as F 
 
 from pytorch_lightning.loggers import TensorBoardLogger
-from e3moldiffusion.molfeat import atom_type_config
+from e3moldiffusion.molfeat import atom_type_config, get_bond_feature_dims
 from e3moldiffusion.sde import VPSDE, VPAncestralSamplingPredictor, DiscreteDDPM
 from e3moldiffusion.coordsatomsbonds import ScoreModel
 
@@ -22,6 +22,7 @@ from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.typing import OptTensor
 from torch_geometric.nn import radius_graph
+from torch_sparse import coalesce
 from torch_geometric.utils import dense_to_sparse
 from torch_scatter import scatter_mean
 from tqdm import tqdm
@@ -41,13 +42,18 @@ def assert_zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0, eps: float 
     out = scatter_mean(x, index=batch, dim=dim, dim_size=dim_size).mean()
     return abs(out) < eps
 
+BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
+
 
 class Trainer(pl.LightningModule):
     def __init__(self, hparams):
         super().__init__()
         self.save_hyperparameters(hparams)
         self.hparams.num_atom_types = get_num_atom_types_geom(dataset=hparams["dataset"])
+        self.hparams.num_bond_types = BOND_FEATURE_DIMS + 1
+
         self.model = ScoreModel(
+            num_bond_types=BOND_FEATURE_DIMS + 1,
             num_atom_types=self.hparams.num_atom_types,
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             cutoff_local=hparams["cutoff_local"],
@@ -164,18 +170,70 @@ class Trainer(pl.LightningModule):
                 
         return pos, xohes, ohe_integer, batch_num_nodes, [pos_traj, atom_type_traj, atom_type_ohe_traj]
     
+    def coalesce_edges(self, edge_index, bond_edge_index, bond_edge_attr, n):
+        # possibly combine the bond-edge-index with radius graph or fully-connected graph
+        # Note: This scenario is useful when learning the 3D coordinates only. 
+        # From an optimization perspective, atoms that are connected by topology should have certain distance values. 
+        # Since the atom types are fixed here, we know which molecule we want to generate a 3D configuration from, so the edge-index will help as inductive bias
+        edge_attr = torch.full(size=(edge_index.size(-1), ), fill_value=BOND_FEATURE_DIMS, device=edge_index.device, dtype=torch.long)
+        # combine
+        edge_index = torch.cat([edge_index, bond_edge_index], dim=-1)
+        edge_attr =  torch.cat([edge_attr, bond_edge_attr], dim=0)
+        # coalesce, i.e. reduce and remove duplicate entries by taking the minimum value, making sure that the bond-features are included
+        edge_index, edge_attr = coalesce(index=edge_index, value=edge_attr, m=n, n=n, op="min")
+        return edge_index, edge_attr
+    
     def forward(self, batch: Batch, t: Tensor):
         node_feat: Tensor = batch.xgeom
         pos: Tensor = batch.pos
         data_batch: Tensor = batch.batch
         bs = int(data_batch.max()) + 1
+        n = batch.num_nodes
+        batch_num_nodes = torch.bincount(data_batch)
         
+        bond_edge_index = batch.edge_index
+        bond_edge_attr = batch.edge_attr
+        if not hasattr(batch, "edge_index_fc"):
+            edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
+            edge_index_global, _ = dense_to_sparse(edge_index_global)
+        else:
+            edge_index_global = batch.edge_index_fc
         
-        fc_edge_index: Tensor = batch.edge_index_fc  # (2, E*)
-        fc_edge_attr: Tensor = batch.edge_attr_fc  # (E*, 5)
+        edge_index_global, edge_attr_global = self.coalesce_edges(edge_index=edge_index_global,
+                                                                  bond_edge_index=bond_edge_index, 
+                                                                  bond_edge_attr=bond_edge_attr,
+                                                                  n=pos.size(0))
         
-        assert pos.shape[0] == t.shape[0]
+    
+        edge_attr_global_p1 = edge_attr_global + 1
+        # create block diagonal matrix
+        dense_edge = torch.zeros(n, n, device=pos.device, dtype=torch.long)
+        # populate entries with integer features 
+        dense_edge[edge_index_global[0, :], edge_index_global[1, :]] = edge_attr_global_p1        
+        dense_edge_ohe = F.one_hot(dense_edge.view(-1, 1),
+                                   num_classes=BOND_FEATURE_DIMS + 2).view(n, n, -1).float()
         
+        dense_edge_ohe_perturbed = (1 / 12) * dense_edge_ohe
+        
+        # create symmetric noise for edge-attributes
+        noise_edges = torch.randn_like(dense_edge_ohe)
+        noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
+        signal = self.sde.sqrt_alphas_cumprod[t]
+        std = self.sde.sqrt_1m_alphas_cumprod[t]
+        signal = signal.repeat_interleave(batch_num_nodes).unsqueeze(-1)
+        std = std.repeat_interleave(batch_num_nodes).unsqueeze(-1)
+        
+        dense_edge_ohe_perturbed = dense_edge_ohe * signal + noise_edges * std
+        
+        # retrieve as edge-attributes in PyG Format 
+        perturbed_edge_attr = dense_edge_ohe_perturbed[edge_index_global[0, :], edge_index_global[1, :], :]
+        noise_edge_attr = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
+        # remove first column as this was a placeholder
+        perturbed_edge_attr = perturbed_edge_attr[:, 1:]
+        noise_edge_attr = noise_edge_attr[:, 1:]
+        
+        batch_edge = data_batch[edge_index_global[0]]     
+    
         if not self.hparams.continuous:
             temb = t.float() / self.hparams.num_diffusion_timesteps
             temb = temb.clamp(min=self.hparams.eps_min)
@@ -191,7 +249,7 @@ class Trainer(pl.LightningModule):
         # center the true point cloud
         pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
         # get signal and noise coefficients for coords
-        mean_coords, std_coords = self.sde.marginal_prob(x=pos_centered, t=t)
+        mean_coords, std_coords = self.sde.marginal_prob(x=pos_centered, t=t[data_batch])
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
         
@@ -200,27 +258,15 @@ class Trainer(pl.LightningModule):
         xohe = 0.25 * xohe
         # sample noise for OHEs in {0, 1}^NUM_CLASSES
         noise_ohes_true = torch.randn_like(xohe)
-        mean_ohes, std_ohes = self.sde.marginal_prob(x=xohe, t=t)
+        mean_ohes, std_ohes = self.sde.marginal_prob(x=xohe, t=t[data_batch])
         # perturb OHEs
         ohes_perturbed = mean_ohes + std_ohes * noise_ohes_true
-        
-        # OHE the bond-edge-attrs
-        # https://github.com/DeepGraphLearning/ConfGF/blob/main/confgf/models/scorenet.py#L149-L169
-        fc_edge_attr_pertubed = None
-        
-        
         
         edge_index_local = radius_graph(x=pos_perturbed,
                                         r=self.hparams.cutoff_local,
                                         batch=data_batch, 
                                         max_num_neighbors=self.hparams.max_num_neighbors)
         
-        if not hasattr(batch, "edge_index_fc"):
-            edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
-            edge_index_global, _ = dense_to_sparse(edge_index_global)
-        else:
-            edge_index_global = batch.edge_index_fc
-
         out = self.model(
             x=ohes_perturbed,
             t=temb,
@@ -228,8 +274,9 @@ class Trainer(pl.LightningModule):
             edge_index_local=edge_index_local,
             edge_index_global=edge_index_global,
             edge_attr_local=None,
-            edge_attr_global=fc_edge_attr_pertubed,
+            edge_attr_global=perturbed_edge_attr,
             batch=data_batch,
+            batch_edge=batch_edge
         )
 
         noise_ohes_pred = out["score_atoms"]
@@ -241,11 +288,12 @@ class Trainer(pl.LightningModule):
         out = {
             "noise_coords_pred": noise_coords_pred,
             "noise_coords_true": noise_coords_true,
-            "noise_ohes_pred": noise_ohes_pred,
-            "noise_ohes_true": noise_ohes_true,
-            "true_class": node_feat,
-            "noise_ohes_bonds_pred": noise_ohes_bonds,
-            "noise_ohes_bonds_true": fc_edge_attr_pertubed,
+            "noise_atoms_pred": noise_ohes_pred,
+            "noise_atoms_true": noise_ohes_true,
+            "true_atom_class": node_feat,
+            "noise_bonds_pred": noise_ohes_bonds,
+            "noise_bonds_true": noise_edge_attr,
+            "true_edge_attr": edge_attr_global
         }
         
         return out
@@ -261,8 +309,6 @@ class Trainer(pl.LightningModule):
                               size=(batch_size,), 
                               dtype=torch.long, device=batch.x.device)
         
-        t = t.index_select(dim=0, index=batch.batch)
-        t = t[batch.batch]
         
         out_dict = self(batch=batch, t=t)
         
@@ -274,21 +320,21 @@ class Trainer(pl.LightningModule):
         )
         coords_loss = torch.mean(coords_loss, dim=0)
         
-        ohes_loss = torch.pow(
-            out_dict["noise_ohes_pred"] - out_dict["noise_ohes_true"], 2
+        atoms_loss = torch.pow(
+            out_dict["noise_atoms_pred"] - out_dict["noise_atoms_true"], 2
         ).mean(-1) 
-        ohes_loss = scatter_mean(
-            ohes_loss, index=batch.batch, dim=0, dim_size=batch_size
+        atoms_loss = scatter_mean(
+            atoms_loss, index=batch.batch, dim=0, dim_size=batch_size
         )
-        ohes_loss = torch.mean(ohes_loss, dim=0)
+        atoms_loss = torch.mean(atoms_loss, dim=0)
         
-        ohes_bonds_loss = torch.pow(
-            out_dict["noise_ohes_bonds_pred"] - out_dict["noise_ohes_bonds_true"], 2
+        bonds_loss = torch.pow(
+            out_dict["noise_bonds_pred"] - out_dict["noise_bonds_true"], 2
         ).mean(-1) 
         # aggregate accross graph.
-        ohes_bonds_loss = ohes_bonds_loss.mean()
+        bonds_loss = bonds_loss.mean()
         
-        loss = coords_loss + ohes_loss + ohes_bonds_loss
+        loss = coords_loss + atoms_loss + bonds_loss
 
         self.log(
             f"{stage}/loss",
@@ -305,15 +351,15 @@ class Trainer(pl.LightningModule):
         )
 
         self.log(
-            f"{stage}/ohes_atoms_loss",
-            ohes_loss,
+            f"{stage}/atoms_loss",
+            atoms_loss,
             on_step=True,
             batch_size=batch_size,
         )
         
         self.log(
-            f"{stage}/ohes_bonds_loss",
-            ohes_bonds_loss,
+            f"{stage}/bonds_loss",
+            bonds_loss,
             on_step=True,
             batch_size=batch_size,
         )
@@ -344,7 +390,7 @@ class Trainer(pl.LightningModule):
 
 if __name__ == "__main__":
     from geom.data import GeomDataModule
-    from geom.hparams_coordsatoms import add_arguments
+    from geom.hparams_coordsatomsbonds import add_arguments
 
     parser = ArgumentParser()
     parser = add_arguments(parser)
@@ -380,7 +426,7 @@ if __name__ == "__main__":
         max_num_conformers=hparams.max_num_conformers,
         pin_memory=True,
         persistent_workers=True,
-        transform_args = {"create_bond_graph": False,
+        transform_args = {"create_bond_graph": True,
                           "save_smiles": False,
                           "fully_connected_edge_index": False
                           }

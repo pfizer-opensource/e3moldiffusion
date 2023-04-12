@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from typing import List, Tuple, Dict
 
-from e3moldiffusion.gnn import EncoderGNN
+from e3moldiffusion.gnn import EncoderGNNAtomBond
 from e3moldiffusion.modules import DenseLayer
 from torch_geometric.typing import OptTensor
 
@@ -79,7 +79,7 @@ class ScoreModel(nn.Module):
         self.local_global_model = local_global_model
         self.fully_connected = fully_connected
         
-        self.gnn = EncoderGNN(
+        self.gnn = EncoderGNNAtomBond(
             hn_dim=hn_dim,
             cutoff_local=cutoff_local,
             cutoff_global=cutoff_global,
