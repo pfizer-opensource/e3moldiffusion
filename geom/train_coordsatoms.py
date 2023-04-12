@@ -169,9 +169,7 @@ class Trainer(pl.LightningModule):
         pos: Tensor = batch.pos
         data_batch: Tensor = batch.batch
         bs = int(data_batch.max()) + 1
-        
-        assert pos.shape[0] == t.shape[0]
-        
+                
         if not self.hparams.continuous:
             temb = t.float() / self.hparams.num_diffusion_timesteps
             temb = temb.clamp(min=self.hparams.eps_min)
@@ -229,8 +227,8 @@ class Trainer(pl.LightningModule):
         out = {
             "noise_coords_pred": noise_coords_pred,
             "noise_coords_true": noise_coords_true,
-            "noise_ohes_pred": noise_ohes_pred,
-            "noise_ohes_true": noise_ohes_true,
+            "noise_atoms_pred": noise_ohes_pred,
+            "noise_atoms_true": noise_ohes_true,
             "true_class": node_feat,
         }
         
@@ -257,15 +255,15 @@ class Trainer(pl.LightningModule):
         )
         coords_loss = torch.mean(coords_loss, dim=0)
         
-        ohes_loss = torch.pow(
-            out_dict["noise_ohes_pred"] - out_dict["noise_ohes_true"], 2
+        atoms_loss = torch.pow(
+            out_dict["noise_atoms_pred"] - out_dict["noise_atoms_true"], 2
         ).mean(-1) 
-        ohes_loss = scatter_mean(
-            ohes_loss, index=batch.batch, dim=0, dim_size=batch_size
+        atoms_loss = scatter_mean(
+            atoms_loss, index=batch.batch, dim=0, dim_size=batch_size
         )
-        ohes_loss = torch.mean(ohes_loss, dim=0)
+        atoms_loss = torch.mean(atoms_loss, dim=0)
 
-        loss = coords_loss + ohes_loss
+        loss = coords_loss + atoms_loss
 
         self.log(
             f"{stage}/loss",
@@ -282,8 +280,8 @@ class Trainer(pl.LightningModule):
         )
 
         self.log(
-            f"{stage}/ohes_loss",
-            ohes_loss,
+            f"{stage}/atoms_loss",
+            atoms_loss,
             on_step=True,
             batch_size=batch_size,
         )

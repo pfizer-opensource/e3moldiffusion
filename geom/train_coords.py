@@ -40,8 +40,10 @@ class Trainer(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(hparams)
         self.hparams.num_atom_types = get_num_atom_types_geom(dataset=hparams["dataset"])
+        self.hparams.num_bond_types = BOND_FEATURE_DIMS + 1
         self.model = ScoreModel(
             num_atom_types=self.hparams.num_atom_types,
+            num_bond_types=BOND_FEATURE_DIMS + 1,
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             edge_dim=hparams["edim"],
             cutoff_local=hparams["cutoff_local"],
@@ -171,8 +173,6 @@ class Trainer(pl.LightningModule):
         data_batch: Tensor = batch.batch
         bond_edge_index = batch.edge_index
         bond_edge_attr = batch.edge_attr
-
-        assert pos.shape[0] == t.shape[0]
 
         bs = int(data_batch.max()) + 1
         
