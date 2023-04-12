@@ -189,7 +189,7 @@ class Trainer(pl.LightningModule):
         noise = noise - scatter_mean(noise, index=data_batch, dim=0, dim_size=bs)[data_batch]
         
         # get mean and std of pos_t | pos_0
-        mean, std = self.sde.marginal_prob(x=pos_centered, t=t)
+        mean, std = self.sde.marginal_prob(x=pos_centered, t=t[data_batch])
         
         # perturb
         pos_perturbed = mean + std * noise
@@ -234,8 +234,6 @@ class Trainer(pl.LightningModule):
             t = torch.randint(low=0, high=self.hparams.num_diffusion_timesteps,
                               size=(batch_size,), 
                               dtype=torch.long, device=batch.x.device)
-        
-        t = t.index_select(dim=0, index=batch.batch)
         
         out_dict = self(batch=batch, t=t)
         loss = torch.pow(out_dict["pred_noise"] - out_dict["true_noise"], 2).sum(-1)

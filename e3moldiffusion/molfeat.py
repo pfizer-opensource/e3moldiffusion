@@ -33,8 +33,8 @@ allowable_features = {
         'SINGLE',
         'DOUBLE',
         'TRIPLE',
-        'AROMATIC',
-        'misc'
+        'AROMATIC'#,
+    #    'misc'
     ],
     'possible_bond_stereo_list': [
         'STEREONONE',
@@ -237,7 +237,7 @@ class BondEncoderOHE(nn.Module):
     
     
 class BondEncoder(nn.Module):
-    def __init__(self, emb_dim):
+    def __init__(self, emb_dim, max_norm: float = 10.0):
         super(BondEncoder, self).__init__()
         FULL_BOND_FEATURE_DIMS = get_bond_feature_dims()
         self.bond_embedding = nn.Embedding(FULL_BOND_FEATURE_DIMS[0] + 3, emb_dim, max_norm=max_norm)

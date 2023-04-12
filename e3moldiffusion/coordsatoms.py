@@ -101,14 +101,10 @@ class ScoreModel(nn.Module):
                  ) -> None:
         super(ScoreModel, self).__init__()
         
-        self.atom_time_mapping = nn.Sequential(
-            DenseLayer(
-                num_atom_types + 1,
-                hn_dim[0],
-                activation=nn.SiLU(),
-            ),
-            DenseLayer(hn_dim[0], hn_dim[0]),
-        )
+        self.time_mapping = DenseLayer(1, hn_dim[0])
+        self.atom_mapping = DenseLayer(num_atom_types, hn_dim[0])
+        self.atom_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
+        
         self.sdim, self.vdim = hn_dim
 
         self.local_global_model = local_global_model
@@ -134,7 +130,9 @@ class ScoreModel(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        reset(self.atom_time_mapping)
+        self.atom_mapping.reset_parameters()
+        self.time_mapping.reset_parameters()
+        self.atom_time_mapping.reset_parameters()
         self.gnn.reset_parameters()
         self.score_head.reset_parameters()
         
@@ -165,8 +163,11 @@ class ScoreModel(nn.Module):
         # global
         edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global, pos=pos)
 
-        sin = torch.cat([x, t], dim=-1)
-        s = self.atom_time_mapping(sin)
+        t = self.time_mapping(t)
+        t = t[batch]
+        s = self.atom_mapping(x)
+        s = self.atom_time_mapping(F.silu(s + t))
+        
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
 
         out = self.gnn(

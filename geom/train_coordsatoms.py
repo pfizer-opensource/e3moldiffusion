@@ -187,7 +187,7 @@ class Trainer(pl.LightningModule):
         # center the true point cloud
         pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
         # get signal and noise coefficients for coords
-        mean_coords, std_coords = self.sde.marginal_prob(x=pos_centered, t=t)
+        mean_coords, std_coords = self.sde.marginal_prob(x=pos_centered, t=t[data_batch])
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
         
@@ -196,7 +196,7 @@ class Trainer(pl.LightningModule):
         xohe = 0.25 * xohe
         # sample noise for OHEs in {0, 1}^NUM_CLASSES
         noise_ohes_true = torch.randn_like(xohe)
-        mean_ohes, std_ohes = self.sde.marginal_prob(x=xohe, t=t)
+        mean_ohes, std_ohes = self.sde.marginal_prob(x=xohe, t=t[data_batch])
         # perturb OHEs
         ohes_perturbed = mean_ohes + std_ohes * noise_ohes_true
         
@@ -246,9 +246,7 @@ class Trainer(pl.LightningModule):
             t = torch.randint(low=0, high=self.hparams.num_diffusion_timesteps,
                               size=(batch_size,), 
                               dtype=torch.long, device=batch.x.device)
-        
-        t = t.index_select(dim=0, index=batch.batch)
-        
+            
         out_dict = self(batch=batch, t=t)
         
         coords_loss = torch.pow(
