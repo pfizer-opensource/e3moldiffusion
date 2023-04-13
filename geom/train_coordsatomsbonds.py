@@ -177,12 +177,12 @@ class Trainer(pl.LightningModule):
         # Note: This scenario is useful when learning the 3D coordinates only. 
         # From an optimization perspective, atoms that are connected by topology should have certain distance values. 
         # Since the atom types are fixed here, we know which molecule we want to generate a 3D configuration from, so the edge-index will help as inductive bias
-        edge_attr = torch.full(size=(edge_index.size(-1), ), fill_value=BOND_FEATURE_DIMS, device=edge_index.device, dtype=torch.long)
+        edge_attr = torch.full(size=(edge_index.size(-1), ), fill_value=0, device=edge_index.device, dtype=torch.long)
         # combine
         edge_index = torch.cat([edge_index, bond_edge_index], dim=-1)
         edge_attr =  torch.cat([edge_attr, bond_edge_attr], dim=0)
-        # coalesce, i.e. reduce and remove duplicate entries by taking the minimum value, making sure that the bond-features are included
-        edge_index, edge_attr = coalesce(index=edge_index, value=edge_attr, m=n, n=n, op="min")
+        # coalesce, i.e. reduce and remove duplicate entries by taking the maximum value, making sure that the bond-features are included. For No bonds we have included fill-value 0 anyways
+        edge_index, edge_attr = coalesce(index=edge_index, value=edge_attr, m=n, n=n, op="max")
         return edge_index, edge_attr
     
     def forward(self, batch: Batch, t: Tensor):
@@ -195,6 +195,8 @@ class Trainer(pl.LightningModule):
         
         bond_edge_index = batch.edge_index
         bond_edge_attr = batch.edge_attr
+        # increment by 1, because we want 0 to stand for no-edge
+        bond_edge_attr_p1 = bond_edge_attr + 1
         if not hasattr(batch, "edge_index_fc"):
             edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
             edge_index_global, _ = dense_to_sparse(edge_index_global)
@@ -203,19 +205,18 @@ class Trainer(pl.LightningModule):
         
         edge_index_global, edge_attr_global = self.coalesce_edges(edge_index=edge_index_global,
                                                                   bond_edge_index=bond_edge_index, 
-                                                                  bond_edge_attr=bond_edge_attr,
+                                                                  bond_edge_attr=bond_edge_attr_p1,
                                                                   n=pos.size(0))
         
     
-        edge_attr_global_p1 = edge_attr_global + 1
         # create block diagonal matrix
         dense_edge = torch.zeros(n, n, device=pos.device, dtype=torch.long)
         # populate entries with integer features 
-        dense_edge[edge_index_global[0, :], edge_index_global[1, :]] = edge_attr_global_p1        
+        dense_edge[edge_index_global[0, :], edge_index_global[1, :]] = edge_attr_global        
         dense_edge_ohe = F.one_hot(dense_edge.view(-1, 1),
-                                   num_classes=BOND_FEATURE_DIMS + 2).view(n, n, -1).float()
+                                   num_classes=BOND_FEATURE_DIMS + 1).view(n, n, -1).float()
         
-        dense_edge_ohe_perturbed = (1 / 12) * dense_edge_ohe
+        dense_edge_ohe_perturbed = (1 / 12) * dense_edge_ohe  # note here we dont use it; in future fix it BELOW
         
         # create symmetric noise for edge-attributes
         noise_edges = torch.randn_like(dense_edge_ohe)
@@ -225,14 +226,12 @@ class Trainer(pl.LightningModule):
         signal = signal.repeat_interleave(batch_num_nodes).unsqueeze(-1)
         std = std.repeat_interleave(batch_num_nodes).unsqueeze(-1)
         
-        dense_edge_ohe_perturbed = dense_edge_ohe * signal + noise_edges * std
+        dense_edge_ohe_perturbed = dense_edge_ohe * signal + noise_edges * std   # see ABOVE
         
         # retrieve as edge-attributes in PyG Format 
         perturbed_edge_attr = dense_edge_ohe_perturbed[edge_index_global[0, :], edge_index_global[1, :], :]
         noise_edge_attr = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
-        # remove first column as this was a placeholder
-        perturbed_edge_attr = perturbed_edge_attr[:, 1:]
-        noise_edge_attr = noise_edge_attr[:, 1:]
+       
         
         batch_edge = data_batch[edge_index_global[0]]     
     
