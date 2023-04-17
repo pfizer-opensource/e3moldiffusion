@@ -24,7 +24,7 @@ from torch_geometric.typing import OptTensor
 from torch_geometric.nn import radius_graph
 from torch_sparse import coalesce
 from torch_geometric.utils import dense_to_sparse
-from torch_scatter import scatter_mean
+from torch_scatter import scatter_mean, scatter_add
 from tqdm import tqdm
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
@@ -52,6 +52,9 @@ class Trainer(pl.LightningModule):
         self.hparams.num_atom_types = get_num_atom_types_geom(dataset=hparams["dataset"])
         self.hparams.num_bond_types = BOND_FEATURE_DIMS + 1
 
+        self.edge_scaling = 1.00
+        self.node_scaling = 0.25
+        
         self.model = ScoreModel(
             num_bond_types=BOND_FEATURE_DIMS + 1,
             num_atom_types=self.hparams.num_atom_types,
@@ -248,7 +251,8 @@ class Trainer(pl.LightningModule):
         # PyG format
         batch_edge = data_batch[edge_index_global[0]]     
         noise_edge_attr = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
-        edge_attr_global = 0.125 *  dense_edge_ohe[edge_index_global[0, :], edge_index_global[1, :], :]
+        edge_attr_global = dense_edge_ohe[edge_index_global[0, :], edge_index_global[1, :], :]
+        edge_attr_global = self.edge_scaling *  edge_attr_global
         # Perturb
         mean_edges, std_edges = self.sde.marginal_prob(x=edge_attr_global, t=t[batch_edge])
         edge_attr_perturbed = mean_edges + std_edges * noise_edge_attr
@@ -274,7 +278,7 @@ class Trainer(pl.LightningModule):
         
         # one-hot-encode
         xohe = F.one_hot(node_feat, num_classes=self.hparams.num_atom_types).float()
-        xohe = 0.25 * xohe
+        xohe = self.node_scaling * xohe
         # sample noise for OHEs in {0, 1}^NUM_CLASSES
         noise_ohes_true = torch.randn_like(xohe)
         mean_ohes, std_ohes = self.sde.marginal_prob(x=xohe, t=t[data_batch])
