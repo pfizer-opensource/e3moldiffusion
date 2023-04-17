@@ -256,7 +256,18 @@ class Trainer(pl.LightningModule):
         # Perturb
         mean_edges, std_edges = self.sde.marginal_prob(x=edge_attr_global, t=t[batch_edge])
         edge_attr_perturbed = mean_edges + std_edges * noise_edge_attr
+        
+        #signal = self.sde.sqrt_alphas_cumprod[t]
+        #std = self.sde.sqrt_1m_alphas_cumprod[t]
+        #signal = signal.repeat_interleave(batch_num_nodes).unsqueeze(-1)
+        #std = std.repeat_interleave(batch_num_nodes).unsqueeze(-1)
+        #dense_edge_ohe_perturbed = self.edge_scaling * dense_edge_ohe * signal + noise_edges * std
     
+        # retrieve as edge-attributes in PyG Format 
+        #edge_attr_perturbed = dense_edge_ohe_perturbed[edge_index_global[0, :], edge_index_global[1, :], :]
+        #noise_edge_attr = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
+        #batch_edge = data_batch[edge_index_global[0]]     
+        
         if not self.hparams.continuous:
             temb = t.float() / self.hparams.num_diffusion_timesteps
             temb = temb.clamp(min=self.hparams.eps_min)
@@ -355,7 +366,9 @@ class Trainer(pl.LightningModule):
         bonds_loss = torch.pow(
             out_dict["noise_bonds_pred"] - out_dict["noise_bonds_true"], 2
         ).mean(-1) 
-        bonds_loss = scatter_mean(
+        
+        #bonds_loss = bonds_loss.mean()
+        bonds_loss = 0.5 * scatter_add(
             bonds_loss, index=out_dict["edge2batch"], dim=0, dim_size=out_dict["noise_atoms_pred"].size(0)
         )
         bonds_loss = scatter_mean(

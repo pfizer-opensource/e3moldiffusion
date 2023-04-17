@@ -8,9 +8,9 @@
 #SBATCH --time=1-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=12
 #SBATCH --mem-per-cpu=4G
-#SBATCH --gres=gpu:v100:2
+#SBATCH --gres=gpu:v100:3
 #SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_coords_multiGPU_%j.out
 #SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_coords_multiGPU_%j.err
 
@@ -22,8 +22,8 @@ source activate e3moldiffusion
 echo "runnning multi-gpu experiment"
 
 args=(
-    --gpus 2
-    --id 1
+    --gpus 3
+    --id 0
     --dataset drugs
     --max_num_conformers 30
     --num_workers 4

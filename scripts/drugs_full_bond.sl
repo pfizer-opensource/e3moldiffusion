@@ -23,11 +23,11 @@ echo "runnning experiment"
 
 args=(
     --gpus 1
-    --id 0
+    --id 2
     --dataset drugs
     --max_num_conformers 30
     --num_workers 4
-    --save_dir logs/drugs
+    --save_dir logs/drugs_atomsbonds
     --num_epochs 100
     --sdim 128 --vdim 32 --rbf_dim 32 --num_layers 5 
     --cutoff_local 5.0

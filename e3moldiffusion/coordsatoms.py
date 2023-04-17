@@ -42,49 +42,6 @@ class ScoreHead(nn.Module):
         out = {"score_coords": score_coords, "score_atoms": score_atoms}
         
         return out
-
-
-class ScoreHeadNew(nn.Module):
-    def __init__(self, hn_dim: Tuple[int, int], num_atom_types: int) -> None:
-        super(ScoreHeadNew, self).__init__()
-        self.sdim, self.vdim = hn_dim
-        self.num_atom_types = num_atom_types
-        
-        self.coords_lin = DenseLayer(in_features=self.vdim, out_features=1, bias=False)
-        self.atoms_net = nn.Sequential(DenseLayer(in_features=self.sdim, out_features=self.sdim, activation=nn.SiLU()),
-                                       DenseLayer(in_features=self.sdim, out_features=num_atom_types+1, bias=False)
-                                       )
-        self.reset_parameters()
-        
-    def reset_parameters(self):
-        self.coords_lin.reset_parameters()
-        self.atoms_net[0].reset_parameters()
-        self.atoms_net[1].reset_parameters()
-        
-    def forward(self,
-                x: Dict[Tensor, Tensor],
-                pos: Tensor,
-                batch: Tensor,
-                edge_index_global: Tensor
-                ) -> Dict:
-        
-        s, v = x["s"], x["v"]
-        s = F.silu(s)
-        
-        score_atoms, d = self.atoms_net(s).split([self.num_atom_types, 1], dim=1)
-        source, target = edge_index_global
-        d = d[source] + d[target]
-        r = pos[source] - pos[target]
-        sr = d * r
-        sr = scatter_add(src=sr, index=target, dim=0, dim_size=s.size(0))
-     
-        score_coords = self.coords_lin(v).squeeze()
-        score_coords = score_coords + sr
-        
-        out = {"score_coords": score_coords, "score_atoms": score_atoms}
-        
-        return out
-    
 class ScoreModel(nn.Module):
     def __init__(self,
                  num_atom_types: int,
@@ -125,7 +82,6 @@ class ScoreModel(nn.Module):
         )
         
         self.score_head = ScoreHead(hn_dim=hn_dim, num_atom_types=num_atom_types)
-        # self.score_head = ScoreHeadNew(hn_dim=hn_dim, num_atom_types=num_atom_types)
         
         self.reset_parameters()
 
