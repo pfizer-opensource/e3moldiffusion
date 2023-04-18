@@ -23,18 +23,18 @@ echo "runnning multi-gpu experiment"
 
 args=(
     --gpus 3
-    --id 0
+    --id 1
     --dataset drugs
     --max_num_conformers 30
     --num_workers 4
     --save_dir logs/drugs_atoms
     --num_epochs 100
     --sdim 128 --vdim 32 --rbf_dim 32 --num_layers 5
-    --cutoff_local 3.0
+    --cutoff_local 8.0
     --cutoff_global 10.0
     --lr 5e-4
     --batch_size 256
-    --local_global_model
+    #--local_global_model
     --omit_cross_product
     --vector_aggr mean
     --schedule cosine

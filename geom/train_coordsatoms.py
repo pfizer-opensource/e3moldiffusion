@@ -81,12 +81,12 @@ class Trainer(pl.LightningModule):
     def reverse_sampling(
         self,
         num_graphs: int,
+        device: torch.device,
         empirical_distribution_num_nodes: Tensor,
         verbose: bool = False,
-        save_traj: bool = False
+        save_traj: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         
-        device = self.timesteps.data.device
         batch_num_nodes = torch.multinomial(input=empirical_distribution_num_nodes,
                                             num_samples=num_graphs, replacement=True).to(device)
         batch_num_nodes = batch_num_nodes.clamp(min=1)
@@ -101,7 +101,7 @@ class Trainer(pl.LightningModule):
         pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
         
         # initialize the atom-types 
-        xohes = torch.randn(pos.size(0), self.hparams.num_atom_types, device=device)
+        atom_types = torch.randn(pos.size(0), self.hparams.num_atom_types, device=device)
         
         edge_index_local = radius_graph(x=pos,
                                         r=self.hparams.cutoff_local,
@@ -121,12 +121,10 @@ class Trainer(pl.LightningModule):
         iterator = tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         for timestep in iterator:
             t = torch.full(size=(bs, ), fill_value=timestep, dtype=torch.long, device=pos.device)
-            t = t.index_select(dim=0, index=batch)
             temb = t / self.hparams.num_diffusion_timesteps
             temb = temb.unsqueeze(dim=1)
-            
             out = self.model(
-                x=xohes,
+                x=atom_types,
                 t=temb,
                 pos=pos,
                 edge_index_local=edge_index_local,
@@ -137,17 +135,17 @@ class Trainer(pl.LightningModule):
             )
              
             score_coords = out["score_coords"]
-            score_ohes = out["score_atoms"]
+            score_atoms = out["score_atoms"]
             
             score_coords = zero_mean(score_coords, batch=batch, dim_size=bs, dim=0)
             noise_coords = torch.randn_like(pos)
             noise_coords = zero_mean(noise_coords, batch=batch, dim_size=bs, dim=0)
         
-            pos, _ = self.sampler.update_fn(x=pos, score=score_coords, t=t, noise=noise_coords)
+            pos, _ = self.sampler.update_fn(x=pos, score=score_coords, t=t[batch], noise=noise_coords)
             pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
             
-            noise_ohes = torch.randn_like(xohes)
-            xohes, _ = self.sampler.update_fn(x=xohes, score=score_ohes, t=t, noise=noise_ohes)
+            noise_atoms = torch.randn_like(atom_types)
+            atom_types, _ = self.sampler.update_fn(x=atom_types, score=score_atoms, t=t[batch], noise=noise_atoms)
             
             if not self.hparams.fully_connected:
                 edge_index_local = radius_graph(x=pos.detach(),
@@ -155,14 +153,14 @@ class Trainer(pl.LightningModule):
                                                 batch=batch, 
                                                 max_num_neighbors=self.hparams.max_num_neighbors)
             
-            ohe_integer = torch.argmax(xohes, dim=-1)
+            atom_integer = torch.argmax(atom_types, dim=-1)
             
             if save_traj:
                 pos_traj.append(pos.detach())
-                atom_type_traj.append(xohes.detach())
-                atom_type_ohe_traj.append(ohe_integer)
+                atom_type_traj.append(atom_types.detach())
+                atom_type_ohe_traj.append(atom_integer)
                 
-        return pos, xohes, ohe_integer, batch_num_nodes, [pos_traj, atom_type_traj, atom_type_ohe_traj]
+        return pos, atom_types, atom_integer, batch_num_nodes, [pos_traj, atom_type_traj, atom_type_ohe_traj]
     
     def forward(self, batch: Batch, t: Tensor):
         node_feat: Tensor = batch.xgeom
@@ -190,13 +188,13 @@ class Trainer(pl.LightningModule):
         pos_perturbed = mean_coords + std_coords * noise_coords_true
         
         # one-hot-encode
-        xohe = F.one_hot(node_feat, num_classes=self.hparams.num_atom_types).float()
-        xohe = 0.25 * xohe
+        atom_types = F.one_hot(node_feat, num_classes=self.hparams.num_atom_types).float()
+        atom_types = 0.25 * atom_types
         # sample noise for OHEs in {0, 1}^NUM_CLASSES
-        noise_ohes_true = torch.randn_like(xohe)
-        mean_ohes, std_ohes = self.sde.marginal_prob(x=xohe, t=t[data_batch])
+        noise_atom_types = torch.randn_like(atom_types)
+        mean_atom_types, std_atom_types = self.sde.marginal_prob(x=atom_types, t=t[data_batch])
         # perturb OHEs
-        ohes_perturbed = mean_ohes + std_ohes * noise_ohes_true
+        atom_types_perturbed = mean_atom_types + std_atom_types * noise_atom_types
         
         edge_index_local = radius_graph(x=pos_perturbed,
                                         r=self.hparams.cutoff_local,
@@ -210,7 +208,7 @@ class Trainer(pl.LightningModule):
             edge_index_global = batch.edge_index_fc
 
         out = self.model(
-            x=ohes_perturbed,
+            x=atom_types_perturbed,
             t=temb,
             pos=pos_perturbed,
             edge_index_local=edge_index_local,
@@ -220,15 +218,15 @@ class Trainer(pl.LightningModule):
             batch=data_batch,
         )
 
-        noise_ohes_pred = out["score_atoms"]
+        noise_atoms_pred = out["score_atoms"]
         noise_coords_pred = out["score_coords"]
         noise_coords_pred = zero_mean(noise_coords_pred, batch=data_batch, dim_size=bs, dim=0)
         
         out = {
             "noise_coords_pred": noise_coords_pred,
             "noise_coords_true": noise_coords_true,
-            "noise_atoms_pred": noise_ohes_pred,
-            "noise_atoms_true": noise_ohes_true,
+            "noise_atoms_pred": noise_atoms_pred,
+            "noise_atoms_true": noise_atom_types,
             "true_class": node_feat,
         }
         
