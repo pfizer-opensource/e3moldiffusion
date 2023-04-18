@@ -28,6 +28,7 @@ geom/trajs/*
 geom/my_movie.gif
 geom/vis.ipynb
 
+geom/logs
 geom/evaluation/
 geom/train_gan.py
 
