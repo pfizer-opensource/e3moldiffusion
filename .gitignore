@@ -34,3 +34,5 @@ geom/train_gan.py
 
 # fullerene/
 fullerene/data/
+
+notebooks/
