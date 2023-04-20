@@ -65,6 +65,7 @@ class ScoreModel(nn.Module):
                  use_cross_product: bool = False,
                  fully_connected: bool = False,
                  local_global_model: bool = True,
+                 local_edge_attrs: bool = False,
                  vector_aggr: str = "mean"
                  ) -> None:
         super(ScoreModel, self).__init__()
@@ -93,7 +94,8 @@ class ScoreModel(nn.Module):
             use_cross_product=use_cross_product,
             vector_aggr=vector_aggr,
             fully_connected=fully_connected,
-            local_global_model=local_global_model
+            local_global_model=local_global_model,
+            local_edge_attrs=local_edge_attrs
         )
         
         self.score_head = ScoreHead(hn_dim=hn_dim, num_atom_types=num_atom_types, num_bond_types=num_bond_types)

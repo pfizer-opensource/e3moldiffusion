@@ -23,7 +23,7 @@ from torch_geometric.data import Batch
 from torch_geometric.typing import OptTensor
 from torch_geometric.nn import radius_graph
 from torch_sparse import coalesce
-from torch_geometric.utils import dense_to_sparse
+from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from torch_scatter import scatter_mean, scatter_add
 from tqdm import tqdm
 
@@ -228,6 +228,7 @@ class Trainer(pl.LightningModule):
         if not hasattr(batch, "edge_index_fc"):
             edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
             edge_index_global, _ = dense_to_sparse(edge_index_global)
+            edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
         else:
             edge_index_global = batch.edge_index_fc
         
@@ -252,7 +253,7 @@ class Trainer(pl.LightningModule):
         batch_edge = data_batch[edge_index_global[0]]     
         noise_edge_attr = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
         edge_attr_global = dense_edge_ohe[edge_index_global[0, :], edge_index_global[1, :], :]
-        edge_attr_global = self.edge_scaling *  edge_attr_global
+        edge_attr_global = self.edge_scaling * edge_attr_global
         # Perturb
         mean_edges, std_edges = self.sde.marginal_prob(x=edge_attr_global, t=t[batch_edge])
         edge_attr_perturbed = mean_edges + std_edges * noise_edge_attr
@@ -299,7 +300,19 @@ class Trainer(pl.LightningModule):
         edge_index_local = radius_graph(x=pos_perturbed,
                                         r=self.hparams.cutoff_local,
                                         batch=data_batch, 
+                                        flow="source_to_target",
                                         max_num_neighbors=self.hparams.max_num_neighbors)
+        
+        # NEW: local edge-attributes
+        # check where edge_index_local is in edge_index_global
+        
+        tryout = (edge_index_local.unsqueeze(-1) == edge_index_global.unsqueeze(1))
+        local_global_idx_select = (tryout.sum(0) == 2).nonzero()[:, 1]
+        edge_attr_local = edge_attr_global[edge_index_local, :]
+        
+        # check: to dense
+        
+        
         
         out = self.model(
             x=ohes_perturbed,
@@ -307,7 +320,7 @@ class Trainer(pl.LightningModule):
             pos=pos_perturbed,
             edge_index_local=edge_index_local,
             edge_index_global=edge_index_global,
-            edge_attr_local=None,
+            edge_attr_local=edge_attr_local,
             edge_attr_global=edge_attr_perturbed,
             batch=data_batch,
             batch_edge=batch_edge

@@ -43,7 +43,8 @@ class EQGATConv(MessagePassing):
         has_v_in: bool = False,
         use_mlp_update: bool = True,
         vector_aggr: str = "mean",
-        use_cross_product: bool = True
+        use_cross_product: bool = True,
+        **kwargs
     ):
         super(EQGATConv, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
@@ -144,13 +145,15 @@ class EQGATConv(MessagePassing):
 
         d, r, e = edge_attr
 
-        # de = d.view(-1, 1)
-        de = 1.0 / (1.0 + d.view(-1, 1))
-
+        de0 = d.view(-1, 1)
+        # 1 / (1 + d)
+        # de1 = 1.0 / (1.0 + d.view(-1, 1))
+        # d
+        
         if e is not None:
-            aij = torch.cat([sa_i, sa_j, de, e], dim=-1)
+            aij = torch.cat([sa_i, sa_j, de0, e], dim=-1)
         else:
-            aij = torch.cat([sa_i, sa_j, de], dim=-1)
+            aij = torch.cat([sa_i, sa_j, de0], dim=-1)
 
         aij = self.edge_net(aij)
 

@@ -2,7 +2,7 @@ from typing import Tuple, Dict, Optional
 from torch import Tensor, nn
 from torch_geometric.typing import OptTensor
 
-from e3moldiffusion.convs import EQGATRBFConv
+from e3moldiffusion.convs import EQGATRBFConv, EQGATConv
 from e3moldiffusion.modules import LayerNorm
 
 
@@ -12,8 +12,7 @@ class EncoderGNN(nn.Module):
                  hn_dim: Tuple[int, int] = (64, 16),
                  rbf_dim: int = 64,
                  edge_dim: Optional[int] = None,
-                 cutoff_local: float = 4.0,
-                 cutoff_global: float = 10.0,
+                 cutoff_local: float = 5.0,
                  num_layers: int = 5,
                  use_norm: bool = True,
                  use_cross_product: bool = False,
@@ -29,22 +28,47 @@ class EncoderGNN(nn.Module):
         
         self.sdim, self.vdim = hn_dim
         
-        
-        self.convs = nn.ModuleList([
-            EQGATRBFConv(in_dims=hn_dim,
+        convs = []
+        for i in range(num_layers):
+            if fully_connected:
+                convs.append(
+                    EQGATConv(in_dims=hn_dim,
+                              out_dims=hn_dim,
+                              edge_dim=edge_dim,
+                              has_v_in=i>0,
+                              use_mlp_update= i < (num_layers - 1),
+                              vector_aggr=vector_aggr,
+                              use_cross_product=use_cross_product
+                              )
+                )
+            else:
+                if i == self.num_layers - 2 and local_global_model:
+                    convs.append(
+                        EQGATConv(in_dims=hn_dim,
+                                  out_dims=hn_dim,
+                                  edge_dim=edge_dim,
+                                  has_v_in=i>0,
+                                  use_mlp_update= i < (num_layers - 1),
+                                  vector_aggr=vector_aggr,
+                                  use_cross_product=use_cross_product)
+                        )
+                else:
+                    convs.append(
+                        EQGATRBFConv(in_dims=hn_dim,
                          out_dims=hn_dim,
                          rbf_dim=rbf_dim,
                          edge_dim=edge_dim,
-                         cutoff=cutoff_global if (i == self.num_layers - 2 and local_global_model) else cutoff_local,
-                         use_cutoff_fnc=False if (i == self.num_layers - 2 and local_global_model) else True,
+                         cutoff=cutoff_local,
+                         use_cutoff_fnc=True,
                          has_v_in=i>0,
                          use_mlp_update= i < (num_layers - 1),
                          vector_aggr=vector_aggr,
                          use_cross_product=use_cross_product
                          )
-            for i in range(num_layers)
-        ])
-
+                    )
+        
+        self.convs = nn.ModuleList(convs)
+                    
         self.use_norm = use_norm
         self.norms = nn.ModuleList([
             LayerNorm(dims=hn_dim) if use_norm else nn.Identity()
@@ -98,14 +122,14 @@ class EncoderGNNAtomBond(nn.Module):
                  hn_dim: Tuple[int, int] = (64, 16),
                  rbf_dim: int = 64,
                  edge_dim: Optional[int] = None,
-                 cutoff_local: float = 4.0,
-                 cutoff_global: float = 10.0,
+                 cutoff_local: float = 5.0,
                  num_layers: int = 5,
                  use_norm: bool = True,
                  use_cross_product: bool = False,
                  vector_aggr: str = "mean",
                  fully_connected: bool = False,
-                 local_global_model: bool = True
+                 local_global_model: bool = True,
+                 local_edge_attrs: bool = False
                  ):
         super(EncoderGNNAtomBond, self).__init__()
 
@@ -115,22 +139,46 @@ class EncoderGNNAtomBond(nn.Module):
         
         self.sdim, self.vdim = hn_dim
         
+        convs = []
         
-        self.convs = nn.ModuleList([
-            EQGATRBFConv(in_dims=hn_dim,
+        for i in range(num_layers):
+            if fully_connected:
+                convs.append(
+                    EQGATConv(in_dims=hn_dim,
+                              out_dims=hn_dim,
+                              edge_dim=edge_dim,
+                              has_v_in=i>0,
+                              use_mlp_update= i < (num_layers - 1),
+                              vector_aggr=vector_aggr,
+                              use_cross_product=use_cross_product
+                              )
+                )
+            else:
+                if (i == self.num_layers - 2 or i == 0) and local_global_model:
+                    convs.append(
+                        EQGATConv(in_dims=hn_dim,
+                                  out_dims=hn_dim,
+                                  edge_dim=edge_dim,
+                                  has_v_in=i>0,
+                                  use_mlp_update= i < (num_layers - 1),
+                                  vector_aggr=vector_aggr,
+                                  use_cross_product=use_cross_product)
+                        )
+                else:
+                    convs.append(
+                        EQGATRBFConv(in_dims=hn_dim,
                          out_dims=hn_dim,
                          rbf_dim=rbf_dim,
-                         edge_dim=edge_dim if ((i == self.num_layers - 2 or i == 0) and local_global_model) else None,
-                         cutoff=cutoff_global if ((i == self.num_layers - 2 or i == 0) and local_global_model) else cutoff_local,
-                         use_cutoff_fnc=False if ((i == self.num_layers - 2 or i == 0) and local_global_model) else True,
+                         edge_dim=edge_dim if local_edge_attrs else None,
+                         cutoff=cutoff_local,
+                         use_cutoff_fnc=True,
                          has_v_in=i>0,
                          use_mlp_update= i < (num_layers - 1),
                          vector_aggr=vector_aggr,
                          use_cross_product=use_cross_product
                          )
-            for i in range(num_layers)
-        ])
-
+                    )
+    
         self.use_norm = use_norm
         self.norms = nn.ModuleList([
             LayerNorm(dims=hn_dim) if use_norm else nn.Identity()
