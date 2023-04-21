@@ -129,6 +129,7 @@ class Trainer(pl.LightningModule):
         assert torch.norm(edge_attrs - edge_attrs.permute(1, 0, 2)).item() == 0.0
         # get COO format (2, E)
         edge_index_global, _ = dense_to_sparse(edge_index_global)
+        edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
         # select in PyG formt (E, self.hparams.num_bond_types)
         edge_attr_global = edge_attrs[edge_index_global[0, :], edge_index_global[1, :], :]
         batch_edge = batch[edge_index_global[0]]     
@@ -308,6 +309,10 @@ class Trainer(pl.LightningModule):
         
         tryout = (edge_index_local.unsqueeze(-1) == edge_index_global.unsqueeze(1))
         local_global_idx_select = (tryout.sum(0) == 2).nonzero()[:, 1]
+        # create mask tensor for backpropagating only local edges
+        local_edge_mask = torch.zeros(size=(edge_index_global.size(1), ), dtype=torch.bool)
+        local_edge_mask[local_global_idx_select] = True
+        assert len(local_global_idx_select) == sum(local_edge_mask)
         edge_attr_local = edge_attr_global[edge_index_local, :]
         
         # check: to dense
