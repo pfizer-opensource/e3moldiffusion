@@ -133,6 +133,8 @@ class Trainer(pl.LightningModule):
         # select in PyG formt (E, self.hparams.num_bond_types)
         edge_attr_global = edge_attrs[edge_index_global[0, :], edge_index_global[1, :], :]
         batch_edge = batch[edge_index_global[0]]     
+        
+        # include local (noisy) edge-attributes based on radius graph indices
 
 
         pos_traj = []
