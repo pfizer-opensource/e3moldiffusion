@@ -246,6 +246,9 @@ class Trainer(pl.LightningModule):
         dense_edge_ohe = F.one_hot(dense_edge.view(-1, 1),
                                    num_classes=BOND_FEATURE_DIMS + 1).view(n, n, -1).float()
         
+        # edge-scaling
+        dense_edge_ohe = self.edge_scaling * dense_edge_ohe
+        
         # create symmetric noise for edge-attributes
         noise_edges = torch.randn_like(dense_edge_ohe)
         noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
@@ -254,7 +257,6 @@ class Trainer(pl.LightningModule):
         batch_edge = data_batch[edge_index_global[0]]     
         noise_edge_attr = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
         edge_attr_global = dense_edge_ohe[edge_index_global[0, :], edge_index_global[1, :], :]
-        edge_attr_global = self.edge_scaling * edge_attr_global
         # Perturb
         mean_edges, std_edges = self.sde.marginal_prob(x=edge_attr_global, t=t[batch_edge])
         edge_attr_perturbed = mean_edges + std_edges * noise_edge_attr
@@ -306,16 +308,18 @@ class Trainer(pl.LightningModule):
         
         # NEW: local edge-attributes
         # check where edge_index_local is in edge_index_global
-        
-        tryout = (edge_index_local.unsqueeze(-1) == edge_index_global.unsqueeze(1))
-        local_global_idx_select = (tryout.sum(0) == 2).nonzero()[:, 1]
+        local_global_idx_select = (edge_index_local.unsqueeze(-1) == edge_index_global.unsqueeze(1))
+        local_global_idx_select = (local_global_idx_select.sum(0) == 2).nonzero()[:, 1]
         # create mask tensor for backpropagating only local edges
         local_edge_mask = torch.zeros(size=(edge_index_global.size(1), ), dtype=torch.bool)
         local_edge_mask[local_global_idx_select] = True
         assert len(local_global_idx_select) == sum(local_edge_mask)
-        edge_attr_local = edge_attr_global[edge_index_local, :]
+        edge_attr_local= edge_attr_perturbed[edge_index_local, :]
         
-        # check: to dense
+        # check: to dense: here just take the clean for checking.
+        #edge_attr_local = edge_attr_global[local_global_idx_select, :]
+        #edge_attr_local_ = dense_edge_ohe[edge_index_local[0, :], edge_index_local[1, :], :]
+        #assert torch.norm(edge_attr_local - edge_attr_local_).item() == 0.0
         
         
         
