@@ -135,6 +135,9 @@ class Trainer(pl.LightningModule):
         batch_edge = batch[edge_index_global[0]]     
         
         # include local (noisy) edge-attributes based on radius graph indices
+        local_global_idx_select = (edge_index_local.unsqueeze(-1) == edge_index_global.unsqueeze(1))
+        local_global_idx_select = (local_global_idx_select.sum(0) == 2).nonzero()[:, 1]
+        edge_attr_local = edge_attr_global[edge_index_local, :]
 
 
         pos_traj = []
@@ -157,7 +160,7 @@ class Trainer(pl.LightningModule):
                 pos=pos,
                 edge_index_local=edge_index_local,
                 edge_index_global=edge_index_global,
-                edge_attr_local=None,
+                edge_attr_local=edge_attr_local,
                 edge_attr_global=edge_attr_global,
                 batch=batch,
                 batch_edge=batch_edge
@@ -192,7 +195,12 @@ class Trainer(pl.LightningModule):
                                                 r=self.hparams.cutoff_local,
                                                 batch=batch, 
                                                 max_num_neighbors=self.hparams.max_num_neighbors)
-            
+                
+                 # include local (noisy) edge-attributes based on radius graph indices
+                local_global_idx_select = (edge_index_local.unsqueeze(-1) == edge_index_global.unsqueeze(1))
+                local_global_idx_select = (local_global_idx_select.sum(0) == 2).nonzero()[:, 1]
+                edge_attr_local = edge_attr_global[edge_index_local, :]
+                    
             #atom_integer = torch.argmax(atom_types, dim=-1)
             #bond_integer = torch.argmax(edge_attr_global, dim=-1)
             
