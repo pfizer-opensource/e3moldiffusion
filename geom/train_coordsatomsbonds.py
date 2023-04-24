@@ -259,7 +259,7 @@ class Trainer(pl.LightningModule):
         edge_attr_global = dense_edge_ohe[edge_index_global[0, :], edge_index_global[1, :], :]
         # Perturb
         mean_edges, std_edges = self.sde.marginal_prob(x=edge_attr_global, t=t[batch_edge])
-        edge_attr_perturbed = mean_edges + std_edges * noise_edge_attr
+        edge_attr_global_perturbed = mean_edges + std_edges * noise_edge_attr
         
         #signal = self.sde.sqrt_alphas_cumprod[t]
         #std = self.sde.sqrt_1m_alphas_cumprod[t]
@@ -314,14 +314,12 @@ class Trainer(pl.LightningModule):
         local_edge_mask = torch.zeros(size=(edge_index_global.size(1), ), dtype=torch.bool)
         local_edge_mask[local_global_idx_select] = True
         assert len(local_global_idx_select) == sum(local_edge_mask)
-        edge_attr_local= edge_attr_perturbed[edge_index_local, :]
+        edge_attr_local_perturbed = edge_attr_global_perturbed[edge_index_local, :]
         
         # check: to dense: here just take the clean for checking.
         #edge_attr_local = edge_attr_global[local_global_idx_select, :]
         #edge_attr_local_ = dense_edge_ohe[edge_index_local[0, :], edge_index_local[1, :], :]
         #assert torch.norm(edge_attr_local - edge_attr_local_).item() == 0.0
-        
-        
         
         out = self.model(
             x=ohes_perturbed,
@@ -329,8 +327,8 @@ class Trainer(pl.LightningModule):
             pos=pos_perturbed,
             edge_index_local=edge_index_local,
             edge_index_global=edge_index_global,
-            edge_attr_local=edge_attr_local,
-            edge_attr_global=edge_attr_perturbed,
+            edge_attr_local=edge_attr_local_perturbed,
+            edge_attr_global=edge_attr_global_perturbed,
             batch=data_batch,
             batch_edge=batch_edge
         )
