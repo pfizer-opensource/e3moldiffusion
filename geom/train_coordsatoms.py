@@ -22,7 +22,7 @@ from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.typing import OptTensor
 from torch_geometric.nn import radius_graph
-from torch_geometric.utils import dense_to_sparse
+from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from torch_scatter import scatter_mean
 from tqdm import tqdm
 

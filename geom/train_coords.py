@@ -21,7 +21,7 @@ from e3moldiffusion.coords import ScoreModel
 from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.typing import OptTensor
-from torch_geometric.utils import dense_to_sparse
+from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from torch_sparse import coalesce
 from torch_scatter import scatter_mean
 from tqdm import tqdm
@@ -119,6 +119,7 @@ class Trainer(pl.LightningModule):
         
         edge_index_global = torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
         edge_index_global, _ = dense_to_sparse(edge_index_global)
+        edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
 
         if self.hparams.use_bond_features:    
             edge_index_global, edge_attr_global = self.coalesce_edges(edge_index=edge_index_global,
@@ -200,6 +201,7 @@ class Trainer(pl.LightningModule):
         if not hasattr(batch, "edge_index_fc"):
             edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
             edge_index_global, _ = dense_to_sparse(edge_index_global)
+            edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
         else:
             edge_index_global = batch.edge_index_fc
 
