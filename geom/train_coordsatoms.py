@@ -110,6 +110,7 @@ class Trainer(pl.LightningModule):
         
         edge_index_global = torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
         edge_index_global, _ = dense_to_sparse(edge_index_global)
+        edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
 
         pos_traj = []
         atom_type_traj = []
@@ -204,6 +205,7 @@ class Trainer(pl.LightningModule):
         if not hasattr(batch, "edge_index_fc"):
             edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
             edge_index_global, _ = dense_to_sparse(edge_index_global)
+            edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
         else:
             edge_index_global = batch.edge_index_fc
 
