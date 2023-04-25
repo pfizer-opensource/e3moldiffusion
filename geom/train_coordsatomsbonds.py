@@ -135,9 +135,14 @@ class Trainer(pl.LightningModule):
         batch_edge = batch[edge_index_global[0]]     
         
         # include local (noisy) edge-attributes based on radius graph indices
-        local_global_idx_select = (edge_index_local.unsqueeze(-1) == edge_index_global.unsqueeze(1))
-        local_global_idx_select = (local_global_idx_select.sum(0) == 2).nonzero()[:, 1]
-        edge_attr_local = edge_attr_global[edge_index_local, :]
+        ## old: the below takes a lot of gpu memory
+        create_mask = False
+        if create_mask:
+            local_global_idx_select = (edge_index_local.unsqueeze(-1) == edge_index_global.unsqueeze(1))
+            local_global_idx_select = (local_global_idx_select.sum(0) == 2).nonzero()[:, 1]
+            edge_attr_local = edge_attr_global[edge_index_local, :]
+        else:
+            edge_attr_local = edge_attrs[edge_index_local[0], edge_index_local[1], :]
 
 
         pos_traj = []
@@ -197,9 +202,15 @@ class Trainer(pl.LightningModule):
                                                 max_num_neighbors=self.hparams.max_num_neighbors)
                 
                  # include local (noisy) edge-attributes based on radius graph indices
-                local_global_idx_select = (edge_index_local.unsqueeze(-1) == edge_index_global.unsqueeze(1))
-                local_global_idx_select = (local_global_idx_select.sum(0) == 2).nonzero()[:, 1]
-                edge_attr_local = edge_attr_global[edge_index_local, :]
+                if create_mask:
+                    local_global_idx_select = (edge_index_local.unsqueeze(-1) == edge_index_global.unsqueeze(1))
+                    local_global_idx_select = (local_global_idx_select.sum(0) == 2).nonzero()[:, 1]
+                    edge_attr_local = edge_attr_global[edge_index_local, :]
+                else:
+                    # need to populate the dense edge-attr tensor
+                    edge_attrs = torch.zeros_like(edge_attrs)
+                    edge_attrs[edge_index_global[0], edge_index_global[1], :] = edge_attr_global
+                    edge_attr_local = edge_attrs[edge_index_local[0], edge_index_local[1], :]
                     
             #atom_integer = torch.argmax(atom_types, dim=-1)
             #bond_integer = torch.argmax(edge_attr_global, dim=-1)
@@ -264,23 +275,27 @@ class Trainer(pl.LightningModule):
         noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
         
         # PyG format
-        batch_edge = data_batch[edge_index_global[0]]     
-        noise_edge_attr = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
-        edge_attr_global = dense_edge_ohe[edge_index_global[0, :], edge_index_global[1, :], :]
+        #batch_edge = data_batch[edge_index_global[0]]     
+        #noise_edge_attr = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
+        #edge_attr_global = dense_edge_ohe[edge_index_global[0, :], edge_index_global[1, :], :]
         # Perturb
-        mean_edges, std_edges = self.sde.marginal_prob(x=edge_attr_global, t=t[batch_edge])
-        edge_attr_global_perturbed = mean_edges + std_edges * noise_edge_attr
+        #mean_edges, std_edges = self.sde.marginal_prob(x=edge_attr_global, t=t[batch_edge])
+        #edge_attr_global_perturbed = mean_edges + std_edges * noise_edge_attr
         
-        #signal = self.sde.sqrt_alphas_cumprod[t]
-        #std = self.sde.sqrt_1m_alphas_cumprod[t]
+        signal = self.sde.sqrt_alphas_cumprod[t]
+        std = self.sde.sqrt_1m_alphas_cumprod[t]
         #signal = signal.repeat_interleave(batch_num_nodes).unsqueeze(-1)
         #std = std.repeat_interleave(batch_num_nodes).unsqueeze(-1)
-        #dense_edge_ohe_perturbed = self.edge_scaling * dense_edge_ohe * signal + noise_edges * std
+        signal_b = signal[data_batch].unsqueeze(-1).unsqueeze(-1)
+        std_b = std[data_batch].unsqueeze(-1).unsqueeze(-1)
+        dense_edge_ohe_perturbed = dense_edge_ohe * signal_b + noise_edges * std_b
     
         # retrieve as edge-attributes in PyG Format 
-        #edge_attr_perturbed = dense_edge_ohe_perturbed[edge_index_global[0, :], edge_index_global[1, :], :]
-        #noise_edge_attr = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
-        #batch_edge = data_batch[edge_index_global[0]]     
+        edge_attr_global_perturbed = dense_edge_ohe_perturbed[edge_index_global[0, :], edge_index_global[1, :], :]
+        edge_attr_global_noise = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
+    
+            
+        batch_edge = data_batch[edge_index_global[0]]     
         
         if not self.hparams.continuous:
             temb = t.float() / self.hparams.num_diffusion_timesteps
@@ -318,19 +333,24 @@ class Trainer(pl.LightningModule):
         
         # NEW: local edge-attributes
         # check where edge_index_local is in edge_index_global
-        local_global_idx_select = (edge_index_local.unsqueeze(-1) == edge_index_global.unsqueeze(1))
-        local_global_idx_select = (local_global_idx_select.sum(0) == 2).nonzero()[:, 1]
-        # create mask tensor for backpropagating only local edges
-        local_edge_mask = torch.zeros(size=(edge_index_global.size(1), ), dtype=torch.bool)
-        local_edge_mask[local_global_idx_select] = True
-        assert len(local_global_idx_select) == sum(local_edge_mask)
-        edge_attr_local_perturbed = edge_attr_global_perturbed[edge_index_local, :]
         
-        # check: to dense: here just take the clean for checking.
-        #edge_attr_local = edge_attr_global[local_global_idx_select, :]
-        #edge_attr_local_ = dense_edge_ohe[edge_index_local[0, :], edge_index_local[1, :], :]
-        #assert torch.norm(edge_attr_local - edge_attr_local_).item() == 0.0
-        
+        create_mask = False
+        if create_mask:
+            local_global_idx_select = (edge_index_local.unsqueeze(-1) == edge_index_global.unsqueeze(1))
+            local_global_idx_select = (local_global_idx_select.sum(0) == 2).nonzero()[:, 1]
+            # create mask tensor for backpropagating only local edges
+            local_edge_mask = torch.zeros(size=(edge_index_global.size(1), ), dtype=torch.bool)
+            local_edge_mask[local_global_idx_select] = True
+            assert len(local_global_idx_select) == sum(local_edge_mask)
+            edge_attr_local_perturbed = edge_attr_global_perturbed[edge_index_local, :]
+            # check: to dense: here just take the clean for checking.
+            #edge_attr_local = edge_attr_global[local_global_idx_select, :]
+            #edge_attr_local_ = dense_edge_ohe[edge_index_local[0, :], edge_index_local[1, :], :]
+            #assert torch.norm(edge_attr_local - edge_attr_local_).item() == 0.0
+        else:
+            edge_attr_local_perturbed = dense_edge_ohe_perturbed[edge_index_local[0, :], edge_index_local[1, :], :]
+            edge_attr_local_noise = noise_edges[edge_index_local[0, :], edge_index_local[1, :], :]
+            
         out = self.model(
             x=ohes_perturbed,
             t=temb,
@@ -356,9 +376,9 @@ class Trainer(pl.LightningModule):
             "noise_atoms_true": noise_ohes_true,
             "true_atom_class": node_feat,
             "noise_bonds_pred": noise_ohes_bonds,
-            "noise_bonds_true": noise_edge_attr,
+            "noise_bonds_true": (edge_attr_local_noise, edge_attr_global_noise),
             "true_edge_attr": edge_attr_global,
-            "edge2batch": batch_edge
+            "edge_index": (edge_index_local, edge_index_global)
         }
         
         return out
@@ -394,12 +414,11 @@ class Trainer(pl.LightningModule):
         atoms_loss = torch.mean(atoms_loss, dim=0)
         
         bonds_loss = torch.pow(
-            out_dict["noise_bonds_pred"] - out_dict["noise_bonds_true"], 2
+            out_dict["noise_bonds_pred"] - out_dict["noise_bonds_true"][1], 2
         ).mean(-1) 
         
-        #bonds_loss = bonds_loss.mean()
         bonds_loss = 0.5 * scatter_add(
-            bonds_loss, index=out_dict["edge2batch"], dim=0, dim_size=out_dict["noise_atoms_pred"].size(0)
+            bonds_loss, index=out_dict["edge_index"][1][1], dim=0, dim_size=out_dict["noise_atoms_pred"].size(0)
         )
         bonds_loss = scatter_mean(
             bonds_loss, index=batch.batch, dim=0, dim_size=batch_size
