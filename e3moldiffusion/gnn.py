@@ -129,7 +129,8 @@ class EncoderGNNAtomBond(nn.Module):
                  vector_aggr: str = "mean",
                  fully_connected: bool = False,
                  local_global_model: bool = True,
-                 local_edge_attrs: bool = False
+                 local_edge_attrs: bool = False,
+                 **kwargs
                  ):
         super(EncoderGNNAtomBond, self).__init__()
 
@@ -178,7 +179,8 @@ class EncoderGNNAtomBond(nn.Module):
                          use_cross_product=use_cross_product
                          )
                     )
-    
+
+        self.convs = nn.ModuleList(convs)
         self.use_norm = use_norm
         self.norms = nn.ModuleList([
             LayerNorm(dims=hn_dim) if use_norm else nn.Identity()

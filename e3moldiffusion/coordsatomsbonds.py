@@ -86,7 +86,7 @@ class ScoreModel(nn.Module):
         self.gnn = EncoderGNNAtomBond(
             hn_dim=hn_dim,
             cutoff_local=cutoff_local,
-            cutoff_global=cutoff_global,
+            #cutoff_global=cutoff_global,
             rbf_dim=rbf_dim,
             edge_dim=hn_dim[0],
             num_layers=num_layers,
