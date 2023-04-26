@@ -46,7 +46,15 @@ BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 
 
 class Trainer(pl.LightningModule):
-    def __init__(self, hparams):
+    def __init__(self,
+                 hparams,
+                 dataset_info=None,
+                 dataset_statistics=None,
+                 train_smiles=None,
+                 properties_norm=None,
+                 nodes_dist=None,
+                 prop_dist=None,
+                 ):
         super().__init__()
         self.save_hyperparameters(hparams)
         self.hparams.num_atom_types = get_num_atom_types_geom(dataset=hparams["dataset"])
