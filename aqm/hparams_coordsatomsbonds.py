@@ -1,5 +1,5 @@
 from aqm.utils import number, LoadFromFile
-from e3moldiffusion.et_utils import act_class_mapping, rbf_class_mapping
+#from e3moldiffusion.et_utils import act_class_mapping, rbf_class_mapping
 from aqm.utils import LoadFromCheckpoint, LoadFromFile
 
 
@@ -152,20 +152,20 @@ def add_arguments(parser):
         default=64,
         help="Number of radial basis functions in model",
     )
-    parser.add_argument(
-        "--activation",
-        type=str,
-        default="silu",
-        choices=list(act_class_mapping.keys()),
-        help="Activation function",
-    )
-    parser.add_argument(
-        "--rbf-type",
-        type=str,
-        default="expnorm",
-        choices=list(rbf_class_mapping.keys()),
-        help="Type of distance expansion",
-    )
+    #parser.add_argument(
+    #    "--activation",
+    #    type=str,
+    #    default="silu",
+    #    choices=list(act_class_mapping.keys()),
+    #    help="Activation function",
+    #)
+    #parser.add_argument(
+    #    "--rbf-type",
+    #    type=str,
+    #    default="expnorm",
+    #    choices=list(rbf_class_mapping.keys()),
+    #    help="Type of distance expansion",
+    #)
     parser.add_argument(
         "--trainable-rbf",
         type=bool,
@@ -191,12 +191,12 @@ def add_arguments(parser):
         choices=["keys", "values", "both", "none"],
         help="Where distance information is included inside the attention",
     )
-    parser.add_argument(
-        "--attn-activation",
-        default="silu",
-        choices=list(act_class_mapping.keys()),
-        help="Attention activation function",
-    )
+    #parser.add_argument(
+    #    "--attn-activation",
+    #    default="silu",
+    #    choices=list(act_class_mapping.keys()),
+    #    help="Attention activation function",
+    #)
     parser.add_argument(
         "--num-heads", type=int, default=8, help="Number of attention heads"
     )
@@ -263,7 +263,7 @@ def add_arguments(parser):
     parser.add_argument(
         "--beta_max", default=20.0, type=float
     )  # after conversion / T --> 1e-4; 0.02 as originally
-    parser.add_argument("--num_diffusion_timesteps", default=1000, type=int)
+    parser.add_argument("--num_diffusion_timesteps", default=300, type=int)
     # diffusion args
     parser.add_argument(
         "--num-atom-types",
@@ -315,7 +315,7 @@ def add_arguments(parser):
         help="Whether or not to perform adaptive gradient clipping",
     )
     parser.add_argument(
-        "--timesteps", type=int, default=1000, help="Number of timesteps for diffusion"
+        "--timesteps", type=int, default=300, help="Number of timesteps for diffusion"
     )
     parser.add_argument(
         "--norm-values",
