@@ -152,20 +152,20 @@ def add_arguments(parser):
         default=64,
         help="Number of radial basis functions in model",
     )
-    #parser.add_argument(
-    #    "--activation",
-    #    type=str,
-    #    default="silu",
-    #    choices=list(act_class_mapping.keys()),
-    #    help="Activation function",
-    #)
-    #parser.add_argument(
-    #    "--rbf-type",
-    #    type=str,
-    #    default="expnorm",
-    #    choices=list(rbf_class_mapping.keys()),
-    #    help="Type of distance expansion",
-    #)
+    parser.add_argument(
+        "--activation",
+        type=str,
+        default="silu",
+        #choices=list(act_class_mapping.keys()),
+        help="Activation function",
+    )
+    parser.add_argument(
+        "--rbf-type",
+        type=str,
+        default="expnorm",
+        #choices=list(rbf_class_mapping.keys()),
+        help="Type of distance expansion",
+    )
     parser.add_argument(
         "--trainable-rbf",
         type=bool,
@@ -191,12 +191,12 @@ def add_arguments(parser):
         choices=["keys", "values", "both", "none"],
         help="Where distance information is included inside the attention",
     )
-    #parser.add_argument(
-    #    "--attn-activation",
-    #    default="silu",
-    #    choices=list(act_class_mapping.keys()),
-    #    help="Attention activation function",
-    #)
+    parser.add_argument(
+        "--attn-activation",
+        default="silu",
+        #choices=list(act_class_mapping.keys()),
+        help="Attention activation function",
+    )
     parser.add_argument(
         "--num-heads", type=int, default=8, help="Number of attention heads"
     )

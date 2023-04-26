@@ -28,13 +28,13 @@ from torch_scatter import scatter_mean, scatter_add
 from tqdm import tqdm
 
 #New imported 
-from aqm.analyze_sampling import SamplingMetrics
+#from aqm.analyze_sampling import SamplingMetrics
 from callbacks.ema import ExponentialMovingAverage
 from config_file import get_dataset_info
-from aqm.info_data import AQMInfos
-from evaluation.diffusion_distribution import (
-    get_distributions
-)
+#from aqm.info_data import AQMInfos
+#from evaluation.diffusion_distribution import (
+#    get_distributions
+#)
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 
@@ -67,6 +67,7 @@ class Trainer(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(hparams)
 
+        self.include_charges = False
         self.num_atom_features = self.hparams.num_atom_types + int(self.include_charges)
         self.num_bond_classes = 5
         
@@ -77,9 +78,11 @@ class Trainer(pl.LightningModule):
         self.nodes_dist = nodes_dist
         self.prop_dist = prop_dist
         
-        self.val_sampling_metrics = SamplingMetrics(
-            self.train_smiles, dataset_statistics, test=False
-        )
+        
+        
+        #self.val_sampling_metrics = SamplingMetrics(
+        #    self.train_smiles, dataset_statistics, test=False
+        #)
         
         self.edge_scaling = 1.00
         self.node_scaling = 0.25
@@ -89,7 +92,7 @@ class Trainer(pl.LightningModule):
             num_layers=hparams["num_layers"],
             use_norm=hparams["use_norm"],
             use_cross_product=hparams["use_cross_product"],
-            num_atom_features=self.num_atom_features,
+            num_atom_types=self.num_atom_features,
             num_bond_types=self.num_bond_classes,
             rbf_dim=hparams["num_rbf"],
             cutoff_local=hparams["cutoff_upper"],
@@ -134,7 +137,7 @@ class Trainer(pl.LightningModule):
         atom_types = torch.randn(pos.size(0), self.hparams.num_atom_types, device=device)
         
         edge_index_local = radius_graph(x=pos,
-                                        r=self.hparams.cutoff_local,
+                                        r=self.hparams.cutoff_upper,
                                         batch=batch, 
                                         max_num_neighbors=self.hparams.max_num_neighbors)
         
@@ -218,7 +221,7 @@ class Trainer(pl.LightningModule):
             
             if not self.hparams.fully_connected:
                 edge_index_local = radius_graph(x=pos.detach(),
-                                                r=self.hparams.cutoff_local,
+                                                r=self.hparams.cutoff_upper,
                                                 batch=batch, 
                                                 max_num_neighbors=self.hparams.max_num_neighbors)
                 
@@ -260,11 +263,15 @@ class Trainer(pl.LightningModule):
         charges: Tensor = batch.charges
         data_batch: Tensor = batch.batch
         batch_num_nodes = torch.bincount(data_batch)
-        bond_edge_index = batch.edge_index
-        bond_edge_attr = batch.edge_attr
+        bond_edge_index = batch.bond_index
+        bond_edge_attr = batch.bond_attr
         n = batch.num_nodes
         bs = int(data_batch.max()) + 1
         
+        bond_edge_index, bond_edge_attr = sort_edge_index(edge_index=bond_edge_index,
+                                                          edge_attr=bond_edge_attr,
+                                                          sort_by_row=False)
+
         if not hasattr(batch, "fc_edge_index"):
             edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
             edge_index_global, _ = dense_to_sparse(edge_index_global)
@@ -277,7 +284,10 @@ class Trainer(pl.LightningModule):
                                                                   bond_edge_attr=bond_edge_attr,
                                                                   n=pos.size(0))
         
-    
+        edge_index_global, edge_attr_global = sort_edge_index(edge_index=edge_index_global,
+                                                              edge_attr=edge_attr_global, 
+                                                              sort_by_row=False)
+
         # create block diagonal matrix
         dense_edge = torch.zeros(n, n, device=pos.device, dtype=torch.long)
         # populate entries with integer features 
@@ -337,7 +347,10 @@ class Trainer(pl.LightningModule):
         pos_perturbed = mean_coords + std_coords * noise_coords_true
         
         # one-hot-encode
-        xohe = F.one_hot(node_feat, num_classes=self.hparams.num_atom_types).float()
+        xohe = F.one_hot(
+            node_feat.squeeze().long(), num_classes=max(self.hparams["atom_types"]) + 1
+        ).float()[:, self.hparams["atom_types"]]
+        
         xohe = self.node_scaling * xohe
         # sample noise for OHEs in {0, 1}^NUM_CLASSES
         noise_ohes_true = torch.randn_like(xohe)
@@ -346,7 +359,7 @@ class Trainer(pl.LightningModule):
         ohes_perturbed = mean_ohes + std_ohes * noise_ohes_true
         
         edge_index_local = radius_graph(x=pos_perturbed,
-                                        r=self.hparams.cutoff_local,
+                                        r=self.hparams.cutoff_upper,
                                         batch=data_batch, 
                                         flow="source_to_target",
                                         max_num_neighbors=self.hparams.max_num_neighbors)
@@ -531,7 +544,8 @@ if __name__ == "__main__":
     datamodule.prepare_data()
     datamodule.setup("fit")
 
-    dataset_statistics = AQMInfos(datamodule.dataset)
+    #dataset_statistics = AQMInfos(datamodule.dataset)
+    dataset_statistics = None
 
     smiles = datamodule.dataset.data.smiles
     train_idx = [int(i) for i in datamodule.idx_train]
@@ -543,7 +557,9 @@ if __name__ == "__main__":
         properties_norm = datamodule.compute_mean_mad(hparams.properties_list)
 
     dataloader = datamodule.get_dataloader(datamodule.train_dataset, "val")
-    nodes_dist, prop_dist = get_distributions(hparams, dataset_info, dataloader)
+    #nodes_dist, prop_dist = get_distributions(hparams, dataset_info, dataloader)
+    nodes_dist, prop_dist = None, None
+    
     if prop_dist is not None:
         prop_dist.set_normalizer(properties_norm)
 
