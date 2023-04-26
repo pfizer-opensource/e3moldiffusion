@@ -50,7 +50,7 @@ cutoff_upper_global: 15.0
 #DATA
 dataset: aqm
 dataset_arg: {}
-dataset_root: /home/cremej01/workspace/e3mol/aqm/data
+dataset_root: /home/let55/workspace/projects/e3moldiffusion/aqm/aqm_data
 
 derivative: false
 #Change for diffusion to VectorCategorical!
