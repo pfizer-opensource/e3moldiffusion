@@ -66,8 +66,9 @@ class Trainer(pl.LightningModule):
             use_norm=not hparams["omit_norm"],
             use_cross_product=not hparams["omit_cross_product"],
             vector_aggr=hparams["vector_aggr"],
-            fully_connected=hparams["fully_connected"],
-            local_global_model=hparams["local_global_model"],
+            fully_connected=False, #   hparams["fully_connected"],
+            local_global_model=True, #hparams["local_global_model"],
+            local_edge_attrs=False
         )
 
         if hparams["continuous"]:
@@ -132,7 +133,8 @@ class Trainer(pl.LightningModule):
         edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
         # select in PyG formt (E, self.hparams.num_bond_types)
         edge_attr_global = edge_attrs[edge_index_global[0, :], edge_index_global[1, :], :]
-        batch_edge = batch[edge_index_global[0]]     
+        batch_edge_global = batch[edge_index_global[0]]     
+        batch_edge_local = batch[edge_index_local[0]]     
         
         # include local (noisy) edge-attributes based on radius graph indices
         ## old: the below takes a lot of gpu memory
@@ -168,7 +170,8 @@ class Trainer(pl.LightningModule):
                 edge_attr_local=edge_attr_local,
                 edge_attr_global=edge_attr_global,
                 batch=batch,
-                batch_edge=batch_edge
+                batch_edge_local=batch_edge_local,
+                batch_edge_global=batch_edge_global
             )
              
             score_coords = out["score_coords"]
@@ -192,7 +195,7 @@ class Trainer(pl.LightningModule):
             noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
             noise_edges = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
             edge_attr_global, _ = self.sampler.update_fn(x=edge_attr_global, score=score_bonds,
-                                                         t=t[batch_edge], noise=noise_edges)
+                                                         t=t[batch_edge_global], noise=noise_edges)
             
             
             if not self.hparams.fully_connected:
@@ -211,6 +214,9 @@ class Trainer(pl.LightningModule):
                     edge_attrs = torch.zeros_like(edge_attrs)
                     edge_attrs[edge_index_global[0], edge_index_global[1], :] = edge_attr_global
                     edge_attr_local = edge_attrs[edge_index_local[0], edge_index_local[1], :]
+                
+                batch_edge_local = batch[edge_index_local[0]]     
+
                     
             #atom_integer = torch.argmax(atom_types, dim=-1)
             #bond_integer = torch.argmax(edge_attr_global, dim=-1)
@@ -293,10 +299,7 @@ class Trainer(pl.LightningModule):
         # retrieve as edge-attributes in PyG Format 
         edge_attr_global_perturbed = dense_edge_ohe_perturbed[edge_index_global[0, :], edge_index_global[1, :], :]
         edge_attr_global_noise = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
-    
             
-        batch_edge = data_batch[edge_index_global[0]]     
-        
         if not self.hparams.continuous:
             temb = t.float() / self.hparams.num_diffusion_timesteps
             temb = temb.clamp(min=self.hparams.eps_min)
@@ -350,7 +353,10 @@ class Trainer(pl.LightningModule):
         else:
             edge_attr_local_perturbed = dense_edge_ohe_perturbed[edge_index_local[0, :], edge_index_local[1, :], :]
             edge_attr_local_noise = noise_edges[edge_index_local[0, :], edge_index_local[1, :], :]
-            
+        
+        batch_edge_global = data_batch[edge_index_global[0]]     
+        batch_edge_local = data_batch[edge_index_local[0]]     
+        
         out = self.model(
             x=ohes_perturbed,
             t=temb,
@@ -360,7 +366,8 @@ class Trainer(pl.LightningModule):
             edge_attr_local=edge_attr_local_perturbed,
             edge_attr_global=edge_attr_global_perturbed,
             batch=data_batch,
-            batch_edge=batch_edge
+            batch_edge_local=batch_edge_local,
+            batch_edge_global=batch_edge_global
         )
 
         noise_ohes_atoms = out["score_atoms"]

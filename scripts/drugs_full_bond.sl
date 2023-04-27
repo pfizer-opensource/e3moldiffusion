@@ -23,7 +23,7 @@ echo "runnning experiment"
 
 args=(
     --gpus 1
-    --id 5
+    --id 6
     --dataset drugs
     --max_num_conformers 30
     --num_workers 4

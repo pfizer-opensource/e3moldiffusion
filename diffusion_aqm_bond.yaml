@@ -2,7 +2,7 @@
 train_size: 0.9
 val_size: 0.1
 test_size: null
-batch_size: 128
+batch_size: 64
 inference_batch_size: 32
 ema_decay: 0.995
 grad_clip_val: 10
@@ -26,9 +26,9 @@ trainable_rbf: false
 neighbor_embedding: true
 
 #EQGAT
-sdim: 128
-vdim: 32
-edim: 32
+sdim: 256
+vdim: 256
+edim: 256
 use_norm: true
 use_cross_product: false
 use_bond_features: true

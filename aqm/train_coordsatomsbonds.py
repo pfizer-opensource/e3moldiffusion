@@ -135,7 +135,7 @@ class Trainer(pl.LightningModule):
         pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
         
         # initialize the atom-types 
-        atom_types = torch.randn(pos.size(0), self.hparams.num_atom_features, device=device)
+        atom_types = torch.randn(pos.size(0), self.num_atom_features, device=device)
         
         edge_index_local = radius_graph(x=pos,
                                         r=self.hparams.cutoff_upper,
@@ -146,7 +146,7 @@ class Trainer(pl.LightningModule):
         # sample symmetric edge-attributes
         edge_attrs = torch.randn((edge_index_global.size(0),
                                   edge_index_global.size(1),
-                                  self.hparams.num_bond_classes),
+                                  self.num_bond_classes),
                                   device=device, 
                                   dtype=torch.get_default_dtype())
         # symmetrize
@@ -157,8 +157,9 @@ class Trainer(pl.LightningModule):
         edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
         # select in PyG formt (E, self.hparams.num_bond_types)
         edge_attr_global = edge_attrs[edge_index_global[0, :], edge_index_global[1, :], :]
-        batch_edge = batch[edge_index_global[0]]     
-        
+        batch_edge_global = batch[edge_index_global[0]]     
+        batch_edge_local = batch[edge_index_local[0]]   
+                  
         # include local (noisy) edge-attributes based on radius graph indices
         ## old: the below takes a lot of gpu memory
         create_mask = False
@@ -193,7 +194,8 @@ class Trainer(pl.LightningModule):
                 edge_attr_local=edge_attr_local,
                 edge_attr_global=edge_attr_global,
                 batch=batch,
-                batch_edge=batch_edge
+                batch_edge_local=batch_edge_local,
+                batch_edge_global=batch_edge_global
             )
              
             score_coords = out["score_coords"]
@@ -217,7 +219,7 @@ class Trainer(pl.LightningModule):
             noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
             noise_edges = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
             edge_attr_global, _ = self.sampler.update_fn(x=edge_attr_global, score=score_bonds,
-                                                         t=t[batch_edge], noise=noise_edges)
+                                                         t=t[batch_edge_global], noise=noise_edges)
             
             
             if not self.hparams.fully_connected:
