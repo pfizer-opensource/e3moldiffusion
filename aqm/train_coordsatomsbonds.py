@@ -100,6 +100,7 @@ class Trainer(pl.LightningModule):
             vector_aggr="mean",
             local_global_model=hparams["fully_connected_layer"],
             fully_connected=hparams["fully_connected"],
+            local_edge_attrs=hparams["use_local_edge_attr"]
         )
 
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
@@ -324,9 +325,6 @@ class Trainer(pl.LightningModule):
         edge_attr_global_perturbed = dense_edge_ohe_perturbed[edge_index_global[0, :], edge_index_global[1, :], :]
         edge_attr_global_noise = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
     
-            
-        batch_edge = data_batch[edge_index_global[0]]     
-        
         if not self.hparams.continuous:
             temb = t.float() / self.hparams.num_diffusion_timesteps
             temb = temb.clamp(min=self.hparams.eps_min)
@@ -363,7 +361,7 @@ class Trainer(pl.LightningModule):
                                         batch=data_batch, 
                                         flow="source_to_target",
                                         max_num_neighbors=self.hparams.max_num_neighbors)
-             
+        
         create_mask = False
         if create_mask:
             local_global_idx_select = (edge_index_local.unsqueeze(-1) == edge_index_global.unsqueeze(1))
@@ -380,7 +378,10 @@ class Trainer(pl.LightningModule):
         else:
             edge_attr_local_perturbed = dense_edge_ohe_perturbed[edge_index_local[0, :], edge_index_local[1, :], :]
             edge_attr_local_noise = noise_edges[edge_index_local[0, :], edge_index_local[1, :], :]
-            
+        
+        batch_edge_global = data_batch[edge_index_global[0]]     
+        batch_edge_local = data_batch[edge_index_local[0]]     
+        
         out = self.model(
             x=ohes_perturbed,
             t=temb,
@@ -390,7 +391,8 @@ class Trainer(pl.LightningModule):
             edge_attr_local=edge_attr_local_perturbed,
             edge_attr_global=edge_attr_global_perturbed,
             batch=data_batch,
-            batch_edge=batch_edge
+            batch_edge_global=batch_edge_global,
+            batch_edge_local=batch_edge_local,
         )
 
         noise_ohes_atoms = out["score_atoms"]

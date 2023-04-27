@@ -2,7 +2,7 @@
 train_size: 0.9
 val_size: 0.1
 test_size: null
-batch_size: 32
+batch_size: 128
 inference_batch_size: 32
 ema_decay: 0.995
 grad_clip_val: 10
@@ -26,20 +26,20 @@ trainable_rbf: false
 neighbor_embedding: true
 
 #EQGAT
-sdim: 256
-vdim: 256
-edim: 256
+sdim: 128
+vdim: 32
+edim: 32
 use_norm: true
 use_cross_product: false
-use_bond_features: false
+use_bond_features: true
 use_all_atom_features: false
 
 #GENERAL MODEL SPECS
 num_layers: 5
 num_rbf: 32
-use_local_edge_attr: false
-fully_connected_layer: false
-fully_connected: true
+use_local_edge_attr: false  # true
+fully_connected_layer: true
+fully_connected: false
 skip_connect_context: False
 
 cutoff_lower: 0.0
@@ -66,18 +66,18 @@ remove_hs: false
 condition_time: true
 ode_regularization: 1.e-3
 gradient_clipping: true
-timesteps: 400
+timesteps: 300
 norm_values: [1, 4, 10, 1]
 n_stability_samples: 1000
 noise_schedule: polynomial_2
 noise_precision: 1.e-5
 loss_type: l2
 
-log_dir: logs/
+log_dir: logs
 lr: 1.e-4
 lr_factor: 0.5
 lr_patience: 10
-max_num_neighbors: 100
+max_num_neighbors: 128
 max_z: 100
 
 weight_decay: 0.0

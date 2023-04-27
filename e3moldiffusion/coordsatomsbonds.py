@@ -129,28 +129,33 @@ class ScoreModel(nn.Module):
         edge_attr_local: OptTensor = None,
         edge_attr_global: OptTensor = None,
         batch: OptTensor = None,
-        batch_edge: OptTensor = None) -> Dict[Tensor, Tensor]:
+        batch_edge_local: OptTensor = None,
+        batch_edge_global: OptTensor = None) -> Dict[Tensor, Tensor]:
         
         # t: (batch_size,)
         t = self.time_mapping(t)
         tnode = t[batch]
         
         # edge_index_global (2, E*)
-        tedge = t[batch_edge]
-         
+        tedge_global = t[batch_edge_global]
+        tedge_local = t[batch_edge_local]
+        
         if batch is None:
             batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)
      
         s = self.atom_mapping(x)
         s = self.atom_time_mapping(F.silu(s + tnode))
         
-        e = self.bond_mapping(edge_attr_global)
-        e = self.bond_time_mapping(F.silu(e + tedge))
+        edge_attr_global = self.bond_mapping(edge_attr_global)
+        edge_attr_global = self.bond_time_mapping(F.silu(edge_attr_global + tedge_global))
+        
+        edge_attr_local = self.bond_mapping(edge_attr_local)
+        edge_attr_local = self.bond_time_mapping(F.silu(edge_attr_local + tedge_local))
         
          # local
         edge_attr_local = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local, pos=pos)        
         # global
-        edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=e, pos=pos)
+        edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global, pos=pos)
         
         
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
