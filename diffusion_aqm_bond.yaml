@@ -26,9 +26,9 @@ trainable_rbf: false
 neighbor_embedding: true
 
 #EQGAT
-sdim: 256
-vdim: 256
-edim: 256
+sdim: 128 #256
+vdim: 32 #256
+edim: 32 #256
 use_norm: true
 use_cross_product: false
 use_bond_features: true

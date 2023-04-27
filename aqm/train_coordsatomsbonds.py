@@ -247,7 +247,7 @@ class Trainer(pl.LightningModule):
                 atom_type_traj.append(atom_types.detach())
                 edge_type_traj.append(edge_attr_global.detach())
                 
-        return pos, atom_types, edge_attr_global, batch_num_nodes, [pos_traj, atom_type_traj, edge_type_traj]
+        return pos, atom_types, edge_attr_global, edge_index_global, batch_num_nodes, [pos_traj, atom_type_traj, edge_type_traj]
     
     def coalesce_edges(self, edge_index, bond_edge_index, bond_edge_attr, n):
         edge_attr = torch.full(size=(edge_index.size(-1), ),

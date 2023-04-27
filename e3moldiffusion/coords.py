@@ -59,7 +59,8 @@ class ScoreHead(nn.Module):
         else:
             score = self.outhead(v).squeeze() + sr
         
-        return score
+        out = {"score_coords": score}
+        return out
         
         
 class ScoreModel(nn.Module):
@@ -102,7 +103,7 @@ class ScoreModel(nn.Module):
         self.gnn = EncoderGNN(
             hn_dim=hn_dim,
             cutoff_local=cutoff_local,
-            cutoff_global=cutoff_global,
+            #cutoff_global=cutoff_global,
             rbf_dim=rbf_dim,
             edge_dim=edge_dim,
             num_layers=num_layers,
