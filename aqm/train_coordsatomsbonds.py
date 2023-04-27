@@ -135,7 +135,7 @@ class Trainer(pl.LightningModule):
         pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
         
         # initialize the atom-types 
-        atom_types = torch.randn(pos.size(0), self.hparams.num_atom_types, device=device)
+        atom_types = torch.randn(pos.size(0), self.hparams.num_atom_features, device=device)
         
         edge_index_local = radius_graph(x=pos,
                                         r=self.hparams.cutoff_upper,
@@ -146,7 +146,7 @@ class Trainer(pl.LightningModule):
         # sample symmetric edge-attributes
         edge_attrs = torch.randn((edge_index_global.size(0),
                                   edge_index_global.size(1),
-                                  self.hparams.num_bond_types),
+                                  self.hparams.num_bond_classes),
                                   device=device, 
                                   dtype=torch.get_default_dtype())
         # symmetrize
