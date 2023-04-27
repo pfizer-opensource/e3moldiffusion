@@ -93,8 +93,8 @@ class ScoreModel(nn.Module):
             use_norm=use_norm,
             use_cross_product=use_cross_product,
             vector_aggr=vector_aggr,
-            fully_connected=True, #fully_connected,
-            local_global_model=False, #local_global_model,
+            fully_connected=False,  # True, fully_connected,
+            local_global_model=True, #False, local_global_model,
             local_edge_attrs=False #local_edge_attrs
         )
         
@@ -149,10 +149,11 @@ class ScoreModel(nn.Module):
         edge_attr_global = self.bond_mapping(edge_attr_global)
         edge_attr_global = self.bond_time_mapping(F.silu(edge_attr_global + tedge_global))
         
-        edge_attr_local = self.bond_mapping(edge_attr_local)
-        edge_attr_local = self.bond_time_mapping(F.silu(edge_attr_local + tedge_local))
+        #edge_attr_local = self.bond_mapping(edge_attr_local)
+        #edge_attr_local = self.bond_time_mapping(F.silu(edge_attr_local + tedge_local))
+        edge_attr_local = None
         
-         # local
+        # local
         edge_attr_local = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local, pos=pos)        
         # global
         edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global, pos=pos)

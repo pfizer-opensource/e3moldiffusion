@@ -118,7 +118,8 @@ class EQGATConv(MessagePassing):
         s = ms + s
         v = mv + v
 
-        return s, v
+        out = {"s": s, "v": v}
+        return out
 
     def aggregate(
         self,
@@ -292,8 +293,8 @@ class EQGATRBFConv(MessagePassing):
 
         s = ms + s
         v = mv + v
-
-        return s, v
+        out = {"s": s, "v": v}
+        return out
 
     def aggregate(
         self,
@@ -468,8 +469,8 @@ class EQGATEdgeConv(MessagePassing):
         
         e = e + eo
         edge_attr = d, r, e
-
-        return s, v, edge_attr
+        out = {"s": s, "v": v, "e": edge_attr}
+        return out
 
     def aggregate(
         self,
@@ -650,8 +651,8 @@ class EQGATEdgeRBFConv(MessagePassing):
         
         e = e + eo
         edge_attr = d, r, e
-
-        return s, v, edge_attr
+        out = {"s": s, "v": v, "e": edge_attr}
+        return out
 
     def aggregate(
         self,

@@ -112,7 +112,8 @@ class EncoderGNN(nn.Module):
             if self.use_norm:
                 s, v = self.norms[i](x=(s, v), batch=batch)
                 
-            s, v = self.convs[i](x=(s, v), edge_index=edge_index_in, edge_attr=edge_attr_in)
+            out = self.convs[i](x=(s, v), edge_index=edge_index_in, edge_attr=edge_attr_in)
+            s, v = out["s"], out["v"]
                         
         out = {"s": s, "v": v}
         
@@ -168,10 +169,10 @@ class EncoderGNNAtomBond(nn.Module):
                         )
                 else:
                     convs.append(
-                        EQGATEdgeRBFConv(in_dims=hn_dim,
+                        EQGATRBFConv(in_dims=hn_dim,
                          out_dims=hn_dim,
                          rbf_dim=rbf_dim,
-                         edge_dim=edge_dim if local_edge_attrs else None,
+                         edge_dim=None, #edge_dim if local_edge_attrs else None,
                          cutoff=cutoff_local,
                          use_cutoff_fnc=True,
                          has_v_in=i>0,
@@ -205,28 +206,30 @@ class EncoderGNNAtomBond(nn.Module):
                 edge_attr_global: Tuple[Tensor, Tensor, OptTensor],
                 batch: Tensor = None) -> Dict:
         
-        for i in range(len(self.convs)):    
-            if self.local_global_model:
-                if i == self.num_layers - 2 or i == 0:
+        for i in range(len(self.convs)):   
+            
+            if self.fully_connected:
                     edge_index_in = edge_index_global
                     edge_attr_in = edge_attr_global
-                else:
-                    edge_index_in = edge_index_local
-                    edge_attr_in = edge_attr_local
             else:
-                if self.fully_connected:
+                if (i == self.num_layers - 2 or i == 0) and self.local_global_model:
                     edge_index_in = edge_index_global
                     edge_attr_in = edge_attr_global
                 else:
                     edge_index_in = edge_index_local
                     edge_attr_in = edge_attr_local
-
+                        
             if self.use_norm:
                 s, v = self.norms[i](x=(s, v), batch=batch)
-                
-            s, v, e = self.convs[i](x=(s, v), edge_index=edge_index_in, edge_attr=edge_attr_in)
-            # right now only handled for fully-connected MPs
-            edge_attr_global = e   # d, r, e
+            
+            out = self.convs[i](x=(s, v), edge_index=edge_index_in, edge_attr=edge_attr_in)
+            if self.fully_connected:
+                s, v, edge_attr_global = out["s"], out["v"], out["e"]
+            else:
+                if (i == self.num_layers - 2 or i == 0) and self.local_global_model:
+                    s, v, edge_attr_global = out["s"], out["v"], out["e"]
+                else:
+                    s, v = out["s"], out["v"]
         
         e = edge_attr_global[-1]
         out = {"s": s, "v": v, "e": e}
