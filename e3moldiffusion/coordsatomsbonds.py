@@ -38,12 +38,12 @@ class ScoreHead(nn.Module):
                 edge_index_global: Tensor
                 ) -> Dict:
         
-        s, v = x["s"], x["v"]
+        s, v, e = x["s"], x["v"], x["e"]
         
         j, i = edge_index_global
-        eps_ij = F.silu(self.bonds_lin_0(s[i] + s[j]))
+        eps_ij = F.silu(self.bonds_lin_0(s[i] + s[j] + e))
         eps_ij = self.bonds_lin_1(eps_ij)
-     
+        
         score_coords = self.coords_lin(v).squeeze()
         score_atoms = self.atoms_lin(s)
         
@@ -93,9 +93,9 @@ class ScoreModel(nn.Module):
             use_norm=use_norm,
             use_cross_product=use_cross_product,
             vector_aggr=vector_aggr,
-            fully_connected=fully_connected,
-            local_global_model=local_global_model,
-            local_edge_attrs=local_edge_attrs
+            fully_connected=True, #fully_connected,
+            local_global_model=False, #local_global_model,
+            local_edge_attrs=False #local_edge_attrs
         )
         
         self.score_head = ScoreHead(hn_dim=hn_dim, num_atom_types=num_atom_types, num_bond_types=num_bond_types)

@@ -2,7 +2,8 @@ from typing import Tuple, Dict, Optional
 from torch import Tensor, nn
 from torch_geometric.typing import OptTensor
 
-from e3moldiffusion.convs import EQGATRBFConv, EQGATConv
+from e3moldiffusion.convs import (EQGATRBFConv, EQGATConv,
+                                  EQGATEdgeRBFConv, EQGATEdgeConv)
 from e3moldiffusion.modules import LayerNorm
 
 
@@ -145,7 +146,7 @@ class EncoderGNNAtomBond(nn.Module):
         for i in range(num_layers):
             if fully_connected:
                 convs.append(
-                    EQGATConv(in_dims=hn_dim,
+                    EQGATEdgeConv(in_dims=hn_dim,
                               out_dims=hn_dim,
                               edge_dim=edge_dim,
                               has_v_in=i>0,
@@ -157,7 +158,7 @@ class EncoderGNNAtomBond(nn.Module):
             else:
                 if (i == self.num_layers - 2 or i == 0) and local_global_model:
                     convs.append(
-                        EQGATConv(in_dims=hn_dim,
+                        EQGATEdgeConv(in_dims=hn_dim,
                                   out_dims=hn_dim,
                                   edge_dim=edge_dim,
                                   has_v_in=i>0,
@@ -167,7 +168,7 @@ class EncoderGNNAtomBond(nn.Module):
                         )
                 else:
                     convs.append(
-                        EQGATRBFConv(in_dims=hn_dim,
+                        EQGATEdgeRBFConv(in_dims=hn_dim,
                          out_dims=hn_dim,
                          rbf_dim=rbf_dim,
                          edge_dim=edge_dim if local_edge_attrs else None,
@@ -223,9 +224,12 @@ class EncoderGNNAtomBond(nn.Module):
             if self.use_norm:
                 s, v = self.norms[i](x=(s, v), batch=batch)
                 
-            s, v = self.convs[i](x=(s, v), edge_index=edge_index_in, edge_attr=edge_attr_in)
-                        
-        out = {"s": s, "v": v}
+            s, v, e = self.convs[i](x=(s, v), edge_index=edge_index_in, edge_attr=edge_attr_in)
+            # right now only handled for fully-connected MPs
+            edge_attr_global = e   # d, r, e
+        
+        e = edge_attr_global[-1]
+        out = {"s": s, "v": v, "e": e}
         
         return out
 
