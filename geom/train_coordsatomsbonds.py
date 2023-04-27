@@ -417,7 +417,7 @@ class Trainer(pl.LightningModule):
             out_dict["noise_bonds_pred"] - out_dict["noise_bonds_true"][1], 2
         ).mean(-1) 
         
-        bonds_loss = 0.5 * scatter_add(
+        bonds_loss = 0.5 * scatter_mean(
             bonds_loss, index=out_dict["edge_index"][1][1], dim=0, dim_size=out_dict["noise_atoms_pred"].size(0)
         )
         bonds_loss = scatter_mean(
