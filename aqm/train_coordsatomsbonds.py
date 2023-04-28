@@ -238,7 +238,9 @@ class Trainer(pl.LightningModule):
                     edge_attrs = torch.zeros_like(edge_attrs)
                     edge_attrs[edge_index_global[0], edge_index_global[1], :] = edge_attr_global
                     edge_attr_local = edge_attrs[edge_index_local[0], edge_index_local[1], :]
-                    
+                
+                batch_edge_local = batch[edge_index_local[0]]
+                
             #atom_integer = torch.argmax(atom_types, dim=-1)
             #bond_integer = torch.argmax(edge_attr_global, dim=-1)
             
