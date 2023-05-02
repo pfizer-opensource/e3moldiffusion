@@ -51,8 +51,7 @@ def add_arguments(parser):
     parser.add_argument("--fully_connected", default=False, action="store_true")
     parser.add_argument("--local_global_model", default=False, action="store_true")
 
-    parser.add_argument("--cutoff_local", default=5.0, type=float)
-    parser.add_argument("--cutoff_global", default=10.0, type=float)
+    parser.add_argument("--cutoff_local", default=7.5, type=float)
 
     parser.add_argument("--omit_cross_product", default=False, action="store_true")
     parser.add_argument("--continuous", default=False, action="store_true",

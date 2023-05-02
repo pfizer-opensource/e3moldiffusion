@@ -33,6 +33,8 @@ class EQGATConv(MessagePassing):
         year={2022},
         url={https://openreview.net/forum?id=kv4xUo5Pu6}
     }
+
+    Intention for this layer is to be used as a fully-connected message passing layer
     """
     def __init__(
         self,
@@ -43,8 +45,7 @@ class EQGATConv(MessagePassing):
         has_v_in: bool = False,
         use_mlp_update: bool = True,
         vector_aggr: str = "mean",
-        use_cross_product: bool = True,
-        **kwargs
+        use_cross_product: bool = True
     ):
         super(EQGATConv, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
@@ -147,9 +148,7 @@ class EQGATConv(MessagePassing):
         d, r, e = edge_attr
 
         de0 = d.view(-1, 1)
-        # 1 / (1 + d)
-        # de1 = 1.0 / (1.0 + d.view(-1, 1))
-        # d
+        # de0 = 1.0 / (1.0 + d.view(-1, 1))
         
         if e is not None:
             aij = torch.cat([sa_i, sa_j, de0, e], dim=-1)
@@ -198,6 +197,8 @@ class EQGATRBFConv(MessagePassing):
         year={2022},
         url={https://openreview.net/forum?id=kv4xUo5Pu6}
     }
+    
+    Intention for this layer is to be used as a local radius-graph message passing layer
     """
     def __init__(
         self,
@@ -205,8 +206,7 @@ class EQGATRBFConv(MessagePassing):
         out_dims: Tuple[int, Optional[int]],
         edge_dim: Optional[int],
         rbf_dim: int,
-        cutoff: float = 10.0,
-        use_cutoff_fnc: bool = True,
+        cutoff: float = 5.0,
         eps: float = 1e-6,
         has_v_in: bool = False,
         use_mlp_update: bool = True,
@@ -233,7 +233,6 @@ class EQGATRBFConv(MessagePassing):
         self.rbf_dim = rbf_dim
         self.cutoff = cutoff
 
-        self.use_cutoff_fnc = use_cutoff_fnc
         self.cutoff_fnc = PolynomialCutoff(cutoff=cutoff, p=6)
         self.rbf = BesselExpansion(cutoff, rbf_dim)
         
@@ -321,12 +320,11 @@ class EQGATRBFConv(MessagePassing):
 
         d, r, e = edge_attr
 
-        # de = d.view(-1, 1)
-        de = 1.0 / (1.0 + d.view(-1, 1))        
+        de = d.view(-1, 1)
+        # de = 1.0 / (1.0 + d.view(-1, 1))        
         rbf = self.rbf(d)
-        if self.use_cutoff_fnc:
-            cutoff = self.cutoff_fnc(d).view(-1, 1)
-            rbf = cutoff * rbf
+        cutoff = self.cutoff_fnc(d).view(-1, 1)
+        rbf = cutoff * rbf
 
         if self.edge_dim == 0:
             aij = torch.cat([sa_i, sa_j, de, rbf], dim=-1)
@@ -379,6 +377,8 @@ class EQGATEdgeConv(MessagePassing):
         year={2022},
         url={https://openreview.net/forum?id=kv4xUo5Pu6}
     }
+    
+    Intention for this layer is to be used as a fully-connected message passing layer
     """
     def __init__(
         self,
@@ -390,7 +390,6 @@ class EQGATEdgeConv(MessagePassing):
         use_mlp_update: bool = True,
         vector_aggr: str = "mean",
         use_cross_product: bool = True,
-        **kwargs
     ):
         super(EQGATEdgeConv, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
@@ -499,10 +498,8 @@ class EQGATEdgeConv(MessagePassing):
         d, r, e = edge_attr
 
         de0 = d.view(-1, 1)
-        # 1 / (1 + d)
-        # de1 = 1.0 / (1.0 + d.view(-1, 1))
-        # d
-        
+        # de0 = 1.0 / (1.0 + d.view(-1, 1))
+      
         if e is not None:
             aij = torch.cat([sa_i + sa_j, de0, e], dim=-1)
         else:
@@ -552,6 +549,8 @@ class EQGATEdgeRBFConv(MessagePassing):
         year={2022},
         url={https://openreview.net/forum?id=kv4xUo5Pu6}
     }
+    
+    Intention for this layer is to be used as a local radius-graph message passing layer
     """
     def __init__(
         self,
@@ -559,8 +558,7 @@ class EQGATEdgeRBFConv(MessagePassing):
         out_dims: Tuple[int, Optional[int]],
         edge_dim: Optional[int],
         rbf_dim: int,
-        cutoff: float = 10.0,
-        use_cutoff_fnc: bool = True,
+        cutoff: float = 5.0,
         eps: float = 1e-6,
         has_v_in: bool = False,
         use_mlp_update: bool = True,
@@ -587,7 +585,6 @@ class EQGATEdgeRBFConv(MessagePassing):
         self.rbf_dim = rbf_dim
         self.cutoff = cutoff
 
-        self.use_cutoff_fnc = use_cutoff_fnc
         self.cutoff_fnc = PolynomialCutoff(cutoff=cutoff, p=6)
         self.rbf = BesselExpansion(cutoff, rbf_dim)
         
@@ -680,12 +677,11 @@ class EQGATEdgeRBFConv(MessagePassing):
 
         d, r, e = edge_attr
 
-        # de = d.view(-1, 1)
-        de = 1.0 / (1.0 + d.view(-1, 1))        
+        de = d.view(-1, 1)
+        # de = 1.0 / (1.0 + d.view(-1, 1))        
         rbf = self.rbf(d)
-        if self.use_cutoff_fnc:
-            cutoff = self.cutoff_fnc(d).view(-1, 1)
-            rbf = cutoff * rbf
+        cutoff = self.cutoff_fnc(d).view(-1, 1)
+        rbf = cutoff * rbf
 
         if self.edge_dim == 0:
             aij = torch.cat([sa_i + sa_j, de, rbf], dim=-1)

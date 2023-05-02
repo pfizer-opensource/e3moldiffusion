@@ -60,7 +60,6 @@ class EncoderGNN(nn.Module):
                          rbf_dim=rbf_dim,
                          edge_dim=edge_dim,
                          cutoff=cutoff_local,
-                         use_cutoff_fnc=True,
                          has_v_in=i>0,
                          use_mlp_update= i < (num_layers - 1),
                          vector_aggr=vector_aggr,
@@ -93,16 +92,13 @@ class EncoderGNN(nn.Module):
                 edge_attr_global: Tuple[Tensor, Tensor, OptTensor],
                 batch: Tensor = None) -> Dict:
         
-        for i in range(len(self.convs)):    
-            if self.local_global_model:
-                if i == self.num_layers - 2:
+        for i in range(len(self.convs)):
+            
+            if self.fully_connected:
                     edge_index_in = edge_index_global
                     edge_attr_in = edge_attr_global
-                else:
-                    edge_index_in = edge_index_local
-                    edge_attr_in = edge_attr_local
             else:
-                if self.fully_connected:
+                if (i == self.num_layers - 2) and self.local_global_model:
                     edge_index_in = edge_index_global
                     edge_attr_in = edge_attr_global
                 else:
@@ -119,6 +115,7 @@ class EncoderGNN(nn.Module):
         
         return out
 
+#TODO: DEBUG the EncoderGNNAtomBond class
 class EncoderGNNAtomBond(nn.Module):
     def __init__(self,
                  hn_dim: Tuple[int, int] = (64, 16),

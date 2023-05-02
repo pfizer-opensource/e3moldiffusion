@@ -51,7 +51,6 @@ class Trainer(pl.LightningModule):
             num_atom_types=self.hparams.num_atom_types,
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             cutoff_local=hparams["cutoff_local"],
-            cutoff_global=hparams["cutoff_global"],
             rbf_dim=hparams["rbf_dim"],
             num_layers=hparams["num_layers"],
             use_norm=not hparams["omit_norm"],
