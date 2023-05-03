@@ -6,7 +6,7 @@ from torch_geometric.loader import DataLoader
 from pytorch_lightning import LightningDataModule
 from pytorch_lightning.utilities import rank_zero_warn
 from aqm.dataset import AQM
-from qm9.utils import make_splits, MissingEnergyException
+from aqm.utils import make_splits, MissingEnergyException
 from torch_scatter import scatter
 
 

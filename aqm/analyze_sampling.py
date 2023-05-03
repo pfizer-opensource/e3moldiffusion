@@ -27,7 +27,13 @@ class SamplingMetrics:
         self.train_smiles = train_smiles
         self.test = test
 
-    def __call__(self, molecules: list, dataset_info: dict, bonds_given: bool):
+    def __call__(
+        self,
+        molecules: list,
+        dataset_info: dict,
+        charges_given: bool,
+        bonds_given: bool,
+    ):
         stability, rdkit_metrics = analyze_stability_for_molecules(
             molecules,
             dataset_info,
@@ -53,58 +59,77 @@ class SamplingMetrics:
         atom_types_tv, atom_tv_per_class = atom_types_distance(
             molecules, stat.atom_types, save_histogram=self.test
         )
-        edge_types_tv, bond_tv_per_class = bond_types_distance(
-            molecules, stat.bond_types, save_histogram=self.test
-        )
-        charge_w1, charge_w1_per_class = charge_distance(
-            molecules, stat.charge_types, stat.atom_types, self.dataset_infos
-        )
-        valency_w1, valency_w1_per_class = valency_distance(
-            molecules, stat.valencies, stat.atom_types, self.dataset_infos.atom_encoder
-        )
-        bond_lengths_w1, bond_lengths_w1_per_type = bond_length_distance(
-            molecules, stat.bond_lengths, stat.bond_types
-        )
-        angles_w1, angles_w1_per_type = angle_distance(
-            molecules,
-            stat.bond_angles,
-            stat.atom_types,
-            stat.valencies,
-            atom_decoder=self.dataset_infos.atom_decoder,
-            save_histogram=self.test,
-        )
 
         to_log = {
             "sampling/NumNodesW1": num_nodes_w1,
             "sampling/AtomTypesTV": atom_types_tv,
-            "sampling/ChargeW1": charge_w1,
-            "sampling/EdgeTypesTV": edge_types_tv,
-            "sampling/ValencyW1": valency_w1,
-            "sampling/BondLengthsW1": bond_lengths_w1,
-            "sampling/AnglesW1": angles_w1,
         }
+
+        if charges_given:
+            charge_w1, charge_w1_per_class = charge_distance(
+                molecules, stat.charge_types, stat.atom_types, self.dataset_infos
+            )
+            to_log.update({"sampling/ChargeW1": charge_w1})
+
+        if bonds_given:
+            edge_types_tv, bond_tv_per_class = bond_types_distance(
+                molecules, stat.bond_types, save_histogram=self.test
+            )
+            valency_w1, valency_w1_per_class = valency_distance(
+                molecules,
+                stat.valencies,
+                stat.atom_types,
+                self.dataset_infos.atom_encoder,
+            )
+            bond_lengths_w1, bond_lengths_w1_per_type = bond_length_distance(
+                molecules, stat.bond_lengths, stat.bond_types
+            )
+            angles_w1, angles_w1_per_type = angle_distance(
+                molecules,
+                stat.bond_angles,
+                stat.atom_types,
+                stat.valencies,
+                atom_decoder=self.dataset_infos.atom_decoder,
+                save_histogram=self.test,
+            )
+
+            bond_log = {
+                "sampling/EdgeTypesTV": edge_types_tv,
+                "sampling/ValencyW1": valency_w1,
+                "sampling/BondLengthsW1": bond_lengths_w1,
+                "sampling/AnglesW1": angles_w1,
+            }
+            to_log.update(bond_log)
+
         print(f"Sampling metrics", {key: round(val, 3) for key, val in to_log.items()})
 
         for i, atom_type in enumerate(self.dataset_infos.atom_decoder):
             to_log[f"sampling_per_class/{atom_type}_TV"] = atom_tv_per_class[i].item()
-            to_log[f"sampling_per_class/{atom_type}_ChargesW1"] = charge_w1_per_class[
-                i
-            ].item()
-            to_log[f"sampling_per_class/{atom_type}_ValencyW1"] = valency_w1_per_class[
-                i
-            ].item()
-            to_log[f"sampling_per_class/{atom_type}_BondAnglesW1"] = angles_w1_per_type[
-                i
-            ].item()
 
-        for j, bond_type in enumerate(
-            ["No bond", "Single", "Double", "Triple", "Aromatic"]
-        ):
-            to_log[f"sampling_per_class/{bond_type}_TV"] = bond_tv_per_class[j].item()
-            if j > 0:
+            if charges_given:
                 to_log[
-                    f"sampling_per_class/{bond_type}_BondLengthsW1"
-                ] = bond_lengths_w1_per_type[j - 1].item()
+                    f"sampling_per_class/{atom_type}_ChargesW1"
+                ] = charge_w1_per_class[i].item()
+
+            if bonds_given:
+                to_log[
+                    f"sampling_per_class/{atom_type}_ValencyW1"
+                ] = valency_w1_per_class[i].item()
+                to_log[
+                    f"sampling_per_class/{atom_type}_BondAnglesW1"
+                ] = angles_w1_per_type[i].item()
+
+        if bonds_given:
+            for j, bond_type in enumerate(
+                ["No bond", "Single", "Double", "Triple", "Aromatic"]
+            ):
+                to_log[f"sampling_per_class/{bond_type}_TV"] = bond_tv_per_class[
+                    j
+                ].item()
+                if j > 0:
+                    to_log[
+                        f"sampling_per_class/{bond_type}_BondLengthsW1"
+                    ] = bond_lengths_w1_per_type[j - 1].item()
 
         return stability, rdkit_metrics, to_log
 

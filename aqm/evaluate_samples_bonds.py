@@ -3,7 +3,7 @@ from evaluation.diffusion_utils import assert_mean_zero, remove_mean
 import torch
 from aqm.data import AQMDataModule
 from aqm.info_data import AQMInfos
-from aqm.train_bond import Trainer
+from aqm.train_bond_dense import Trainer
 import torch.nn.functional as F
 import time
 import evaluation.diffusion_visualiser as vis
@@ -63,74 +63,13 @@ def test_conditional(model_path, output_path, num_atoms, interpolate_prop, devic
 
     test_loader = datamodule.test_dataloader(store_dataloader=False)
 
+    import pdb
+
+    pdb.set_trace()
+
     nll_epoch = 0
     n_samples = 0
     with torch.no_grad():
-        for i, data in enumerate(test_loader):
-            # Get data
-            pos = data.pos.to(device)
-            batch = data.batch.to(device)
-
-            edge_index_global, dense_edge_oh = model.get_fully_connected_edge_attr(data)
-            z = (
-                F.one_hot(
-                    data.z.squeeze().long(), num_classes=max(hparams["atom_types"]) + 1
-                )
-                .float()[:, hparams["atom_types"]]
-                .to(device)
-            )
-            pos = remove_mean(pos, batch)
-            assert_mean_zero(pos, batch)
-
-            Q = (torch.zeros(0) if not hparams["include_charges"] else data.Q).to(
-                z.device
-            )
-            h = {"categorical": z, "integer": Q}
-
-            pos, h, dense_edge_oh, delta_log_px = model.normalize(
-                pos, h, dense_edge_oh, batch
-            )
-            if properties_norm is not None:
-                context = prepare_context(
-                    hparams["properties_list"], data, properties_norm
-                )
-            else:
-                context = None
-
-            # compute loss
-            loss, loss_dict = model.compute_loss(
-                pos,
-                h,
-                batch,
-                edge_index_global=edge_index_global,
-                dense_edge_oh=dense_edge_oh,
-                context=context,
-                t0_always=True,
-            )
-
-            # Correct for normalization on x.
-            assert loss.size() == delta_log_px.size()
-            loss = loss - delta_log_px
-
-            N = batch.bincount()
-            log_pN = nodes_dist.log_prob(N).to(device)
-            assert loss.size() == log_pN.size()
-            loss = loss - log_pN
-
-            loss = loss.mean(0)
-
-            reg_term = torch.tensor([0.0]).to(loss.device)
-            loss = loss + hparams["ode_regularization"] * reg_term
-
-            # standard nll from forward KL
-            nll_epoch += loss.item() * len(batch.unique())
-            n_samples += len(batch.unique())
-            if i % n_report_steps == 0:
-                print(
-                    f"\r Test NLL \t, iter: {i}/{len(test_loader)}, "
-                    f"NLL: {nll_epoch/n_samples:.2f}"
-                )
-
         model.analyze_and_save(
             n_samples=10000,
             batch_size=100,

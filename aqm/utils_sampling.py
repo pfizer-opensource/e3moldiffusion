@@ -68,11 +68,13 @@ class Molecule:
             assert len(bond_types.shape) == 2
         assert len(atom_types.shape) == 1
         assert len(positions.shape) == 2
+        if charges.ndim == 2:
+            charges = charges.squeeze()
 
-        self.atom_types = atom_types.long()
-        self.bond_types = bond_types.long() if bond_types is not None else None
-        self.positions = positions
-        self.charges = charges
+        self.atom_types = atom_types.long().cpu()
+        self.bond_types = bond_types.long().cpu() if bond_types is not None else None
+        self.positions = positions.cpu()
+        self.charges = charges.cpu()
         self.rdkit_mol = (
             self.build_molecule(atom_decoder)
             if bond_types is not None
@@ -99,6 +101,10 @@ class Molecule:
         edge_types = torch.triu(self.bond_types, diagonal=1)
         edge_types[edge_types == -1] = 0
         all_bonds = torch.nonzero(edge_types)
+
+        import pdb
+
+        pdb.set_trace()
         for i, bond in enumerate(all_bonds):
             if bond[0].item() != bond[1].item():
                 mol.AddBond(
@@ -526,7 +532,6 @@ def sanitize_molecules_openbabel_batch(molecule_list, dataset_info):
 def analyze_stability_for_molecules(
     molecule_list, dataset_info, smiles_train=None, bonds_given=False
 ):
-
     molecule_stable = 0
     nr_stable_bonds = 0
     n_atoms = 0

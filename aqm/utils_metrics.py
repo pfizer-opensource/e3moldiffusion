@@ -314,7 +314,7 @@ def molecules_to_datalist(molecules):
     return data_list
 
 
-def batch_to_list(one_hot, positions, charges, bonds, batch, atom_decoder):
+def batch_to_list(one_hot, positions, charges, batch, atom_decoder, bonds=None):
     atomsxmol = batch.bincount()
 
     num_atoms_prev = 0
@@ -323,11 +323,14 @@ def batch_to_list(one_hot, positions, charges, bonds, batch, atom_decoder):
         z = one_hot[num_atoms_prev : num_atoms_prev + num_atoms]
         pos = positions[num_atoms_prev : num_atoms_prev + num_atoms]
         q = charges[num_atoms_prev : num_atoms_prev + num_atoms]
-        b = bonds[
-            num_atoms_prev : num_atoms_prev + num_atoms,
-            num_atoms_prev : num_atoms_prev + num_atoms,
-        ]
-
+        b = (
+            bonds[
+                num_atoms_prev : num_atoms_prev + num_atoms,
+                num_atoms_prev : num_atoms_prev + num_atoms,
+            ]
+            if bonds is not None
+            else None
+        )
         molecule = Molecule(
             atom_types=z,
             positions=pos,
