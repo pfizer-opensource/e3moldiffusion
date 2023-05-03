@@ -47,7 +47,6 @@ class Trainer(pl.LightningModule):
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             edge_dim=hparams["edim"],
             cutoff_local=hparams["cutoff_local"],
-            cutoff_global=hparams["cutoff_global"],
             rbf_dim=hparams["rbf_dim"],
             num_layers=hparams["num_layers"],
             use_norm=not hparams["omit_norm"],
@@ -153,7 +152,7 @@ class Trainer(pl.LightningModule):
                 edge_attr_local=edge_attr_local if self.hparams.use_bond_features else None,
                 edge_attr_global=edge_attr_global if self.hparams.use_bond_features else None,
                 batch=batch,
-            )
+            )['score_coords']
             noise = torch.randn_like(pos)
             noise = noise - scatter_mean(noise, index=batch, dim=0, dim_size=bs)[batch]
         
@@ -223,7 +222,7 @@ class Trainer(pl.LightningModule):
             edge_attr_local=edge_attr_local if self.hparams.use_bond_features else None,
             edge_attr_global=edge_attr_global if self.hparams.use_bond_features else None,
             batch=data_batch,
-        )
+        )["score_coords"]
 
         # center the predictions as ground truth noise is also centered
         out_mean = scatter_mean(out, index=data_batch, dim=0, dim_size=bs)

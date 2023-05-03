@@ -128,8 +128,7 @@ class EncoderGNNAtomBond(nn.Module):
                  vector_aggr: str = "mean",
                  fully_connected: bool = False,
                  local_global_model: bool = True,
-                 local_edge_attrs: bool = False,
-                 **kwargs
+                 local_edge_attrs: bool = False
                  ):
         super(EncoderGNNAtomBond, self).__init__()
 
@@ -171,7 +170,6 @@ class EncoderGNNAtomBond(nn.Module):
                          rbf_dim=rbf_dim,
                          edge_dim=None, #edge_dim if local_edge_attrs else None,
                          cutoff=cutoff_local,
-                         use_cutoff_fnc=True,
                          has_v_in=i>0,
                          use_mlp_update= i < (num_layers - 1),
                          vector_aggr=vector_aggr,

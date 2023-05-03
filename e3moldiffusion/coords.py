@@ -70,8 +70,7 @@ class ScoreModel(nn.Module):
                  hn_dim: Tuple[int, int] = (64, 16),
                  edge_dim: int = 16,
                  rbf_dim: int = 16,
-                 cutoff_local: float = 3.0,
-                 cutoff_global: float = 10.0,
+                 cutoff_local: float = 5.0,
                  num_layers: int = 5,
                  use_norm: bool = True,
                  use_cross_product: bool = False,
@@ -103,7 +102,6 @@ class ScoreModel(nn.Module):
         self.gnn = EncoderGNN(
             hn_dim=hn_dim,
             cutoff_local=cutoff_local,
-            #cutoff_global=cutoff_global,
             rbf_dim=rbf_dim,
             edge_dim=edge_dim,
             num_layers=num_layers,

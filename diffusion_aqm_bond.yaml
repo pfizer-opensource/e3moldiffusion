@@ -15,7 +15,7 @@ gpus: 1
 num_epochs: 3000
 test_interval: 100
 
-model: equivariant-transformer
+model: eqgat
 
 #ET
 embedding_dimension: 256
@@ -26,9 +26,9 @@ trainable_rbf: false
 neighbor_embedding: true
 
 #EQGAT
-sdim: 128 #256
-vdim: 32 #256
-edim: 32 #256
+sdim: 256 #256
+vdim: 256 #256
+edim: 256 #256
 use_norm: true
 use_cross_product: false
 use_bond_features: true
