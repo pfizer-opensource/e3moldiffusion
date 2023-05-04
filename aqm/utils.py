@@ -251,3 +251,74 @@ def _collate(data_list):
         add_batch=False,
     )
     return data, slices
+
+
+mol_properties = [
+    "DIP",
+    "HLgap",
+    "eAT",
+    "eC",
+    "eEE",
+    "eH",
+    "eKIN",
+    "eKSE",
+    "eL",
+    "eNE",
+    "eNN",
+    "eMBD",
+    "eTS",
+    "eX",
+    "eXC",
+    "eXX",
+    "mPOL",
+]
+
+
+class MultiTaskLoss(torch.nn.Module):
+    """https://arxiv.org/abs/1705.07115"""
+
+    def __init__(self, reduction="mean"):
+        super(MultiTaskLoss, self).__init__()
+        self.is_regression = torch.Tensor([True, True, True, True])
+        self.n_tasks = len(self.is_regression)
+        self.log_vars = torch.nn.Parameter(torch.zeros(self.n_tasks))
+        self.reduction = reduction
+
+    def forward(self, preds, targets, loss_fn):
+        dtype = preds.dtype
+        device = preds.device
+        stds = (torch.exp(self.log_vars) ** (1 / 2)).to(device).to(dtype)
+        self.is_regression = self.is_regression.to(device).to(dtype)
+
+        coeffs = 1 / ((self.is_regression + 1) * (stds**2))
+
+        loss_0 = loss_fn(preds[:, 0], targets[:, 0])
+        loss_1 = loss_fn(preds[:, 1], targets[:, 1])
+        loss_2 = loss_fn(preds[:, 2], targets[:, 2])
+        loss_3 = loss_fn(preds[:, 3], targets[:, 3])
+        losses = torch.stack([loss_0, loss_1, loss_2, loss_3])
+
+        multi_task_losses = coeffs * losses + torch.log(stds)
+
+        if self.reduction == "sum":
+            multi_task_losses = multi_task_losses.sum()
+        if self.reduction == "mean":
+            multi_task_losses = multi_task_losses.mean()
+
+        return multi_task_losses
+
+
+"""
+usage
+is_regression = torch.Tensor([True, True, False]) # True: Regression/MeanSquaredErrorLoss, False: Classification/CrossEntropyLoss
+multitaskloss_instance = MultiTaskLoss(is_regression)
+
+params = list(model.parameters()) + list(multitaskloss_instance.parameters())
+torch.optim.Adam(params, lr=1e-3)
+
+model.train()
+multitaskloss.train()
+
+losses = torch.stack(loss0, loss1, loss3)
+multitaskloss = multitaskloss_instance(losses)
+"""

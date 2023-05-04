@@ -39,8 +39,26 @@ def add_arguments(parser):
     parser.add_argument("--lr-patience", default=10, type=int)
     parser.add_argument("--lr-cooldown", default=10, type=int)
     parser.add_argument("--lr-factor", default=0.75, type=float)
+    parser.add_argument("--lr-metric", default="val_loss", type=str)
+    parser.add_argument("--lr-min", default=1.0e-8, type=float)
+    parser.add_argument("--lr-warmup-steps", default=1000, type=int)
+    parser.add_argument("--early-stopping-patience", default=25, type=int)
+
     parser.add_argument("--weight-decay", default=0.0, type=float)
     parser.add_argument("--ema-decay", default=0.999, type=float)
+    parser.add_argument("--ema-alpha-y", default=1.0, type=float)
+    parser.add_argument("--ema-alpha-dy", default=1.0, type=float)
+    parser.add_argument("--y-weight", default=1.0, type=float)
+    parser.add_argument("--neg-dy-weight", default=0.0, type=float)
+
+    parser.add_argument("--guidance-prob", default=0.2, type=float)
+    parser.add_argument("--guidance-strength", default=2, type=float)
+    parser.add_argument(
+        "--classifier-free-guidance",
+        default=False,
+        type=bool,
+        help="Use classifier-free guidance",
+    )
 
     parser.add_argument("--load-ckpt", default="", type=str)
     parser.add_argument(
@@ -52,7 +70,9 @@ def add_arguments(parser):
     parser.add_argument(
         "--num-workers", type=int, default=4, help="Number of workers for data prefetch"
     )
-
+    parser.add_argument(
+        "--prior-model", type=str, default=None, help="Prior model liek Atomref"
+    )
     # Dataset
     parser.add_argument(
         "--dataset", default="qm9", choices=["qm9", "geom_drugs", "geom_qm9"]
@@ -272,6 +292,12 @@ def add_arguments(parser):
         help="Number of unique atom types in the data.",
     )
     parser.add_argument(
+        "--l-max",
+        type=int,
+        default=3,
+        help="Number of spherical harmonic order",
+    )
+    parser.add_argument(
         "--atom-types",
         type=list,
         default=[1, 6, 7, 8, 9],
@@ -364,6 +390,13 @@ def add_arguments(parser):
         default="qm9",
         choices=["qm9", "drugs"],
         help="Which experiment dataset to use.",
+    )
+    parser.add_argument(
+        "--reduce-op",
+        type=str,
+        default="add",
+        choices=["add", "mean"],
+        help="Scatter reduce operation.",
     )
     parser.add_argument(
         "--use-rbf",
