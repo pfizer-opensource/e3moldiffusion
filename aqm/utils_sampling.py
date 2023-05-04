@@ -9,7 +9,7 @@ from evaluation import bond_analyze
 from openbabel import openbabel
 from openbabel import pybel
 import tempfile
-from rdkit.Chem.rdForceFieldHelpers import UFFOptimizeMolecule, UFFHasAllMoleculeParams
+from rdkit.Chem.rdForceFieldHelpers import UFFOptimizeMolecule
 import warnings
 
 lg = RDLogger.logger()
@@ -50,7 +50,7 @@ ATOM_VALENCY = {6: 4, 7: 3, 8: 2, 9: 1, 15: 3, 16: 2, 17: 1, 35: 1, 53: 1}
 
 class Molecule:
     def __init__(
-        self, atom_types, positions, charges=None, bond_types=None, atom_decoder=None
+        self, atom_types, positions, charges=None, bond_types=None, dataset_info=None
     ):
         """
         atom_types: n      LongTensor
@@ -58,6 +58,7 @@ class Molecule:
         bond_types: n x n  LongTensor
         positions: n x 3   FloatTensor
         atom_decoder: extracted from dataset_infos."""
+        atom_decoder = dataset_info["atom_decoder"]
         assert atom_types.dim() == 1 and atom_types.dtype == torch.long, (
             f"shape of atoms {atom_types.shape} " f"and dtype {atom_types.dtype}"
         )
@@ -70,20 +71,27 @@ class Molecule:
         assert len(positions.shape) == 2
         if charges.ndim == 2:
             charges = charges.squeeze()
+        elif charges.shape[0] == 0:
+            charges = torch.zeros_like(atom_types)
 
         self.atom_types = atom_types.long().cpu()
         self.bond_types = bond_types.long().cpu() if bond_types is not None else None
         self.positions = positions.cpu()
         self.charges = charges.cpu()
-        self.rdkit_mol = (
-            self.build_molecule(atom_decoder)
-            if bond_types is not None
-            else xyz_to_mol(positions, atom_types, atom_decoder)
+        # self.rdkit_mol = (
+        #     self.build_molecule_given_bonds(atom_decoder)
+        #     if bond_types is not None
+        #     else self.build_molecule(
+        #         self.positions, self.atom_types, dataset_info
+        #     )  # alternatively xyz_to_mol
+        # )
+        self.rdkit_mol = self.build_molecule(
+            self.positions, self.atom_types, dataset_info
         )
         self.num_nodes = len(atom_types)
         self.num_atom_types = len(atom_decoder)
 
-    def build_molecule(self, atom_decoder, verbose=False):
+    def build_molecule_given_bonds(self, atom_decoder, verbose=False):
         if verbose:
             print("building new molecule")
 
@@ -102,9 +110,6 @@ class Molecule:
         edge_types[edge_types == -1] = 0
         all_bonds = torch.nonzero(edge_types)
 
-        import pdb
-
-        pdb.set_trace()
         for i, bond in enumerate(all_bonds):
             if bond[0].item() != bond[1].item():
                 mol.AddBond(
@@ -120,7 +125,6 @@ class Molecule:
                         edge_types[bond[0], bond[1]].item(),
                         bond_dict[edge_types[bond[0], bond[1]].item()],
                     )
-
         try:
             mol = mol.GetMol()
         except Chem.KekulizeException:
@@ -142,6 +146,63 @@ class Molecule:
         mol.AddConformer(conf)
 
         return mol
+
+    def build_molecule(self, positions, atom_types, dataset_info):
+        atom_decoder = dataset_info["atom_decoder"]
+        X, A, E = self.build_xae_molecule(positions, atom_types, dataset_info)
+        mol = Chem.RWMol()
+        for atom in X:
+            a = Chem.Atom(atom_decoder[atom.item()])
+            mol.AddAtom(a)
+
+        all_bonds = torch.nonzero(A)
+        for bond in all_bonds:
+            mol.AddBond(
+                bond[0].item(), bond[1].item(), bond_dict[E[bond[0], bond[1]].item()]
+            )
+        return mol
+
+    def build_xae_molecule(self, positions, atom_types, dataset_info):
+        """Returns a triplet (X, A, E): atom_types, adjacency matrix, edge_types
+        args:
+        positions: N x 3  (already masked to keep final number nodes)
+        atom_types: N
+        returns:
+        X: N         (int)
+        A: N x N     (bool)                  (binary adjacency matrix)
+        E: N x N     (int)  (bond type, 0 if no bond) such that A = E.bool()
+        """
+        atom_decoder = dataset_info["atom_decoder"]
+        n = positions.shape[0]
+        X = atom_types
+        A = torch.zeros((n, n), dtype=torch.bool)
+        E = torch.zeros((n, n), dtype=torch.int)
+
+        pos = positions.unsqueeze(0)
+        dists = torch.cdist(pos, pos, p=2).squeeze(0)
+        for i in range(n):
+            for j in range(i):
+                pair = sorted([atom_types[i], atom_types[j]])
+                if (
+                    dataset_info["name"] == "qm9"
+                    or dataset_info["name"] == "qm9_second_half"
+                    or dataset_info["name"] == "qm9_first_half"
+                ):
+                    order = bond_analyze.get_bond_order(
+                        atom_decoder[pair[0]], atom_decoder[pair[1]], dists[i, j]
+                    )
+                elif dataset_info["name"] == "geom" or dataset_info["name"] == "aqm":
+                    order = bond_analyze.geom_predictor(
+                        (atom_decoder[pair[0]], atom_decoder[pair[1]]),
+                        dists[i, j],
+                        limit_bonds_to_one=True,
+                    )
+                # TODO: a batched version of get_bond_order to avoid the for loop
+                if order > 0:
+                    # Warning: the graph should be DIRECTED
+                    A[i, j] = 1
+                    E[i, j] = order
+        return X, A, E
 
 
 class BasicMolecularMetrics(object):
@@ -168,12 +229,19 @@ class BasicMolecularMetrics(object):
                     num_components.append(len(mol_frags))
                     if len(mol_frags) > 1:
                         error_message[4] += 1
+                        try:
+                            largest_mol = max(
+                                mol_frags, default=mol, key=lambda m: m.GetNumAtoms()
+                            )
+                            Chem.SanitizeMol(largest_mol)
+                            smiles = Chem.MolToSmiles(largest_mol)
+                            valid.append(smiles)
+                            all_smiles.append(smiles)
+                        except:
+                            continue
                     else:
-                        largest_mol = max(
-                            mol_frags, default=mol, key=lambda m: m.GetNumAtoms()
-                        )
-                        Chem.SanitizeMol(largest_mol)
-                        smiles = Chem.MolToSmiles(largest_mol)
+                        Chem.SanitizeMol(rdmol)
+                        smiles = Chem.MolToSmiles(rdmol)
                         valid.append(smiles)
                         all_smiles.append(smiles)
                 except Chem.rdchem.AtomValenceException:
@@ -264,10 +332,11 @@ def check_stability_given_bonds(
 ):
     """molecule: Molecule object."""
     if atom_decoder is None:
-        atom_decoder = dataset_info.atom_decoder
+        atom_decoder = dataset_info["atom_decoder"]
 
     atom_types = molecule.atom_types
     edge_types = molecule.bond_types
+    charges = molecule.charges
 
     edge_types[edge_types == 4] = 1.5
     edge_types[edge_types < 0] = 0
@@ -277,12 +346,13 @@ def check_stability_given_bonds(
     n_stable_bonds = 0
     mol_stable = True
     for i, (atom_type, valency, charge) in enumerate(
-        zip(atom_types, valencies, molecule.charges)
+        zip(atom_types, valencies, charges)
     ):
         atom_type = atom_type.item()
         valency = valency.item()
         charge = charge.item()
         possible_bonds = allowed_bonds[atom_decoder[atom_type]]
+
         if type(possible_bonds) == int:
             is_stable = possible_bonds == valency
         elif type(possible_bonds) == dict:
@@ -314,7 +384,7 @@ def check_stability_given_bonds(
 
 ############################
 # Validity and bond analysis
-def check_stability(positions, atom_type, dataset_info, debug=True):
+def check_stability(positions, atom_type, dataset_info, debug=False):
     assert len(positions.shape) == 2
     assert positions.shape[1] == 3
 
@@ -539,6 +609,7 @@ def analyze_stability_for_molecules(
 
     for mol in molecule_list:
         pos, atom_type = mol.positions, mol.atom_types
+
         if bonds_given:
             validity_results = check_stability_given_bonds(mol, dataset_info)
         else:

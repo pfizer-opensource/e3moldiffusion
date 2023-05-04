@@ -1457,7 +1457,7 @@ class Trainer(pl.LightningModule):
                 positions=x_squeeze,
                 charges=q,
                 bond_types=bond_types,
-                atom_decoder=self.dataset_info["atom_decoder"],
+                dataset_info=self.dataset_info,
             )
             mol_stable = check_stability_given_bonds(molecule, self.dataset_info)[0]
 
@@ -1600,7 +1600,7 @@ class Trainer(pl.LightningModule):
                     charges=charges,
                     bonds=bonds.argmax(2),
                     batch=batch,
-                    atom_decoder=self.dataset_info["atom_decoder"],
+                    dataset_info=self.dataset_info,
                 )
             )
 
@@ -1661,7 +1661,7 @@ class Trainer(pl.LightningModule):
                     charges=charges,
                     bonds=bonds.argmax(2),
                     batch=batch,
-                    atom_decoder=self.dataset_info["atom_decoder"],
+                    dataset_info=self.dataset_info,
                 )
             )
             vis.save_xyz_file(
@@ -1711,7 +1711,7 @@ class Trainer(pl.LightningModule):
             charges=charges,
             bonds=bonds.argmax(2),
             batch=batch,
-            atom_decoder=self.dataset_info["atom_decoder"],
+            dataset_info=self.dataset_info,
         )
         _ = visualize(
             os.path.join(path, "bonds"), molecules, num_molecules_to_visualize=-1
