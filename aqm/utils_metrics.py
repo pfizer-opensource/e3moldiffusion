@@ -314,7 +314,7 @@ def molecules_to_datalist(molecules):
     return data_list
 
 
-def batch_to_list(one_hot, positions, charges, batch, atom_decoder, bonds=None):
+def batch_to_list(one_hot, positions, charges, batch, dataset_info, bonds=None):
     atomsxmol = batch.bincount()
 
     num_atoms_prev = 0
@@ -336,9 +336,10 @@ def batch_to_list(one_hot, positions, charges, batch, atom_decoder, bonds=None):
             positions=pos,
             charges=q,
             bond_types=b,
-            atom_decoder=atom_decoder,
+            dataset_info=dataset_info,
         )
         molecule_list.append(molecule)
 
         num_atoms_prev += num_atoms
+
     return molecule_list
