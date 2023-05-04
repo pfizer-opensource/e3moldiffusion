@@ -191,7 +191,7 @@ class Molecule:
                     order = bond_analyze.get_bond_order(
                         atom_decoder[pair[0]], atom_decoder[pair[1]], dists[i, j]
                     )
-                elif dataset_info["name"] == "geom" or dataset_info["name"] == "aqm":
+                elif dataset_info["name"] == "drugs" or dataset_info["name"] == "aqm":
                     order = bond_analyze.geom_predictor(
                         (atom_decoder[pair[0]], atom_decoder[pair[1]]),
                         dists[i, j],

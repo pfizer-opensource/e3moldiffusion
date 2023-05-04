@@ -343,3 +343,4 @@ def batch_to_list(one_hot, positions, charges, batch, dataset_info, bonds=None):
         num_atoms_prev += num_atoms
 
     return molecule_list
+
