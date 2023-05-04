@@ -9,8 +9,8 @@
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=4G
-#SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:2
+#SBATCH --cpus-per-task=16
+#SBATCH --gres=gpu:4
 #SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/01_drugs_fullatombond_multiGPU_%j.out
 #SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/01_drugs_fullatombond_multiGPU_%j.err
 
@@ -22,8 +22,8 @@ source activate e3moldiffusion
 echo "runnning experiment"
 
 args=(
-    --gpus 2
-    --id 10
+    --gpus 4
+    --id 12
     --dataset drugs
     --max_num_conformers 30
     --num_workers 4
@@ -33,7 +33,8 @@ args=(
     --cutoff_local 5.0
     --lr 5e-4
     --batch_size 128
-    --local_global_model
+    # --local_global_model
+    --fully_connected
     --omit_cross_product
     --vector_aggr mean
     --schedule cosine

@@ -94,7 +94,6 @@ class Trainer(pl.LightningModule):
             num_atom_types=self.num_atom_features,
             rbf_dim=hparams["num_rbf"],
             cutoff_local=hparams["cutoff_upper"],
-            #cutoff_global=hparams["cutoff_upper_global"],
             vector_aggr="mean",
             local_global_model=hparams["fully_connected_layer"],
             fully_connected=hparams["fully_connected"]

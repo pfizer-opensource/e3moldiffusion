@@ -37,13 +37,13 @@ use_all_atom_features: false
 #GENERAL MODEL SPECS
 num_layers: 5
 num_rbf: 32
-use_local_edge_attr: false  # true
-fully_connected_layer: true
+use_local_edge_attr: false  
+fully_connected_layer: false
 fully_connected: false
 skip_connect_context: False
 
 cutoff_lower: 0.0
-cutoff_upper: 5.0
+cutoff_upper: 8.0
 cutoff_lower_global: 0.0
 cutoff_upper_global: 15.0
 
@@ -66,7 +66,7 @@ remove_hs: false
 condition_time: true
 ode_regularization: 1.e-3
 gradient_clipping: true
-timesteps: 300
+timesteps: 800
 norm_values: [1, 4, 10, 1]
 n_stability_samples: 1000
 noise_schedule: polynomial_2
