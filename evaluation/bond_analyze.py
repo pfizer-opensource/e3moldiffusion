@@ -205,7 +205,8 @@ def check_consistency_bond_dictionaries():
 
 stdv = {"H": 5, "C": 1, "N": 1, "O": 2, "F": 3}
 
-margin1, margin2, margin3 = 20, 10, 6
+# margin1, margin2, margin3 = 20, 10, 6
+margin1, margin2, margin3 = 10, 5, 3
 
 allowed_bonds = {
     "H": 1,
