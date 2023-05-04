@@ -530,7 +530,7 @@ def sanitize_molecules_openbabel_batch(molecule_list, dataset_info):
 
 
 def analyze_stability_for_molecules(
-    molecule_list, dataset_info, smiles_train=None, bonds_given=False
+    molecule_list, dataset_info, smiles_train=None, bonds_given=False, debug: bool = True
 ):
     molecule_stable = 0
     nr_stable_bonds = 0
@@ -542,7 +542,7 @@ def analyze_stability_for_molecules(
         if bonds_given:
             validity_results = check_stability_given_bonds(mol, dataset_info)
         else:
-            validity_results = check_stability(pos.cpu(), atom_type.cpu(), dataset_info)
+            validity_results = check_stability(pos.cpu(), atom_type.cpu(), dataset_info, debug=debug)
 
         molecule_stable += int(validity_results[0])
         nr_stable_bonds += int(validity_results[1])
