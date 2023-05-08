@@ -13,6 +13,7 @@ from torch_geometric.utils import (
     to_dense_adj,
     to_dense_batch,
     remove_self_loops,
+    sort_edge_index
 )
 from torch_sparse import coalesce
 import torch.nn.functional as F
@@ -109,21 +110,10 @@ def fully_connected_edge_idx(data: Data, without_self_loop: bool = True):
     if without_self_loop:
         mask = fc_edge_index[0] != fc_edge_index[1]
         fc_edge_index = fc_edge_index[:, mask]
-    data.fc_edge_index = fc_edge_index
+        
+    fc_edge_index = sort_edge_index(fc_edge_index, sort_by_row=False, num_nodes=N)
 
-    # fc_edge_attr = torch.full(
-    #     size=(fc_edge_index.size(-1),),
-    #     fill_value=4,
-    #     device=fc_edge_index.device,
-    #     dtype=torch.long,
-    # )
-    # fc_edge_index = torch.cat([fc_edge_index, data.bond_index], dim=-1)
-    # fc_edge_attr = torch.cat([fc_edge_attr, data.bond_attr], dim=0)
-    # fc_edge_index, fc_edge_attr = coalesce(
-    #     index=fc_edge_index, value=fc_edge_attr, m=N, n=N, op="min"
-    # )
-    # data.fc_edge_index = fc_edge_index
-    # data.fc_edge_attr = fc_edge_attr
+    data.fc_edge_index = fc_edge_index
     return data
 
 
@@ -205,6 +195,8 @@ class MolFeaturization:
         if without_self_loop:
             mask = edge_index[0] != edge_index[1]
             edge_index = edge_index[:, mask]
+        
+        edge_index = sort_edge_index(edge_index, sort_by_row=False, num_nodes=N)
         data.edge_index_fc = edge_index
         return data
 
