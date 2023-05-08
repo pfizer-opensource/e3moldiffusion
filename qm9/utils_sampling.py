@@ -159,6 +159,21 @@ class Molecule:
             mol.AddBond(
                 bond[0].item(), bond[1].item(), bond_dict[E[bond[0], bond[1]].item()]
             )
+            
+        # Set coordinates
+        positions = self.positions.double()
+        conf = Chem.Conformer(mol.GetNumAtoms())
+        for i in range(mol.GetNumAtoms()):
+            conf.SetAtomPosition(
+                i,
+                Point3D(
+                    positions[i][0].item(),
+                    positions[i][1].item(),
+                    positions[i][2].item(),
+                ),
+            )
+        mol.AddConformer(conf)
+        
         return mol
 
     def build_xae_molecule(self, positions, atom_types, dataset_info):
