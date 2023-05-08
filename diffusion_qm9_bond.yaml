@@ -4,7 +4,7 @@ val_size: 0.1
 test_size: null
 batch_size: 64
 inference_batch_size: 32
-ema_decay: 0.995
+ema_decay: 0.9999
 grad_clip_val: 10
 
 activation: silu
@@ -26,9 +26,9 @@ trainable_rbf: false
 neighbor_embedding: true
 
 #EQGAT
-sdim: 128 #256
-vdim: 64 #256
-edim: 64 #256
+sdim: 256 #256
+vdim: 256 #256
+edim: 256 #256
 use_norm: true
 use_cross_product: false
 use_bond_features: true
@@ -66,7 +66,7 @@ remove_hs: false
 condition_time: true
 ode_regularization: 1.e-3
 gradient_clipping: true
-timesteps: 300
+timesteps: 1000
 norm_values: [1, 4, 10, 1]
 n_stability_samples: 1000
 noise_schedule: polynomial_2
@@ -74,7 +74,7 @@ noise_precision: 1.e-5
 loss_type: l2
 
 log_dir: logs
-lr: 1.e-4
+lr: 5.e-4
 lr_factor: 0.5
 lr_patience: 10
 max_num_neighbors: 128

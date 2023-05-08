@@ -77,16 +77,16 @@ class Molecule:
         self.bond_types = bond_types.long().cpu() if bond_types is not None else None
         self.positions = positions.cpu()
         self.charges = charges.cpu()
-        # self.rdkit_mol = (
-        #     self.build_molecule_given_bonds(atom_decoder)
-        #     if bond_types is not None
-        #     else self.build_molecule(
-        #         self.positions, self.atom_types, dataset_info
-        #     )  # alternatively xyz_to_mol
-        # )
-        self.rdkit_mol = self.build_molecule(
-            self.positions, self.atom_types, dataset_info
-        )
+        self.rdkit_mol = (
+             self.build_molecule_given_bonds(atom_decoder)
+             if bond_types is not None
+             else self.build_molecule(
+                 self.positions, self.atom_types, dataset_info
+             )  # alternatively xyz_to_mol
+         )
+        #self.rdkit_mol = self.build_molecule(
+        #    self.positions, self.atom_types, dataset_info
+        #)
         self.num_nodes = len(atom_types)
         self.num_atom_types = len(atom_decoder)
 

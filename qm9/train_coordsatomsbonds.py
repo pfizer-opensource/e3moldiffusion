@@ -104,7 +104,7 @@ class Trainer(pl.LightningModule):
 
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
                                 beta_max=hparams["beta_max"],
-                                N=hparams["num_diffusion_timesteps"],
+                                N=hparams["timesteps"],
                                 scaled_reverse_posterior_sigma=False,
                                 schedule="cosine")
             
