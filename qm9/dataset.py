@@ -247,6 +247,7 @@ class QM9(QM9_geometric):
                 atom_feat=atom_features,
                 name=name,
                 idx=i,
+                smiles=smiles,
             )
 
             if self.pre_filter is not None and not self.pre_filter(data):
