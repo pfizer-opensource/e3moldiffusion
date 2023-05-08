@@ -174,14 +174,14 @@ class Trainer(pl.LightningModule):
         atom_type_traj = []
         edge_type_traj = []
         
-        chain = range(self.hparams.num_diffusion_timesteps)
+        chain = range(self.hparams.timesteps)
     
         if verbose:
             print(chain)
         iterator = tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         for timestep in iterator:
             t = torch.full(size=(bs, ), fill_value=timestep, dtype=torch.long, device=pos.device)
-            temb = t / self.hparams.num_diffusion_timesteps
+            temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
             
             out = self.model(
@@ -329,7 +329,7 @@ class Trainer(pl.LightningModule):
         edge_attr_global_noise = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
     
         if not self.hparams.continuous:
-            temb = t.float() / self.hparams.num_diffusion_timesteps
+            temb = t.float() / self.hparams.timesteps
             temb = temb.clamp(min=self.hparams.eps_min)
         else:
             temb = t
@@ -425,7 +425,7 @@ class Trainer(pl.LightningModule):
             t = t * (self.sde.T - self.hparams.eps_min) + self.hparams.eps_min
         else:
             # ToDo: Check the discrete state t=0
-            t = torch.randint(low=0, high=self.hparams.num_diffusion_timesteps,
+            t = torch.randint(low=0, high=self.hparams.timesteps,
                               size=(batch_size,), 
                               dtype=torch.long, device=batch.x.device)
         
@@ -616,3 +616,4 @@ if __name__ == "__main__":
         datamodule=datamodule,
         # ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
     )
+    
