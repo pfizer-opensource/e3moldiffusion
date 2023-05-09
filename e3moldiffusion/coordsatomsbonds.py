@@ -144,13 +144,16 @@ class ScoreModel(nn.Module):
             batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)
      
         s = self.atom_mapping(x)
-        s = self.atom_time_mapping(F.silu(s + tnode))
+        # s = self.atom_time_mapping(F.silu(s + tnode))  # not use activation
+        s = self.atom_time_mapping(s + tnode)
         
         edge_attr_global = self.bond_mapping(edge_attr_global)
-        edge_attr_global = self.bond_time_mapping(F.silu(edge_attr_global + tedge_global))
+        # edge_attr_global = self.bond_time_mapping(F.silu(edge_attr_global + tedge_global))  # not use activation
+        edge_attr_global = self.bond_time_mapping(edge_attr_global + tedge_global)
         
         #edge_attr_local = self.bond_mapping(edge_attr_local)
         #edge_attr_local = self.bond_time_mapping(F.silu(edge_attr_local + tedge_local))
+        #edge_attr_local = self.bond_time_mapping(edge_attr_local + tedge_local)
         edge_attr_local = None
         
         # local

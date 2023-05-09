@@ -321,7 +321,7 @@ class EQGATRBFConv(MessagePassing):
         d, r, e = edge_attr
 
         de = d.view(-1, 1)
-        # de = 1.0 / (1.0 + d.view(-1, 1))        
+        # de = 1.0 / (1.0 + d.view(-1, 1))
         rbf = self.rbf(d)
         cutoff = self.cutoff_fnc(d).view(-1, 1)
         rbf = cutoff * rbf

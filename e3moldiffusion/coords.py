@@ -161,7 +161,9 @@ class ScoreModel(nn.Module):
         t = self.time_mapping(t)
         t = t[batch]
         s = self.atom_mapping(x)
-        s = self.atom_time_mapping(F.silu(s + t))
+        # s = self.atom_time_mapping(F.silu(s + t))  # not use activation
+        s = self.atom_time_mapping(s + t)
+
         
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
 
