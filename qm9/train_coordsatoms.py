@@ -428,7 +428,7 @@ if __name__ == "__main__":
         val_check_interval=hparams.eval_freq,
         gradient_clip_val=hparams.grad_clip_val,
         callbacks=[
-            ema_callback,
+            # ema_callback,
             lr_logger,
             checkpoint_callback,
             TQDMProgressBar(refresh_rate=5),
