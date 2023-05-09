@@ -82,6 +82,8 @@ class ScoreModel(nn.Module):
         self.local_global_model = local_global_model
         self.fully_connected = fully_connected
         
+        assert fully_connected or local_global_model
+        
         self.gnn = EncoderGNNAtomBond(
             hn_dim=hn_dim,
             cutoff_local=cutoff_local,
@@ -91,8 +93,8 @@ class ScoreModel(nn.Module):
             use_norm=use_norm,
             use_cross_product=use_cross_product,
             vector_aggr=vector_aggr,
-            fully_connected=False,  # True, fully_connected,
-            local_global_model=True, #False, local_global_model,
+            fully_connected=fully_connected, 
+            local_global_model=local_global_model,
             local_edge_attrs=False #local_edge_attrs
         )
         
@@ -154,7 +156,10 @@ class ScoreModel(nn.Module):
         # local
         edge_attr_local = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local, pos=pos)        
         # global
-        edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global, pos=pos)
+        if self.local_global_model or self.fully_connected:
+            edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global, pos=pos)
+        else:
+            edge_attr_global = (None, None, None)
         
         
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)

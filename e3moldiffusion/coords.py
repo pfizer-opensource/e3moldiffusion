@@ -153,7 +153,10 @@ class ScoreModel(nn.Module):
         # local
         edge_attr_local = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local, pos=pos)        
         # global
-        edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global, pos=pos)
+        if self.local_global_model or self.fully_connected:
+            edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global, pos=pos)
+        else:
+            edge_attr_global = (None, None, None)
 
         t = self.time_mapping(t)
         t = t[batch]
