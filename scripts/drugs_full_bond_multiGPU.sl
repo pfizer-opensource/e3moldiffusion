@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J drugs_full
+#SBATCH -J bond_large
 #SBATCH --mail-user=tuan.le@pfizer.com
 #SBATCH --mail-type=ALL
 #SBATCH --partition=gpu_medium
@@ -8,11 +8,11 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --mem-per-cpu=4G
-#SBATCH --cpus-per-task=16
-#SBATCH --gres=gpu:4
-#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/01_drugs_fullatombond_multiGPU_%j.out
-#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/01_drugs_fullatombond_multiGPU_%j.err
+#SBATCH --mem-per-cpu=20G
+#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:a100:2
+#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/large_bond%j.out
+#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/large_bond%j.err
 
 # attempting to access the data directory
 ls /hpfs/projects/mlcs/e3moldiffusion
@@ -22,24 +22,24 @@ source activate e3moldiffusion
 echo "runnning experiment"
 
 args=(
-    --gpus 4
-    --id 12
+    --gpus 2
+    --id 22
     --dataset drugs
-    --max_num_conformers 30
     --num_workers 4
     --save_dir logs/drugs_atomsbonds
     --num_epochs 100
-    --sdim 256 --vdim 128 --rbf_dim 32 --num_layers 5 
-    --cutoff_local 5.0
-    --lr 5e-4
-    --batch_size 128
-    # --local_global_model
-    --fully_connected
+    --sdim 512 --vdim 256 --rbf_dim 32 --num_layers 8 
+    --ema_decay 0.999
+    --cutoff_local 7.0
+    --lr 2e-4
+    --batch_size 32
+    --local_global_model
+    # --fully_connected
     --omit_cross_product
     --vector_aggr mean
     --schedule cosine
-    --num_diffusion_timesteps 300
-    --max_time 00:23:50:00
+    --num_diffusion_timesteps 1000
+    --max_time 00:23:45:00
     )
 
 python train_coordsatomsbonds.py "${args[@]}"

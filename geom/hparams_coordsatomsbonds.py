@@ -19,10 +19,10 @@ def add_arguments(parser):
     parser.add_argument("-i", "--id", type=int, default=0)
     parser.add_argument("-g", "--gpus", default=1, type=int)
     parser.add_argument("-e", "--num_epochs", default=300, type=int)
-    parser.add_argument("--eval_freq", default=0.5, type=float)
+    parser.add_argument("--eval_freq", default=0.75, type=float)
     parser.add_argument("-s", "--save_dir", default=DEFAULT_SAVE_DIR, type=str)
     parser.add_argument("--precision", default=32, type=int)
-    parser.add_argument("-b", "--batch_size", default=256, type=int)
+    parser.add_argument("-b", "--batch_size", default=32, type=int)
     parser.add_argument("--lr", default=5e-4, type=float)
     parser.add_argument("--gamma", default=0.975, type=float)
     parser.add_argument("--grad_clip_val", default=100.0, type=float)
@@ -41,19 +41,20 @@ def add_arguments(parser):
                             )
     parser.add_argument("--accum_batch", default=None, type=int)
     parser.add_argument("--max_num_neighbors", default=128, type=int)
+    parser.add_argument("--ema_decay", default=0.999, type=float)
 
-    parser.add_argument("--sdim", default=128, type=int)
-    parser.add_argument("--vdim", default=32, type=int)
-    parser.add_argument("--rbf_dim", default=20, type=int)
+    parser.add_argument("--sdim", default=512, type=int)
+    parser.add_argument("--vdim", default=300, type=int)
+    parser.add_argument("--rbf_dim", default=32, type=int)
     parser.add_argument("--vector_aggr", default="mean", type=str)
-    parser.add_argument("--num_layers", default=5, type=int)
+    parser.add_argument("--num_layers", default=7, type=int)
     parser.add_argument("--omit_norm", default=False, action="store_true")
     parser.add_argument("--fully_connected", default=False, action="store_true")
-    parser.add_argument("--local_global_model", default=False, action="store_true")
+    parser.add_argument("--local_global_model", default=True, action="store_true")
 
     parser.add_argument("--backprop_local", default=False, action="store_true")
 
-    parser.add_argument("--cutoff_local", default=5.0, type=float)
+    parser.add_argument("--cutoff_local", default=7.0, type=float)
     parser.add_argument("--cutoff_global", default=10.0, type=float)
 
     parser.add_argument("--omit_cross_product", default=False, action="store_true")
@@ -72,7 +73,7 @@ def add_arguments(parser):
     parser.add_argument(
         "--beta_max", default=2e-2, type=float
     )
-    parser.add_argument("--num_diffusion_timesteps", default=300, type=int)
+    parser.add_argument("--num_diffusion_timesteps", default=1000, type=int)
 
     parser.add_argument("--max_time", type=str, default=None)
 

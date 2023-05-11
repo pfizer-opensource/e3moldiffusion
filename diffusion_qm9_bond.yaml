@@ -12,7 +12,7 @@ aggr: add
 attn_activation: silu
 
 gpus: 1
-num_epochs: 3000
+num_epochs: 500
 test_interval: 100
 
 model: eqgat

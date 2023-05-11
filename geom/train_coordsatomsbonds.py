@@ -241,7 +241,12 @@ class Trainer(pl.LightningModule):
         return edge_index, edge_attr
     
     def forward(self, batch: Batch, t: Tensor):
-        node_feat: Tensor = batch.xgeom
+        
+        try:
+            node_feat: Tensor = batch.xgeom
+        except:  # MIDI
+            node_feat: Tensor = batch.x
+            
         pos: Tensor = batch.pos
         data_batch: Tensor = batch.batch
         bs = int(data_batch.max()) + 1
@@ -251,7 +256,9 @@ class Trainer(pl.LightningModule):
         bond_edge_index = batch.edge_index
         bond_edge_attr = batch.edge_attr
         # increment by 1, because we want 0 to stand for no-edge
-        bond_edge_attr_p1 = bond_edge_attr + 1
+        # bond_edge_attr_p1 = bond_edge_attr + 1  (not in MIDI)
+        bond_edge_attr_p1 = bond_edge_attr  # MIDI
+        
         if not hasattr(batch, "edge_index_fc"):
             edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
             edge_index_global, _ = dense_to_sparse(edge_index_global)
@@ -486,8 +493,8 @@ class Trainer(pl.LightningModule):
     
 
 if __name__ == "__main__":
-    from geom.data import GeomDataModule
     from geom.hparams_coordsatomsbonds import add_arguments
+    from callbacks.ema import ExponentialMovingAverage
 
     parser = ArgumentParser()
     parser = add_arguments(parser)
@@ -514,26 +521,44 @@ if __name__ == "__main__":
     model = Trainer(hparams=hparams.__dict__)
 
     print(f"Loading {hparams.dataset} Datamodule.")
-    datamodule = GeomDataModule(
-        batch_size=hparams.batch_size,
-        num_workers=hparams.num_workers,
-        dataset=hparams.dataset,
-        env_in_init=True,
-        shuffle_train=True,
-        max_num_conformers=hparams.max_num_conformers,
-        pin_memory=True,
-        persistent_workers=True,
-        transform_args = {"create_bond_graph": True,
-                          "save_smiles": False,
-                          "fully_connected_edge_index": False
-                          }
-    )
+    old = False
+    
+    if old:
+        from geom.data import GeomDataModule
+        print("Using native GEOM")
+        datamodule = GeomDataModule(
+            batch_size=hparams.batch_size,
+            num_workers=hparams.num_workers,
+            dataset=hparams.dataset,
+            env_in_init=True,
+            shuffle_train=True,
+            max_num_conformers=hparams.max_num_conformers,
+            pin_memory=True,
+            persistent_workers=True,
+            transform_args = {"create_bond_graph": True,
+                            "save_smiles": False,
+                            "fully_connected_edge_index": False
+                            }
+        )
+    else:
+        from geom.geom_dataset import GeomDataModule
+        print("Using MIDI GEOM")
+        datamodule = GeomDataModule(root='/home/let55/workspace/projects/e3moldiffusion/geom/data',
+                                    batch_size=hparams.batch_size,
+                                    num_workers=hparams.num_workers,
+                                    pin_memory=True,
+                                    persistent_workers=True
+                                    )
 
     strategy = (
         pl.strategies.DDPStrategy(find_unused_parameters=False)
         if hparams.gpus > 1
         else None
     )
+    
+    ema_callback = ExponentialMovingAverage(decay=hparams.ema_decay)
+
+
 
     trainer = pl.Trainer(
         accelerator="gpu",
@@ -545,6 +570,7 @@ if __name__ == "__main__":
         val_check_interval=hparams.eval_freq,
         gradient_clip_val=hparams.grad_clip_val,
         callbacks=[
+            ema_callback,
             lr_logger,
             checkpoint_callback,
             TQDMProgressBar(refresh_rate=5),
@@ -564,3 +590,4 @@ if __name__ == "__main__":
         datamodule=datamodule,
         ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
     )
+
