@@ -84,7 +84,7 @@ class Trainer(pl.LightningModule):
         #)
         
         self.edge_scaling = 1.00
-        self.node_scaling = 0.25
+        self.node_scaling = 1.00
         
         self.model = ScoreModel(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
@@ -412,7 +412,8 @@ class Trainer(pl.LightningModule):
         std = self.sde.sqrt_1m_alphas_cumprod[t]
         
         # right now only use equation for continuous coords.
-        pos0_pred = 1 / signal[data_batch].unsqueeze(-1) * (pos_perturbed - std[data_batch].unsqueeze(-1) * noise_coords_pred)
+        # pos0_pred = 1 / signal[data_batch].unsqueeze(-1) * (pos_perturbed - std[data_batch].unsqueeze(-1) * noise_coords_pred)
+        pos0_pred = noise_coords_pred
         nodefeat0_pred = noise_ohes_atoms
         edgefeat0_pred = noise_ohes_bonds
         
@@ -603,7 +604,7 @@ if __name__ == "__main__":
         val_check_interval=hparams.eval_freq,
         gradient_clip_val=hparams.grad_clip_val,
         callbacks=[
-            # ema_callback,
+            ema_callback,
             lr_logger,
             checkpoint_callback,
             TQDMProgressBar(refresh_rate=5),
