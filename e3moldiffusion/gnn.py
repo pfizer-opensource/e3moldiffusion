@@ -321,9 +321,10 @@ class EncoderGNNAtomBondV2(nn.Module):
         # (E, E x 3, E x F)
 
         n = s.size(0)
-        edge_attr_global_dense = torch.zeros(size=(n, n, edge_attr_global[-1].size(1)), device=s.device, dtype=edge_attr_global[-1].dtype, requires_grad=True)
+        edge_attr_global_dense = torch.zeros(size=(n, n, edge_attr_global[-1].size(1)), device=s.device, dtype=edge_attr_global[-1].dtype)
         edge_attr_global_dense[edge_index_global[0], edge_index_global[1], :] = edge_attr_global[-1]
-                    
+        assert edge_attr_global_dense.requires_grad_
+        
         for i in range(len(self.convs)):   
             
             if self.fully_connected:
