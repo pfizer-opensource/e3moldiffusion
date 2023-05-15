@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from typing import List, Tuple, Dict
 
-from e3moldiffusion.gnn import EncoderGNNAtomBond
+from e3moldiffusion.gnn import EncoderGNNAtomBond, EncoderGNNAtomBondV2
 from e3moldiffusion.modules import DenseLayer
 from torch_geometric.typing import OptTensor
 
@@ -79,24 +79,38 @@ class ScoreModel(nn.Module):
         
         self.sdim, self.vdim = hn_dim
         
+        self.local_edge_attrs = local_edge_attrs
         self.local_global_model = local_global_model
         self.fully_connected = fully_connected
         
         assert fully_connected or local_global_model
         
-        self.gnn = EncoderGNNAtomBond(
-            hn_dim=hn_dim,
-            cutoff_local=cutoff_local,
-            rbf_dim=rbf_dim,
-            edge_dim=hn_dim[0],
-            num_layers=num_layers,
-            use_norm=use_norm,
-            use_cross_product=use_cross_product,
-            vector_aggr=vector_aggr,
-            fully_connected=fully_connected, 
-            local_global_model=local_global_model,
-            local_edge_attrs=False #local_edge_attrs
-        )
+        if not local_edge_attrs:
+            self.gnn = EncoderGNNAtomBond(
+                hn_dim=hn_dim,
+                cutoff_local=cutoff_local,
+                rbf_dim=rbf_dim,
+                edge_dim=hn_dim[0],  # we should experiment and reduce the edge_dim size
+                num_layers=num_layers,
+                use_norm=use_norm,
+                use_cross_product=use_cross_product,
+                vector_aggr=vector_aggr,
+                fully_connected=fully_connected, 
+                local_global_model=local_global_model
+            )
+        else:
+            self.gnn = EncoderGNNAtomBondV2(
+                hn_dim=hn_dim,
+                cutoff_local=cutoff_local,
+                rbf_dim=rbf_dim,
+                edge_dim=hn_dim[0], # we should experiment and reduce the edge_dim size
+                num_layers=num_layers,
+                use_norm=use_norm,
+                use_cross_product=use_cross_product,
+                vector_aggr=vector_aggr,
+                fully_connected=fully_connected, 
+                local_global_model=local_global_model
+            )
         
         self.score_head = ScoreHead(hn_dim=hn_dim, num_atom_types=num_atom_types, num_bond_types=num_bond_types)
         
@@ -144,17 +158,16 @@ class ScoreModel(nn.Module):
             batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)
      
         s = self.atom_mapping(x)
-        # s = self.atom_time_mapping(F.silu(s + tnode))  # not use activation
         s = self.atom_time_mapping(s + tnode)
         
         edge_attr_global = self.bond_mapping(edge_attr_global)
-        # edge_attr_global = self.bond_time_mapping(F.silu(edge_attr_global + tedge_global))  # not use activation
         edge_attr_global = self.bond_time_mapping(edge_attr_global + tedge_global)
         
-        #edge_attr_local = self.bond_mapping(edge_attr_local)
-        #edge_attr_local = self.bond_time_mapping(F.silu(edge_attr_local + tedge_local))
-        #edge_attr_local = self.bond_time_mapping(edge_attr_local + tedge_local)
-        edge_attr_local = None
+        if self.local_edge_attrs:
+            edge_attr_local = self.bond_mapping(edge_attr_local)
+            edge_attr_local = self.bond_time_mapping(edge_attr_local + tedge_local)
+        else:
+            edge_attr_local = None
         
         # local
         edge_attr_local = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local, pos=pos)        

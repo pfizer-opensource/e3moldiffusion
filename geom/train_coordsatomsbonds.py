@@ -65,24 +65,16 @@ class Trainer(pl.LightningModule):
             use_norm=not hparams["omit_norm"],
             use_cross_product=not hparams["omit_cross_product"],
             vector_aggr=hparams["vector_aggr"],
-            fully_connected=False, #   hparams["fully_connected"],
-            local_global_model=True, #hparams["local_global_model"],
-            local_edge_attrs=False
+            fully_connected=hparams["fully_connected"],
+            local_global_model=hparams["local_global_model"],
+            local_edge_attrs=hparams["local_edge_attrs"]
         )
 
-        if hparams["continuous"]:
-            # todo: double check continuous time
-            raise NotImplementedError
-            self.sde = VPSDE(beta_min=hparams["beta_min"],
-                             beta_max=hparams["beta_max"],
-                             N=hparams["num_diffusion_timesteps"],
-                             scaled_reverse_posterior_sigma=True)
-        else:
-            self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
-                                    beta_max=hparams["beta_max"],
-                                    N=hparams["num_diffusion_timesteps"],
-                                    scaled_reverse_posterior_sigma=False,
-                                    schedule=hparams["schedule"])
+        self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
+                                beta_max=hparams["beta_max"],
+                                N=hparams["num_diffusion_timesteps"],
+                                scaled_reverse_posterior_sigma=False,
+                                schedule=hparams["schedule"])
             
         self.sampler = VPAncestralSamplingPredictor(sde=self.sde)
      

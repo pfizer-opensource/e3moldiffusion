@@ -23,18 +23,20 @@ echo "runnning experiment"
 
 args=(
     --gpus 2
-    --id 22
+    --id 26
+    --accum_batch 4
     --dataset drugs
     --num_workers 4
     --save_dir logs/drugs_atomsbonds
     --num_epochs 100
-    --sdim 512 --vdim 256 --rbf_dim 32 --num_layers 8 
+    --sdim 512 --vdim 256 --rbf_dim 32 --num_layers 7
     --ema_decay 0.999
     --cutoff_local 7.0
     --lr 2e-4
     --batch_size 32
     --local_global_model
     # --fully_connected
+    --local_edge_attrs
     --omit_cross_product
     --vector_aggr mean
     --schedule cosine
