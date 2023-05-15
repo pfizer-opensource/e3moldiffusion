@@ -349,14 +349,14 @@ class EncoderGNNAtomBondV2(nn.Module):
                     edge_attr_global_dense[edge_index_global[0], edge_index_global[1], :] = edge_attr_global[-1]
                     edge_attr_local = (edge_attr_local[0],
                                        edge_attr_local[1],
-                                       edge_attr_global_dense[edge_index_local[0], edge_index_local[2], :])
+                                       edge_attr_global_dense[edge_index_local[0], edge_index_local[1], :])
                 else:
                     s, v, edge_attr_local = out["s"], out["v"], out["e"]
                     # update global edge attr based on local through filling
                     edge_attr_global_dense[edge_index_local[0], edge_index_local[1], :] = edge_attr_local[-1]
                     edge_attr_global = (edge_attr_global[0],
                                         edge_attr_global[1],
-                                        edge_attr_global_dense[edge_index_global[0], edge_index_global[2], :])
+                                        edge_attr_global_dense[edge_index_global[0], edge_index_global[1], :])
                             
         e = edge_attr_global[-1]
         out = {"s": s, "v": v, "e": e}
