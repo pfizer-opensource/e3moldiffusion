@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from pytorch_lightning.loggers import TensorBoardLogger
 from e3moldiffusion.molfeat import atom_type_config, get_bond_feature_dims
 from e3moldiffusion.sde import VPAncestralSamplingPredictor, DiscreteDDPM
-from e3moldiffusion.coordsatomsbonds import ScoreModel, ScoreModelSE3
+from e3moldiffusion.coordsatomsbonds import ScoreModelSE3
 
 from torch import Tensor
 from torch_geometric.data import Batch
@@ -94,11 +94,11 @@ class Trainer(pl.LightningModule):
             num_atom_types=self.num_atom_features,
             num_bond_types=self.num_bond_classes,
             rbf_dim=hparams["num_rbf"],
+            edge_dim=hparams['edim'],
             cutoff_local=hparams["cutoff_upper"],
             vector_aggr="mean",
             local_global_model=hparams["fully_connected_layer"],
             fully_connected=hparams["fully_connected"],
-            local_edge_attrs=False
         )
 
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
@@ -307,26 +307,16 @@ class Trainer(pl.LightningModule):
         noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
         assert torch.norm(noise_edges - noise_edges.permute(1, 0, 2)).item() == 0.0
         
-        # PyG format
-        #batch_edge = data_batch[edge_index_global[0]]     
-        #noise_edge_attr = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
-        #edge_attr_global = dense_edge_ohe[edge_index_global[0, :], edge_index_global[1, :], :]
-        # Perturb
-        #mean_edges, std_edges = self.sde.marginal_prob(x=edge_attr_global, t=t[batch_edge])
-        #edge_attr_global_perturbed = mean_edges + std_edges * noise_edge_attr
-        
         signal = self.sde.sqrt_alphas_cumprod[t]
         std = self.sde.sqrt_1m_alphas_cumprod[t]
         
-        #signal = signal.repeat_interleave(batch_num_nodes).unsqueeze(-1)
-        #std = std.repeat_interleave(batch_num_nodes).unsqueeze(-1)
         signal_b = signal[data_batch].unsqueeze(-1).unsqueeze(-1)
         std_b = std[data_batch].unsqueeze(-1).unsqueeze(-1)
         dense_edge_ohe_perturbed = dense_edge_ohe * signal_b + noise_edges * std_b
     
         # retrieve as edge-attributes in PyG Format 
         edge_attr_global_perturbed = dense_edge_ohe_perturbed[edge_index_global[0, :], edge_index_global[1, :], :]
-        edge_attr_global_noise = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
+        #edge_attr_global_noise = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
     
         if not self.hparams.continuous:
             temb = t.float() / self.hparams.timesteps
@@ -365,25 +355,10 @@ class Trainer(pl.LightningModule):
                                         flow="source_to_target",
                                         max_num_neighbors=self.hparams.max_num_neighbors)
         
-        create_mask = False
-        if create_mask:
-            local_global_idx_select = (edge_index_local.unsqueeze(-1) == edge_index_global.unsqueeze(1))
-            local_global_idx_select = (local_global_idx_select.sum(0) == 2).nonzero()[:, 1]
-            # create mask tensor for backpropagating only local edges
-            local_edge_mask = torch.zeros(size=(edge_index_global.size(1), ), dtype=torch.bool)
-            local_edge_mask[local_global_idx_select] = True
-            assert len(local_global_idx_select) == sum(local_edge_mask)
-            edge_attr_local_perturbed = edge_attr_global_perturbed[edge_index_local, :]
-            # check: to dense: here just take the clean for checking.
-            #edge_attr_local = edge_attr_global[local_global_idx_select, :]
-            #edge_attr_local_ = dense_edge_ohe[edge_index_local[0, :], edge_index_local[1, :], :]
-            #assert torch.norm(edge_attr_local - edge_attr_local_).item() == 0.0
-        else:
-            edge_attr_local_perturbed = dense_edge_ohe_perturbed[edge_index_local[0, :], edge_index_local[1, :], :]
-            edge_attr_local_noise = noise_edges[edge_index_local[0, :], edge_index_local[1, :], :]
+        edge_attr_local_perturbed = dense_edge_ohe_perturbed[edge_index_local[0, :], edge_index_local[1, :], :]
+        #edge_attr_local_noise = noise_edges[edge_index_local[0, :], edge_index_local[1, :], :]
         
         batch_edge_global = data_batch[edge_index_global[0]]     
-        batch_edge_local = data_batch[edge_index_local[0]]     
         
         out = self.model(
             x=ohes_perturbed,
@@ -395,7 +370,6 @@ class Trainer(pl.LightningModule):
             edge_attr_global=edge_attr_global_perturbed,
             batch=data_batch,
             batch_edge_global=batch_edge_global,
-            batch_edge_local=batch_edge_local,
         )
 
         noise_ohes_atoms = out["score_atoms"]
@@ -403,14 +377,7 @@ class Trainer(pl.LightningModule):
         noise_coords_pred = zero_mean(noise_coords_pred, batch=data_batch, dim_size=bs, dim=0)
         
         noise_ohes_bonds = out["score_bonds"]
-        
-        # predict initial data x0
-        # we know that x_t = sqrt(alpha_bar_t) * x0 + sqrt(1 - alpha_bar_t)*epsilon
-        # so we solve for x0
-        # x0 = 1/sqrt(alpha_bar_t) * (x_t - sqrt(1 - alpha_bar_t)*epsilon)
-        signal = self.sde.sqrt_alphas_cumprod[t]
-        std = self.sde.sqrt_1m_alphas_cumprod[t]
-        
+    
         # right now only use equation for continuous coords.
         pos0_pred = noise_coords_pred
         nodefeat0_pred = noise_ohes_atoms

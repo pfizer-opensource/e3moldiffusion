@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from typing import List, Tuple, Dict
 
-from e3moldiffusion.gnn import EncoderGNNAtomBond, EncoderGNNAtomBondV2, EncoderGNNAtomBondSE3
+from e3moldiffusion.gnn import EncoderGNNAtomBond, EncoderGNNAtomBondV2, EncoderGNNAtomBondSE3, GNNSE3AtomBond
 from e3moldiffusion.modules import DenseLayer
 from torch_geometric.typing import OptTensor
 
@@ -198,12 +198,12 @@ class PredictionHead(nn.Module):
         self.sdim, self.vdim = hn_dim
         self.num_atom_types = num_atom_types
         
-        self.shared_mapping = DenseLayer(self.sdim, self.sdim, bias=True)
+        self.shared_mapping = DenseLayer(self.sdim, self.sdim, bias=True, activation=nn.SiLU())
         
-        self.bonds_lin_0 = DenseLayer(in_features=self.sdim + 1, out_features=self.sdim, bias=False)
-        self.bonds_lin_1 = DenseLayer(in_features=self.sdim, out_features=num_bond_types, bias=False)
+        self.bonds_lin_0 = DenseLayer(in_features=self.sdim + 1, out_features=self.sdim, bias=True)
+        self.bonds_lin_1 = DenseLayer(in_features=self.sdim, out_features=num_bond_types, bias=True)
         self.coords_lin = DenseLayer(in_features=self.vdim, out_features=1, bias=False)
-        self.atoms_lin = DenseLayer(in_features=self.sdim, out_features=num_atom_types, bias=False)
+        self.atoms_lin = DenseLayer(in_features=self.sdim, out_features=num_atom_types, bias=True)
         self.reset_parameters()
         
     def reset_parameters(self):
@@ -241,20 +241,19 @@ class PredictionHead(nn.Module):
         return out
 
 
- 
 class ScoreModelSE3(nn.Module):
     def __init__(self,
                  num_atom_types: int,
                  num_bond_types: int = 5,
-                 hn_dim: Tuple[int, int] = (64, 16),
-                 rbf_dim: int = 16,
-                 cutoff_local: float = 5.0,
+                 hn_dim: Tuple[int, int] = (256, 64),
+                 rbf_dim: int = 32,
+                 edge_dim: int = 32,
+                 cutoff_local: float = 7.5,
                  num_layers: int = 5,
                  use_norm: bool = True,
                  use_cross_product: bool = False,
                  fully_connected: bool = False,
                  local_global_model: bool = True,
-                 local_edge_attrs: bool = False,
                  vector_aggr: str = "mean"
                  ) -> None:
         super(ScoreModelSE3, self).__init__()
@@ -266,20 +265,21 @@ class ScoreModelSE3(nn.Module):
         self.atom_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
         self.bond_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
         
+        assert fully_connected or local_global_model
+        
         
         self.sdim, self.vdim = hn_dim
         
-        self.local_edge_attrs = local_edge_attrs
         self.local_global_model = local_global_model
         self.fully_connected = fully_connected
         
         assert fully_connected or local_global_model
     
-        self.gnn = EncoderGNNAtomBondSE3(
+        self.gnn = GNNSE3AtomBond(
             hn_dim=hn_dim,
             cutoff_local=cutoff_local,
             rbf_dim=rbf_dim,
-            edge_dim=hn_dim[0],  # we should experiment and reduce the edge_dim size
+            edge_dim=edge_dim,
             num_layers=num_layers,
             use_norm=use_norm,
             use_cross_product=use_cross_product,
@@ -304,9 +304,11 @@ class ScoreModelSE3(nn.Module):
     def calculate_edge_attrs(self, edge_index: Tensor, edge_attr: OptTensor, pos: Tensor):
         source, target = edge_index
         r = pos[target] - pos[source]
+        a = pos[target] * pos[source]
+        a = a.sum(-1)
         d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6).sqrt()
         r_norm = torch.div(r, d.unsqueeze(-1))
-        edge_attr = (d, r_norm, edge_attr)
+        edge_attr = (d, a, r_norm, edge_attr)
         return edge_attr
     
     def forward(
@@ -319,7 +321,6 @@ class ScoreModelSE3(nn.Module):
         edge_attr_local: OptTensor = None,
         edge_attr_global: OptTensor = None,
         batch: OptTensor = None,
-        batch_edge_local: OptTensor = None,
         batch_edge_global: OptTensor = None) -> Dict[Tensor, Tensor]:
         
         # t: (batch_size,)
@@ -328,7 +329,6 @@ class ScoreModelSE3(nn.Module):
         
         # edge_index_global (2, E*)
         tedge_global = t[batch_edge_global]
-        tedge_local = t[batch_edge_local]
         
         if batch is None:
             batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)
@@ -338,21 +338,11 @@ class ScoreModelSE3(nn.Module):
         
         edge_attr_global = self.bond_mapping(edge_attr_global)
         edge_attr_global = self.bond_time_mapping(edge_attr_global + tedge_global)
-        
-        if self.local_edge_attrs:
-            edge_attr_local = self.bond_mapping(edge_attr_local)
-            edge_attr_local = self.bond_time_mapping(edge_attr_local + tedge_local)
-        else:
-            edge_attr_local = None
-        
+                
         # local
-        edge_attr_local = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local, pos=pos)        
+        edge_attr_local = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=None, pos=pos)        
         # global
-        if self.local_global_model or self.fully_connected:
-            edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global, pos=pos)
-        else:
-            edge_attr_global = (None, None, None)
-        
+        edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global, pos=pos)
         
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
 
