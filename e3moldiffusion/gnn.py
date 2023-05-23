@@ -4,7 +4,10 @@ from torch import Tensor, nn
 from torch_geometric.typing import OptTensor
 
 from e3moldiffusion.convs import (EQGATRBFConv, EQGATConv,
-                                  EQGATEdgeRBFConv, EQGATEdgeConv)
+                                  EQGATEdgeRBFConv, EQGATEdgeConv,
+                                  EQGATEdgeConvV2, EQGATRBFConvV2,
+                                  EQGATConvV2
+                                  )
 from e3moldiffusion.modules import LayerNorm
 
 
@@ -361,5 +364,231 @@ class EncoderGNNAtomBondV2(nn.Module):
                             
         e = edge_attr_global[-1]
         out = {"s": s, "v": v, "e": e}
+        
+        return out
+    
+    
+class EncoderGNNAtomBondSE3(nn.Module):
+    def __init__(self,
+                 hn_dim: Tuple[int, int] = (64, 16),
+                 rbf_dim: int = 64,
+                 edge_dim: Optional[int] = None,
+                 cutoff_local: float = 5.0,
+                 num_layers: int = 5,
+                 use_norm: bool = True,
+                 use_cross_product: bool = False,
+                 vector_aggr: str = "mean",
+                 fully_connected: bool = False,
+                 local_global_model: bool = True,
+                 ):
+        super(EncoderGNNAtomBondSE3, self).__init__()
+
+        self.num_layers = num_layers
+        self.fully_connected = fully_connected
+        self.local_global_model = local_global_model
+        
+        self.sdim, self.vdim = hn_dim
+        
+        convs = []
+        
+        for i in range(num_layers):
+            if fully_connected:
+                convs.append(
+                    EQGATEdgeConvV2(in_dims=hn_dim,
+                              out_dims=hn_dim,
+                              edge_dim=edge_dim,
+                              has_v_in=i>0,
+                              use_mlp_update= i < (num_layers - 1),
+                              vector_aggr=vector_aggr,
+                              use_cross_product=use_cross_product
+                              )
+                )
+            else:
+                if (i == self.num_layers - 2 or i == 0) and local_global_model:
+                    convs.append(
+                        EQGATEdgeConvV2(in_dims=hn_dim,
+                                  out_dims=hn_dim,
+                                  edge_dim=edge_dim,
+                                  has_v_in=i>0,
+                                  use_mlp_update= i < (num_layers - 1),
+                                  vector_aggr=vector_aggr,
+                                  use_cross_product=use_cross_product)
+                        )
+                else:
+                    convs.append(
+                        EQGATRBFConvV2(in_dims=hn_dim,
+                         out_dims=hn_dim,
+                         rbf_dim=rbf_dim,
+                         edge_dim=None, #edge_dim if local_edge_attrs else None,
+                         cutoff=cutoff_local,
+                         has_v_in=i>0,
+                         use_mlp_update= i < (num_layers - 1),
+                         vector_aggr=vector_aggr,
+                         use_cross_product=use_cross_product
+                         )
+                    )
+
+        self.convs = nn.ModuleList(convs)
+        self.use_norm = use_norm
+        self.norms = nn.ModuleList([
+            LayerNorm(dims=hn_dim) if use_norm else nn.Identity()
+            for _ in range(num_layers)
+        ])
+        
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        for conv, norm in zip(self.convs, self.norms):
+            conv.reset_parameters()
+            if self.use_norm:
+                norm.reset_parameters()
+                
+    def forward(self,
+                s: Tensor,
+                v: Tensor,
+                p: Tensor,
+                edge_index_local: Tensor,
+                edge_attr_local: Tuple[Tensor, Tensor, OptTensor],
+                edge_index_global: Tensor,
+                edge_attr_global: Tuple[Tensor, Tensor, OptTensor],
+                batch: Tensor = None) -> Dict:
+        # edge_attr_xyz (distances, relative_positions, edge_features)
+        # (E, E x 3, E x F)
+        for i in range(len(self.convs)):   
+            
+            if self.fully_connected:
+                    edge_index_in = edge_index_global
+                    edge_attr_in = edge_attr_global
+            else:
+                if (i == self.num_layers - 2 or i == 0) and self.local_global_model:
+                    edge_index_in = edge_index_global
+                    edge_attr_in = edge_attr_global
+                else:
+                    edge_index_in = edge_index_local
+                    edge_attr_in = edge_attr_local
+                        
+            if self.use_norm:
+                s, v = self.norms[i](x=(s, v), batch=batch)
+            
+            out = self.convs[i](x=(s, v, p), edge_index=edge_index_in, edge_attr=edge_attr_in)
+            if self.fully_connected:
+                s, v, p, edge_attr_global = out["s"], out["v"], out['p'], out["e"]
+            else:
+                if (i == self.num_layers - 2 or i == 0) and self.local_global_model:
+                    s, v, p, edge_attr_global = out["s"], out["v"], out['p'], out["e"]
+                else:
+                    s, v, p = out["s"], out["v"], out['p']
+        
+        e = edge_attr_global[-1]
+        out = {"s": s, "v": v, "e": e, 'p': p}
+        
+        return out
+
+
+class EncoderGNNSE3(nn.Module):
+    def __init__(self,
+                 hn_dim: Tuple[int, int] = (64, 16),
+                 rbf_dim: int = 64,
+                 edge_dim: Optional[int] = None,
+                 cutoff_local: float = 5.0,
+                 num_layers: int = 5,
+                 use_norm: bool = True,
+                 use_cross_product: bool = False,
+                 vector_aggr: str = "mean",
+                 fully_connected: bool = False,
+                 local_global_model: bool = True
+                 ):
+        super(EncoderGNNSE3, self).__init__()
+
+        self.num_layers = num_layers
+        self.fully_connected = fully_connected
+        self.local_global_model = local_global_model
+        
+        self.sdim, self.vdim = hn_dim
+        
+        convs = []
+        for i in range(num_layers):
+            if fully_connected:
+                convs.append(
+                    EQGATConvV2(in_dims=hn_dim,
+                              out_dims=hn_dim,
+                              edge_dim=edge_dim,
+                              has_v_in=i>0,
+                              use_mlp_update= i < (num_layers - 1),
+                              vector_aggr=vector_aggr,
+                              use_cross_product=use_cross_product
+                              )
+                )
+            else:
+                if i == self.num_layers - 2 and local_global_model:
+                    convs.append(
+                        EQGATConvV2(in_dims=hn_dim,
+                                  out_dims=hn_dim,
+                                  edge_dim=edge_dim,
+                                  has_v_in=i>0,
+                                  use_mlp_update= i < (num_layers - 1),
+                                  vector_aggr=vector_aggr,
+                                  use_cross_product=use_cross_product)
+                        )
+                else:
+                    convs.append(
+                        EQGATRBFConvV2(in_dims=hn_dim,
+                         out_dims=hn_dim,
+                         rbf_dim=rbf_dim,
+                         edge_dim=edge_dim,
+                         cutoff=cutoff_local,
+                         has_v_in=i>0,
+                         use_mlp_update= i < (num_layers - 1),
+                         vector_aggr=vector_aggr,
+                         use_cross_product=use_cross_product
+                         )
+                    )
+        
+        self.convs = nn.ModuleList(convs)
+                    
+        self.use_norm = use_norm
+        self.norms = nn.ModuleList([
+            LayerNorm(dims=hn_dim) if use_norm else nn.Identity()
+            for _ in range(num_layers)
+        ])
+        
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        for conv, norm in zip(self.convs, self.norms):
+            conv.reset_parameters()
+            if self.use_norm:
+                norm.reset_parameters()
+                
+    def forward(self,
+                s: Tensor,
+                v: Tensor,
+                p: Tensor,
+                edge_index_local: Tensor,
+                edge_attr_local: Tuple[Tensor, Tensor, OptTensor],
+                edge_index_global: Tensor,
+                edge_attr_global: Tuple[Tensor, Tensor, OptTensor],
+                batch: Tensor = None) -> Dict:
+        
+        for i in range(len(self.convs)):
+            
+            if self.fully_connected:
+                    edge_index_in = edge_index_global
+                    edge_attr_in = edge_attr_global
+            else:
+                if (i == self.num_layers - 2) and self.local_global_model:
+                    edge_index_in = edge_index_global
+                    edge_attr_in = edge_attr_global
+                else:
+                    edge_index_in = edge_index_local
+                    edge_attr_in = edge_attr_local
+
+            if self.use_norm:
+                s, v = self.norms[i](x=(s, v, p), batch=batch)
+                
+            out = self.convs[i](x=(s, v, p), edge_index=edge_index_in, edge_attr=edge_attr_in)
+            s, v, p = out["s"], out["v"], out['p']
+                        
+        out = {"s": s, "v": v, 'p': p}
         
         return out

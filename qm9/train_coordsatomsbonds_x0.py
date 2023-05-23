@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from pytorch_lightning.loggers import TensorBoardLogger
 from e3moldiffusion.molfeat import atom_type_config, get_bond_feature_dims
 from e3moldiffusion.sde import VPAncestralSamplingPredictor, DiscreteDDPM
-from e3moldiffusion.coordsatomsbonds import ScoreModel
+from e3moldiffusion.coordsatomsbonds import ScoreModel, ScoreModelSE3
 
 from torch import Tensor
 from torch_geometric.data import Batch
@@ -86,7 +86,7 @@ class Trainer(pl.LightningModule):
         self.edge_scaling = 1.00
         self.node_scaling = 1.00
         
-        self.model = ScoreModel(
+        self.model = ScoreModelSE3(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
             use_norm=hparams["use_norm"],
@@ -98,7 +98,7 @@ class Trainer(pl.LightningModule):
             vector_aggr="mean",
             local_global_model=hparams["fully_connected_layer"],
             fully_connected=hparams["fully_connected"],
-            local_edge_attrs=hparams["use_local_edge_attr"]
+            local_edge_attrs=False
         )
 
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
@@ -180,7 +180,7 @@ class Trainer(pl.LightningModule):
         iterator = tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         for timestep in iterator:
             t = torch.full(size=(bs, ), fill_value=timestep, dtype=torch.long, device=pos.device)
-            temb = t / self.hparams.timesteps
+            temb = t / self.hparams.timestepse
             temb = temb.unsqueeze(dim=1)
             
             out = self.model(
@@ -412,7 +412,6 @@ class Trainer(pl.LightningModule):
         std = self.sde.sqrt_1m_alphas_cumprod[t]
         
         # right now only use equation for continuous coords.
-        # pos0_pred = 1 / signal[data_batch].unsqueeze(-1) * (pos_perturbed - std[data_batch].unsqueeze(-1) * noise_coords_pred)
         pos0_pred = noise_coords_pred
         nodefeat0_pred = noise_ohes_atoms
         edgefeat0_pred = noise_ohes_bonds

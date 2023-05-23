@@ -41,7 +41,6 @@ def add_arguments(parser):
     parser.add_argument("--lr-factor", default=0.75, type=float)
     parser.add_argument("--weight-decay", default=0.0, type=float)
     parser.add_argument("--ema-decay", default=0.999, type=float)
-
     parser.add_argument("--load-ckpt", default="", type=str)
     parser.add_argument(
         "--log-dir",

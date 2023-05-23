@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from typing import List, Tuple, Dict
 
-from e3moldiffusion.gnn import EncoderGNN
+from e3moldiffusion.gnn import EncoderGNN, EncoderGNNSE3
 from e3moldiffusion.modules import DenseLayer
 from torch_geometric.typing import OptTensor
 
