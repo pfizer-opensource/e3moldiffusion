@@ -1543,7 +1543,7 @@ class EQGATGlobalConv(MessagePassing):
     ) -> Tuple[Tensor, Tensor, Tensor]:
         s = scatter(inputs[0], index=index, dim=0, reduce="add", dim_size=dim_size)
         v = scatter(inputs[1], index=index, dim=0, reduce=self.vector_aggr, dim_size=dim_size)
-        p = scatter(inputs[2], index=index, dim=0, reduce="add", dim_size=dim_size)
+        p = scatter(inputs[2], index=index, dim=0, reduce=self.vector_aggr, dim_size=dim_size)
         edge = inputs[3]
         return s, v, p, edge
 
@@ -1627,7 +1627,6 @@ class EQGATLocalConv(MessagePassing):
         self,
         in_dims: Tuple[int, Optional[int]],
         out_dims: Tuple[int, Optional[int]],
-        edge_dim: Optional[int],
         rbf_dim: int,
         cutoff: float = 5.0,
         eps: float = 1e-6,
@@ -1659,12 +1658,7 @@ class EQGATLocalConv(MessagePassing):
         self.cutoff_fnc = PolynomialCutoff(cutoff=cutoff, p=6)
         self.rbf = BesselExpansion(cutoff, rbf_dim)
         
-        if edge_dim is None or 0:
-            self.edge_dim = 0
-        else:
-            self.edge_dim = edge_dim
-            
-        self.edge_net = nn.Sequential(DenseLayer(self.si + self.edge_dim + rbf_dim,
+        self.edge_net = nn.Sequential(DenseLayer(self.si + rbf_dim + 2,
                                                  self.si,
                                                  bias=True, activation=nn.SiLU()
                                                  ),
@@ -1695,7 +1689,7 @@ class EQGATLocalConv(MessagePassing):
         edge_attr: Tuple[Tensor, Tensor, Tensor, OptTensor],
     ):
 
-        s, v = x
+        s, v, _ = x
         d, a, r, e = edge_attr
 
         ms, mv = self.propagate(

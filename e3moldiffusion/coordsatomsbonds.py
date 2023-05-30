@@ -7,7 +7,7 @@ from e3moldiffusion.modules import DenseLayer
 from torch_geometric.typing import OptTensor
 
 from torch import Tensor, nn
-from torch_scatter import scatter_add
+from torch_scatter import scatter_add, scatter_mean
 from torch_geometric.nn.inits import reset
 
 # Score Model that is trained to learn 3D coords, Atom-Types and Bond-Types
@@ -193,12 +193,14 @@ class ScoreModel(nn.Module):
     
     
 class PredictionHead(nn.Module):
-    def __init__(self, hn_dim: Tuple[int, int], num_atom_types: int, num_bond_types: int = 5) -> None:
+    def __init__(self, hn_dim: Tuple[int, int], edge_dim: int, num_atom_types: int, num_bond_types: int = 5) -> None:
         super(PredictionHead, self).__init__()
         self.sdim, self.vdim = hn_dim
         self.num_atom_types = num_atom_types
         
         self.shared_mapping = DenseLayer(self.sdim, self.sdim, bias=True, activation=nn.SiLU())
+        
+        self.bond_mapping = DenseLayer(edge_dim, self.sdim, bias=True)
         
         self.bonds_lin_0 = DenseLayer(in_features=self.sdim + 1, out_features=self.sdim, bias=True)
         self.bonds_lin_1 = DenseLayer(in_features=self.sdim, out_features=num_bond_types, bias=True)
@@ -225,7 +227,7 @@ class PredictionHead(nn.Module):
         j, i = edge_index_global
         
         d = (pos[i] - pos[j]).pow(2).sum(-1, keepdim=True).sqrt()
-        f = s[i] + s[j] + e
+        f = s[i] + s[j] + self.bond_mapping(e)
         edge = torch.cat([f, d], dim=-1)
         
         eps_ij = F.silu(self.bonds_lin_0(edge))
@@ -258,12 +260,14 @@ class ScoreModelSE3(nn.Module):
                  ) -> None:
         super(ScoreModelSE3, self).__init__()
         
-        self.time_mapping = DenseLayer(1, hn_dim[0])   
+        self.time_mapping_atom = DenseLayer(1, hn_dim[0])
+        self.time_mapping_bond = DenseLayer(1, edge_dim) 
+        
         self.atom_mapping = DenseLayer(num_atom_types, hn_dim[0])
-        self.bond_mapping = DenseLayer(num_bond_types, hn_dim[0])
+        self.bond_mapping = DenseLayer(num_bond_types, edge_dim)
         
         self.atom_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
-        self.bond_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
+        self.bond_time_mapping = DenseLayer(edge_dim, edge_dim)
         
         assert fully_connected or local_global_model
         
@@ -288,15 +292,18 @@ class ScoreModelSE3(nn.Module):
             local_global_model=local_global_model
         )
         
-        self.score_head = PredictionHead(hn_dim=hn_dim, num_atom_types=num_atom_types, num_bond_types=num_bond_types)
+        self.score_head = PredictionHead(hn_dim=hn_dim, edge_dim=edge_dim, 
+                                         num_atom_types=num_atom_types,
+                                         num_bond_types=num_bond_types)
         
         self.reset_parameters()
 
     def reset_parameters(self):
         self.atom_mapping.reset_parameters()
         self.bond_mapping.reset_parameters()
-        self.time_mapping.reset_parameters()
+        self.time_mapping_atom.reset_parameters()
         self.atom_time_mapping.reset_parameters()
+        self.time_mapping_bond.reset_parameters()
         self.bond_time_mapping.reset_parameters()
         self.gnn.reset_parameters()
         self.score_head.reset_parameters()
@@ -323,12 +330,15 @@ class ScoreModelSE3(nn.Module):
         batch: OptTensor = None,
         batch_edge_global: OptTensor = None) -> Dict[Tensor, Tensor]:
         
-        # t: (batch_size,)
-        t = self.time_mapping(t)
-        tnode = t[batch]
         
+        pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
+        # t: (batch_size,)
+        ta = self.time_mapping_atom(t)
+        tb = self.time_mapping_bond(t)
+        tnode = ta[batch]
+                
         # edge_index_global (2, E*)
-        tedge_global = t[batch_edge_global]
+        tedge_global = tb[batch_edge_global]
         
         if batch is None:
             batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)

@@ -265,6 +265,7 @@ class DiscreteDDPM(nn.Module):
         N: int = 300,
         scaled_reverse_posterior_sigma: bool = True,
         schedule: str = "cosine",
+        enforce_zero_terminal_snr: bool = False,
         **kwargs
     ):
         """Constructs discrete Diffusion schedule according to DDPM in Ho et al. (2020).
@@ -284,6 +285,11 @@ class DiscreteDDPM(nn.Module):
         discrete_betas = get_beta_schedule(beta_start=beta_min, beta_end=beta_max,
                                            num_diffusion_timesteps=N,
                                            kind=schedule, plot=False)
+        
+        if enforce_zero_terminal_snr:
+            discrete_betas = self.enforce_zero_terminal_snr(betas=discrete_betas)
+        
+        self.enforce_zero_terminal_snr = enforce_zero_terminal_snr
         
         sqrt_betas = torch.sqrt(discrete_betas)
         alphas = 1.0 - discrete_betas
@@ -314,6 +320,30 @@ class DiscreteDDPM(nn.Module):
         self.register_buffer("sqrt_alphas_cumprod", sqrt_alphas_cumprod)
         self.register_buffer("sqrt_1m_alphas_cumprod", sqrt_1m_alphas_cumprod)
         self.register_buffer("reverse_posterior_sigma", reverse_posterior_sigma)
+        
+    def enforce_zero_terminal_snr(self, betas):
+        # Convert betas to alphas_bar_sqrt
+        alphas = 1 - betas
+        alphas_bar = alphas.cumprod(0)
+        alphas_bar_sqrt = alphas_bar.sqrt()
+
+        # Store old values.
+        alphas_bar_sqrt_0 = alphas_bar_sqrt[0].clone()
+        alphas_bar_sqrt_T = alphas_bar_sqrt[-1].clone()
+
+        # Shift so the last timestep is zero.
+        alphas_bar_sqrt -= alphas_bar_sqrt_T
+
+        # Scale so the first timestep is back to the old value.
+        alphas_bar_sqrt *= alphas_bar_sqrt_0 / (alphas_bar_sqrt_0 - alphas_bar_sqrt_T)
+
+        # Convert alphas_bar_sqrt to betas
+        alphas_bar = alphas_bar_sqrt ** 2
+        alphas = alphas_bar[1:] / alphas_bar[:-1]
+        alphas = torch.cat([alphas_bar[0:1], alphas])
+        betas = 1 - alphas
+
+        return betas
 
     def marginal_prob(self, x: Tensor, t: Tensor):
         """_summary_
@@ -413,19 +443,32 @@ if __name__ == "__main__":
     from torch_scatter import scatter_mean
 
     T = 1000
-    schedule = "polynomial"
+    schedule = "cosine"
     
     sde = DiscreteDDPM(beta_min=1e-4,
                        beta_max=2e-2,
                        N=T,
                        scaled_reverse_posterior_sigma=True, 
-                       schedule=schedule)
+                       schedule=schedule,
+                       enforce_zero_terminal_snr=True)
     
     sde.plot_signal_to_noise()
     
     plt.plot(range(len(sde.discrete_betas)), sde.discrete_betas, label="betas")
     plt.plot(range(len(sde.alphas)), sde.alphas, label="alphas")
     plt.xlabel("t")
+    plt.legend()
+    plt.show()
+    
+    # exploring ways to combine x0 and noise prediction
+    sigmat2 = torch.pow(sde.reverse_posterior_sigma, 2)
+    plt.plot(range(len(sigmat2)), sigmat2, label='reverse_posterior_sigma')
+    plt.legend()
+    plt.show()
+    
+    # noise weighting loss
+    l = sde.discrete_betas.pow(2) / (2.0 * sigmat2 * sde.alphas * sde.sqrt_1m_alphas_cumprod.pow(2))
+    plt.plot(range(len(l)), l, label='epsilon-loss-weights')
     plt.legend()
     plt.show()
     
@@ -442,6 +485,16 @@ if __name__ == "__main__":
     plt.plot(range(len(noise)), noise, label="noise")
     plt.scatter(np.array(truncated_timesteps), signal_indexes)
     plt.scatter(np.array(truncated_timesteps), noise_indexes)
+    plt.legend()
+    plt.show()
+    
+    #### SNR
+    signal = sde.alphas_cumprod
+    noise = sde.sqrt_1m_alphas_cumprod
+    var = noise.pow(2)
+    plt.plot(range(len(signal)), signal, label="signal")
+    plt.plot(range(len(noise)), noise, label="noise")
+    plt.plot(range(len(var)), var, label="var")
     plt.legend()
     plt.show()
     

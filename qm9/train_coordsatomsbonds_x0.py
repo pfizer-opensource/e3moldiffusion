@@ -84,7 +84,7 @@ class Trainer(pl.LightningModule):
         #)
         
         self.edge_scaling = 1.00
-        self.node_scaling = 1.00
+        self.node_scaling = 4.00
         
         self.model = ScoreModelSE3(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
@@ -97,8 +97,8 @@ class Trainer(pl.LightningModule):
             edge_dim=hparams['edim'],
             cutoff_local=hparams["cutoff_upper"],
             vector_aggr="mean",
-            local_global_model=hparams["fully_connected_layer"],
-            fully_connected=hparams["fully_connected"],
+            local_global_model=False, #hparams["fully_connected_layer"],
+            fully_connected=True #hparams["fully_connected"],
         )
 
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
@@ -417,16 +417,26 @@ class Trainer(pl.LightningModule):
         )
         coords_loss = torch.mean(coords_loss, dim=0)
         
+        atoms_pred = F.gumbel_softmax(logits=out_dict["atoms_pred"],
+                                      tau=( (t / self.hparams.timesteps) + self.hparams.eps_min),
+                                      hard=False, dim=-1)
+        
         atoms_loss =F.cross_entropy(
-            out_dict["atoms_pred"], out_dict["atoms_true"], reduction='none'
+            atoms_pred, out_dict["atoms_true"], reduction='none'
             )
         atoms_loss = scatter_mean(
             atoms_loss, index=batch.batch, dim=0, dim_size=batch_size
         )
         atoms_loss = torch.mean(atoms_loss, dim=0)
         
+        
+        bonds_pred = F.gumbel_softmax(logits=out_dict["edge_pred"],
+                                      tau=( (t / self.hparams.timesteps) + self.hparams.eps_min),
+                                      hard=False, dim=-1)
+        
+        
         bonds_loss = F.cross_entropy(
-            out_dict["edge_pred"], out_dict["edge_true"], reduction='none'
+            bonds_pred, out_dict["edge_true"], reduction='none'
         )
         bonds_loss = 0.5 * scatter_mean(
             bonds_loss, index=out_dict["edge_index"][1][1], dim=0, dim_size=out_dict["atoms_pred"].size(0)

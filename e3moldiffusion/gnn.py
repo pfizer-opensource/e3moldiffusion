@@ -663,7 +663,6 @@ class GNNSE3AtomBond(nn.Module):
                         EQGATLocalConv(in_dims=hn_dim,
                          out_dims=hn_dim,
                          rbf_dim=rbf_dim,
-                         edge_dim=None,
                          cutoff=cutoff_local,
                          has_v_in=i>0,
                          use_mlp_update= i < (num_layers - 1),
@@ -738,11 +737,9 @@ class GNNSE3AtomBond(nn.Module):
                 if (i == self.num_layers - 2 or i == 0) and self.local_global_model:
                     s, v, p, e = out["s"], out["v"], out['p'], out["e"]
                     p = p - scatter_mean(p, batch, dim=0)[batch]
-
                     edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, pos=p, edge_attr=e)
-            
                     edge_index_local = radius_graph(p, r=self.cutoff_local, batch=batch, max_num_neighbors=128, flow='source_to_target')
-                    edge_attr_local = self.calculate_edge_attrs(edge_index=edge_index_local, p=p, edge_attr=None)
+                    edge_attr_local = self.calculate_edge_attrs(edge_index=edge_index_local, pos=p, edge_attr=None)
                 else:
                     s, v = out["s"], out["v"]
                     
