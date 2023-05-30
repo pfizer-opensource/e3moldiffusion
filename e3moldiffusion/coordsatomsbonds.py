@@ -203,9 +203,9 @@ class PredictionHead(nn.Module):
         self.bond_mapping = DenseLayer(edge_dim, self.sdim, bias=True)
         
         self.bonds_lin_0 = DenseLayer(in_features=self.sdim + 1, out_features=self.sdim, bias=True)
-        self.bonds_lin_1 = DenseLayer(in_features=self.sdim, out_features=num_bond_types, bias=True)
-        self.coords_lin = DenseLayer(in_features=self.vdim, out_features=1, bias=False)
-        self.atoms_lin = DenseLayer(in_features=self.sdim, out_features=num_atom_types, bias=True)
+        self.bonds_lin_1 = DenseLayer(in_features=self.sdim, out_features=2 * num_bond_types, bias=True)
+        self.coords_lin = DenseLayer(in_features=self.vdim, out_features=2 * 1, bias=False)
+        self.atoms_lin = DenseLayer(in_features=self.sdim, out_features=2 * num_atom_types, bias=True)
         self.reset_parameters()
         
     def reset_parameters(self):
@@ -230,15 +230,25 @@ class PredictionHead(nn.Module):
         f = s[i] + s[j] + self.bond_mapping(e)
         edge = torch.cat([f, d], dim=-1)
         
-        eps_ij = F.silu(self.bonds_lin_0(edge))
-        eps_ij = self.bonds_lin_1(eps_ij)
+        bonds_pred = F.silu(self.bonds_lin_0(edge))
+        bonds_pred = self.bonds_lin_1(bonds_pred)
+        bonds_pred, bonds_eps = bonds_pred.chunk(2, dim=-1)
         
-        score_coords = self.coords_lin(v).squeeze()
-        score_atoms = self.atoms_lin(s)
+        coords_eps_0 = self.coords_lin(v)
+        coords_eps_0, coords_eps_1 = coords_eps_0.chunk(2, dim=-1)
+        coords_eps_0, coords_eps_1 = coords_eps_0.squeeze(), coords_eps_1.squeeze()
         
-        score_coords = pos + score_coords
+        atoms_eps, atoms_pred = self.atoms_lin(s).chunk(2, dim=-1)
         
-        out = {"score_coords": score_coords, "score_atoms": score_atoms, "score_bonds": eps_ij}
+        coords_pred = pos + coords_eps_1
+        
+        coords_pred = coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
+        coords_eps_0 = coords_eps_0 - scatter_mean(coords_eps_0, index=batch, dim=0)[batch]
+        
+        out = {"coords_pred": coords_pred, "coords_eps": coords_eps_0,
+               "atoms_pred": atoms_pred, "atoms_eps": atoms_eps,
+               "bonds_pred": bonds_pred, "bonds_eps": bonds_eps
+               }
         
         return out
 

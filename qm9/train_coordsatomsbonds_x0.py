@@ -54,6 +54,32 @@ def assert_zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0, eps: float 
 BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 
 
+def sample_gumbel(shape, device, eps=1e-20):
+    U = torch.rand(shape, device=device)
+    return -torch.log(-torch.log(U + eps) + eps)
+
+def gumbel_softmax_sample(logits, temperature, dim=-1):
+    y = logits + sample_gumbel(logits.size())
+    return F.softmax(y / temperature, dim=dim)
+
+def gumbel_softmax(logits, temperature, hard=False, dim=-1):
+    """
+    ST-gumple-softmax
+    input: [*, n_class]
+    return: flatten --> [*, n_class] an one-hot vector
+    """
+    y_soft = gumbel_softmax_sample(logits, temperature, dim=dim)
+
+    if hard:
+        # Straight through.
+        index = y_soft.max(dim, keepdim=True)[1]
+        y_hard = torch.zeros_like(logits, memory_format=torch.legacy_contiguous_format).scatter_(dim, index, 1.0)
+        ret = y_hard - y_soft.detach() + y_soft
+    else:
+        # Reparametrization trick.
+        ret = y_soft
+    return ret
+
 class Trainer(pl.LightningModule):
     def __init__(self,
                  hparams,
@@ -84,7 +110,7 @@ class Trainer(pl.LightningModule):
         #)
         
         self.edge_scaling = 1.00
-        self.node_scaling = 4.00
+        self.node_scaling = 1.00
         
         self.model = ScoreModelSE3(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
@@ -105,7 +131,8 @@ class Trainer(pl.LightningModule):
                                 beta_max=hparams["beta_max"],
                                 N=hparams["timesteps"],
                                 scaled_reverse_posterior_sigma=False,
-                                schedule="cosine")
+                                schedule="cosine",
+                                enforce_zero_terminal_snr=False)
             
         self.sampler = VPAncestralSamplingPredictor(sde=self.sde)
      
@@ -371,72 +398,62 @@ class Trainer(pl.LightningModule):
             batch=data_batch,
             batch_edge_global=batch_edge_global,
         )
-
-        noise_ohes_atoms = out["score_atoms"]
-        noise_coords_pred = out["score_coords"]
-        noise_coords_pred = zero_mean(noise_coords_pred, batch=data_batch, dim_size=bs, dim=0)
         
-        noise_ohes_bonds = out["score_bonds"]
-    
-        # right now only use equation for continuous coords.
-        pos0_pred = noise_coords_pred
-        nodefeat0_pred = noise_ohes_atoms
-        edgefeat0_pred = noise_ohes_bonds
+        out['coords_perturbed'] = pos_perturbed
+        out['atoms_perturbed'] = ohes_perturbed
+        out['bonds_perturbed'] = edge_attr_global_perturbed
         
-        out = {
-            "coords_pred": pos0_pred,
-            "coords_true": pos_centered,
-            "atoms_pred": nodefeat0_pred,
-            "atoms_true": node_feat.argmax(-1),
-            "edge_pred": edgefeat0_pred,
-            "edge_true": edge_attr_global,
-            "edge_index": (edge_index_local, edge_index_global)
-        }
         
-        return out
+        out['coords_true'] = pos_centered
+        out['atoms_true'] = node_feat.argmax(dim=-1)
+        out['bonds_true'] = edge_attr_global
+        
+        out['edge_index'] = (edge_index_local, edge_index_global)
+        
+        return out, data_batch, batch_edge_global
     
     def step_fnc(self, batch, batch_idx, stage: str):
         batch_size = int(batch.batch.max()) + 1
-        if self.hparams.continuous:
-            t = torch.rand(size=(batch_size, ), dtype=batch.pos.dtype, device=batch.pos.device)
-            t = t * (self.sde.T - self.hparams.eps_min) + self.hparams.eps_min
-        else:
-            # ToDo: Check the discrete state t=0
-            t = torch.randint(low=0, high=self.hparams.timesteps,
-                              size=(batch_size,), 
-                              dtype=torch.long, device=batch.x.device)
+        t = torch.randint(low=0, high=self.hparams.timesteps,
+                            size=(batch_size,), 
+                            dtype=torch.long, device=batch.x.device)
+        out_dict, node_batch, edge_batch = self(batch=batch, t=t)
         
+        sigmast = self.sde.sqrt_1m_alphas_cumprod[t]
+        sigmas2t = sigmast.pow(2)
+        alpha_bar_t = self.sde.alphas_cumprod[t]
+
+        coords_pred = sigmas2t[node_batch].unsqueeze(-1) * out_dict['coords_pred'] + \
+            alpha_bar_t[node_batch].unsqueeze(-1) * (out_dict['coords_perturbed'] - sigmast[node_batch].unsqueeze(-1) * out_dict['coords_eps'])
         
-        out_dict = self(batch=batch, t=t)
-        
+        atoms_pred = sigmas2t[node_batch].unsqueeze(-1) * out_dict['atoms_pred'].softmax(dim=-1) + \
+            alpha_bar_t[node_batch].unsqueeze(-1) * (out_dict['atoms_perturbed'] - sigmast[node_batch].unsqueeze(-1) * out_dict['atoms_eps'])
+            
+        edges_pred = sigmas2t[edge_batch].unsqueeze(-1) * out_dict['bonds_pred'].softmax(dim=-1) + \
+            alpha_bar_t[edge_batch].unsqueeze(-1) * (out_dict['bonds_perturbed'] - sigmast[edge_batch].unsqueeze(-1) * out_dict['bonds_eps'])
+            
+            
         coords_loss = torch.pow(
-            out_dict["coords_pred"] - out_dict["coords_true"], 2
+           coords_pred - out_dict["coords_true"], 2
         ).sum(-1)
         coords_loss = scatter_mean(
             coords_loss, index=batch.batch, dim=0, dim_size=batch_size
         )
         coords_loss = torch.mean(coords_loss, dim=0)
         
-        atoms_pred = F.gumbel_softmax(logits=out_dict["atoms_pred"],
-                                      tau=( (t / self.hparams.timesteps) + self.hparams.eps_min),
-                                      hard=False, dim=-1)
-        
-        atoms_loss =F.cross_entropy(
+
+        atoms_loss = F.cross_entropy(
             atoms_pred, out_dict["atoms_true"], reduction='none'
             )
         atoms_loss = scatter_mean(
             atoms_loss, index=batch.batch, dim=0, dim_size=batch_size
         )
         atoms_loss = torch.mean(atoms_loss, dim=0)
-        
-        
-        bonds_pred = F.gumbel_softmax(logits=out_dict["edge_pred"],
-                                      tau=( (t / self.hparams.timesteps) + self.hparams.eps_min),
-                                      hard=False, dim=-1)
-        
-        
+
+
+
         bonds_loss = F.cross_entropy(
-            bonds_pred, out_dict["edge_true"], reduction='none'
+            edges_pred, out_dict["bonds_true"], reduction='none'
         )
         bonds_loss = 0.5 * scatter_mean(
             bonds_loss, index=out_dict["edge_index"][1][1], dim=0, dim_size=out_dict["atoms_pred"].size(0)

@@ -450,7 +450,7 @@ if __name__ == "__main__":
                        N=T,
                        scaled_reverse_posterior_sigma=True, 
                        schedule=schedule,
-                       enforce_zero_terminal_snr=True)
+                       enforce_zero_terminal_snr=False)
     
     sde.plot_signal_to_noise()
     
@@ -474,6 +474,15 @@ if __name__ == "__main__":
     
     signal = sde.sqrt_alphas_cumprod
     noise = sde.sqrt_1m_alphas_cumprod
+    
+    snr = sde.alphas_cumprod.pow(2) / (sde.sqrt_1m_alphas_cumprod.pow(2))
+    s = torch.arange(0, 999)
+    t = torch.arange(1, 1000)
+    w = snr[s] - snr[t]
+    
+    plt.plot(range(len(w)), w, label="SNR(s) - SNR(t)")
+    plt.legend()
+    plt.show()
     
     D = 5
     indexes = len(signal) // D
