@@ -472,6 +472,17 @@ if __name__ == "__main__":
     plt.legend()
     plt.show()
     
+    signal = sde.alphas_cumprod
+    noise = sde.sqrt_1m_alphas_cumprod
+    var = noise.pow(2)
+    t = range(len(signal))
+    
+    plt.plot(t, signal, label="signal")
+    plt.plot(t, noise, label="std")
+    plt.plot(t, var, label="variance")
+    plt.legend()
+    plt.show()
+    
     signal = sde.sqrt_alphas_cumprod
     noise = sde.sqrt_1m_alphas_cumprod
     
@@ -480,9 +491,17 @@ if __name__ == "__main__":
     t = torch.arange(1, 1000)
     w = snr[s] - snr[t]
     
-    plt.plot(range(len(w)), w, label="SNR(s) - SNR(t)")
+    plt.plot(range(len(w[0:])), w[0:], label="SNR(s) - SNR(t)")
     plt.legend()
     plt.show()
+    
+    w1 = 1 / (2.0 * sde.reverse_posterior_sigma.pow(2))
+    w2 = sde.alphas_cumprod_prev * sde.discrete_betas.pow(2) / sde.sqrt_1m_alphas_cumprod.pow(4)
+    w3 = w1 * w2
+    plt.plot(range(len(w3[0:])), w3[0:], label="x0-pred-weight")
+    plt.legend()
+    plt.show()
+    
     
     D = 5
     indexes = len(signal) // D

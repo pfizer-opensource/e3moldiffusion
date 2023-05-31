@@ -37,7 +37,7 @@ use_all_atom_features: false
 #GENERAL MODEL SPECS
 num_layers: 5
 num_rbf: 32
-use_local_edge_attr: true  
+use_local_edge_attr: false  
 fully_connected_layer: true
 fully_connected: false
 skip_connect_context: False

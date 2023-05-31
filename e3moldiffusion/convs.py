@@ -1476,10 +1476,9 @@ class EQGATGlobalConv(MessagePassing):
             self.vector_net = nn.Identity()
 
         self.edge_dim = edge_dim
-        self.dnet = DenseLayer(1, self.si)
-        self.edge_net_0 = DenseLayer(self.si + edge_dim + 1 + 1, self.si, bias=True)
-        self.edge_net_1= DenseLayer(self.si, self.v_mul * self.vi + self.si + 1 + edge_dim, bias=True)
-
+        self.edge_net = nn.Sequential(DenseLayer(self.si + edge_dim + 2, self.si, bias=True, activation=nn.SiLU()),
+                                      DenseLayer(self.si, self.v_mul * self.vi + self.si + 1 + edge_dim, bias=True)
+                                      )
         self.scalar_net = DenseLayer(self.si, self.si, bias=True)
         self.update_net = GatedEquivBlock(in_dims=(self.si, self.vi),
                                           hs_dim=self.si, hv_dim=self.vi,
@@ -1490,9 +1489,7 @@ class EQGATGlobalConv(MessagePassing):
         self.reset_parameters()
 
     def reset_parameters(self):
-        self.dnet.reset_parameters()
-        self.edge_net_0.reset_parameters()
-        self.edge_net_1.reset_parameters()
+        reset(self.edge_net)
         if self.has_v_in:
             reset(self.vector_net)
         reset(self.scalar_net)
@@ -1507,15 +1504,11 @@ class EQGATGlobalConv(MessagePassing):
 
         s, v, p = x
         d, a, r, e = edge_attr
-        
-        pn = p.pow(2).sum(-1, keepdim=True).sqrt()
-        pn = self.dnet(pn)
-
+    
         ms, mv, mp, me = self.propagate(
             sa=s,
             sb=self.scalar_net(s),
             va=v,
-            pn=pn,
             vb=self.vector_net(v),
             edge_attr=(d, a, r, e),
             edge_index=edge_index,
@@ -1555,8 +1548,6 @@ class EQGATGlobalConv(MessagePassing):
         va_i: Tensor,
         va_j: Tensor,
         vb_j: Tensor,
-        pn_i: Tensor,
-        pn_j: Tensor,
         index: Tensor,
         edge_attr: Tuple[Tensor, Tensor, Tensor, OptTensor],
         dim_size: Optional[int]
@@ -1568,10 +1559,7 @@ class EQGATGlobalConv(MessagePassing):
         a0 = a.view(-1, 1)
     
         aij = torch.cat([sa_i + sa_j, de0, a0, e], dim=-1)
-    
-        aij = self.edge_net_0(aij)
-        aij = self.silu(aij + (pn_i + pn_j))
-        aij = self.edge_net_1(aij)
+        aij = self.edge_net(aij)
         
         fdim = aij.shape[-1]
         aij, gij = aij.split([fdim - 1, 1], dim=-1)
@@ -1735,7 +1723,7 @@ class EQGATLocalConv(MessagePassing):
         dim_size: Optional[int]
     ) -> Tuple[Tensor, Tensor]:
 
-        d, a, r, e = edge_attr
+        d, a, r, _ = edge_attr
 
         de = d.view(-1, 1)
         rbf = self.rbf(d)

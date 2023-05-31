@@ -235,15 +235,15 @@ class PredictionHead(nn.Module):
         bonds_pred, bonds_eps = bonds_pred.chunk(2, dim=-1)
         
         coords_eps_0 = self.coords_lin(v)
+        coords_eps_0 = coords_eps_0 - scatter_mean(coords_eps_0, index=batch, dim=0)[batch]
+
         coords_eps_0, coords_eps_1 = coords_eps_0.chunk(2, dim=-1)
         coords_eps_0, coords_eps_1 = coords_eps_0.squeeze(), coords_eps_1.squeeze()
         
         atoms_eps, atoms_pred = self.atoms_lin(s).chunk(2, dim=-1)
         
+        pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
         coords_pred = pos + coords_eps_1
-        
-        coords_pred = coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
-        coords_eps_0 = coords_eps_0 - scatter_mean(coords_eps_0, index=batch, dim=0)[batch]
         
         out = {"coords_pred": coords_pred, "coords_eps": coords_eps_0,
                "atoms_pred": atoms_pred, "atoms_eps": atoms_eps,
@@ -356,26 +356,30 @@ class ScoreModelSE3(nn.Module):
         s = self.atom_mapping(x)
         s = self.atom_time_mapping(s + tnode)
         
-        edge_attr_global = self.bond_mapping(edge_attr_global)
-        edge_attr_global = self.bond_time_mapping(edge_attr_global + tedge_global)
+        edge_attr_global_transformed = self.bond_mapping(edge_attr_global)
+        edge_attr_global_transformed = self.bond_time_mapping(edge_attr_global_transformed + tedge_global)
                 
         # local
         edge_attr_local = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=None, pos=pos)        
         # global
-        edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global, pos=pos)
+        edge_attr_global_transformed = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global_transformed, pos=pos)
         
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
 
         out = self.gnn(
             s=s, v=v, p=pos,
             edge_index_local=edge_index_local, edge_attr_local=edge_attr_local,
-            edge_index_global=edge_index_global, edge_attr_global=edge_attr_global,
+            edge_index_global=edge_index_global, edge_attr_global=edge_attr_global_transformed,
             batch=batch
         )
         
-        score = self.score_head(x=out, pos=out['p'], batch=batch, edge_index_global=edge_index_global)
-                     
-        return score
+        out = self.score_head(x=out, pos=out['p'], batch=batch, edge_index_global=edge_index_global)
+        
+        out['coords_perturbed'] = pos
+        out['atoms_perturbed'] = x
+        out['bonds_perturbed'] = edge_attr_global
+        
+        return out
     
     
 if __name__ == "__main__":
