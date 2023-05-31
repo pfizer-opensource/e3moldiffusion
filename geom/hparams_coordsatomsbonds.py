@@ -1,4 +1,5 @@
 import os
+from aqm.utils import LoadFromCheckpoint, LoadFromFile
 
 DEFAULT_SAVE_DIR = os.path.join(os.getcwd(), "3DcoordsAtomsBonds_0")
 
@@ -14,6 +15,18 @@ def add_arguments(parser):
     Returns:
         parser: Updated parser object
     """
+    
+    # Load yaml file
+    parser.add_argument(
+        "--load-model",
+        action=LoadFromCheckpoint,
+        help="Restart training using a model checkpoint",
+    )  # keep first
+    parser.add_argument(
+        "--conf", "-c", type=open, action=LoadFromFile, help="Configuration yaml file"
+    )  # keep second
+
+    # General
 
     # GENERAL
     parser.add_argument("-i", "--id", type=int, default=0)
@@ -27,11 +40,18 @@ def add_arguments(parser):
     parser.add_argument("--gamma", default=0.975, type=float)
     parser.add_argument("--grad_clip_val", default=100.0, type=float)
     parser.add_argument("--frequency", default=5, type=int)
+    parser.add_argument("--lr_frequency", default=5, type=int)
+
     parser.add_argument("--detect_anomaly", default=False, action="store_true")
     parser.add_argument("--num_workers", default=4, type=int)
     parser.add_argument("--patience", default=5, type=int)
+    parser.add_argument("--lr_patience", default=5, type=int)
+
     parser.add_argument("--cooldown", default=5, type=int)
+    parser.add_argument("--lr_cooldown", default=5, type=int)
+
     parser.add_argument("--factor", default=0.75, type=float)
+    parser.add_argument("--lr_factor", default=0.75, type=float)
 
     parser.add_argument("--load_ckpt", default="", type=str)
     parser.add_argument("--dataset", default="drugs", choices=["qm9", "drugs"])
@@ -41,11 +61,13 @@ def add_arguments(parser):
                             )
     parser.add_argument("--accum_batch", default=None, type=int)
     parser.add_argument("--max_num_neighbors", default=128, type=int)
-    parser.add_argument("--ema_decay", default=0.999, type=float)
+    parser.add_argument("--ema_decay", default=0.9999, type=float)
 
-    parser.add_argument("--sdim", default=512, type=int)
-    parser.add_argument("--vdim", default=300, type=int)
+    parser.add_argument("--sdim", default=256, type=int)
+    parser.add_argument("--vdim", default=64, type=int)
     parser.add_argument("--rbf_dim", default=32, type=int)
+    parser.add_argument("--edim", default=32, type=int)
+
     parser.add_argument("--vector_aggr", default="mean", type=str)
     parser.add_argument("--num_layers", default=7, type=int)
     parser.add_argument("--omit_norm", default=False, action="store_true")
@@ -75,6 +97,7 @@ def add_arguments(parser):
         "--beta_max", default=2e-2, type=float
     )
     parser.add_argument("--num_diffusion_timesteps", default=1000, type=int)
+    parser.add_argument("--timesteps", default=1000, type=int)
 
     parser.add_argument("--max_time", type=str, default=None)
 
