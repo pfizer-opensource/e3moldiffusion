@@ -23,6 +23,8 @@ def add_arguments(parser):
     )  # keep second
 
     # General
+    parser.add_argument("-relative_pose", "--relative_pose", default=False, action='store_true')
+
     parser.add_argument("-i", "--id", type=int, default=0)
     parser.add_argument("-g", "--gpus", default=1, type=int)
     parser.add_argument("-e", "--num_epochs", default=300, type=int)

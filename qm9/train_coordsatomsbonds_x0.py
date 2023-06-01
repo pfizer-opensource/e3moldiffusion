@@ -77,6 +77,8 @@ class Trainer(pl.LightningModule):
         self.edge_scaling = 1.00
         self.node_scaling = 1.00
         
+        self.relative_pos = True
+        
         self.model = ScoreModelSE3(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
@@ -146,7 +148,7 @@ class Trainer(pl.LightningModule):
     
     
     @torch.no_grad()
-    def run_evaluation(self, epoch: int, step: int, ngraphs: int = 4000, bs: int = 500):
+    def run_evaluation(self, step: int, ngraphs: int = 4000, bs: int = 500):
         b = ngraphs // bs
         l = [bs] * b
         if sum(l) != ngraphs:
@@ -557,7 +559,7 @@ class Trainer(pl.LightningModule):
         coords_loss = torch.pow(
            coords_pred - out_dict["coords_true"], 2
         ).sum(-1)
-    
+        
         coords_loss = scatter_mean(
             coords_loss, index=batch.batch, dim=0, dim_size=batch_size
         )
@@ -587,7 +589,19 @@ class Trainer(pl.LightningModule):
         bonds_loss *= w
         bonds_loss = bonds_loss.sum(dim=0)
         
-        loss = 1.0 * coords_loss +  1.0 * atoms_loss +  1.0 * bonds_loss
+        if self.relative_pos:
+            j, i = out_dict["edge_index"][1]
+            pji_true = out_dict["coords_true"][j] - out_dict["coords_true"][i]
+            pji_pred = coords_pred[j] - coords_pred[i]
+            rel_pos_loss = (pji_true - pji_pred).pow(2).mean(-1)
+            rel_pos_loss = 0.5 * scatter_mean(rel_pos_loss, index=i, dim=0, dim_size=out_dict["atoms_pred"].size(0))
+            rel_pos_loss = scatter_mean(rel_pos_loss, index=batch.batch, dim=0, dim_size=out_dict["atoms_pred"].size(0))
+            rel_pos_loss *= w
+            rel_pos_loss = rel_pos_loss.sum(dim=0)
+        else:
+            rel_pos_loss = 0.0
+            
+        loss = 1.0 * coords_loss +  1.0 * atoms_loss +  1.0 * bonds_loss + 1.0 * rel_pos_loss
 
 
         self.log(
@@ -617,6 +631,15 @@ class Trainer(pl.LightningModule):
             on_step=True,
             batch_size=batch_size,
         )
+        
+        self.log(
+            f"{stage}/rel_coords_loss",
+            rel_pos_loss,
+            on_step=True,
+            batch_size=batch_size,
+        )
+        
+        
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -681,7 +704,7 @@ if __name__ == "__main__":
 
 
     dataloader = datamodule.get_dataloader(datamodule.train_dataset, "val")
-  
+        
     model = Trainer(
         hparams=hparams.__dict__,
         dataset_info=dataset_info

@@ -2,10 +2,12 @@
 train_size: 0.9
 val_size: 0.1
 test_size: null
-batch_size: 256 # 64
+batch_size: 64 # 256 # 64
 inference_batch_size: 32
 ema_decay: 0.9999
 grad_clip_val: 10
+
+relative_pose: true
 
 activation: silu
 aggr: add
@@ -13,7 +15,7 @@ attn_activation: silu
 
 gpus: 1
 num_epochs: 500
-test_interval: 25
+test_interval: 20
 
 model: eqgat
 
@@ -26,16 +28,16 @@ trainable_rbf: false
 neighbor_embedding: true
 
 #EQGAT
-sdim: 128 #256
-vdim: 32 #256
-edim: 32 #256
+sdim: 256 #128 #256
+vdim: 256 # 32 #256
+edim: 256 # 32 #256
 use_norm: true
 use_cross_product: false
 use_bond_features: true
 use_all_atom_features: false
 
 #GENERAL MODEL SPECS
-num_layers: 5
+num_layers: 7 # 5
 num_rbf: 32
 use_local_edge_attr: false  
 fully_connected_layer: true
