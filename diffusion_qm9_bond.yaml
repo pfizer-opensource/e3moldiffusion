@@ -2,7 +2,7 @@
 train_size: 0.9
 val_size: 0.1
 test_size: null
-batch_size: 64
+batch_size: 256 # 64
 inference_batch_size: 32
 ema_decay: 0.9999
 grad_clip_val: 10
@@ -13,7 +13,7 @@ attn_activation: silu
 
 gpus: 1
 num_epochs: 500
-test_interval: 100
+test_interval: 25
 
 model: eqgat
 

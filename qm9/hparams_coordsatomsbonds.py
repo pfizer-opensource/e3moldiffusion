@@ -26,7 +26,7 @@ def add_arguments(parser):
     parser.add_argument("-i", "--id", type=int, default=0)
     parser.add_argument("-g", "--gpus", default=1, type=int)
     parser.add_argument("-e", "--num_epochs", default=300, type=int)
-    parser.add_argument("--eval_freq", default=0.8, type=float)
+    parser.add_argument("--eval_freq", default=1.0, type=float)
     parser.add_argument("--precision", default=32, type=int)
     parser.add_argument("-b", "--batch_size", default=256, type=int)
     parser.add_argument("--lr", default=5e-4, type=float)
