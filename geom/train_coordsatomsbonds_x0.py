@@ -2,6 +2,7 @@ import logging
 import os
 from argparse import ArgumentParser
 from typing import List, Optional, Tuple
+import pandas as pd
 
 import pytorch_lightning as pl
 import torch
@@ -26,6 +27,7 @@ from torch_sparse import coalesce
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from torch_scatter import scatter_mean, scatter_add
 from tqdm import tqdm
+import json
 
 #New imported 
 #from aqm.analyze_sampling import SamplingMetrics
@@ -54,32 +56,6 @@ def assert_zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0, eps: float 
 BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 
 
-def sample_gumbel(shape, device, eps=1e-20):
-    U = torch.rand(shape, device=device)
-    return -torch.log(-torch.log(U + eps) + eps)
-
-def gumbel_softmax_sample(logits, temperature, dim=-1):
-    y = logits + sample_gumbel(logits.size())
-    return F.softmax(y / temperature, dim=dim)
-
-def gumbel_softmax(logits, temperature, hard=False, dim=-1):
-    """
-    ST-gumple-softmax
-    input: [*, n_class]
-    return: flatten --> [*, n_class] an one-hot vector
-    """
-    y_soft = gumbel_softmax_sample(logits, temperature, dim=dim)
-
-    if hard:
-        # Straight through.
-        index = y_soft.max(dim, keepdim=True)[1]
-        y_hard = torch.zeros_like(logits, memory_format=torch.legacy_contiguous_format).scatter_(dim, index, 1.0)
-        ret = y_hard - y_soft.detach() + y_soft
-    else:
-        # Reparametrization trick.
-        ret = y_soft
-    return ret
-
 class Trainer(pl.LightningModule):
     def __init__(self,
                  hparams
@@ -99,12 +75,12 @@ class Trainer(pl.LightningModule):
       
         self.mixture = True
         
-        #self.val_sampling_metrics = SamplingMetrics(
-        #    self.train_smiles, dataset_statistics, test=False
-        #)
+        empirical_num_nodes = self._get_empirical_num_nodes()
+        self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
         
         self.edge_scaling = 1.00
         self.node_scaling = 1.00
+        self.relative_pos = True
         
         self.model = ScoreModelSE3(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
@@ -130,7 +106,126 @@ class Trainer(pl.LightningModule):
             
         # self.sampler = VPAncestralSamplingPredictor(sde=self.sde)
      
+    def _get_empirical_num_nodes(self):
+        with open('/home/let55/workspace/projects/e3moldiffusion/geom/num_nodes_geom_midi.json', 'r') as f:
+            num_nodes_dict = json.load(f, object_hook=lambda d: {int(k) if k.lstrip('-').isdigit() else k: v for k, v in d.items()})
+        num_nodes_dict = self.dataset_info.get('n_nodes')
+        max_num_nodes = max(num_nodes_dict.keys())
+        empirical_distribution_num_nodes = {i: num_nodes_dict.get(i) for i in range(max_num_nodes)}
+        empirical_distribution_num_nodes_tensor = {}
+
+        for key, value in empirical_distribution_num_nodes.items():
+            if value is None:
+                value = 0
+            empirical_distribution_num_nodes_tensor[key] = value
+        empirical_distribution_num_nodes_tensor = torch.tensor(list(empirical_distribution_num_nodes_tensor.values())).float()
+        return empirical_distribution_num_nodes_tensor
+                
+    def get_list_of_edge_adjs(self, edge_attrs_dense, batch_num_nodes):
+        ptr = torch.cat([torch.zeros(1, device=batch_num_nodes.device, dtype=torch.long), batch_num_nodes.cumsum(0)])
+        edge_tensor_lists = []
+        for i in range(len(ptr) - 1):
+            select_slice = slice(ptr[i].item(), ptr[i+1].item())
+            e = edge_attrs_dense[select_slice, select_slice]
+            edge_tensor_lists.append(e)
+        return edge_tensor_lists
+
+    @torch.no_grad()
+    def generate_graphs(self,
+                        num_graphs: int,
+                        empirical_distribution_num_nodes: torch.Tensor,
+                        device: torch.device,
+                        verbose=False,
+                        save_traj=False):
+        
+        pos, atom_types, edge_types,\
+        edge_index_global, batch_num_nodes, trajs = self.reverse_sampling(num_graphs=num_graphs,
+                                                                        device=device,
+                                                                        empirical_distribution_num_nodes=empirical_distribution_num_nodes,
+                                                                        verbose=verbose,
+                                                                        save_traj=save_traj)
+
+        pos_splits = pos.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
+        atom_types_split = atom_types.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
+
+        atom_types_integer = torch.argmax(atom_types, dim=-1)
+        atom_types_integer_split = atom_types_integer.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
+        
+        return pos_splits, atom_types_split, atom_types_integer_split, edge_types, edge_index_global, batch_num_nodes, trajs    
     
+    
+    @torch.no_grad()
+    def run_evaluation(self, step: int, ngraphs: int = 4000, bs: int = 500):
+        b = ngraphs // bs
+        l = [bs] * b
+        if sum(l) != ngraphs:
+            l.append(ngraphs - sum(l))
+        assert sum(l) == ngraphs
+        
+        results = []
+        for num_graphs in l:
+            start = datetime.now()
+            pos_splits, _, atom_types_integer_split, \
+            edge_types, edge_index_global, batch_num_nodes, _ = self.generate_graphs(
+                                                                                     num_graphs=num_graphs,
+                                                                                     verbose=False,
+                                                                                     device=self.empirical_num_nodes.device,
+                                                                                     empirical_distribution_num_nodes=self.empirical_num_nodes)
+            
+            n = batch_num_nodes.sum().item()
+            edge_attrs_dense = torch.zeros(size=(n,n,5), dtype=edge_types.dtype, device=edge_types.device)
+            edge_attrs_dense[edge_index_global[0, :], edge_index_global[1, :], :] = edge_types
+            edge_attrs_dense = edge_attrs_dense.argmax(-1)
+            edge_attrs_splits = self.get_list_of_edge_adjs(edge_attrs_dense, batch_num_nodes)
+            
+            molecule_list = []
+            for positions, atom_types, edges in zip(pos_splits,
+                                                        atom_types_integer_split,
+                                                        edge_attrs_splits):
+                molecule = Molecule(atom_types=atom_types, positions=positions,
+                                    dataset_info=dataset_info,
+                                    charges=torch.zeros(0, device=positions.device),
+                                    bond_types=edges)
+                molecule_list.append(molecule)
+            
+        
+            res = analyze_stability_for_molecules(molecule_list=molecule_list, 
+                                                dataset_info=dataset_info,
+                                                smiles_train=[], bonds_given=True
+                                                )
+            print(f'Run time={datetime.now() - start}')
+            total_res = {k: v for k, v in zip(['validity', 'uniqueness', 'novelty'], res[1][0])}
+            total_res.update(res[0])
+            print(total_res)
+            total_res = pd.DataFrame.from_dict([total_res])
+            results.append(total_res)
+            tmp_df = pd.concat(results)
+            print(tmp_df.describe())
+            print()
+        
+        final_res = dict(tmp_df.aggregate("mean", axis="rows"))
+        final_res['step'] = step
+        final_res['epoch'] = self.current_epoch
+        final_res = pd.DataFrame.from_dict([final_res])
+
+        save_dir = os.path.join(model.hparams.log_dir, 'evaluation.csv')
+        with open(save_dir, 'a') as f:
+            final_res.to_csv(f, header=False)
+            
+        return final_res
+        
+    def validation_epoch_end(self, validation_step_outputs):
+        
+        if (self.current_epoch + 1) % self.hparams.test_interval == 0:        
+            final_res = self.run_evaluation(step=self.i, ngraphs=1000, bs=self.hparams.batch_size)
+            self.i += 1
+            self.log(name='val/validity', value=final_res.validity[0], on_epoch=True)
+            self.log(name='val/uniqueness', value=final_res.uniqueness[0], on_epoch=True)
+            self.log(name='val/novelty', value=final_res.novelty[0], on_epoch=True)
+            self.log(name='val/mol_stable', value=final_res.mol_stable[0], on_epoch=True)
+            self.log(name='val/atm_stable', value=final_res.atm_stable[0], on_epoch=True)
+        
+                
     def reverse_sampling(
         self,
         num_graphs: int,
@@ -472,10 +567,12 @@ class Trainer(pl.LightningModule):
         out_dict, node_batch, edge_batch = self(batch=batch, t=t)
         
         
-        snr = self.sde.alphas_cumprod.pow(2) / (self.sde.sqrt_1m_alphas_cumprod.pow(2))
-        s = t - 1
-        s = torch.clamp(s, min=0)
-        w = snr[s] - snr[t]
+        #snr = self.sde.alphas_cumprod.pow(2) / (self.sde.sqrt_1m_alphas_cumprod.pow(2))
+        #s = t - 1
+        #s = torch.clamp(s, min=0)
+        #w = snr[s] - snr[t]
+        
+        w = 1 / batch_size
     
         sigmast = self.sde.sqrt_1m_alphas_cumprod[t]
         sigmas2t = sigmast.pow(2)

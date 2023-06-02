@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from pytorch_lightning.loggers import TensorBoardLogger
 from e3moldiffusion.molfeat import atom_type_config, get_bond_feature_dims
 from e3moldiffusion.sde import VPAncestralSamplingPredictor, DiscreteDDPM
-from e3moldiffusion.coordsatomsbonds import ScoreModelSE3
+from e3moldiffusion.coordsatomsbonds import ScoreModelSE3, ScoreModel
 
 from torch import Tensor
 from torch_geometric.data import Batch
@@ -72,28 +72,45 @@ class Trainer(pl.LightningModule):
         empirical_num_nodes = self._get_empirical_num_nodes()
         self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
         
-        self.mixture = True
       
         self.edge_scaling = 1.00
         self.node_scaling = 1.00
         
-        self.relative_pos = True
+        self.relative_pos = False
+        self.mixture = False
+        self.new = False
         
-        self.model = ScoreModelSE3(
-            hn_dim=(hparams["sdim"], hparams["vdim"]),
-            num_layers=hparams["num_layers"],
-            use_norm=hparams["use_norm"],
-            use_cross_product=hparams["use_cross_product"],
-            num_atom_types=self.num_atom_features,
-            num_bond_types=self.num_bond_classes,
-            rbf_dim=hparams["num_rbf"],
-            edge_dim=hparams['edim'],
-            cutoff_local=hparams["cutoff_upper"],
-            vector_aggr="mean",
-            local_global_model=hparams["fully_connected_layer"],
-            fully_connected=hparams["fully_connected"],
-        )
-
+        if self.new:
+            self.model = ScoreModelSE3(
+                hn_dim=(hparams["sdim"], hparams["vdim"]),
+                num_layers=hparams["num_layers"],
+                use_norm=hparams["use_norm"],
+                use_cross_product=hparams["use_cross_product"],
+                num_atom_types=self.num_atom_features,
+                num_bond_types=self.num_bond_classes,
+                rbf_dim=hparams["num_rbf"],
+                edge_dim=hparams['edim'],
+                cutoff_local=hparams["cutoff_upper"],
+                vector_aggr="mean",
+                local_global_model=hparams["fully_connected_layer"],
+                fully_connected=hparams["fully_connected"],
+            )
+        else:
+            self.model = ScoreModel(
+                hn_dim=(hparams["sdim"], hparams["vdim"]),
+                num_layers=hparams["num_layers"],
+                use_norm=hparams["use_norm"],
+                use_cross_product=hparams["use_cross_product"],
+                num_atom_types=self.num_atom_features,
+                num_bond_types=self.num_bond_classes,
+                rbf_dim=hparams["num_rbf"],
+                cutoff_local=hparams["cutoff_upper"],
+                vector_aggr="mean",
+                local_global_model=hparams["fully_connected_layer"],
+                fully_connected=hparams["fully_connected"],
+                local_edge_attrs=False
+            )
+        
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
                                 beta_max=hparams["beta_max"],
                                 N=hparams["timesteps"],
@@ -306,7 +323,7 @@ class Trainer(pl.LightningModule):
             one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
             sqrt_alphas_cumprod_prev = torch.sqrt(self.sde.alphas_cumprod_prev[t].unsqueeze(-1))
             one_m_alphas = self.sde.discrete_betas[t].unsqueeze(-1)
-
+            sqrt_alpha_bar_t = alpha_bar_t.sqrt()
             
             if self.mixture:
                 coords_pred = sigmas2t[batch] * out['coords_pred'] + \
@@ -322,10 +339,27 @@ class Trainer(pl.LightningModule):
                     
                 edges_pred = edges_pred.softmax(dim=-1)
             else:
-                coords_pred = out['coords_pred']
-                atoms_pred = out['atoms_pred'].softmax(dim=-1)
-                edges_pred = out['bonds_pred'].softmax(dim=-1)
-                
+                if self.new:    
+                    coords_pred = out['coords_pred']
+                    atoms_pred = out['atoms_pred'].softmax(dim=-1)
+                    edges_pred = out['bonds_pred'].softmax(dim=-1)
+                else:
+                    coords_score = out['score_coords']
+                    atoms_score =  out['score_atoms']
+                    edges_score = out['score_bonds']
+                    # x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1.0 - alpha_bar_t) * epsilon
+                    # leads to x_0 = 1/sqrt(alpha_bar_t) * ( x_t - sqrt(1.0 - alpha_bar_t) * epsilon )  
+                    coords_pred = 1.0 / sqrt_alpha_bar_t[batch].unsqueeze(-1) * \
+                        (out['coords_perturbed'] - sigmast[batch].unsqueeze(-1) * coords_score)
+                        
+                    atoms_pred = 1.0 / sqrt_alpha_bar_t[batch].unsqueeze(-1) * \
+                        (out['atoms_perturbed'] - sigmast[batch].unsqueeze(-1) * atoms_score)
+                    atoms_pred = atoms_pred.softmax(dim=-1)
+                    
+                    edges_pred = 1.0 / sqrt_alpha_bar_t[batch_edge_global].unsqueeze(-1) * \
+                        (out['bonds_perturbed'] - sigmast[batch_edge_global].unsqueeze(-1) * edges_score)
+                    edges_pred = edges_pred.softmax(dim=-1)
+                    
             # update fnc
             
             # positions/coords
@@ -540,6 +574,7 @@ class Trainer(pl.LightningModule):
         sigmast = self.sde.sqrt_1m_alphas_cumprod[t]
         sigmas2t = sigmast.pow(2)
         alpha_bar_t = self.sde.alphas_cumprod[t]
+        sqrt_alpha_bar_t = alpha_bar_t.sqrt()
 
         if self.mixture:
             coords_pred = sigmas2t[node_batch].unsqueeze(-1) * out_dict['coords_pred'] + \
@@ -551,11 +586,23 @@ class Trainer(pl.LightningModule):
             edges_pred = sigmas2t[edge_batch].unsqueeze(-1) * out_dict['bonds_pred'].softmax(dim=-1) + \
                 alpha_bar_t[edge_batch].unsqueeze(-1) * (out_dict['bonds_perturbed'] - sigmast[edge_batch].unsqueeze(-1) * out_dict['bonds_eps'])
         else:
-            coords_pred = out_dict['coords_pred']
-            atoms_pred = out_dict['atoms_pred'].softmax(dim=-1)
-            edges_pred = out_dict['bonds_pred'].softmax(dim=-1)
-            
-            
+            if self.new:    
+                coords_pred = out_dict['coords_pred']
+                atoms_pred = out_dict['atoms_pred']
+                edges_pred = out_dict['bonds_pred']
+            else:
+                coords_score = out_dict['score_coords']
+                atoms_score =  out_dict['score_atoms']
+                edges_score = out_dict['score_bonds']
+                # x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1.0 - alpha_bar_t) * epsilon
+                # leads to x_0 = 1/sqrt(alpha_bar_t) * ( x_t - sqrt(1.0 - alpha_bar_t) * epsilon )  
+                coords_pred = 1.0 / sqrt_alpha_bar_t[node_batch].unsqueeze(-1) * \
+                    (out_dict['coords_perturbed'] - sigmast[node_batch].unsqueeze(-1) * coords_score)
+                atoms_pred = 1.0 / sqrt_alpha_bar_t[node_batch].unsqueeze(-1) * \
+                    (out_dict['atoms_perturbed'] - sigmast[node_batch].unsqueeze(-1) * atoms_score)
+                edges_pred = 1.0 / sqrt_alpha_bar_t[edge_batch].unsqueeze(-1) * \
+                    (out_dict['bonds_perturbed'] - sigmast[edge_batch].unsqueeze(-1) * edges_score)
+                
         coords_loss = torch.pow(
            coords_pred - out_dict["coords_true"], 2
         ).sum(-1)
@@ -581,7 +628,7 @@ class Trainer(pl.LightningModule):
         )
          
         bonds_loss = 0.5 * scatter_mean(
-            bonds_loss, index=out_dict["edge_index"][1][1], dim=0, dim_size=out_dict["atoms_pred"].size(0)
+            bonds_loss, index=out_dict["edge_index"][1][1], dim=0, dim_size=out_dict["coords_true"].size(0)
         )
         bonds_loss = scatter_mean(
             bonds_loss, index=batch.batch, dim=0, dim_size=batch_size
@@ -591,11 +638,15 @@ class Trainer(pl.LightningModule):
         
         if self.relative_pos:
             j, i = out_dict["edge_index"][1]
+            # distance 
+            # pji_true = torch.pow(out_dict["coords_true"][j] - out_dict["coords_true"][i], 2).sum(-1, keepdim=True).sqrt()
+            # pji_pred = torch.pow(coords_pred[j] - coords_pred[i], 2).sum(-1, keepdim=True).sqrt()
+            # pos
             pji_true = out_dict["coords_true"][j] - out_dict["coords_true"][i]
             pji_pred = coords_pred[j] - coords_pred[i]
             rel_pos_loss = (pji_true - pji_pred).pow(2).mean(-1)
-            rel_pos_loss = 0.5 * scatter_mean(rel_pos_loss, index=i, dim=0, dim_size=out_dict["atoms_pred"].size(0))
-            rel_pos_loss = scatter_mean(rel_pos_loss, index=batch.batch, dim=0, dim_size=out_dict["atoms_pred"].size(0))
+            rel_pos_loss = 0.5 * scatter_mean(rel_pos_loss, index=i, dim=0, dim_size=out_dict["coords_true"].size(0))
+            rel_pos_loss = scatter_mean(rel_pos_loss, index=batch.batch, dim=0, dim_size=out_dict["coords_true"].size(0))
             rel_pos_loss *= w
             rel_pos_loss = rel_pos_loss.sum(dim=0)
         else:
