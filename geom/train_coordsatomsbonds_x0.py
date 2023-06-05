@@ -30,13 +30,12 @@ from tqdm import tqdm
 import json
 
 #New imported 
-#from aqm.analyze_sampling import SamplingMetrics
+from datetime import datetime
 from callbacks.ema import ExponentialMovingAverage
 from config_file import get_dataset_info
-from qm9.info_data import QM9Infos
-#from evaluation.diffusion_distribution import (
-#    get_distributions
-#)
+from geom.utils_sampling import Molecule, analyze_stability_for_molecules
+import pandas as pd
+from datetime import datetime
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 
@@ -58,7 +57,8 @@ BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 
 class Trainer(pl.LightningModule):
     def __init__(self,
-                 hparams
+                 hparams: dict,
+                 dataset_info: dict
                  ):
         super().__init__()
         self.save_hyperparameters(hparams)
@@ -71,16 +71,19 @@ class Trainer(pl.LightningModule):
         self.num_atom_features = self.hparams.num_atom_types + int(self.include_charges)
         self.num_bond_classes = 5
         
+        self.dataset_info = dataset_info
+        
         self.i = 0
       
-        self.mixture = True
+        self.mixture = False
+        self.new = True
+        self.relative_pos = True
         
         empirical_num_nodes = self._get_empirical_num_nodes()
         self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
         
         self.edge_scaling = 1.00
         self.node_scaling = 1.00
-        self.relative_pos = True
         
         self.model = ScoreModelSE3(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
@@ -155,7 +158,7 @@ class Trainer(pl.LightningModule):
     
     
     @torch.no_grad()
-    def run_evaluation(self, step: int, ngraphs: int = 4000, bs: int = 500):
+    def run_evaluation(self, step: int, dataset_info, ngraphs: int = 4000, bs: int = 500):
         b = ngraphs // bs
         l = [bs] * b
         if sum(l) != ngraphs:
@@ -208,7 +211,7 @@ class Trainer(pl.LightningModule):
         final_res['epoch'] = self.current_epoch
         final_res = pd.DataFrame.from_dict([final_res])
 
-        save_dir = os.path.join(model.hparams.log_dir, 'evaluation.csv')
+        save_dir = os.path.join(model.hparams.save_dir, 'evaluation.csv')
         with open(save_dir, 'a') as f:
             final_res.to_csv(f, header=False)
             
@@ -217,7 +220,7 @@ class Trainer(pl.LightningModule):
     def validation_epoch_end(self, validation_step_outputs):
         
         if (self.current_epoch + 1) % self.hparams.test_interval == 0:        
-            final_res = self.run_evaluation(step=self.i, ngraphs=1000, bs=self.hparams.batch_size)
+            final_res = self.run_evaluation(step=self.i, dataset_info=self.dataset_info, ngraphs=1000, bs=self.hparams.batch_size)
             self.i += 1
             self.log(name='val/validity', value=final_res.validity[0], on_epoch=True)
             self.log(name='val/uniqueness', value=final_res.uniqueness[0], on_epoch=True)
@@ -304,99 +307,91 @@ class Trainer(pl.LightningModule):
                 batch_edge_global=batch_edge_global
             )
             
-            old = False
-            if old:
-                score_coords = out["score_coords"]
-                score_atoms = out["score_atoms"]
-                score_bonds = out["score_bonds"]
+        
+            rev_sigma = self.sde.reverse_posterior_sigma[t].unsqueeze(-1)
+            sigmast = self.sde.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
+            sigmas2t = sigmast.pow(2)
+            alpha_bar_t = self.sde.alphas_cumprod[t].unsqueeze(-1)
+            
+            sqrt_alphas = self.sde.sqrt_alphas[t].unsqueeze(-1)
+            sqrt_1m_alphas_cumprod_prev = torch.sqrt(1.0 - self.sde.alphas_cumprod_prev[t]).unsqueeze(-1)
+            one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
+            sqrt_alphas_cumprod_prev = torch.sqrt(self.sde.alphas_cumprod_prev[t].unsqueeze(-1))
+            one_m_alphas = self.sde.discrete_betas[t].unsqueeze(-1)
+            sqrt_alpha_bar_t = alpha_bar_t.sqrt()
+            
+            if self.mixture:
+                coords_pred = sigmas2t[batch] * out['coords_pred'] + \
+                    alpha_bar_t[batch] * (out['coords_perturbed'] - sigmast[batch] * out['coords_eps'])
+                                    
+                atoms_pred = sigmas2t[batch] * out['atoms_pred'].softmax(dim=-1) + \
+                    alpha_bar_t[batch] * (out['atoms_perturbed'] - sigmast[batch] * out['atoms_eps'])
                 
-                score_coords = zero_mean(score_coords, batch=batch, dim_size=bs, dim=0)
-                noise_coords = torch.randn_like(pos)
-                noise_coords = zero_mean(noise_coords, batch=batch, dim_size=bs, dim=0)
-
-                # coords
-                pos, _ = self.sampler.update_fn(x=pos, score=score_coords, t=t[batch], noise=noise_coords)
-                pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
-                
-                # atoms
-                noise_atoms = torch.randn_like(atom_types)
-                atom_types, _ = self.sampler.update_fn(x=atom_types, score=score_atoms, t=t[batch], noise=noise_atoms)
-                
-                # bonds
-                noise_edges = torch.randn_like(edge_attrs)
-                noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
-                noise_edges = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
-                edge_attr_global, _ = self.sampler.update_fn(x=edge_attr_global, score=score_bonds,
-                                                            t=t[batch_edge_global], noise=noise_edges)
-            else:
-                
-                rev_sigma = self.sde.reverse_posterior_sigma[t].unsqueeze(-1)
-                sigmast = self.sde.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
-                sigmas2t = sigmast.pow(2)
-                alpha_bar_t = self.sde.alphas_cumprod[t].unsqueeze(-1)
-                
-                sqrt_alphas = self.sde.sqrt_alphas[t].unsqueeze(-1)
-                sqrt_1m_alphas_cumprod_prev = torch.sqrt(1.0 - self.sde.alphas_cumprod_prev[t]).unsqueeze(-1)
-                one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
-                sqrt_alphas_cumprod_prev = torch.sqrt(self.sde.alphas_cumprod_prev[t].unsqueeze(-1))
-                one_m_alphas = self.sde.discrete_betas[t].unsqueeze(-1)
-
-                
-                if self.mixture:
-                    coords_pred = sigmas2t[batch] * out['coords_pred'] + \
-                        alpha_bar_t[batch] * (out['coords_perturbed'] - sigmast[batch] * out['coords_eps'])
-                                        
-                    atoms_pred = sigmas2t[batch] * out['atoms_pred'].softmax(dim=-1) + \
-                        alpha_bar_t[batch] * (out['atoms_perturbed'] - sigmast[batch] * out['atoms_eps'])
+                atoms_pred = atoms_pred.softmax(dim=-1)
                     
-                    atoms_pred = atoms_pred.softmax(dim=-1)
-                        
-                    edges_pred = sigmas2t[batch_edge_global] * out['bonds_pred'].softmax(dim=-1) + \
-                        alpha_bar_t[batch_edge_global] * (out['bonds_perturbed'] - sigmast[batch_edge_global] * out['bonds_eps'])
-                        
-                    edges_pred = edges_pred.softmax(dim=-1)
-                else:
-                    coords_pred = out['coords_pred']
+                edges_pred = sigmas2t[batch_edge_global] * out['bonds_pred'].softmax(dim=-1) + \
+                    alpha_bar_t[batch_edge_global] * (out['bonds_perturbed'] - sigmast[batch_edge_global] * out['bonds_eps'])
+                    
+                edges_pred = edges_pred.softmax(dim=-1)
+            else:
+                if self.new:    
+                    coords_pred = out['coords_pred'].squeeze()
                     atoms_pred = out['atoms_pred'].softmax(dim=-1)
                     edges_pred = out['bonds_pred'].softmax(dim=-1)
+                else:
+                    coords_score = out['score_coords'].squeeze()
+                    atoms_score =  out['score_atoms']
+                    edges_score = out['score_bonds']
+                    # x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1.0 - alpha_bar_t) * epsilon
+                    # leads to x_0 = 1/sqrt(alpha_bar_t) * ( x_t - sqrt(1.0 - alpha_bar_t) * epsilon )  
+                    coords_pred = 1.0 / sqrt_alpha_bar_t[batch] * \
+                        (out['coords_perturbed'] - sigmast[batch] * coords_score)
+                        
+                    atoms_pred = 1.0 / sqrt_alpha_bar_t[batch] * \
+                        (out['atoms_perturbed'] - sigmast[batch] * atoms_score)
+                    atoms_pred = atoms_pred.softmax(dim=-1)
                     
-                # update fnc
+                    edges_pred = 1.0 / sqrt_alpha_bar_t[batch_edge_global] * \
+                        (out['bonds_perturbed'] - sigmast[batch_edge_global] * edges_score)
+                    edges_pred = edges_pred.softmax(dim=-1)
                 
-                # positions/coords
-                mean = sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * out['coords_perturbed'] + \
-                    sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * coords_pred
-                mean = (1.0 / sigmas2t[batch]) * mean
-                std = rev_sigma[batch]
-                noise = torch.randn_like(mean)
-                noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
-                pos = mean + std * noise
-                
-                if torch.any(pos.isnan()):
-                    import pdb
-                    print(t)
-                    print(pos)
-                    pdb.set_trace()
+            # update fnc
+            
+            # positions/coords
+            mean = sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * out['coords_perturbed'] + \
+                sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * coords_pred
+            mean = (1.0 / sigmas2t[batch]) * mean
+            std = rev_sigma[batch]
+            noise = torch.randn_like(mean)
+            noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
+            pos = mean + std * noise
+            
+            if torch.any(pos.isnan()):
+                import pdb
+                print(t)
+                print(pos)
+                pdb.set_trace()
 
-                    
-                # atoms 
-                mean = sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * out['atoms_perturbed'] + \
-                    sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * atoms_pred
-                mean = (1.0 / sigmas2t[batch]) * mean
-                std = rev_sigma[batch]
-                noise = torch.randn_like(mean)
-                atom_types = mean + std * noise
                 
-                
-                # edges
-                mean = sqrt_alphas[batch_edge_global] * one_m_alphas_cumprod_prev[batch_edge_global] * out['bonds_perturbed'] + \
-                    sqrt_alphas_cumprod_prev[batch_edge_global] * one_m_alphas[batch_edge_global] * edges_pred
-                mean = (1.0 / sigmas2t[batch_edge_global]) * mean
-                std = rev_sigma[batch_edge_global]
-                noise_edges = torch.randn_like(edge_attrs)
-                noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
-                noise_edges = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
-                edge_attr_global = mean + std * noise_edges
-                
+            # atoms 
+            mean = sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * out['atoms_perturbed'] + \
+                sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * atoms_pred
+            mean = (1.0 / sigmas2t[batch]) * mean
+            std = rev_sigma[batch]
+            noise = torch.randn_like(mean)
+            atom_types = mean + std * noise
+            
+            
+            # edges
+            mean = sqrt_alphas[batch_edge_global] * one_m_alphas_cumprod_prev[batch_edge_global] * out['bonds_perturbed'] + \
+                sqrt_alphas_cumprod_prev[batch_edge_global] * one_m_alphas[batch_edge_global] * edges_pred
+            mean = (1.0 / sigmas2t[batch_edge_global]) * mean
+            std = rev_sigma[batch_edge_global]
+            noise_edges = torch.randn_like(edge_attrs)
+            noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
+            noise_edges = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
+            edge_attr_global = mean + std * noise_edges
+            
                 
             if not self.hparams.fully_connected:
                 edge_index_local = radius_graph(x=pos.detach(),
@@ -577,6 +572,8 @@ class Trainer(pl.LightningModule):
         sigmast = self.sde.sqrt_1m_alphas_cumprod[t]
         sigmas2t = sigmast.pow(2)
         alpha_bar_t = self.sde.alphas_cumprod[t]
+        sqrt_alpha_bar_t = alpha_bar_t.sqrt()
+
 
         if self.mixture:
             coords_pred = sigmas2t[node_batch].unsqueeze(-1) * out_dict['coords_pred'] + \
@@ -588,9 +585,22 @@ class Trainer(pl.LightningModule):
             edges_pred = sigmas2t[edge_batch].unsqueeze(-1) * out_dict['bonds_pred'].softmax(dim=-1) + \
                 alpha_bar_t[edge_batch].unsqueeze(-1) * (out_dict['bonds_perturbed'] - sigmast[edge_batch].unsqueeze(-1) * out_dict['bonds_eps'])
         else:
-            coords_pred = out_dict['coords_pred']
-            atoms_pred = out_dict['atoms_pred'].softmax(dim=-1)
-            edges_pred = out_dict['bonds_pred'].softmax(dim=-1)
+            if self.new:    
+                coords_pred = out_dict['coords_pred']
+                atoms_pred = out_dict['atoms_pred']
+                edges_pred = out_dict['bonds_pred']
+            else:
+                coords_score = out_dict['score_coords'].squeeze()
+                atoms_score =  out_dict['score_atoms']
+                edges_score = out_dict['score_bonds']
+                # x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1.0 - alpha_bar_t) * epsilon
+                # leads to x_0 = 1/sqrt(alpha_bar_t) * ( x_t - sqrt(1.0 - alpha_bar_t) * epsilon )  
+                coords_pred = 1.0 / sqrt_alpha_bar_t[node_batch].unsqueeze(-1) * \
+                    (out_dict['coords_perturbed'] - sigmast[node_batch].unsqueeze(-1) * coords_score)
+                atoms_pred = 1.0 / sqrt_alpha_bar_t[node_batch].unsqueeze(-1) * \
+                    (out_dict['atoms_perturbed'] - sigmast[node_batch].unsqueeze(-1) * atoms_score)
+                edges_pred = 1.0 / sqrt_alpha_bar_t[edge_batch].unsqueeze(-1) * \
+                    (out_dict['bonds_perturbed'] - sigmast[edge_batch].unsqueeze(-1) * edges_score)
             
             
         coords_loss = torch.pow(
@@ -626,14 +636,31 @@ class Trainer(pl.LightningModule):
         bonds_loss *= w
         bonds_loss = bonds_loss.sum(dim=0)
         
-        loss = 1.0 * coords_loss +  1.0 * atoms_loss +  1.0 * bonds_loss
-
+        if self.relative_pos:
+            j, i = out_dict["edge_index"][1]
+            # distance 
+            # pji_true = torch.pow(out_dict["coords_true"][j] - out_dict["coords_true"][i], 2).sum(-1, keepdim=True).sqrt()
+            # pji_pred = torch.pow(coords_pred[j] - coords_pred[i], 2).sum(-1, keepdim=True).sqrt()
+            # pos
+            pji_true = out_dict["coords_true"][j] - out_dict["coords_true"][i]
+            pji_pred = coords_pred[j] - coords_pred[i]
+            rel_pos_loss = (pji_true - pji_pred).pow(2).mean(-1)
+            rel_pos_loss = 0.5 * scatter_mean(rel_pos_loss, index=i, dim=0, dim_size=out_dict["coords_true"].size(0))
+            rel_pos_loss = scatter_mean(rel_pos_loss, index=batch.batch, dim=0, dim_size=out_dict["coords_true"].size(0))
+            rel_pos_loss *= w
+            rel_pos_loss = rel_pos_loss.sum(dim=0)
+        else:
+            rel_pos_loss = 0.0
+            
+        loss = 1.0 * coords_loss +  1.0 * atoms_loss +  1.0 * bonds_loss + 1.0 * rel_pos_loss
+        
 
         self.log(
             f"{stage}/loss",
             loss,
             on_step=True,
             batch_size=batch_size,
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
         )
 
         self.log(
@@ -641,6 +668,7 @@ class Trainer(pl.LightningModule):
             coords_loss,
             on_step=True,
             batch_size=batch_size,
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
         )
 
         self.log(
@@ -648,6 +676,7 @@ class Trainer(pl.LightningModule):
             atoms_loss,
             on_step=True,
             batch_size=batch_size,
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
         )
         
         self.log(
@@ -655,7 +684,19 @@ class Trainer(pl.LightningModule):
             bonds_loss,
             on_step=True,
             batch_size=batch_size,
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
         )
+        
+        self.log(
+            f"{stage}/rel_coords_loss",
+            rel_pos_loss,
+            on_step=True,
+            batch_size=batch_size,
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
+        )
+        
+        
+        
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -709,8 +750,8 @@ if __name__ == "__main__":
         hparams.save_dir + f"/run{hparams.id}/", default_hp_metric=False
     )
 
-    model = Trainer(hparams=hparams.__dict__)
-
+    dataset_info = get_dataset_info("drugs", remove_h=False)
+  
     print(f"Loading {hparams.dataset} Datamodule.")
     old = False
     
@@ -740,9 +781,10 @@ if __name__ == "__main__":
                                     pin_memory=True,
                                     persistent_workers=True
                                     )
-    model = Trainer(
-        hparams=hparams.__dict__
-    )
+        
+        
+    model = Trainer(hparams=hparams.__dict__,
+                    dataset_info=dataset_info)
 
     strategy = (
         pl.strategies.DDPStrategy(find_unused_parameters=False)

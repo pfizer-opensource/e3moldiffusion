@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from pytorch_lightning.loggers import TensorBoardLogger
 from e3moldiffusion.molfeat import atom_type_config, get_bond_feature_dims
 from e3moldiffusion.sde import VPAncestralSamplingPredictor, DiscreteDDPM
-from e3moldiffusion.coordsatomsbonds import ScoreModelSE3, ScoreModel
+from e3moldiffusion.coordsatomsbonds import ScoreModelSE3, ScoreModel, DenseLayer
 
 from torch import Tensor
 from torch_geometric.data import Batch
@@ -31,7 +31,8 @@ from tqdm import tqdm
 from datetime import datetime
 from callbacks.ema import ExponentialMovingAverage
 from config_file import get_dataset_info
-from qm9.utils_sampling import Molecule, analyze_stability_for_molecules
+from qm9.utils_sampling import Molecule, BasicMolecularMetrics, analyze_stability_for_molecules
+from qm9.analyze_sampling import SamplingMetrics
 import pandas as pd
 
 
@@ -71,45 +72,29 @@ class Trainer(pl.LightningModule):
         empirical_num_nodes = self._get_empirical_num_nodes()
         self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
         
-      
-        self.edge_scaling = 1.00
-        self.node_scaling = 1.00
+        self.relative_pos = False
+    
+        # self.atom_mapping = DenseLayer(self.num_atom_features, self.num_atom_features, bias=False)
+        self.atom_mapping = torch.nn.Embedding(self.num_atom_features, self.num_atom_features, padding_idx=None, max_norm=1.0)
+        # self.bond_mapping = DenseLayer(self.num_bond_classes, self.num_bond_classes, bias=False)
+        self.bond_mapping = torch.nn.Embedding(self.num_bond_classes, self.num_bond_classes, padding_idx=None, max_norm=1.0)
         
-        self.relative_pos = True
-        self.mixture = False
-        self.new = True
         
-        if self.new:
-            self.model = ScoreModelSE3(
-                hn_dim=(hparams["sdim"], hparams["vdim"]),
-                num_layers=hparams["num_layers"],
-                use_norm=hparams["use_norm"],
-                use_cross_product=hparams["use_cross_product"],
-                num_atom_types=self.num_atom_features,
-                num_bond_types=self.num_bond_classes,
-                rbf_dim=hparams["num_rbf"],
-                edge_dim=hparams['edim'],
-                cutoff_local=hparams["cutoff_upper"],
-                vector_aggr="mean",
-                local_global_model=hparams["fully_connected_layer"],
-                fully_connected=hparams["fully_connected"],
-            )
-        else:
-            self.model = ScoreModel(
-                hn_dim=(hparams["sdim"], hparams["vdim"]),
-                num_layers=hparams["num_layers"],
-                use_norm=hparams["use_norm"],
-                use_cross_product=hparams["use_cross_product"],
-                num_atom_types=self.num_atom_features,
-                num_bond_types=self.num_bond_classes,
-                rbf_dim=hparams["num_rbf"],
-                cutoff_local=hparams["cutoff_upper"],
-                vector_aggr="mean",
-                local_global_model=hparams["fully_connected_layer"],
-                fully_connected=hparams["fully_connected"],
-                local_edge_attrs=False
-            )
-        
+        self.model = ScoreModelSE3(
+            hn_dim=(hparams["sdim"], hparams["vdim"]),
+            num_layers=hparams["num_layers"],
+            use_norm=hparams["use_norm"],
+            use_cross_product=hparams["use_cross_product"],
+            num_atom_types=self.num_atom_features,
+            num_bond_types=self.num_bond_classes,
+            rbf_dim=hparams["num_rbf"],
+            edge_dim=hparams['edim'],
+            cutoff_local=hparams["cutoff_upper"],
+            vector_aggr="mean",
+            local_global_model=hparams["fully_connected_layer"],
+            fully_connected=hparams["fully_connected"],
+        )
+            
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
                                 beta_max=hparams["beta_max"],
                                 N=hparams["timesteps"],
@@ -164,7 +149,7 @@ class Trainer(pl.LightningModule):
     
     
     @torch.no_grad()
-    def run_evaluation(self, step: int, dataset_info, ngraphs: int = 4000, bs: int = 500):
+    def run_evaluation(self, step: int, ngraphs: int = 4000, bs: int = 500):
         b = ngraphs // bs
         l = [bs] * b
         if sum(l) != ngraphs:
@@ -226,7 +211,7 @@ class Trainer(pl.LightningModule):
     def validation_epoch_end(self, validation_step_outputs):
         
         if (self.current_epoch + 1) % self.hparams.test_interval == 0:        
-            final_res = self.run_evaluation(step=self.i, dataset_info=self.dataset_info, ngraphs=1000, bs=self.hparams.batch_size)
+            final_res = self.run_evaluation(step=self.i, ngraphs=1000, bs=self.hparams.batch_size)
             self.i += 1
             self.log(name='val/validity', value=final_res.validity[0], on_epoch=True)
             self.log(name='val/uniqueness', value=final_res.uniqueness[0], on_epoch=True)
@@ -324,42 +309,66 @@ class Trainer(pl.LightningModule):
             one_m_alphas = self.sde.discrete_betas[t].unsqueeze(-1)
             sqrt_alpha_bar_t = alpha_bar_t.sqrt()
             
-            if self.mixture:
-                coords_pred = sigmas2t[batch] * out['coords_pred'] + \
-                    alpha_bar_t[batch] * (out['coords_perturbed'] - sigmast[batch] * out['coords_eps'])
-                                    
-                atoms_pred = sigmas2t[batch] * out['atoms_pred'].softmax(dim=-1) + \
-                    alpha_bar_t[batch] * (out['atoms_perturbed'] - sigmast[batch] * out['atoms_eps'])
-                
-                atoms_pred = atoms_pred.softmax(dim=-1)
-                    
-                edges_pred = sigmas2t[batch_edge_global] * out['bonds_pred'].softmax(dim=-1) + \
-                    alpha_bar_t[batch_edge_global] * (out['bonds_perturbed'] - sigmast[batch_edge_global] * out['bonds_eps'])
-                    
-                edges_pred = edges_pred.softmax(dim=-1)
-            else:
-                if self.new:    
-                    coords_pred = out['coords_pred'].squeeze()
-                    atoms_pred = out['atoms_pred'].softmax(dim=-1)
-                    edges_pred = out['bonds_pred'].softmax(dim=-1)
-                else:
-                    coords_score = out['score_coords'].squeeze()
-                    atoms_score =  out['score_atoms']
-                    edges_score = out['score_bonds']
-                    # x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1.0 - alpha_bar_t) * epsilon
-                    # leads to x_0 = 1/sqrt(alpha_bar_t) * ( x_t - sqrt(1.0 - alpha_bar_t) * epsilon )  
-                    coords_pred = 1.0 / sqrt_alpha_bar_t[batch] * \
-                        (out['coords_perturbed'] - sigmast[batch] * coords_score)
-                        
-                    atoms_pred = 1.0 / sqrt_alpha_bar_t[batch] * \
-                        (out['atoms_perturbed'] - sigmast[batch] * atoms_score)
-                    atoms_pred = atoms_pred.softmax(dim=-1)
-                    
-                    edges_pred = 1.0 / sqrt_alpha_bar_t[batch_edge_global] * \
-                        (out['bonds_perturbed'] - sigmast[batch_edge_global] * edges_score)
-                    edges_pred = edges_pred.softmax(dim=-1)
-                    
-            # update fnc
+
+            coords_pred = out['coords_pred'].squeeze()
+            # (n, 3)
+            atoms_pred = out['atoms_pred'].softmax(dim=-1)
+            # (n, num_atoms)
+            edges_pred = out['bonds_pred'].softmax(dim=-1)
+            # (e, num_edges)
+            
+            atom_feats = self.atom_mapping.weight.unsqueeze(0)
+            edge_feats = self.bond_mapping.weight.unsqueeze(0)
+            # (1, num_atoms, d_a)
+            # (1, num_edges, d_e)
+            # get reverse normal posterior p(x_{t-1} | x_t, x0=embed) 
+            
+            #import pdb
+            #pdb.set_trace()
+            
+            # atoms 
+            f0 = sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * 1.0 / sigmas2t[batch]
+            f0 = f0.unsqueeze(1)
+            # (n, 1, 1)
+            f0 = f0 * atom_feats
+            # (n, num_atoms, d_a)
+            f1 = (sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * out['atoms_perturbed']).unsqueeze(1)
+            # (n, 1, d_a)
+            mean = f0 + f1
+            # (n, num_atoms, d_a)
+            std = rev_sigma[batch].unsqueeze(-1)
+            # (n, 1, 1)
+            noise = torch.randn_like(mean)
+            f = mean + noise * std
+            # (n, num_atoms, d_a)
+            atom_types = f * atoms_pred.unsqueeze(-1)
+            # (n, num_atoms, d_a)
+            atom_types = atom_types.sum(dim=1)
+            # (n, d_a)
+            
+            
+            # edges
+            f0 = (sqrt_alphas_cumprod_prev[batch_edge_global] * one_m_alphas[batch_edge_global] * (1.0 / sigmas2t[batch_edge_global])).unsqueeze(1) * edge_feats
+            # (e, num_edges, d_e)
+            f1 = (sqrt_alphas[batch_edge_global] * one_m_alphas_cumprod_prev[batch_edge_global] * out['bonds_perturbed']).unsqueeze(1)
+            # (e, 1, d_e)
+            mean = f0 + f1
+            # (e, num_edges, d_e)
+            std = rev_sigma[batch_edge_global].unsqueeze(-1)
+            # (e, 1, 1)
+            noise = torch.randn((edge_attrs.size(0),
+                                 edge_attrs.size(1),
+                                 self.num_bond_classes,
+                                 self.num_bond_classes),
+                                 device=device, 
+                                 dtype=torch.get_default_dtype())
+            # (e/2, e/2, num_edges, d_e)
+            noise = 0.5 * (noise + noise.permute(1, 0, 2, 3))
+            noise = noise[edge_index_global[0, :], edge_index_global[1, :], :, :]
+            # (e, num_edges, d_e)
+            f = mean + noise * std
+            edge_attr_global = f * edges_pred.unsqueeze(-1)
+            edge_attr_global = edge_attr_global.sum(dim=1)
             
             # positions/coords
             mean = sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * out['coords_perturbed'] + \
@@ -376,26 +385,7 @@ class Trainer(pl.LightningModule):
                 print(pos)
                 pdb.set_trace()
 
-            # atoms 
-            mean = sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * out['atoms_perturbed'] + \
-                sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * atoms_pred
-            mean = (1.0 / sigmas2t[batch]) * mean
-            std = rev_sigma[batch]
-            noise = torch.randn_like(mean)
-            atom_types = mean + std * noise
-            
-            
-            # edges
-            mean = sqrt_alphas[batch_edge_global] * one_m_alphas_cumprod_prev[batch_edge_global] * out['bonds_perturbed'] + \
-                sqrt_alphas_cumprod_prev[batch_edge_global] * one_m_alphas[batch_edge_global] * edges_pred
-            mean = (1.0 / sigmas2t[batch_edge_global]) * mean
-            std = rev_sigma[batch_edge_global]
-            noise_edges = torch.randn_like(edge_attrs)
-            noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
-            noise_edges = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
-            edge_attr_global = mean + std * noise_edges
-            
-                
+          
             if not self.hparams.fully_connected:
                 edge_index_local = radius_graph(x=pos.detach(),
                                                 r=self.hparams.cutoff_upper,
@@ -404,6 +394,10 @@ class Trainer(pl.LightningModule):
                 
                  # include local (noisy) edge-attributes based on radius graph indices
                 edge_attrs = torch.zeros_like(edge_attrs)
+                #print(edge_attrs.shape)
+                #print(edge_attr_global.shape)
+                #import pdb
+                #pdb.set_trace()
                 edge_attrs[edge_index_global[0], edge_index_global[1], :] = edge_attr_global
                 edge_attr_local = edge_attrs[edge_index_local[0], edge_index_local[1], :]
                 batch_edge_local = batch[edge_index_local[0]]
@@ -415,8 +409,8 @@ class Trainer(pl.LightningModule):
                 pos_traj.append(pos.detach())
                 atom_type_traj.append(atom_types.detach())
                 edge_type_traj.append(edge_attr_global.detach())
-                
-        return pos, atom_types, edge_attr_global, edge_index_global, batch_num_nodes, [pos_traj, atom_type_traj, edge_type_traj]
+                  
+        return pos, atoms_pred, edges_pred, edge_index_global, batch_num_nodes, [pos_traj, atom_type_traj, edge_type_traj]
     
     def coalesce_edges(self, edge_index, bond_edge_index, bond_edge_attr, n):
         edge_attr = torch.full(size=(edge_index.size(-1), ),
@@ -460,19 +454,19 @@ class Trainer(pl.LightningModule):
                                                               edge_attr=edge_attr_global, 
                                                               sort_by_row=False)
         
-        # create block diagonal matrix
-        dense_edge = torch.zeros(n, n, device=pos.device, dtype=torch.long)
-        # populate entries with integer features 
-        dense_edge[edge_index_global[0, :], edge_index_global[1, :]] = edge_attr_global        
-        dense_edge_ohe = F.one_hot(dense_edge.view(-1, 1),
-                                   num_classes=BOND_FEATURE_DIMS + 1).view(n, n, -1).float()
+
+        # edge_attr_global = F.one_hot(edge_attr_global, num_classes=self.num_bond_classes)
+        edge_attr_global_transformed = self.bond_mapping(edge_attr_global)
         
-        assert torch.norm(dense_edge_ohe - dense_edge_ohe.permute(1, 0, 2)).item() == 0.0
-        # edge-scaling
-        dense_edge_ohe = self.edge_scaling * dense_edge_ohe
+        # create block diagonal tensor
+        dense_edge = torch.zeros(n, n, self.num_bond_classes, device=pos.device, dtype=torch.float)
+        # populate entries with integer features 
+        dense_edge[edge_index_global[0, :], edge_index_global[1, :], :] = edge_attr_global_transformed        
+
+        assert torch.norm(dense_edge - dense_edge.permute(1, 0, 2)).item() == 0.0
         
         # create symmetric noise for edge-attributes
-        noise_edges = torch.randn_like(dense_edge_ohe)
+        noise_edges = torch.randn_like(dense_edge)
         noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
         assert torch.norm(noise_edges - noise_edges.permute(1, 0, 2)).item() == 0.0
         
@@ -481,10 +475,10 @@ class Trainer(pl.LightningModule):
         
         signal_b = signal[data_batch].unsqueeze(-1).unsqueeze(-1)
         std_b = std[data_batch].unsqueeze(-1).unsqueeze(-1)
-        dense_edge_ohe_perturbed = dense_edge_ohe * signal_b + noise_edges * std_b
+        dense_edge_perturbed = dense_edge * signal_b + noise_edges * std_b
     
         # retrieve as edge-attributes in PyG Format 
-        edge_attr_global_perturbed = dense_edge_ohe_perturbed[edge_index_global[0, :], edge_index_global[1, :], :]
+        edge_attr_global_perturbed = dense_edge_perturbed[edge_index_global[0, :], edge_index_global[1, :], :]
         #edge_attr_global_noise = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
     
         if not self.hparams.continuous:
@@ -506,17 +500,17 @@ class Trainer(pl.LightningModule):
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
         
-        # one-hot-encode
+        # node feat
         node_feat = F.one_hot(
             node_feat.squeeze().long(), num_classes=max(self.hparams["atom_types"]) + 1
-        ).float()[:, self.hparams["atom_types"]]
+        ).float()[:, self.hparams["atom_types"]].argmax(dim=-1)
         
-        xohe = self.node_scaling * node_feat
+        node_feat_transformed = self.atom_mapping(node_feat)
         # sample noise for OHEs in {0, 1}^NUM_CLASSES
-        noise_ohes_true = torch.randn_like(xohe)
-        mean_ohes, std_ohes = self.sde.marginal_prob(x=xohe, t=t[data_batch])
+        noise_node_feats = torch.randn_like(node_feat_transformed)
+        mean_ohes, std_ohes = self.sde.marginal_prob(x=node_feat_transformed, t=t[data_batch])
         # perturb OHEs
-        ohes_perturbed = mean_ohes + std_ohes * noise_ohes_true
+        ohes_perturbed = mean_ohes + std_ohes * noise_node_feats
         
         edge_index_local = radius_graph(x=pos_perturbed,
                                         r=self.hparams.cutoff_upper,
@@ -524,7 +518,7 @@ class Trainer(pl.LightningModule):
                                         flow="source_to_target",
                                         max_num_neighbors=self.hparams.max_num_neighbors)
         
-        edge_attr_local_perturbed = dense_edge_ohe_perturbed[edge_index_local[0, :], edge_index_local[1, :], :]
+        edge_attr_local_perturbed = dense_edge_perturbed[edge_index_local[0, :], edge_index_local[1, :], :]
         #edge_attr_local_noise = noise_edges[edge_index_local[0, :], edge_index_local[1, :], :]
         
         batch_edge_global = data_batch[edge_index_global[0]]     
@@ -549,8 +543,10 @@ class Trainer(pl.LightningModule):
             out['bonds_perturbed'] = edge_attr_global_perturbed
         
         out['coords_true'] = pos_centered
-        out['atoms_true'] = node_feat.argmax(dim=-1)
+        out['atoms_true'] = node_feat
         out['bonds_true'] = edge_attr_global
+        out['atoms_embed'] = node_feat_transformed
+        out['bonds_embed'] = edge_attr_global_transformed
         
         out['edge_index'] = (edge_index_local, edge_index_global)
         
@@ -575,33 +571,10 @@ class Trainer(pl.LightningModule):
         alpha_bar_t = self.sde.alphas_cumprod[t]
         sqrt_alpha_bar_t = alpha_bar_t.sqrt()
 
-        if self.mixture:
-            coords_pred = sigmas2t[node_batch].unsqueeze(-1) * out_dict['coords_pred'] + \
-                alpha_bar_t[node_batch].unsqueeze(-1) * (out_dict['coords_perturbed'] - sigmast[node_batch].unsqueeze(-1) * out_dict['coords_eps'])
-            
-            atoms_pred = sigmas2t[node_batch].unsqueeze(-1) * out_dict['atoms_pred'].softmax(dim=-1) + \
-                alpha_bar_t[node_batch].unsqueeze(-1) * (out_dict['atoms_perturbed'] - sigmast[node_batch].unsqueeze(-1) * out_dict['atoms_eps'])
-                
-            edges_pred = sigmas2t[edge_batch].unsqueeze(-1) * out_dict['bonds_pred'].softmax(dim=-1) + \
-                alpha_bar_t[edge_batch].unsqueeze(-1) * (out_dict['bonds_perturbed'] - sigmast[edge_batch].unsqueeze(-1) * out_dict['bonds_eps'])
-        else:
-            if self.new:    
-                coords_pred = out_dict['coords_pred']
-                atoms_pred = out_dict['atoms_pred']
-                edges_pred = out_dict['bonds_pred']
-            else:
-                coords_score = out_dict['score_coords'].squeeze()
-                atoms_score =  out_dict['score_atoms']
-                edges_score = out_dict['score_bonds']
-                # x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1.0 - alpha_bar_t) * epsilon
-                # leads to x_0 = 1/sqrt(alpha_bar_t) * ( x_t - sqrt(1.0 - alpha_bar_t) * epsilon )  
-                coords_pred = 1.0 / sqrt_alpha_bar_t[node_batch].unsqueeze(-1) * \
-                    (out_dict['coords_perturbed'] - sigmast[node_batch].unsqueeze(-1) * coords_score)
-                atoms_pred = 1.0 / sqrt_alpha_bar_t[node_batch].unsqueeze(-1) * \
-                    (out_dict['atoms_perturbed'] - sigmast[node_batch].unsqueeze(-1) * atoms_score)
-                edges_pred = 1.0 / sqrt_alpha_bar_t[edge_batch].unsqueeze(-1) * \
-                    (out_dict['bonds_perturbed'] - sigmast[edge_batch].unsqueeze(-1) * edges_score)
-                
+        coords_pred = out_dict['coords_pred']
+        atoms_pred = out_dict['atoms_pred']
+        edges_pred = out_dict['bonds_pred']
+
         coords_loss = torch.pow(
            coords_pred - out_dict["coords_true"], 2
         ).sum(-1)

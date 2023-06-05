@@ -160,8 +160,8 @@ class ScoreModel(nn.Module):
         s = self.atom_mapping(x)
         s = self.atom_time_mapping(s + tnode)
         
-        edge_attr_global = self.bond_mapping(edge_attr_global)
-        edge_attr_global = self.bond_time_mapping(edge_attr_global + tedge_global)
+        edge_attr_global_transformed = self.bond_mapping(edge_attr_global)
+        edge_attr_global_transformed = self.bond_time_mapping(edge_attr_global_transformed + tedge_global)
         
         if self.local_edge_attrs:
             edge_attr_local = self.bond_mapping(edge_attr_local)
@@ -173,9 +173,9 @@ class ScoreModel(nn.Module):
         edge_attr_local = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local, pos=pos)        
         # global
         if self.local_global_model or self.fully_connected:
-            edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global, pos=pos)
+            edge_attr_global_transformed = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global_transformed, pos=pos)
         else:
-            edge_attr_global = (None, None, None)
+            edge_attr_global_transformed = (None, None, None)
         
         
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
@@ -183,13 +183,18 @@ class ScoreModel(nn.Module):
         out = self.gnn(
             s=s, v=v,
             edge_index_local=edge_index_local, edge_attr_local=edge_attr_local,
-            edge_index_global=edge_index_global, edge_attr_global=edge_attr_global,
+            edge_index_global=edge_index_global, edge_attr_global=edge_attr_global_transformed,
             batch=batch
         )
         
-        score = self.score_head(x=out, pos=pos, batch=batch, edge_index_global=edge_index_global)
-             
-        return score
+        out = self.score_head(x=out, pos=pos, batch=batch, edge_index_global=edge_index_global)
+        
+        out['coords_perturbed'] = pos
+        out['atoms_perturbed'] = x
+        out['bonds_perturbed'] = edge_attr_global
+        
+
+        return out
     
     
 class PredictionHead(nn.Module):
