@@ -12,6 +12,8 @@ from torch.utils.data import BatchSampler
 import argparse
 from torch_geometric.data import InMemoryDataset, DataLoader
 from typing import Optional
+from torch_geometric.utils import subgraph
+
 
 from geom.utils_metrics import compute_all_statistics
 from geom.utils_data import (
@@ -54,7 +56,7 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles):
 
 
 DATAROOT = '/home/let55/workspace/projects/e3moldiffusion/geom/data'
-
+root_no_h = '/home/let55/workspace/projects/e3moldiffusion/geom/data_noH'
 
 full_atom_encoder = {'H': 0, 'B': 1, 'C': 2, 'N': 3, 'O': 4, 'F': 5, 'Al': 6, 'Si': 7,
                      'P': 8, 'S': 9, 'Cl': 10, 'As': 11, 'Br': 12, 'I': 13, 'Hg': 14, 'Bi': 15}
@@ -143,7 +145,97 @@ class GeomDrugsDataset(InMemoryDataset):
         torch.save(self.collate(data_list), self.processed_paths[0])
 
 
+def get_data_no_h(data: Data) -> Data:
+    select_mask = (data.x != 0)
+    edge_index, edge_attr = subgraph(
+        subset=select_mask,
+        edge_index=data.edge_index,
+        edge_attr=data.edge_attr,
+        relabel_nodes=True,
+        num_nodes=data.num_nodes,
+        return_edge_mask=False
+    )
+    x = data.x[select_mask]
+    pos = data.pos[select_mask]
+    charges = data.charges[select_mask]
+    data = Data(x=x, pos=pos, edge_index=edge_index, edge_attr=edge_attr, charges=charges, smiles=data.smiles)
+    data = fully_connected_edge_idx(data)
+    assert sum(data.x == 0) == 0
+    return data
 
+
+class GeomDrugsDataset_NoH(InMemoryDataset):
+    def __init__(self, root,  split,  transform=None, pre_transform=None, pre_filter=None):
+        assert split in ['train', 'val', 'test']
+        self.split = split
+        self.atom_encoder = full_atom_encoder
+      
+        super().__init__(root, transform, pre_transform, pre_filter)
+        self.data, self.slices = torch.load(self.processed_paths[0])
+        self.statistics = Statistics(num_nodes=load_pickle(self.processed_paths[1]),
+                                     atom_types=torch.from_numpy(np.load(self.processed_paths[2])),
+                                     bond_types=torch.from_numpy(np.load(self.processed_paths[3])),
+                                     charge_types=torch.from_numpy(np.load(self.processed_paths[4])),
+                                     valencies=load_pickle(self.processed_paths[5]),
+                                     bond_lengths=None,
+                                     bond_angles=None)
+    
+    def download(self):
+        pass
+    
+    @property
+    def raw_file_names(self):
+        if self.split == 'train':
+            return ['train_data.pickle']
+        elif self.split == 'val':
+            return ['val_data.pickle']
+        else:
+            return ['test_data.pickle']
+   
+    @property
+    def processed_file_names(self):
+        h = 'noh'
+        if self.split == 'train':
+            return [f'train_{h}.pt', f'train_n_{h}.pickle', f'train_atom_types_{h}.npy', f'train_bond_types_{h}.npy',
+                    f'train_charges_{h}.npy', f'train_valency_{h}.pickle', f'train_bond_lengths_{h}.pickle',
+                    f'train_angles_{h}.npy', 'train_smiles.pickle']
+        elif self.split == 'val':
+            return [f'val_{h}.pt', f'val_n_{h}.pickle', f'val_atom_types_{h}.npy', f'val_bond_types_{h}.npy',
+                    f'val_charges_{h}.npy', f'val_valency_{h}.pickle', f'val_bond_lengths_{h}.pickle',
+                    f'val_angles_{h}.npy', 'val_smiles.pickle']
+        else:
+            return [f'test_{h}.pt', f'test_n_{h}.pickle', f'test_atom_types_{h}.npy', f'test_bond_types_{h}.npy',
+                    f'test_charges_{h}.npy', f'test_valency_{h}.pickle', f'test_bond_lengths_{h}.pickle',
+                    f'test_angles_{h}.npy', 'test_smiles.pickle']
+
+    def process(self):
+        if self.split == "train":
+            dataset = GeomDrugsDataset(root='/home/let55/workspace/projects/e3moldiffusion/geom/data', split="train")
+        elif self.split == "val":
+            dataset = GeomDrugsDataset(root='/home/let55/workspace/projects/e3moldiffusion/geom/data', split="val")
+        else:
+            dataset = GeomDrugsDataset(root='/home/let55/workspace/projects/e3moldiffusion/geom/data', split="test")
+        data_list = []
+       
+        for data in tqdm(dataset, total=len(dataset)):
+            data = get_data_no_h(data)
+            data_list.append(data)
+
+        torch.save(self.collate(data_list), self.processed_paths[0])
+
+        statistics = compute_all_statistics(data_list, self.atom_encoder, charges_dic={-2: 0, -1: 1, 0: 2,
+                                                                                       1: 3, 2: 4, 3: 5},
+                                           bonds=False, angles=False)
+        save_pickle(statistics.num_nodes, self.processed_paths[1])
+        np.save(self.processed_paths[2], statistics.atom_types)
+        np.save(self.processed_paths[3], statistics.bond_types)
+        np.save(self.processed_paths[4], statistics.charge_types)
+        save_pickle(statistics.valencies, self.processed_paths[5])
+        save_pickle(statistics.bond_lengths, self.processed_paths[6])
+        np.save(self.processed_paths[7], statistics.bond_angles)
+        torch.save(self.collate(data_list), self.processed_paths[0])
+        
+        
 class GeomDataModule(LightningDataModule):
     def __init__(
         self,
@@ -153,19 +245,30 @@ class GeomDataModule(LightningDataModule):
         shuffle_train: bool = True,
         pin_memory: bool = True,
         persistent_workers: bool = True,
+        with_hydrogen: bool = True
     ):
         super().__init__()
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.root = DATAROOT if root is not None else root
+        self.root = DATAROOT if root is None else root
         self.shuffle_train = shuffle_train
         self.pin_memory = pin_memory
         self.persistent_workers = persistent_workers
+        self.with_hydrogen = with_hydrogen
 
     def setup(self, stage: Optional[str] = None) -> None:
-        train_dataset = GeomDrugsDataset(root=self.root, split="train")
-        val_dataset = GeomDrugsDataset(root=self.root, split="val")
-        test_dataset = GeomDrugsDataset(root=self.root, split="test")      
+        print(self.root)
+        if not self.with_hydrogen:
+            print("loading without hydrogens")
+            train_dataset = GeomDrugsDataset_NoH(root=self.root, split="train")
+            val_dataset = GeomDrugsDataset_NoH(root=self.root, split="val")
+            test_dataset = GeomDrugsDataset_NoH(root=self.root, split="test")
+        else:
+            print("loading with hydrogens")
+            train_dataset = GeomDrugsDataset(root=self.root, split="train")
+            val_dataset = GeomDrugsDataset(root=self.root, split="val")
+            test_dataset = GeomDrugsDataset(root=self.root, split="test")
+            
         if stage == "fit" or stage is None:
             self.train_dataset = train_dataset
             self.val_dataset = val_dataset

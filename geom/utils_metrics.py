@@ -48,7 +48,7 @@ bond_dict = [
 ATOM_VALENCY = {6: 4, 7: 3, 8: 2, 9: 1, 15: 3, 16: 2, 17: 1, 35: 1, 53: 1}
 
 
-def compute_all_statistics(data_list, atom_encoder, charges_dic):
+def compute_all_statistics(data_list, atom_encoder, charges_dic, bonds: bool = True, angles: bool = True):
     num_nodes = node_counts(data_list)
     atom_types = atom_type_counts(data_list, num_classes=len(atom_encoder))
     print(f"Atom types: {atom_types}")
@@ -60,9 +60,17 @@ def compute_all_statistics(data_list, atom_encoder, charges_dic):
     print(f"Charge types: {charge_types}")
     valency = valency_count(data_list, atom_encoder)
     print("Valency: ", valency)
-    bond_lengths = bond_lengths_counts(data_list)
-    print("Bond lengths: ", bond_lengths)
-    angles = bond_angles(data_list, atom_encoder)
+    
+    if bonds:
+        bond_lengths = bond_lengths_counts(data_list)
+        print("Bond lengths: ", bond_lengths)
+    else:
+        bond_lengths = None
+    if angles:
+        angles = bond_angles(data_list, atom_encoder)
+    else:
+        angles = None
+        
     return Statistics(
         num_nodes=num_nodes,
         atom_types=atom_types,

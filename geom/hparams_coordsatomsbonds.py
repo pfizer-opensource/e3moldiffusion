@@ -34,6 +34,7 @@ def add_arguments(parser):
     parser.add_argument("-e", "--num_epochs", default=300, type=int)
     parser.add_argument("--eval_freq", default=1.0, type=float)
     parser.add_argument("--test_interval", default=5, type=int)
+    parser.add_argument("-nh", "--no_h", default=False, action='store_true')
 
     parser.add_argument("-s", "--save_dir", default=DEFAULT_SAVE_DIR, type=str)
     parser.add_argument("--precision", default=32, type=int)

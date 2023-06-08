@@ -73,11 +73,15 @@ class Trainer(pl.LightningModule):
         self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
         
         self.relative_pos = False
-    
+        
+        
+        self.a_latent_dim = hparams["sdim"]
+        self.e_latent_dim = hparams["edim"]
+        
         # self.atom_mapping = DenseLayer(self.num_atom_features, self.num_atom_features, bias=False)
-        self.atom_mapping = torch.nn.Embedding(self.num_atom_features, self.num_atom_features, padding_idx=None, max_norm=1.0)
+        self.atom_mapping = torch.nn.Embedding(self.num_atom_features, self.a_latent_dim, padding_idx=None, max_norm=1.0)
         # self.bond_mapping = DenseLayer(self.num_bond_classes, self.num_bond_classes, bias=False)
-        self.bond_mapping = torch.nn.Embedding(self.num_bond_classes, self.num_bond_classes, padding_idx=None, max_norm=1.0)
+        self.bond_mapping = torch.nn.Embedding(self.num_bond_classes,  self.e_latent_dim, padding_idx=None, max_norm=1.0)
         
         
         self.model = ScoreModelSE3(
@@ -93,6 +97,8 @@ class Trainer(pl.LightningModule):
             vector_aggr="mean",
             local_global_model=hparams["fully_connected_layer"],
             fully_connected=hparams["fully_connected"],
+            atom_mapping=False,
+            bond_mapping=False
         )
             
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
@@ -211,7 +217,7 @@ class Trainer(pl.LightningModule):
     def validation_epoch_end(self, validation_step_outputs):
         
         if (self.current_epoch + 1) % self.hparams.test_interval == 0:        
-            final_res = self.run_evaluation(step=self.i, ngraphs=1000, bs=self.hparams.batch_size)
+            final_res = self.run_evaluation(step=self.i, ngraphs=1000, bs=self.hparams.inference_batch_size)
             self.i += 1
             self.log(name='val/validity', value=final_res.validity[0], on_epoch=True)
             self.log(name='val/uniqueness', value=final_res.uniqueness[0], on_epoch=True)
@@ -242,7 +248,7 @@ class Trainer(pl.LightningModule):
         pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
         
         # initialize the atom-types 
-        atom_types = torch.randn(pos.size(0), self.num_atom_features, device=device)
+        atom_types = torch.randn(pos.size(0), self.a_latent_dim, device=device)
         
         edge_index_local = radius_graph(x=pos,
                                         r=self.hparams.cutoff_upper,
@@ -253,7 +259,7 @@ class Trainer(pl.LightningModule):
         # sample symmetric edge-attributes
         edge_attrs = torch.randn((edge_index_global.size(0),
                                   edge_index_global.size(1),
-                                  self.num_bond_classes),
+                                  self.e_latent_dim),
                                   device=device, 
                                   dtype=torch.get_default_dtype())
         # symmetrize
@@ -359,7 +365,7 @@ class Trainer(pl.LightningModule):
             noise = torch.randn((edge_attrs.size(0),
                                  edge_attrs.size(1),
                                  self.num_bond_classes,
-                                 self.num_bond_classes),
+                                 self.e_latent_dim),
                                  device=device, 
                                  dtype=torch.get_default_dtype())
             # (e/2, e/2, num_edges, d_e)
@@ -459,7 +465,7 @@ class Trainer(pl.LightningModule):
         edge_attr_global_transformed = self.bond_mapping(edge_attr_global)
         
         # create block diagonal tensor
-        dense_edge = torch.zeros(n, n, self.num_bond_classes, device=pos.device, dtype=torch.float)
+        dense_edge = torch.zeros(n, n, self.e_latent_dim, device=pos.device, dtype=torch.float)
         # populate entries with integer features 
         dense_edge[edge_index_global[0, :], edge_index_global[1, :], :] = edge_attr_global_transformed        
 

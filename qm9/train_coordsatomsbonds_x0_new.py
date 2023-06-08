@@ -2,7 +2,6 @@ import logging
 import os
 from argparse import ArgumentParser
 from typing import List, Optional, Tuple
-import pandas as pd
 
 import pytorch_lightning as pl
 import torch
@@ -17,7 +16,7 @@ import torch.nn.functional as F
 from pytorch_lightning.loggers import TensorBoardLogger
 from e3moldiffusion.molfeat import atom_type_config, get_bond_feature_dims
 from e3moldiffusion.sde import VPAncestralSamplingPredictor, DiscreteDDPM
-from e3moldiffusion.coordsatomsbonds import ScoreModelSE3
+from e3moldiffusion.coordsatomsbonds import ScoreModelSE3New
 
 from torch import Tensor
 from torch_geometric.data import Batch
@@ -27,15 +26,14 @@ from torch_sparse import coalesce
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from torch_scatter import scatter_mean, scatter_add
 from tqdm import tqdm
-import json
 
 #New imported 
 from datetime import datetime
 from callbacks.ema import ExponentialMovingAverage
 from config_file import get_dataset_info
-from geom.utils_sampling import Molecule, analyze_stability_for_molecules
+from qm9.utils_sampling import Molecule, analyze_stability_for_molecules
 import pandas as pd
-from datetime import datetime
+
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 
@@ -57,70 +55,50 @@ BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 
 class Trainer(pl.LightningModule):
     def __init__(self,
-                 hparams: dict,
+                 hparams,
                  dataset_info: dict
                  ):
         super().__init__()
         self.save_hyperparameters(hparams)
 
         self.include_charges = False
-        
-        self.hparams.num_atom_types = get_num_atom_types_geom(dataset="drugs")
-        if hparams.get('no_h'):
-            print("Training without hydrogen")
-            self.hparams.num_atom_types -= 1
-            
-        self.hparams.num_bond_types = BOND_FEATURE_DIMS + 1
-        
         self.num_atom_features = self.hparams.num_atom_types + int(self.include_charges)
         self.num_bond_classes = 5
         
-        self.dataset_info = dataset_info
-
         self.i = 0
-      
-        self.mixture = False
-        self.new = True
-        self.relative_pos = True
+        self.dataset_info = dataset_info
         
         empirical_num_nodes = self._get_empirical_num_nodes()
         self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
         
+      
         self.edge_scaling = 1.00
         self.node_scaling = 1.00
         
-        self.model = ScoreModelSE3(
+        self.relative_pos = False
+    
+        self.model = ScoreModelSE3New(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
-            use_norm=not hparams["omit_norm"],
-            use_cross_product=not hparams["omit_cross_product"],
+            use_norm=hparams["use_norm"],
+            use_cross_product=hparams["use_cross_product"],
             num_atom_types=self.num_atom_features,
             num_bond_types=self.num_bond_classes,
-            edge_dim=hparams['edim'],
-            cutoff_local=hparams["cutoff_local"],
-            rbf_dim=hparams["rbf_dim"],
-            vector_aggr=hparams["vector_aggr"],
+            rbf_dim=hparams["num_rbf"],
+            cutoff_local=hparams["cutoff_upper"],
+            vector_aggr="mean",
+            local_global_model=hparams["fully_connected_layer"],
             fully_connected=hparams["fully_connected"],
-            local_global_model=hparams["local_global_model"],
         )
-
+    
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
                                 beta_max=hparams["beta_max"],
                                 N=hparams["timesteps"],
                                 scaled_reverse_posterior_sigma=True,
                                 schedule="cosine",
                                 enforce_zero_terminal_snr=False)
-            
-        # self.sampler = VPAncestralSamplingPredictor(sde=self.sde)
-     
+        
     def _get_empirical_num_nodes(self):
-        if not self.hparams.no_h:
-            with open('/home/let55/workspace/projects/e3moldiffusion/geom/num_nodes_geom_midi.json', 'r') as f:
-                num_nodes_dict = json.load(f, object_hook=lambda d: {int(k) if k.lstrip('-').isdigit() else k: v for k, v in d.items()})
-        else:
-            with open('/home/let55/workspace/projects/e3moldiffusion/geom/num_nodes_geom_midi_no_h.json', 'r') as f:
-                num_nodes_dict = json.load(f, object_hook=lambda d: {int(k) if k.lstrip('-').isdigit() else k: v for k, v in d.items()})
-                
         num_nodes_dict = self.dataset_info.get('n_nodes')
         max_num_nodes = max(num_nodes_dict.keys())
         empirical_distribution_num_nodes = {i: num_nodes_dict.get(i) for i in range(max_num_nodes)}
@@ -161,9 +139,6 @@ class Trainer(pl.LightningModule):
         atom_types_split = atom_types.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
 
         atom_types_integer = torch.argmax(atom_types, dim=-1)
-        if self.hparams.no_h:
-            atom_types_integer += 1
-            
         atom_types_integer_split = atom_types_integer.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
         
         return pos_splits, atom_types_split, atom_types_integer_split, edge_types, edge_index_global, batch_num_nodes, trajs    
@@ -223,7 +198,7 @@ class Trainer(pl.LightningModule):
         final_res['epoch'] = self.current_epoch
         final_res = pd.DataFrame.from_dict([final_res])
 
-        save_dir = os.path.join(model.hparams.save_dir, 'evaluation.csv')
+        save_dir = os.path.join(model.hparams.log_dir, 'evaluation.csv')
         with open(save_dir, 'a') as f:
             final_res.to_csv(f, header=False)
             
@@ -240,7 +215,6 @@ class Trainer(pl.LightningModule):
             self.log(name='val/mol_stable', value=final_res.mol_stable[0], on_epoch=True)
             self.log(name='val/atm_stable', value=final_res.atm_stable[0], on_epoch=True)
         
-                
     def reverse_sampling(
         self,
         num_graphs: int,
@@ -267,31 +241,16 @@ class Trainer(pl.LightningModule):
         atom_types = torch.randn(pos.size(0), self.num_atom_features, device=device)
         
         edge_index_local = radius_graph(x=pos,
-                                        r=self.hparams.cutoff_local,
+                                        r=self.hparams.cutoff_upper,
                                         batch=batch, 
                                         max_num_neighbors=self.hparams.max_num_neighbors)
         
         edge_index_global = torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
-        # sample symmetric edge-attributes
-        edge_attrs = torch.randn((edge_index_global.size(0),
-                                  edge_index_global.size(1),
-                                  self.num_bond_classes),
-                                  device=device, 
-                                  dtype=torch.get_default_dtype())
-        # symmetrize
-        edge_attrs = 0.5 * (edge_attrs + edge_attrs.permute(1, 0, 2))
-        assert torch.norm(edge_attrs - edge_attrs.permute(1, 0, 2)).item() == 0.0
-        # get COO format (2, E)
         edge_index_global, _ = dense_to_sparse(edge_index_global)
         edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
         # select in PyG formt (E, self.hparams.num_bond_types)
-        edge_attr_global = edge_attrs[edge_index_global[0, :], edge_index_global[1, :], :]
         batch_edge_global = batch[edge_index_global[0]]     
         batch_edge_local = batch[edge_index_local[0]]   
-                  
-        # include local (noisy) edge-attributes based on radius graph indices
-        edge_attr_local = edge_attrs[edge_index_local[0], edge_index_local[1], :]
-
 
         pos_traj = []
         atom_type_traj = []
@@ -313,13 +272,12 @@ class Trainer(pl.LightningModule):
                 pos=pos,
                 edge_index_local=edge_index_local,
                 edge_index_global=edge_index_global,
-                edge_attr_local=edge_attr_local,
-                edge_attr_global=edge_attr_global,
+                edge_attr_local=None,
+                edge_attr_global=None,
                 batch=batch,
                 batch_edge_global=batch_edge_global
             )
-            
-        
+             
             rev_sigma = self.sde.reverse_posterior_sigma[t].unsqueeze(-1)
             sigmast = self.sde.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
             sigmas2t = sigmast.pow(2)
@@ -331,42 +289,11 @@ class Trainer(pl.LightningModule):
             sqrt_alphas_cumprod_prev = torch.sqrt(self.sde.alphas_cumprod_prev[t].unsqueeze(-1))
             one_m_alphas = self.sde.discrete_betas[t].unsqueeze(-1)
             sqrt_alpha_bar_t = alpha_bar_t.sqrt()
-            
-            if self.mixture:
-                coords_pred = sigmas2t[batch] * out['coords_pred'] + \
-                    alpha_bar_t[batch] * (out['coords_perturbed'] - sigmast[batch] * out['coords_eps'])
-                                    
-                atoms_pred = sigmas2t[batch] * out['atoms_pred'].softmax(dim=-1) + \
-                    alpha_bar_t[batch] * (out['atoms_perturbed'] - sigmast[batch] * out['atoms_eps'])
-                
-                atoms_pred = atoms_pred.softmax(dim=-1)
-                    
-                edges_pred = sigmas2t[batch_edge_global] * out['bonds_pred'].softmax(dim=-1) + \
-                    alpha_bar_t[batch_edge_global] * (out['bonds_perturbed'] - sigmast[batch_edge_global] * out['bonds_eps'])
-                    
-                edges_pred = edges_pred.softmax(dim=-1)
-            else:
-                if self.new:    
-                    coords_pred = out['coords_pred'].squeeze()
-                    atoms_pred = out['atoms_pred'].softmax(dim=-1)
-                    edges_pred = out['bonds_pred'].softmax(dim=-1)
-                else:
-                    coords_score = out['score_coords'].squeeze()
-                    atoms_score =  out['score_atoms']
-                    edges_score = out['score_bonds']
-                    # x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1.0 - alpha_bar_t) * epsilon
-                    # leads to x_0 = 1/sqrt(alpha_bar_t) * ( x_t - sqrt(1.0 - alpha_bar_t) * epsilon )  
-                    coords_pred = 1.0 / sqrt_alpha_bar_t[batch] * \
-                        (out['coords_perturbed'] - sigmast[batch] * coords_score)
-                        
-                    atoms_pred = 1.0 / sqrt_alpha_bar_t[batch] * \
-                        (out['atoms_perturbed'] - sigmast[batch] * atoms_score)
-                    atoms_pred = atoms_pred.softmax(dim=-1)
-                    
-                    edges_pred = 1.0 / sqrt_alpha_bar_t[batch_edge_global] * \
-                        (out['bonds_perturbed'] - sigmast[batch_edge_global] * edges_score)
-                    edges_pred = edges_pred.softmax(dim=-1)
-                
+
+            coords_pred = out['coords_pred'].squeeze()
+            atoms_pred = out['atoms_pred'].softmax(dim=-1)
+            edges_pred = out['bonds_pred']
+        
             # update fnc
             
             # positions/coords
@@ -384,7 +311,6 @@ class Trainer(pl.LightningModule):
                 print(pos)
                 pdb.set_trace()
 
-                
             # atoms 
             mean = sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * out['atoms_perturbed'] + \
                 sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * atoms_pred
@@ -392,30 +318,12 @@ class Trainer(pl.LightningModule):
             std = rev_sigma[batch]
             noise = torch.randn_like(mean)
             atom_types = mean + std * noise
-            
-            
-            # edges
-            mean = sqrt_alphas[batch_edge_global] * one_m_alphas_cumprod_prev[batch_edge_global] * out['bonds_perturbed'] + \
-                sqrt_alphas_cumprod_prev[batch_edge_global] * one_m_alphas[batch_edge_global] * edges_pred
-            mean = (1.0 / sigmas2t[batch_edge_global]) * mean
-            std = rev_sigma[batch_edge_global]
-            noise_edges = torch.randn_like(edge_attrs)
-            noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
-            noise_edges = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
-            edge_attr_global = mean + std * noise_edges
-            
                 
             if not self.hparams.fully_connected:
                 edge_index_local = radius_graph(x=pos.detach(),
-                                                r=self.hparams.cutoff_local,
+                                                r=self.hparams.cutoff_upper,
                                                 batch=batch, 
                                                 max_num_neighbors=self.hparams.max_num_neighbors)
-                
-                 # include local (noisy) edge-attributes based on radius graph indices
-                edge_attrs = torch.zeros_like(edge_attrs)
-                edge_attrs[edge_index_global[0], edge_index_global[1], :] = edge_attr_global
-                edge_attr_local = edge_attrs[edge_index_local[0], edge_index_local[1], :]
-                batch_edge_local = batch[edge_index_local[0]]
                 
             #atom_integer = torch.argmax(atom_types, dim=-1)
             #bond_integer = torch.argmax(edge_attr_global, dim=-1)
@@ -423,9 +331,9 @@ class Trainer(pl.LightningModule):
             if save_traj:
                 pos_traj.append(pos.detach())
                 atom_type_traj.append(atom_types.detach())
-                edge_type_traj.append(edge_attr_global.detach())
+                edge_type_traj.append(None)
                 
-        return pos, atom_types, edge_attr_global, edge_index_global, batch_num_nodes, [pos_traj, atom_type_traj, edge_type_traj]
+        return pos, atom_types, edges_pred, edge_index_global, batch_num_nodes, [pos_traj, atom_type_traj, edge_type_traj]
     
     def coalesce_edges(self, edge_index, bond_edge_index, bond_edge_attr, n):
         edge_attr = torch.full(size=(edge_index.size(-1), ),
@@ -439,13 +347,13 @@ class Trainer(pl.LightningModule):
     
     def forward(self, batch: Batch, t: Tensor):
         
-        node_feat: Tensor = batch.x
+        node_feat: Tensor = batch.z
         pos: Tensor = batch.pos
         charges: Tensor = batch.charges
         data_batch: Tensor = batch.batch
         batch_num_nodes = torch.bincount(data_batch)
-        bond_edge_index = batch.edge_index
-        bond_edge_attr = batch.edge_attr
+        bond_edge_index = batch.bond_index
+        bond_edge_attr = batch.bond_attr
         n = batch.num_nodes
         bs = int(data_batch.max()) + 1
         
@@ -469,33 +377,6 @@ class Trainer(pl.LightningModule):
                                                               edge_attr=edge_attr_global, 
                                                               sort_by_row=False)
         
-        # create block diagonal matrix
-        dense_edge = torch.zeros(n, n, device=pos.device, dtype=torch.long)
-        # populate entries with integer features 
-        dense_edge[edge_index_global[0, :], edge_index_global[1, :]] = edge_attr_global        
-        dense_edge_ohe = F.one_hot(dense_edge.view(-1, 1),
-                                   num_classes=BOND_FEATURE_DIMS + 1).view(n, n, -1).float()
-        
-        assert torch.norm(dense_edge_ohe - dense_edge_ohe.permute(1, 0, 2)).item() == 0.0
-        # edge-scaling
-        dense_edge_ohe = self.edge_scaling * dense_edge_ohe
-        
-        # create symmetric noise for edge-attributes
-        noise_edges = torch.randn_like(dense_edge_ohe)
-        noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
-        assert torch.norm(noise_edges - noise_edges.permute(1, 0, 2)).item() == 0.0
-        
-        signal = self.sde.sqrt_alphas_cumprod[t]
-        std = self.sde.sqrt_1m_alphas_cumprod[t]
-        
-        signal_b = signal[data_batch].unsqueeze(-1).unsqueeze(-1)
-        std_b = std[data_batch].unsqueeze(-1).unsqueeze(-1)
-        dense_edge_ohe_perturbed = dense_edge_ohe * signal_b + noise_edges * std_b
-    
-        # retrieve as edge-attributes in PyG Format 
-        edge_attr_global_perturbed = dense_edge_ohe_perturbed[edge_index_global[0, :], edge_index_global[1, :], :]
-        #edge_attr_global_noise = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
-    
         if not self.hparams.continuous:
             temb = t.float() / self.hparams.timesteps
             temb = temb.clamp(min=self.hparams.eps_min)
@@ -516,13 +397,9 @@ class Trainer(pl.LightningModule):
         pos_perturbed = mean_coords + std_coords * noise_coords_true
         
         # one-hot-encode
-                
-        import pdb
-        pdb.set_trace()
-        
-        if self.hparams.no_h:
-            node_feat -= 1 
-        node_feat = F.one_hot(node_feat, num_classes=self.num_atom_features).float()
+        node_feat = F.one_hot(
+            node_feat.squeeze().long(), num_classes=max(self.hparams["atom_types"]) + 1
+        ).float()[:, self.hparams["atom_types"]]
         
         xohe = self.node_scaling * node_feat
         # sample noise for OHEs in {0, 1}^NUM_CLASSES
@@ -530,30 +407,23 @@ class Trainer(pl.LightningModule):
         mean_ohes, std_ohes = self.sde.marginal_prob(x=xohe, t=t[data_batch])
         # perturb OHEs
         ohes_perturbed = mean_ohes + std_ohes * noise_ohes_true
-
+        
         edge_index_local = radius_graph(x=pos_perturbed,
-                                        r=self.hparams.cutoff_local,
+                                        r=self.hparams.cutoff_upper,
                                         batch=data_batch, 
                                         flow="source_to_target",
                                         max_num_neighbors=self.hparams.max_num_neighbors)
         
-        edge_attr_local_perturbed = dense_edge_ohe_perturbed[edge_index_local[0, :], edge_index_local[1, :], :]
-        #edge_attr_local_noise = noise_edges[edge_index_local[0, :], edge_index_local[1, :], :]
-        
         batch_edge_global = data_batch[edge_index_global[0]]     
         
-        #import pdb
-        #print(ohes_perturbed.shape)
-        #pdb.set_trace()
-
         out = self.model(
             x=ohes_perturbed,
             t=temb,
             pos=pos_perturbed,
             edge_index_local=edge_index_local,
             edge_index_global=edge_index_global,
-            edge_attr_local=edge_attr_local_perturbed,
-            edge_attr_global=edge_attr_global_perturbed,
+            edge_attr_local=None,
+            edge_attr_global=None,
             batch=data_batch,
             batch_edge_global=batch_edge_global,
         )
@@ -563,7 +433,7 @@ class Trainer(pl.LightningModule):
         if "atoms_perturbed" not in out.keys():
             out['atoms_perturbed'] = ohes_perturbed
         if "bonds_perturbed" not in out.keys():
-            out['bonds_perturbed'] = edge_attr_global_perturbed
+            out['bonds_perturbed'] = None
         
         out['coords_true'] = pos_centered
         out['atoms_true'] = node_feat.argmax(dim=-1)
@@ -580,52 +450,26 @@ class Trainer(pl.LightningModule):
                             dtype=torch.long, device=batch.x.device)
         out_dict, node_batch, edge_batch = self(batch=batch, t=t)
         
-        
         #snr = self.sde.alphas_cumprod.pow(2) / (self.sde.sqrt_1m_alphas_cumprod.pow(2))
         #s = t - 1
         #s = torch.clamp(s, min=0)
         #w = snr[s] - snr[t]
-        
-        w = 1 / batch_size
+        w = 1.0 / batch_size
     
         sigmast = self.sde.sqrt_1m_alphas_cumprod[t]
         sigmas2t = sigmast.pow(2)
         alpha_bar_t = self.sde.alphas_cumprod[t]
         sqrt_alpha_bar_t = alpha_bar_t.sqrt()
-
-
-        if self.mixture:
-            coords_pred = sigmas2t[node_batch].unsqueeze(-1) * out_dict['coords_pred'] + \
-                alpha_bar_t[node_batch].unsqueeze(-1) * (out_dict['coords_perturbed'] - sigmast[node_batch].unsqueeze(-1) * out_dict['coords_eps'])
-            
-            atoms_pred = sigmas2t[node_batch].unsqueeze(-1) * out_dict['atoms_pred'].softmax(dim=-1) + \
-                alpha_bar_t[node_batch].unsqueeze(-1) * (out_dict['atoms_perturbed'] - sigmast[node_batch].unsqueeze(-1) * out_dict['atoms_eps'])
+        
+        coords_pred = out_dict['coords_pred']
+        atoms_pred = out_dict['atoms_pred']
+        edges_pred = out_dict['bonds_pred']
+        
                 
-            edges_pred = sigmas2t[edge_batch].unsqueeze(-1) * out_dict['bonds_pred'].softmax(dim=-1) + \
-                alpha_bar_t[edge_batch].unsqueeze(-1) * (out_dict['bonds_perturbed'] - sigmast[edge_batch].unsqueeze(-1) * out_dict['bonds_eps'])
-        else:
-            if self.new:    
-                coords_pred = out_dict['coords_pred']
-                atoms_pred = out_dict['atoms_pred']
-                edges_pred = out_dict['bonds_pred']
-            else:
-                coords_score = out_dict['score_coords'].squeeze()
-                atoms_score =  out_dict['score_atoms']
-                edges_score = out_dict['score_bonds']
-                # x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1.0 - alpha_bar_t) * epsilon
-                # leads to x_0 = 1/sqrt(alpha_bar_t) * ( x_t - sqrt(1.0 - alpha_bar_t) * epsilon )  
-                coords_pred = 1.0 / sqrt_alpha_bar_t[node_batch].unsqueeze(-1) * \
-                    (out_dict['coords_perturbed'] - sigmast[node_batch].unsqueeze(-1) * coords_score)
-                atoms_pred = 1.0 / sqrt_alpha_bar_t[node_batch].unsqueeze(-1) * \
-                    (out_dict['atoms_perturbed'] - sigmast[node_batch].unsqueeze(-1) * atoms_score)
-                edges_pred = 1.0 / sqrt_alpha_bar_t[edge_batch].unsqueeze(-1) * \
-                    (out_dict['bonds_perturbed'] - sigmast[edge_batch].unsqueeze(-1) * edges_score)
-            
-            
         coords_loss = torch.pow(
            coords_pred - out_dict["coords_true"], 2
         ).sum(-1)
-    
+        
         coords_loss = scatter_mean(
             coords_loss, index=batch.batch, dim=0, dim_size=batch_size
         )
@@ -647,7 +491,7 @@ class Trainer(pl.LightningModule):
         )
          
         bonds_loss = 0.5 * scatter_mean(
-            bonds_loss, index=out_dict["edge_index"][1][1], dim=0, dim_size=out_dict["atoms_pred"].size(0)
+            bonds_loss, index=out_dict["edge_index"][1][1], dim=0, dim_size=out_dict["coords_true"].size(0)
         )
         bonds_loss = scatter_mean(
             bonds_loss, index=batch.batch, dim=0, dim_size=batch_size
@@ -672,14 +516,13 @@ class Trainer(pl.LightningModule):
             rel_pos_loss = 0.0
             
         loss = 1.0 * coords_loss +  1.0 * atoms_loss +  1.0 * bonds_loss + 1.0 * rel_pos_loss
-        
+
 
         self.log(
             f"{stage}/loss",
             loss,
             on_step=True,
             batch_size=batch_size,
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
         )
 
         self.log(
@@ -687,7 +530,6 @@ class Trainer(pl.LightningModule):
             coords_loss,
             on_step=True,
             batch_size=batch_size,
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
         )
 
         self.log(
@@ -695,7 +537,6 @@ class Trainer(pl.LightningModule):
             atoms_loss,
             on_step=True,
             batch_size=batch_size,
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
         )
         
         self.log(
@@ -703,7 +544,6 @@ class Trainer(pl.LightningModule):
             bonds_loss,
             on_step=True,
             batch_size=batch_size,
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
         )
         
         self.log(
@@ -711,9 +551,7 @@ class Trainer(pl.LightningModule):
             rel_pos_loss,
             on_step=True,
             batch_size=batch_size,
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
         )
-        
         
         
         return loss
@@ -744,72 +582,47 @@ class Trainer(pl.LightningModule):
     
 
 if __name__ == "__main__":
-    from geom.hparams_coordsatomsbonds import add_arguments
+    from qm9.data import QM9DataModule
+    from qm9.hparams_coordsatomsbonds import add_arguments
 
     parser = ArgumentParser()
     parser = add_arguments(parser)
     hparams = parser.parse_args()
     
-    if not os.path.exists(hparams.save_dir):
-        os.makedirs(hparams.save_dir)
+    if not os.path.exists(hparams.log_dir):
+        os.makedirs(hparams.log_dir)
 
-    if not os.path.isdir(hparams.save_dir + f"/run{hparams.id}/"):
+    if not os.path.isdir(hparams.log_dir + f"/run{hparams.id}/"):
         print("Creating directory")
-        os.mkdir(hparams.save_dir + f"/run{hparams.id}/")
+        os.mkdir(hparams.log_dir + f"/run{hparams.id}/")
     print(f"Starting Run {hparams.id}")
+    
     ema_callback = ExponentialMovingAverage(decay=hparams.ema_decay)
     checkpoint_callback = ModelCheckpoint(
-        dirpath=hparams.save_dir + f"/run{hparams.id}/",
+        dirpath=hparams.log_dir + f"/run{hparams.id}/",
         save_top_k=1,
         monitor="val/coords_loss",
         save_last=True,
     )
     lr_logger = LearningRateMonitor()
     tb_logger = TensorBoardLogger(
-        hparams.save_dir + f"/run{hparams.id}/", default_hp_metric=False
+        hparams.log_dir + f"/run{hparams.id}/", default_hp_metric=False
     )
 
-    dataset_info = get_dataset_info("drugs", remove_h=False)
-  
     print(f"Loading {hparams.dataset} Datamodule.")
-    old = False
-    
-    if old:
-        from geom.data import GeomDataModule
-        print("Using native GEOM")
-        datamodule = GeomDataModule(
-            batch_size=hparams.batch_size,
-            num_workers=hparams.num_workers,
-            dataset=hparams.dataset,
-            env_in_init=True,
-            shuffle_train=True,
-            max_num_conformers=hparams.max_num_conformers,
-            pin_memory=True,
-            persistent_workers=True,
-            transform_args = {"create_bond_graph": True,
-                            "save_smiles": False,
-                            "fully_connected_edge_index": False
-                            }
-        )
-    else:
-        from geom.geom_dataset import GeomDataModule
-        print("Using MIDI GEOM")
-        if hparams.no_h:
-            root = '/home/let55/workspace/projects/e3moldiffusion/geom/data_noH' 
-        else:
-            root = '/home/let55/workspace/projects/e3moldiffusion/geom/data'
-        print(root)
-        datamodule = GeomDataModule(root=root,
-                                    batch_size=hparams.batch_size,
-                                    num_workers=hparams.num_workers,
-                                    pin_memory=True,
-                                    persistent_workers=True,
-                                    with_hydrogen=not hparams.no_h
-                                    )
+    datamodule = QM9DataModule(hparams)
+    datamodule.prepare_data()
+    datamodule.setup("fit")
+
+    dataset_info = get_dataset_info(hparams.dataset, hparams.remove_hs)
+
+
+    dataloader = datamodule.get_dataloader(datamodule.train_dataset, "val")
         
-        
-    model = Trainer(hparams=hparams.__dict__,
-                    dataset_info=dataset_info)
+    model = Trainer(
+        hparams=hparams.__dict__,
+        dataset_info=dataset_info
+    )
 
     strategy = (
         pl.strategies.DDPStrategy(find_unused_parameters=False)
@@ -837,7 +650,9 @@ if __name__ == "__main__":
         num_sanity_val_steps=2,
         max_epochs=hparams.num_epochs,
         detect_anomaly=hparams.detect_anomaly,
-        resume_from_checkpoint=hparams.load_ckpt if hparams.load_ckpt != "" else None,
+        resume_from_checkpoint=None
+        if hparams.load_model is None
+        else hparams.load_model,
     )
 
     pl.seed_everything(seed=0, workers=hparams.gpus > 1)
@@ -845,5 +660,6 @@ if __name__ == "__main__":
     trainer.fit(
         model=model,
         datamodule=datamodule,
-        ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
+        # ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
     )
+    
