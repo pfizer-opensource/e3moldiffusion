@@ -30,7 +30,7 @@ neighbor_embedding: true
 #EQGAT
 sdim: 256 #128 #256
 vdim: 256 # 32 #256
-edim: 64 # 32 #256
+edim: # 64 # 32 #256
 use_norm: true
 use_cross_product: false
 use_bond_features: true

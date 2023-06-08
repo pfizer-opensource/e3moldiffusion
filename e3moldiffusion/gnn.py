@@ -9,7 +9,7 @@ from e3moldiffusion.convs import (EQGATRBFConv, EQGATConv,
                                   EQGATEdgeRBFConv, EQGATEdgeConv,
                                   EQGATEdgeConvV2, EQGATRBFConvV2,
                                   EQGATConvV2,
-                                  EQGATLocalConv, EQGATGlobalConv
+                                  EQGATLocalConv, EQGATGlobalConv, EQGATGlobalConvNoEdge
                                   )
 from e3moldiffusion.modules import LayerNorm
 
@@ -785,9 +785,8 @@ class GNNSE3Atom(nn.Module):
         for i in range(num_layers):
             if fully_connected:
                 convs.append(
-                    EQGATGlobalConv(in_dims=hn_dim,
+                    EQGATGlobalConvNoEdge(in_dims=hn_dim,
                                     out_dims=hn_dim,
-                                    edge_dim=None,
                                     has_v_in=i>0,
                                     use_mlp_update= i < (num_layers - 1),
                                     vector_aggr=vector_aggr,
@@ -797,9 +796,8 @@ class GNNSE3Atom(nn.Module):
             else:
                 if (i == self.num_layers - 2 or i == 0) and local_global_model:
                     convs.append(
-                        EQGATGlobalConv(in_dims=hn_dim,
+                        EQGATGlobalConvNoEdge(in_dims=hn_dim,
                                         out_dims=hn_dim,
-                                        edge_dim=None,
                                         has_v_in=i>0,
                                         use_mlp_update= i < (num_layers - 1),
                                         vector_aggr=vector_aggr,

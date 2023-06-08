@@ -402,14 +402,12 @@ class ScoreModelSE3(nn.Module):
 
 
 class PredictionHeadNew(nn.Module):
-    def __init__(self, hn_dim: Tuple[int, int], edge_dim: int, num_atom_types: int, num_bond_types: int = 5) -> None:
+    def __init__(self, hn_dim: Tuple[int, int], num_atom_types: int, num_bond_types: int = 5) -> None:
         super(PredictionHeadNew, self).__init__()
         self.sdim, self.vdim = hn_dim
         self.num_atom_types = num_atom_types
         
         self.shared_mapping = DenseLayer(self.sdim, self.sdim, bias=True, activation=nn.SiLU())
-        
-        self.bond_mapping = DenseLayer(edge_dim, self.sdim, bias=True)
         
         self.bonds_lin_0 = DenseLayer(in_features=self.sdim + 1, out_features=self.sdim, bias=True)
         self.bonds_lin_1 = DenseLayer(in_features=self.sdim, out_features=2 * num_bond_types, bias=True)
@@ -436,7 +434,7 @@ class PredictionHeadNew(nn.Module):
         j, i = edge_index_global
         
         d = (pos[i] - pos[j]).pow(2).sum(-1, keepdim=True).sqrt()
-        f = s[i] + s[j] + self.bond_mapping(e)
+        f = s[i] + s[j]
         edge = torch.cat([f, d], dim=-1)
         
         bonds_pred = F.silu(self.bonds_lin_0(edge))
@@ -478,7 +476,8 @@ class ScoreModelSE3New(nn.Module):
                  ) -> None:
         super(ScoreModelSE3New, self).__init__()
         
-        self.time_mapping_atom = DenseLayer(1, hn_dim[0])    
+        self.time_mapping = DenseLayer(1, hn_dim[0])   
+        self.atom_mapping = DenseLayer(num_atom_types, hn_dim[0])
         self.atom_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
         
         assert fully_connected or local_global_model
@@ -502,14 +501,15 @@ class ScoreModelSE3New(nn.Module):
             local_global_model=local_global_model
         )
         
-        self.score_head = PredictionHead(hn_dim=hn_dim, 
+        self.score_head = PredictionHeadNew(hn_dim=hn_dim, 
                                          num_atom_types=num_atom_types,
                                          num_bond_types=num_bond_types)
         
         self.reset_parameters()
 
     def reset_parameters(self):
-        self.time_mapping_atom.reset_parameters()
+        self.time_mapping.reset_parameters()
+        self.atom_mapping.reset_parameters()
         self.atom_time_mapping.reset_parameters()
         self.gnn.reset_parameters()
         self.score_head.reset_parameters()
@@ -539,8 +539,8 @@ class ScoreModelSE3New(nn.Module):
         
         pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
         # t: (batch_size,)
-        ta = self.time_mapping_atom(t)
-        tnode = ta[batch]
+        temb = self.time_mapping(t)
+        tnode = temb[batch]
         
         if batch is None:
             batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)
