@@ -75,7 +75,7 @@ class Trainer(pl.LightningModule):
         self.edge_scaling = 1.00
         self.node_scaling = 1.00
         
-        self.relative_pos = False
+        self.relative_pos = True
     
         self.model = ScoreModelSE3New(
             hn_dim=(hparams["sdim"], hparams["vdim"]),

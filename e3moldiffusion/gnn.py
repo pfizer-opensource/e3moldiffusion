@@ -754,8 +754,8 @@ class GNNSE3AtomBond(nn.Module):
 class GNNSE3Atom(nn.Module):
     """_summary_
     Implements a gnn that inputs: scalars, vectors, positions
-        local message passing: updating scalar, vector: inputting scalars, vectors, positions, edges-features
-        global message passing: updating scalar, vector, position and edge features: inputting scalars, vectors, positions, edges-features
+        local message passing: updating scalar, vector: inputting scalars, vectors, positions
+        global message passing: updating scalar, vector, position: inputting scalars, vectors, positions
     Args:
         nn (_type_): _description_
     """
