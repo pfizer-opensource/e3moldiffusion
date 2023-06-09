@@ -1,4 +1,3 @@
-
 train_size: 0.9
 val_size: 0.1
 test_size: null
@@ -29,7 +28,7 @@ neighbor_embedding: true
 
 #EQGAT
 sdim: 256 #128 #256
-vdim: 256 # 32 #256
+vdim: 128 # 32 #256
 edim: # 64 # 32 #256
 use_norm: true
 use_cross_product: false
@@ -37,7 +36,7 @@ use_bond_features: true
 use_all_atom_features: false
 
 #GENERAL MODEL SPECS
-num_layers: 7 # 7
+num_layers: 5 # 7
 num_rbf: 32
 use_local_edge_attr: false  
 fully_connected_layer: true
