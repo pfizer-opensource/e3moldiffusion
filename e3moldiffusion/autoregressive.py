@@ -32,7 +32,8 @@ class EQGATFCConv(MessagePassing):
         has_v_in: bool = False,
         use_mlp_update: bool = True,
         vector_aggr: str = "mean",
-        use_cross_product: bool = False
+        use_cross_product: bool = False,
+        edge_dim: Optional[int] = None
     ):
         super(EQGATFCConv, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
@@ -46,6 +47,8 @@ class EQGATFCConv(MessagePassing):
         self.has_v_in = has_v_in
         self.use_cross_product = use_cross_product
         self.silu = nn.SiLU()
+        self.edge_dim = edge_dim if edge_dim else 0
+        
         if has_v_in:
             self.vector_net = DenseLayer(self.vi, self.vi, bias=False)
             self.v_mul = 3 if use_cross_product else 2
@@ -53,7 +56,7 @@ class EQGATFCConv(MessagePassing):
             self.v_mul = 1
             self.vector_net = nn.Identity()
 
-        self.edge_net = nn.Sequential(DenseLayer(self.si + 2, self.si, bias=True, activation=nn.SiLU()),
+        self.edge_net = nn.Sequential(DenseLayer(self.si + 2 + self.edge_dim, self.si, bias=True, activation=nn.SiLU()),
                                       DenseLayer(self.si, self.v_mul * self.vi + self.si + 1, bias=True)
                                       )
         self.scalar_net = DenseLayer(self.si, self.si, bias=True)
@@ -128,12 +131,16 @@ class EQGATFCConv(MessagePassing):
         dim_size: Optional[int]
     ) -> Tuple[Tensor, Tensor]:
 
-        d, a, r, _ = edge_attr
+        d, a, r, e = edge_attr
 
         de0 = d.view(-1, 1)
         a0 = a.view(-1, 1)
     
-        aij = torch.cat([sa_i + sa_j, de0, a0], dim=-1)
+        if self.edge_dim:
+            aij = torch.cat([sa_i + sa_j, de0, a0, e], dim=-1)
+        else:
+            aij = torch.cat([sa_i + sa_j, de0, a0], dim=-1)
+            
         aij = self.edge_net(aij)
         
         fdim = aij.shape[-1]
@@ -177,7 +184,8 @@ class EQGATGNN(nn.Module):
                  num_layers: int = 5,
                  use_norm: bool = True,
                  use_cross_product: bool = False,
-                 vector_aggr: str = "mean"
+                 vector_aggr: str = "mean",
+                 edge_dim: Optional[int] = None
                  ):
         super(EQGATGNN, self).__init__()
 
@@ -195,7 +203,8 @@ class EQGATGNN(nn.Module):
                             has_v_in=i>0,
                             use_mlp_update= i < (num_layers - 1),
                             vector_aggr=vector_aggr,
-                            use_cross_product=use_cross_product
+                            use_cross_product=use_cross_product,
+                            edge_dim=edge_dim
                             )
                 )
         
@@ -289,14 +298,23 @@ class E3ARDiffusionModel(nn.Module):
                  num_layers: int = 5,
                  use_norm: bool = True,
                  use_cross_product: bool = True,
-                 vector_aggr: str = "mean"
+                 vector_aggr: str = "mean",
+                 edge_dim: Optional[int] = None,
+                 mask: list = ["atoms", "coords"]
                  ) -> None:
         super(E3ARDiffusionModel, self).__init__()
         
         self.time_mapping = DenseLayer(1, hn_dim[0], bias=True)
         self.atom_mapping = DenseLayer(num_atom_types + 1, hn_dim[0], bias=True)
         self.atom_time_mapping = DenseLayer(hn_dim[0], hn_dim[0], bias=True)
+        self.mask = mask
         
+        assert "coords" in mask
+        
+        self.edge_dim = edge_dim
+        if edge_dim:
+            self.edge_mapping = DenseLayer(6, edge_dim, bias=True)
+            
         self.sdim, self.vdim = hn_dim
 
         self.gnn = EQGATGNN(
@@ -305,6 +323,7 @@ class E3ARDiffusionModel(nn.Module):
             use_norm=use_norm,
             use_cross_product=use_cross_product,
             vector_aggr=vector_aggr,
+            edge_dim=edge_dim
         )
         
         self.prediction_head = PredictionHead(hn_dim=hn_dim, num_atom_types=num_atom_types)
@@ -340,10 +359,21 @@ class E3ARDiffusionModel(nn.Module):
         
         if batch is None:
             batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)
-                    
-        x_m = x * mask.view(-1, 1)
-        pos_m = pos * mask.view(-1, 1)
+
+        if "atoms" in self.mask:
+            x_m = x * mask.view(-1, 1)
+        else:
+            x_m = x
         
+        if "coords" in self.mask:
+            pos_m = pos * mask.view(-1, 1)
+        else:
+            pos_m = pos
+        
+        
+        if self.edge_dim:
+            edge_attr = self.edge_mapping(edge_attr)
+            
         edge_attr = self.calculate_edge_attrs(edge_index=edge_index, edge_attr=edge_attr, pos=pos)
         
         t = self.time_mapping(t)

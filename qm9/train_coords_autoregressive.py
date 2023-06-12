@@ -2,7 +2,6 @@ import logging
 import os
 from argparse import ArgumentParser
 from typing import List, Optional, Tuple
-import json
 
 import pytorch_lightning as pl
 import torch
@@ -30,6 +29,7 @@ from tqdm import tqdm
 #New imported 
 from callbacks.ema import ExponentialMovingAverage
 from config_file import get_dataset_info
+from qm9.info_data import QM9Infos
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 
@@ -53,10 +53,10 @@ class Trainer(pl.LightningModule):
     def __init__(self,
                  hparams,
                  dataset_info=None,
+
                  ):
         super().__init__()
         self.save_hyperparameters(hparams)
-        self.hparams.num_atom_types = get_num_atom_types_geom(dataset="drugs")
         self.num_atom_features = self.hparams.num_atom_types
         self.i = 0
         self.dataset_info = dataset_info
@@ -64,26 +64,15 @@ class Trainer(pl.LightningModule):
         self.model = E3ARDiffusionModel(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
-            use_norm=not hparams["omit_norm"],
-            use_cross_product=not hparams["omit_cross_product"],
+            use_norm=hparams["use_norm"],
+            use_cross_product=hparams["use_cross_product"],
             num_atom_types=self.num_atom_features,
             vector_aggr="mean",
-            edge_dim=None,
-            mask=["coords", "atoms"]
+            edge_dim=hparams["sdim"],
+            mask=["coords"]
         )
-        
-        empirical_num_nodes = self._get_empirical_num_nodes()
-        self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
-        
-        
+
     def _get_empirical_num_nodes(self):
-        if not self.hparams.no_h:
-            with open('/home/let55/workspace/projects/e3moldiffusion/geom/num_nodes_geom_midi.json', 'r') as f:
-                num_nodes_dict = json.load(f, object_hook=lambda d: {int(k) if k.lstrip('-').isdigit() else k: v for k, v in d.items()})
-        else:
-            with open('/home/let55/workspace/projects/e3moldiffusion/geom/num_nodes_geom_midi_no_h.json', 'r') as f:
-                num_nodes_dict = json.load(f, object_hook=lambda d: {int(k) if k.lstrip('-').isdigit() else k: v for k, v in d.items()})
-                
         num_nodes_dict = self.dataset_info.get('n_nodes')
         max_num_nodes = max(num_nodes_dict.keys())
         empirical_distribution_num_nodes = {i: num_nodes_dict.get(i) for i in range(max_num_nodes)}
@@ -95,7 +84,7 @@ class Trainer(pl.LightningModule):
             empirical_distribution_num_nodes_tensor[key] = value
         empirical_distribution_num_nodes_tensor = torch.tensor(list(empirical_distribution_num_nodes_tensor.values())).float()
         return empirical_distribution_num_nodes_tensor
-                            
+                
     def get_list_of_edge_adjs(self, edge_attrs_dense, batch_num_nodes):
         ptr = torch.cat([torch.zeros(1, device=batch_num_nodes.device, dtype=torch.long), batch_num_nodes.cumsum(0)])
         edge_tensor_lists = []
@@ -108,97 +97,77 @@ class Trainer(pl.LightningModule):
     
     def reverse_sampling(
         self,
-        num_graphs: int,
-        device: torch.device,
-        empirical_distribution_num_nodes: Tensor,
-        verbose: bool = False,
-        save_traj: bool = False,
+        x: Tensor,
+        batch: OptTensor = None,
+        bond_edge_index: OptTensor = None,
+        bond_edge_attr: OptTensor = None,
+        save_traj: bool = False
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         
-        batch_num_nodes = torch.multinomial(input=empirical_distribution_num_nodes,
-                                            num_samples=num_graphs, replacement=True).to(device)
-        batch_num_nodes = batch_num_nodes.clamp(min=1)
-        batch = torch.arange(num_graphs, device=device).repeat_interleave(batch_num_nodes, dim=0)
-        bs = int(batch.max()) + 1
-        
-        # initialiaze the 0-mean point cloud from N(0, I)
-        pos = torch.randn(len(batch), 3,
-                          device=device,
-                          dtype=torch.get_default_dtype()
-                          )
-        pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
-        
-        # initialize the atom-types 
-        atom_types = torch.randn(pos.size(0), self.num_atom_features, device=device)
-        
-        edge_index_local = radius_graph(x=pos,
-                                        r=self.hparams.cutoff_upper,
-                                        batch=batch, 
-                                        max_num_neighbors=self.hparams.max_num_neighbors)
+        batch_num_nodes = batch.bincount()
+        assert batch_num_nodes.float().mean() == batch_num_nodes[0].float()
+        n = batch_num_nodes[0].item()
+        bs = len(batch_num_nodes)
+        num_nodes = len(batch)
         
         edge_index_global = torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
         edge_index_global, _ = dense_to_sparse(edge_index_global)
         edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
+        edge_index_global, edge_attr_global = self.coalesce_edges(edge_index=edge_index_global,
+                                                                      bond_edge_index=bond_edge_index,
+                                                                      bond_edge_attr=bond_edge_attr,
+                                                                      n=x.size(0))
 
-        pos_traj = []
-        atom_type_traj = []
-        atom_type_ohe_traj = []
-        chain = range(self.hparams.timesteps)
-    
-        if verbose:
-            print(chain)
-        iterator = tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
-        for timestep in iterator:
-            t = torch.full(size=(bs, ), fill_value=timestep, dtype=torch.long, device=pos.device)
-            temb = t / self.hparams.timesteps
-            temb = temb.unsqueeze(dim=1)
+        xohe = F.one_hot(x, num_classes=self.hparams.num_atom_types).float()
+        edge_attr_global = F.one_hot(edge_attr_global, num_classes=BOND_FEATURE_DIMS + 1).float()
+        pos = torch.randn(size=(num_nodes, 3), device=x.device, dtype=torch.float32)
+        perm = torch.cat([torch.randperm(n, device=x.device) for _ in range(bs)])
+        t_placeholder = torch.empty(num_nodes, device=x.device, dtype=torch.long).fill_(0)
+        pos_list = [pos]
+        for t in range(n):
+            t_placeholder = t_placeholder.fill_(t)
+            mask = (perm < t_placeholder)
+            sampled = (perm == t_placeholder).float().unsqueeze(-1)
+            
+            temb = (t_placeholder.float() / n).unsqueeze(-1)
+            
             out = self.model(
-                x=atom_types,
-                t=temb,
-                pos=pos,
-                edge_index_local=edge_index_local,
-                edge_index_global=edge_index_global,
-                edge_attr_local=None,
-                edge_attr_global=None,
-                batch=batch,
-            )
-             
-            score_coords = out["score_coords"]
-            score_atoms = out["score_atoms"]
-            
-            score_coords = zero_mean(score_coords, batch=batch, dim_size=bs, dim=0)
-            noise_coords = torch.randn_like(pos)
-            noise_coords = zero_mean(noise_coords, batch=batch, dim_size=bs, dim=0)
-        
-            pos, _ = self.sampler.update_fn(x=pos, score=score_coords, t=t[batch], noise=noise_coords)
-            pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
-            
-            noise_atoms = torch.randn_like(atom_types)
-            atom_types, _ = self.sampler.update_fn(x=atom_types, score=score_atoms, t=t[batch], noise=noise_atoms)
-            
-            if not self.hparams.fully_connected:
-                edge_index_local = radius_graph(x=pos.detach(),
-                                                r=self.hparams.cutoff_upper,
-                                                batch=batch, 
-                                                max_num_neighbors=self.hparams.max_num_neighbors)
-            
-            atom_integer = torch.argmax(atom_types, dim=-1)
+            x=xohe,
+            t=temb,
+            mask=mask,
+            pos=pos,
+            edge_index=edge_index_global,
+            edge_attr=edge_attr_global,
+            batch=batch
+        )
+            # update positions
+            pos = (1.0 - sampled) * pos + (sampled) * out["coords_mean"]
             
             if save_traj:
-                pos_traj.append(pos.detach())
-                atom_type_traj.append(atom_types.detach())
-                atom_type_ohe_traj.append(atom_integer)
-                
-        return pos, atom_types, atom_integer, batch_num_nodes, [pos_traj, atom_type_traj, atom_type_ohe_traj]
+                pos_list.append(pos.detach())
+        
+        return pos, pos_list
+            
+    def coalesce_edges(self, edge_index, bond_edge_index, bond_edge_attr, n):
+        edge_attr = torch.full(size=(edge_index.size(-1), ),
+                               fill_value=0,
+                               device=edge_index.device,
+                               dtype=torch.long)
+        edge_index = torch.cat([edge_index, bond_edge_index], dim=-1)
+        edge_attr =  torch.cat([edge_attr, bond_edge_attr], dim=0)
+        edge_index, edge_attr = coalesce(index=edge_index, value=edge_attr, m=n, n=n, op="max")
+        return edge_index, edge_attr
     
     def forward(self, batch: Batch):
         
-        node_feat: Tensor = batch.x
+        node_feat: Tensor = batch.z
         pos: Tensor = batch.pos
         data_batch: Tensor = batch.batch
         batch_num_nodes = torch.bincount(data_batch)
         bs = int(data_batch.max()) + 1
-
+        bond_edge_index = batch.bond_index
+        bond_edge_attr = batch.bond_attr    
+        
         pos = zero_mean(pos, data_batch, dim_size=bs, dim=0)
         
         t = torch.cat([torch.randint(low=0, high=n, size=(1, )) for n in batch_num_nodes.cpu().tolist()])
@@ -213,7 +182,9 @@ class Trainer(pl.LightningModule):
         temb = temb.unsqueeze(dim=1)
         
         # one-hot-encode
-        xohe = F.one_hot(node_feat, num_classes=self.num_atom_features).float()
+        xohe = F.one_hot(
+            node_feat.squeeze().long(), num_classes=max(self.hparams["atom_types"]) + 1
+        ).float()[:, self.hparams["atom_types"]]
         
         if not hasattr(batch, "fc_edge_index"):
             edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
@@ -222,13 +193,32 @@ class Trainer(pl.LightningModule):
         else:
             edge_index_global = batch.fc_edge_index
 
+        edge_index_global, edge_attr_global = self.coalesce_edges(edge_index=edge_index_global,
+                                                                  bond_edge_index=bond_edge_index, 
+                                                                  bond_edge_attr=bond_edge_attr,
+                                                                  n=pos.size(0))
+        
+        edge_index_global, edge_attr_global = sort_edge_index(edge_index=edge_index_global,
+                                                              edge_attr=edge_attr_global, 
+                                                              sort_by_row=False)
+        
+        
+        bm = (mask.unsqueeze(-1) * mask.unsqueeze(0)).float()
+        n = len(data_batch)
+        edge_attr_dense = torch.zeros(n, n, dtype=torch.long, device=pos.device)
+        edge_attr_dense[edge_index_global[0, :], edge_index_global[1, :]] = edge_attr_global
+        edge_attr_dense_masked = (5.0 * (1.0 - bm) + bm * edge_attr_dense).long()
+        edge_attr_global_masked = edge_attr_dense_masked[edge_index_global[0], edge_index_global[1]]
+        edge_attr_global_masked = F.one_hot(edge_attr_global_masked, num_classes=5+1).float()
+
+        
         out = self.model(
             x=xohe,
             t=temb,
             mask=mask,
             pos=pos,
             edge_index=edge_index_global,
-            edge_attr=None,
+            edge_attr=edge_attr_global_masked,
             batch=data_batch
         )
 
@@ -266,15 +256,16 @@ class Trainer(pl.LightningModule):
         coords_loss = torch.mean(coords_loss, dim=0)
         
         
-        atoms_loss = F.cross_entropy(
-            out_dict["atoms_pred"], out_dict["atoms_true"], reduction='none'
-            )
-        atoms_loss *= f
-        atoms_loss = scatter_add(
-            atoms_loss, index=batch.batch, dim=0, dim_size=batch_size
-        )
-        atoms_loss *= s
-        atoms_loss = torch.mean(atoms_loss, dim=0)
+        #atoms_loss = F.cross_entropy(
+        #    out_dict["atoms_pred"], out_dict["atoms_true"], reduction='none'
+        #    )
+        #atoms_loss *= f
+        #atoms_loss = scatter_add(
+        #    atoms_loss, index=batch.batch, dim=0, dim_size=batch_size
+        #)
+        #atoms_loss *= s
+        #atoms_loss = torch.mean(atoms_loss, dim=0)
+        atoms_loss = 0.0
        
         loss = coords_loss + atoms_loss
 
@@ -326,70 +317,39 @@ class Trainer(pl.LightningModule):
     
 
 if __name__ == "__main__":
-    from geom.hparams_coordsatomsbonds import add_arguments
+    from qm9.data import QM9DataModule
+    from qm9.hparams_coordsatomsbonds import add_arguments
 
     parser = ArgumentParser()
     parser = add_arguments(parser)
     hparams = parser.parse_args()
     
-    if not os.path.exists(hparams.save_dir):
-        os.makedirs(hparams.save_dir)
+    if not os.path.exists(hparams.log_dir):
+        os.makedirs(hparams.log_dir)
 
-    if not os.path.isdir(hparams.save_dir + f"/run{hparams.id}/"):
+    if not os.path.isdir(hparams.log_dir + f"/run{hparams.id}/"):
         print("Creating directory")
-        os.mkdir(hparams.save_dir + f"/run{hparams.id}/")
+        os.mkdir(hparams.log_dir + f"/run{hparams.id}/")
     print(f"Starting Run {hparams.id}")
+    
     ema_callback = ExponentialMovingAverage(decay=hparams.ema_decay)
     checkpoint_callback = ModelCheckpoint(
-        dirpath=hparams.save_dir + f"/run{hparams.id}/",
+        dirpath=hparams.log_dir + f"/run{hparams.id}/",
         save_top_k=1,
         monitor="val/coords_loss",
         save_last=True,
     )
     lr_logger = LearningRateMonitor()
     tb_logger = TensorBoardLogger(
-        hparams.save_dir + f"/run{hparams.id}/", default_hp_metric=False
+        hparams.log_dir + f"/run{hparams.id}/", default_hp_metric=False
     )
 
-    dataset_info = get_dataset_info("drugs", remove_h=False)
-  
     print(f"Loading {hparams.dataset} Datamodule.")
-    old = False
+    datamodule = QM9DataModule(hparams)
+    datamodule.prepare_data()
+    datamodule.setup("fit")
     
-    if old:
-        from geom.data import GeomDataModule
-        print("Using native GEOM")
-        datamodule = GeomDataModule(
-            batch_size=hparams.batch_size,
-            num_workers=hparams.num_workers,
-            dataset=hparams.dataset,
-            env_in_init=True,
-            shuffle_train=True,
-            max_num_conformers=hparams.max_num_conformers,
-            pin_memory=True,
-            persistent_workers=True,
-            transform_args = {"create_bond_graph": True,
-                            "save_smiles": False,
-                            "fully_connected_edge_index": False
-                            }
-        )
-    else:
-        from geom.geom_dataset import GeomDataModule
-        print("Using MIDI GEOM")
-        if hparams.no_h:
-            root = '/home/let55/workspace/projects/e3moldiffusion/geom/data_noH' 
-        else:
-            root = '/home/let55/workspace/projects/e3moldiffusion/geom/data'
-        print(root)
-        datamodule = GeomDataModule(root=root,
-                                    batch_size=hparams.batch_size,
-                                    num_workers=hparams.num_workers,
-                                    pin_memory=True,
-                                    persistent_workers=True,
-                                    with_hydrogen=not hparams.no_h
-                                    )
-    
-    dataset_info = get_dataset_info(hparams.dataset, False)
+    dataset_info = get_dataset_info(hparams.dataset, hparams.remove_hs)
 
     model = Trainer(
         hparams=hparams.__dict__,
@@ -422,7 +382,9 @@ if __name__ == "__main__":
         num_sanity_val_steps=2,
         max_epochs=hparams.num_epochs,
         detect_anomaly=hparams.detect_anomaly,
-        resume_from_checkpoint=hparams.load_ckpt if hparams.load_ckpt != "" else None,
+        resume_from_checkpoint=None
+        if hparams.load_model is None
+        else hparams.load_model,
     )
 
     pl.seed_everything(seed=0, workers=hparams.gpus > 1)
@@ -430,5 +392,5 @@ if __name__ == "__main__":
     trainer.fit(
         model=model,
         datamodule=datamodule,
-        ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
+        # ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
     )

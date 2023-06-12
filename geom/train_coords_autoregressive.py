@@ -68,8 +68,7 @@ class Trainer(pl.LightningModule):
             use_cross_product=not hparams["omit_cross_product"],
             num_atom_types=self.num_atom_features,
             vector_aggr="mean",
-            edge_dim=None,
-            mask=["coords", "atoms"]
+            edge_dim=hparams["sdim"]
         )
         
         empirical_num_nodes = self._get_empirical_num_nodes()
@@ -191,6 +190,17 @@ class Trainer(pl.LightningModule):
                 
         return pos, atom_types, atom_integer, batch_num_nodes, [pos_traj, atom_type_traj, atom_type_ohe_traj]
     
+    def coalesce_edges(self, edge_index, bond_edge_index, bond_edge_attr, n):
+        edge_attr = torch.full(size=(edge_index.size(-1), ),
+                               fill_value=0,
+                               device=edge_index.device,
+                               dtype=torch.long)
+        edge_index = torch.cat([edge_index, bond_edge_index], dim=-1)
+        edge_attr =  torch.cat([edge_attr, bond_edge_attr], dim=0)
+        edge_index, edge_attr = coalesce(index=edge_index, value=edge_attr, m=n, n=n, op="max")
+        return edge_index, edge_attr
+    
+    
     def forward(self, batch: Batch):
         
         node_feat: Tensor = batch.x
@@ -198,6 +208,14 @@ class Trainer(pl.LightningModule):
         data_batch: Tensor = batch.batch
         batch_num_nodes = torch.bincount(data_batch)
         bs = int(data_batch.max()) + 1
+        bond_edge_index = batch.edge_index
+        bond_edge_attr = batch.edge_attr
+        n = batch.num_nodes
+        bs = int(data_batch.max()) + 1
+        
+        bond_edge_index, bond_edge_attr = sort_edge_index(edge_index=bond_edge_index,
+                                                          edge_attr=bond_edge_attr,
+                                                          sort_by_row=False)
 
         pos = zero_mean(pos, data_batch, dim_size=bs, dim=0)
         
@@ -211,6 +229,24 @@ class Trainer(pl.LightningModule):
         
         temb = t_.float() / batch_num_nodes[data_batch].float()
         temb = temb.unsqueeze(dim=1)
+        
+        if not hasattr(batch, "fc_edge_index"):
+            edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
+            edge_index_global, _ = dense_to_sparse(edge_index_global)
+            edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
+        else:
+            edge_index_global = batch.fc_edge_index
+            
+        edge_index_global, edge_attr_global = self.coalesce_edges(edge_index=edge_index_global,
+                                                                  bond_edge_index=bond_edge_index, 
+                                                                  bond_edge_attr=bond_edge_attr,
+                                                                  n=pos.size(0))
+        
+        edge_index_global, edge_attr_global = sort_edge_index(edge_index=edge_index_global,
+                                                              edge_attr=edge_attr_global, 
+                                                              sort_by_row=False)
+        
+        edge_attr_global = F.one_hot(edge_attr_global, num_classes=5).float()
         
         # one-hot-encode
         xohe = F.one_hot(node_feat, num_classes=self.num_atom_features).float()
@@ -228,7 +264,7 @@ class Trainer(pl.LightningModule):
             mask=mask,
             pos=pos,
             edge_index=edge_index_global,
-            edge_attr=None,
+            edge_attr=edge_attr_global,
             batch=data_batch
         )
 
@@ -266,16 +302,18 @@ class Trainer(pl.LightningModule):
         coords_loss = torch.mean(coords_loss, dim=0)
         
         
-        atoms_loss = F.cross_entropy(
-            out_dict["atoms_pred"], out_dict["atoms_true"], reduction='none'
-            )
-        atoms_loss *= f
-        atoms_loss = scatter_add(
-            atoms_loss, index=batch.batch, dim=0, dim_size=batch_size
-        )
-        atoms_loss *= s
-        atoms_loss = torch.mean(atoms_loss, dim=0)
-       
+        #atoms_loss = F.cross_entropy(
+        #    out_dict["atoms_pred"], out_dict["atoms_true"], reduction='none'
+        #    )
+        #atoms_loss *= f
+        #atoms_loss = scatter_add(
+        #    atoms_loss, index=batch.batch, dim=0, dim_size=batch_size
+        #)
+        #atoms_loss *= s
+        #atoms_loss = torch.mean(atoms_loss, dim=0)
+        atoms_loss = 0.0
+        
+        
         loss = coords_loss + atoms_loss
 
         self.log(

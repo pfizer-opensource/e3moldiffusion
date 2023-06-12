@@ -67,7 +67,9 @@ class Trainer(pl.LightningModule):
             use_norm=hparams["use_norm"],
             use_cross_product=hparams["use_cross_product"],
             num_atom_types=self.num_atom_features,
-            vector_aggr="mean"
+            vector_aggr="mean",
+            edge_dim=None,
+            mask=["coords", "atoms"]
         )
 
     def _get_empirical_num_nodes(self):
@@ -96,15 +98,12 @@ class Trainer(pl.LightningModule):
     def reverse_sampling(
         self,
         num_graphs: int,
+        num_nodes: int,
         device: torch.device,
-        empirical_distribution_num_nodes: Tensor,
-        verbose: bool = False,
         save_traj: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         
-        batch_num_nodes = torch.multinomial(input=empirical_distribution_num_nodes,
-                                            num_samples=num_graphs, replacement=True).to(device)
-        batch_num_nodes = batch_num_nodes.clamp(min=1)
+        batch_num_nodes = torch.tensor([num_nodes for _ in range(num_graphs)]).long().to(device)
         batch = torch.arange(num_graphs, device=device).repeat_interleave(batch_num_nodes, dim=0)
         bs = int(batch.max()) + 1
         
@@ -116,67 +115,44 @@ class Trainer(pl.LightningModule):
         pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
         
         # initialize the atom-types 
-        atom_types = torch.randn(pos.size(0), self.num_atom_features, device=device)
-        
-        edge_index_local = radius_graph(x=pos,
-                                        r=self.hparams.cutoff_upper,
-                                        batch=batch, 
-                                        max_num_neighbors=self.hparams.max_num_neighbors)
-        
+        atom_types = torch.zeros(pos.size(0), self.num_atom_features, device=device)
         edge_index_global = torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
         edge_index_global, _ = dense_to_sparse(edge_index_global)
         edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
 
-        pos_traj = []
-        atom_type_traj = []
-        atom_type_ohe_traj = []
-        chain = range(self.hparams.timesteps)
-    
-        if verbose:
-            print(chain)
-        iterator = tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
-        for timestep in iterator:
-            t = torch.full(size=(bs, ), fill_value=timestep, dtype=torch.long, device=pos.device)
-            temb = t / self.hparams.timesteps
-            temb = temb.unsqueeze(dim=1)
+        perm = torch.cat([torch.randperm(num_nodes, device=device) for _ in range(bs)])
+        t_placeholder = torch.empty(num_nodes, device=device, dtype=torch.long).fill_(0)
+        pos_list = [pos]
+        atom_list = [atom_types] 
+        for t in range(num_nodes):
+            t_placeholder = t_placeholder.fill_(t)
+            mask = (perm < t_placeholder)
+            sampled = (perm == t_placeholder).float().unsqueeze(-1)
+            
+            temb = (t_placeholder.float() / num_nodes).unsqueeze(-1)
+            
             out = self.model(
-                x=atom_types,
-                t=temb,
-                pos=pos,
-                edge_index_local=edge_index_local,
-                edge_index_global=edge_index_global,
-                edge_attr_local=None,
-                edge_attr_global=None,
-                batch=batch,
-            )
-             
-            score_coords = out["score_coords"]
-            score_atoms = out["score_atoms"]
-            
-            score_coords = zero_mean(score_coords, batch=batch, dim_size=bs, dim=0)
-            noise_coords = torch.randn_like(pos)
-            noise_coords = zero_mean(noise_coords, batch=batch, dim_size=bs, dim=0)
-        
-            pos, _ = self.sampler.update_fn(x=pos, score=score_coords, t=t[batch], noise=noise_coords)
-            pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
-            
-            noise_atoms = torch.randn_like(atom_types)
-            atom_types, _ = self.sampler.update_fn(x=atom_types, score=score_atoms, t=t[batch], noise=noise_atoms)
-            
-            if not self.hparams.fully_connected:
-                edge_index_local = radius_graph(x=pos.detach(),
-                                                r=self.hparams.cutoff_upper,
-                                                batch=batch, 
-                                                max_num_neighbors=self.hparams.max_num_neighbors)
-            
-            atom_integer = torch.argmax(atom_types, dim=-1)
-            
+            x=atom_types,
+            t=temb,
+            mask=mask,
+            pos=pos,
+            edge_index=edge_index_global,
+            edge_attr=None,
+            batch=batch
+        )
+            # update positions
+            pos = (1.0 - sampled) * pos + (sampled) * out["coords_mean"]
+            atom_types = (1.0 - sampled) * atom_types + (sampled) * out["atoms_pred"]
+            atom_types = atom_types.argmax(dim=-1)
             if save_traj:
-                pos_traj.append(pos.detach())
-                atom_type_traj.append(atom_types.detach())
-                atom_type_ohe_traj.append(atom_integer)
-                
-        return pos, atom_types, atom_integer, batch_num_nodes, [pos_traj, atom_type_traj, atom_type_ohe_traj]
+                pos_list.append(pos.detach())
+                atom_list.append(atom_types)
+            atom_types = F.one_hot(atom_types, num_classes=self.num_atom_features)
+            
+        return pos, (pos_list, atom_list)
+            
+            
+            
     
     def forward(self, batch: Batch):
         
