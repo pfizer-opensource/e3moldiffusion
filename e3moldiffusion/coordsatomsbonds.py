@@ -273,7 +273,7 @@ class ScoreModelSE3(nn.Module):
                  local_global_model: bool = True,
                  vector_aggr: str = "mean",
                  atom_mapping: bool = True,
-                 bond_mapping: bool = True
+                 bond_mapping: bool = True,
                  ) -> None:
         super(ScoreModelSE3, self).__init__()
         
