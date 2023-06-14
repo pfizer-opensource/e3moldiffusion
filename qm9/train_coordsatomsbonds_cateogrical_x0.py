@@ -27,7 +27,7 @@ from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from torch_scatter import scatter_mean, scatter_add
 from tqdm import tqdm
 
-from e3moldiffusion.categorical import get_terminal_transition, CategoricalKernel
+from e3moldiffusion.categorical import CategoricalTerminalKernel, CategoricalUniformKernel
 #New imported 
 from datetime import datetime
 from callbacks.ema import ExponentialMovingAverage
@@ -73,15 +73,15 @@ class Trainer(pl.LightningModule):
         empirical_num_nodes = self._get_empirical_num_nodes()
         self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
     
-        self.relative_pos = True
+        self.relative_pos = False
         
         self.model = ScoreModelSE3(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
             use_norm=hparams["use_norm"],
             use_cross_product=hparams["use_cross_product"],
-            num_atom_types=self.num_atom_features + 1,
-            num_bond_types=self.num_bond_classes + 1,
+            num_atom_types=self.num_atom_features,# + 1,
+            num_bond_types=self.num_bond_classes, # + 1,
             rbf_dim=hparams["num_rbf"],
             edge_dim=hparams['edim'],
             cutoff_local=hparams["cutoff_upper"],
@@ -89,7 +89,6 @@ class Trainer(pl.LightningModule):
             local_global_model=hparams["fully_connected_layer"],
             fully_connected=hparams["fully_connected"],
         )
-     
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
                                 beta_max=hparams["beta_max"],
                                 N=hparams["timesteps"],
@@ -97,12 +96,15 @@ class Trainer(pl.LightningModule):
                                 schedule="cosine",
                                 enforce_zero_terminal_snr=False)
         
-        self.cat_atoms = CategoricalKernel(num_classes=self.num_atom_features + 1,
+        self.cat_atoms = CategoricalUniformKernel(num_classes=self.num_atom_features,
+                                           terminal_state=1,
                                            timesteps=hparams["timesteps"],
-                                           alphas_bar=self.sde.alphas_cumprod.clone())
-        self.cat_edges = CategoricalKernel(num_classes=self.num_bond_classes + 1,
+                                           alphas=self.sde.alphas.clone(),
+                                           )
+        self.cat_edges = CategoricalUniformKernel(num_classes=self.num_bond_classes,
+                                           terminal_state=0,
                                            timesteps=hparams["timesteps"],
-                                           alphas_bar=self.sde.alphas_cumprod.clone())
+                                           alphas=self.sde.alphas.clone())
         
     def _get_empirical_num_nodes(self):
         num_nodes_dict = self.dataset_info.get('n_nodes')
@@ -136,14 +138,14 @@ class Trainer(pl.LightningModule):
         
         pos, atom_types, edge_types,\
         edge_index_global, batch_num_nodes, trajs = self.reverse_sampling(num_graphs=num_graphs,
-                                                                        device=device,
-                                                                        empirical_distribution_num_nodes=empirical_distribution_num_nodes,
-                                                                        verbose=verbose,
-                                                                        save_traj=save_traj)
+                                                                          device=device,
+                                                                          empirical_distribution_num_nodes=empirical_distribution_num_nodes,
+                                                                          verbose=verbose,
+                                                                          save_traj=save_traj)
 
         pos_splits = pos.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
         atom_types_split = atom_types.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
-
+        # atom_types_integer = torch.argmax(atom_types[:, :-1], dim=-1)
         atom_types_integer = torch.argmax(atom_types, dim=-1)
         atom_types_integer_split = atom_types_integer.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
         
@@ -170,6 +172,7 @@ class Trainer(pl.LightningModule):
             
             n = batch_num_nodes.sum().item()
             edge_attrs_dense = torch.zeros(size=(n,n,5), dtype=edge_types.dtype, device=edge_types.device)
+            # edge_attrs_dense[edge_index_global[0, :], edge_index_global[1, :], :] = edge_types[:, :-1]
             edge_attrs_dense[edge_index_global[0, :], edge_index_global[1, :], :] = edge_types
             edge_attrs_dense = edge_attrs_dense.argmax(-1)
             edge_attrs_splits = self.get_list_of_edge_adjs(edge_attrs_dense, batch_num_nodes)
@@ -243,11 +246,11 @@ class Trainer(pl.LightningModule):
                           )
         pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
         
-        # n = len(batch)
+        n = len(batch)
         
         # initialize the atom-types as mask tokens
-        atom_types = torch.zeros(pos.size(0), self.num_atom_features + 1, device=device, dtype=torch.float32)
-        atom_types[:, -1] = 1.0
+        atom_types = torch.zeros(pos.size(0), self.num_atom_features, device=device, dtype=torch.float32)
+        atom_types[:, 1] = 1.0
         
         edge_index_local = radius_graph(x=pos,
                                         r=self.hparams.cutoff_upper,
@@ -260,15 +263,21 @@ class Trainer(pl.LightningModule):
         edge_index_global, _ = dense_to_sparse(edge_index_global)
         edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
         # initialize the edge-types as mask tokens 
-        edge_attr_global = torch.zeros(edge_index_global.size(0), self.num_bond_classes + 1, device=device, dtype=torch.float32)
-        edge_attr_global[:, -1] = 1.0
+        #edge_attr_global = torch.zeros(edge_index_global.size(1), self.num_bond_classes + 1, device=device, dtype=torch.float32)
+        #edge_attr_global[:, -1] = 1.0
+        
+        edge_attr_global_dense = torch.zeros(size=(n, n), device=device, dtype=torch.long)
+        
+        edge_attr_global = torch.zeros(edge_index_global.size(1), self.num_bond_classes, device=device, dtype=torch.float32)
+        edge_attr_global[:, 0] = 1.0
         
         j, i = edge_index_global
         mask = j < i
         mask_i = i[mask]
-        #mask_j = j[mask]
+        mask_j = j[mask]
         #edge_attr_triu = edge_attr_global[mask]
-      
+        batch_edge_global = batch[edge_index_global[0]]     
+
         pos_traj = []
         atom_type_traj = []
         edge_type_traj = []
@@ -292,24 +301,24 @@ class Trainer(pl.LightningModule):
                 edge_attr_local=None,
                 edge_attr_global=edge_attr_global,
                 batch=batch,
-                batch_edge_global=None
+                batch_edge_global=batch_edge_global
             )
              
             rev_sigma = self.sde.reverse_posterior_sigma[t].unsqueeze(-1)
             sigmast = self.sde.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
             sigmas2t = sigmast.pow(2)
-            alpha_bar_t = self.sde.alphas_cumprod[t].unsqueeze(-1)
             
             sqrt_alphas = self.sde.sqrt_alphas[t].unsqueeze(-1)
             sqrt_1m_alphas_cumprod_prev = torch.sqrt(1.0 - self.sde.alphas_cumprod_prev[t]).unsqueeze(-1)
             one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
             sqrt_alphas_cumprod_prev = torch.sqrt(self.sde.alphas_cumprod_prev[t].unsqueeze(-1))
             one_m_alphas = self.sde.discrete_betas[t].unsqueeze(-1)
-            sqrt_alpha_bar_t = alpha_bar_t.sqrt()
             
             coords_pred = out['coords_pred'].squeeze()
             atoms_pred = out['atoms_pred'].softmax(dim=-1)
+            # N x a
             edges_pred = out['bonds_pred'].softmax(dim=-1)
+            # E x b
               
             # update fnc
             
@@ -322,20 +331,38 @@ class Trainer(pl.LightningModule):
             noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
             pos = mean + std * noise
             
-            # atoms 
-            probs_atoms = self.cat_atoms.reverse_posterior(x0=atoms_pred, xt=atom_types, t=t[batch])
-            atom_types =  F.one_hot(probs_atoms.multinomial(1,), num_classes=self.num_atom_features + 1).float()
-            
+            # atoms  
+            rev_atoms = self.cat_atoms.reverse_posterior_for_every_x0(xt=atom_types, t=t[batch])
+            # (N, a, a)
+            probs_atoms = (rev_atoms * atoms_pred.unsqueeze(-1)).sum(1)
+            #if not (abs(probs_atoms.sum(-1) - 1.0) < 1e-4).all():
+            #    print(probs_atoms)
+            atom_types =  F.one_hot(probs_atoms.multinomial(1,).squeeze(), num_classes=self.num_atom_features).float()
+ 
             # edges
             edges_pred_triu = edges_pred[mask]
+            #print(edges_pred_triu)
             edges_xt_triu = edge_attr_global[mask]
-            probs_edges = self.cat_edges.reverse_posterior(x0=edges_pred_triu, xt=edges_xt_triu, t=t[batch[mask_i]])
-            edges_triu = F.one_hot(probs_edges.multinomial(1,), num_classes=self.num_bond_classes + 1).float()
+            rev_edges = self.cat_edges.reverse_posterior_for_every_x0(xt=edges_xt_triu, t=t[batch[mask_i]])
+            # (E, b, b)
+            probs_edges = (rev_edges * edges_pred_triu.unsqueeze(-1)).sum(1)
+            #if not (abs(probs_edges.sum(-1) - 1.0) < 1e-4).all():
+            #    print(probs_edges)  
+            
+            # import pdb; pdb.set_trace()
+            
+            edges_triu = probs_edges.multinomial(1,).squeeze()
             # create full edge tensors
             #j = torch.concat([mask_j, mask_i]) # already computed above
             #i = torch.concat([mask_i, mask_j]) # already computed above
             #edge_index_global_perturbed = torch.stack([j, i], dim=0)
-            edge_attr_global = torch.concat([edges_triu, edges_triu], dim=0)
+            edge_attr_global_dense[mask_j, mask_i] = edges_triu
+            edge_attr_global_dense = 0.5 * (edge_attr_global_dense + edge_attr_global_dense.T)
+            edge_attr_global_dense = edge_attr_global_dense.long()
+            edge_attr_global = edge_attr_global_dense[j, i]
+            edge_attr_global = F.one_hot(edge_attr_global, num_classes=self.num_bond_classes)
+            
+            # edge_attr_global = torch.concat([edges_triu, edges_triu], dim=0)
             
             if not self.hparams.fully_connected:
                 edge_index_local = radius_graph(x=pos.detach(),
@@ -404,7 +431,9 @@ class Trainer(pl.LightningModule):
         mask_i = i[mask]
         mask_j = j[mask]
         edge_attr_triu = edge_attr_global[mask]
-        edge_attr_triu_ohe = F.one_hot(edge_attr_triu, num_classes=self.num_bond_classes + 1).float()
+        # edge_attr_triu_ohe = F.one_hot(edge_attr_triu, num_classes=self.num_bond_classes + 1).float()
+        edge_attr_triu_ohe = F.one_hot(edge_attr_triu, num_classes=self.num_bond_classes).float()
+
         t_edge = t[data_batch[mask_i]]
         probs = self.cat_edges.marginal_prob(edge_attr_triu_ohe, t=t_edge)
         edges_t_given_0 = probs.multinomial(1,).squeeze()
@@ -424,8 +453,8 @@ class Trainer(pl.LightningModule):
             pdb.set_trace()
             
             
-        edge_attr_global_perturbed = F.one_hot(edge_attr_global_perturbed, num_classes=self.num_bond_classes + 1).float()
-             
+        #edge_attr_global_perturbed = F.one_hot(edge_attr_global_perturbed, num_classes=self.num_bond_classes + 1).float()
+        edge_attr_global_perturbed = F.one_hot(edge_attr_global_perturbed, num_classes=self.num_bond_classes).float()
         if not self.hparams.continuous:
             temb = t.float() / self.hparams.timesteps
             temb = temb.clamp(min=self.hparams.eps_min)
@@ -446,11 +475,11 @@ class Trainer(pl.LightningModule):
         pos_perturbed = mean_coords + std_coords * noise_coords_true
         
         # one-hot-encode
-        node_feat = F.one_hot(node_feat.squeeze().long(), num_classes=self.num_atom_features + 1).float()
+        node_feat = F.one_hot(node_feat.squeeze().long(), num_classes=self.num_atom_features).float()
         xohe = self.node_scaling * node_feat
         probs = self.cat_atoms.marginal_prob(xohe.float(), t[data_batch])
         ohes_perturbed = probs.multinomial(1,).squeeze()
-        ohes_perturbed = F.one_hot(ohes_perturbed, num_classes=self.num_atom_features + 1).float()
+        ohes_perturbed = F.one_hot(ohes_perturbed, num_classes=self.num_atom_features).float()
         
         
         edge_index_local = radius_graph(x=pos_perturbed,

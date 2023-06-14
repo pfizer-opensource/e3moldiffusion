@@ -14,7 +14,7 @@ attn_activation: silu
 
 gpus: 1
 num_epochs: 500
-test_interval: 20
+test_interval: 5
 
 model: eqgat
 
@@ -74,7 +74,7 @@ noise_schedule: polynomial_2
 noise_precision: 1.e-5
 loss_type: l2
 
-load_model: #  qm9/logs/x0/run11_new/run0/last.ckpt
+load_model:
 log_dir: logs
 lr: 5.0e-4
 lr_factor: 0.5
