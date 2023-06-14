@@ -71,7 +71,7 @@ class Trainer(pl.LightningModule):
         self.node_scaling, self.edge_scaling = 1.0, 1.0
         
         self.mask_atoms = 1
-        self.mask_edges = 1
+        self.mask_edges = 0
         
         
         empirical_num_nodes = self._get_empirical_num_nodes()
@@ -107,20 +107,29 @@ class Trainer(pl.LightningModule):
                                             alphas=self.sde.alphas.clone(),
                                            )
         else:
-            self.cat_atoms = CategoricalUniformKernel(num_classes=self.num_atom_features + self.mask_atoms,
+            #self.cat_atoms = CategoricalUniformKernel(num_classes=self.num_atom_features + self.mask_atoms,
+            #                                timesteps=hparams["timesteps"],
+            #                                alphas=self.sde.alphas.clone(),
+            #                               )
+            self.cat_atoms = CategoricalTerminalKernel(num_classes=self.num_atom_features + self.mask_atoms,
+                                            terminal_state=1,
                                             timesteps=hparams["timesteps"],
                                             alphas=self.sde.alphas.clone(),
                                            )
-            
         if self.mask_edges:
             self.cat_edges = CategoricalTerminalKernel(num_classes=self.num_bond_classes + self.mask_edges,
                                             terminal_state=self.num_bond_classes,
                                             timesteps=hparams["timesteps"],
                                             alphas=self.sde.alphas.clone())
+        
         else:
             self.cat_edges = CategoricalUniformKernel(num_classes=self.num_bond_classes + self.mask_edges,
                                             timesteps=hparams["timesteps"],
                                             alphas=self.sde.alphas.clone())
+            #self.cat_edges = CategoricalTerminalKernel(num_classes=self.num_bond_classes + self.mask_edges,
+            #                                           terminal_state=0,
+            #                                           timesteps=hparams["timesteps"],
+            #                                           alphas=self.sde.alphas.clone())
         
         
     def _get_empirical_num_nodes(self):
@@ -460,13 +469,11 @@ class Trainer(pl.LightningModule):
         mask_i = i[mask]
         mask_j = j[mask]
         edge_attr_triu = edge_attr_global[mask]
-        
-        if self.mask_edges:
-            edge_attr_triu_ohe = F.one_hot(edge_attr_triu, num_classes=self.num_bond_classes + 1).float()
-        else:
-            edge_attr_triu_ohe = F.one_hot(edge_attr_triu, num_classes=self.num_bond_classes).float()
 
+        edge_attr_triu_ohe = F.one_hot(edge_attr_triu, num_classes=self.num_bond_classes + self.mask_edges).float()
+       
         t_edge = t[data_batch[mask_i]]
+        
         probs = self.cat_edges.marginal_prob(edge_attr_triu_ohe, t=t_edge)
         edges_t_given_0 = probs.multinomial(1,).squeeze()
         j = torch.concat([mask_j, mask_i])
@@ -508,11 +515,11 @@ class Trainer(pl.LightningModule):
         pos_perturbed = mean_coords + std_coords * noise_coords_true
         
         # one-hot-encode
-        node_feat = F.one_hot(node_feat.squeeze().long(), num_classes=self.num_atom_features + self.mask_edges).float()
+        node_feat = F.one_hot(node_feat.squeeze().long(), num_classes=self.num_atom_features + self.mask_atoms).float()
         xohe = self.node_scaling * node_feat
         probs = self.cat_atoms.marginal_prob(xohe.float(), t[data_batch])
         ohes_perturbed = probs.multinomial(1,).squeeze()
-        ohes_perturbed = F.one_hot(ohes_perturbed, num_classes=self.num_atom_features + self.mask_edges ).float()
+        ohes_perturbed = F.one_hot(ohes_perturbed, num_classes=self.num_atom_features + self.mask_atoms).float()
         
         
         edge_index_local = radius_graph(x=pos_perturbed,
