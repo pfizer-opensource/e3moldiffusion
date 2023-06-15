@@ -342,6 +342,8 @@ class Trainer(pl.LightningModule):
             pos = mean + std * noise
             
             if torch.any(pos.isnan()):
+                print("nan")
+                exit()
                 import pdb
                 print(t)
                 print(pos)
@@ -477,10 +479,6 @@ class Trainer(pl.LightningModule):
         pos_perturbed = mean_coords + std_coords * noise_coords_true
         
         # one-hot-encode
-                
-        import pdb
-        pdb.set_trace()
-        
         if self.hparams.no_h:
             node_feat -= 1 
         node_feat = F.one_hot(node_feat, num_classes=self.num_atom_features).float()
