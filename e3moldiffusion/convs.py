@@ -583,7 +583,6 @@ class EQGATLocalConvFinal(MessagePassing):
         in_dims: Tuple[int, Optional[int]],
         out_dims: Tuple[int, Optional[int]],
         rbf_dim: int,
-        edge_dim: int,
         cutoff: float = 5.0,
         eps: float = 1e-6,
         has_v_in: bool = False,
@@ -609,23 +608,20 @@ class EQGATLocalConvFinal(MessagePassing):
             self.vector_net = nn.Identity()
             
         self.rbf_dim = rbf_dim
-        self.edge_dim = edge_dim
         self.cutoff = cutoff
 
         self.cutoff_fnc = PolynomialCutoff(cutoff=cutoff, p=6)
         self.rbf = BesselExpansion(cutoff, rbf_dim)
         
-        self.edge_pre = DenseLayer(edge_dim, edge_dim)
-        self.edge_net = nn.Sequential(DenseLayer(self.si + rbf_dim + 2 + edge_dim,
+        self.edge_net = nn.Sequential(DenseLayer(self.si + rbf_dim + 2,
                                                  self.si,
                                                  bias=True, activation=nn.SiLU()
                                                  ),
                                       DenseLayer(self.si, 
-                                                 self.v_mul * self.vi + self.si + 1 + edge_dim,
+                                                 self.v_mul * self.vi + self.si + 1,
                                                  bias=True
                                                  )
                                       )
-        self.edge_post = DenseLayer(edge_dim, edge_dim)
         
         self.scalar_net = DenseLayer(self.si, self.si, bias=True)
         self.update_net = GatedEquivBlock(in_dims=(self.si, self.vi),
@@ -688,8 +684,7 @@ class EQGATLocalConvFinal(MessagePassing):
         s = scatter(inputs[0], index=index, dim=0, reduce="add", dim_size=dim_size)
         v = scatter(inputs[1], index=index, dim=0, reduce=self.vector_aggr, dim_size=dim_size)
         p = scatter(inputs[2], index=index, dim=0, reduce=self.vector_aggr, dim_size=dim_size)
-        edge = inputs[3]
-        return s, v, p, edge
+        return s, v, p
 
 
     def message(
@@ -703,7 +698,7 @@ class EQGATLocalConvFinal(MessagePassing):
         index: Tensor,
         edge_attr: Tuple[Tensor, Tensor, Tensor, OptTensor],
         dim_size: Optional[int]
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor, Tensor]:
 
         d, a, r, e = edge_attr
 
@@ -719,8 +714,6 @@ class EQGATLocalConvFinal(MessagePassing):
 
         fdim = aij.shape[-1]
         aij, gij = aij.split([fdim - 1, 1], dim=-1)
-        fdim = aij.shape[-1]
-        aij, edge = aij.split([fdim - self.edge_dim, self.edge_dim], dim=-1)
         pj = gij * r
 
         if self.has_v_in:
@@ -750,5 +743,5 @@ class EQGATLocalConvFinal(MessagePassing):
         else:
             nv_j = nv0_j
 
-        return ns_j, nv_j, pj, edge
+        return ns_j, nv_j, pj
     
