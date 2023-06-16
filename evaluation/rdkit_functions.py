@@ -2,7 +2,7 @@ from rdkit import Chem
 import numpy as np
 from evaluation.bond_analyze import get_bond_order, geom_predictor
 import torch
-from config_file import get_dataset_info
+from experiments.utils.config_file import get_dataset_info
 import pickle
 import os
 
