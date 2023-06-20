@@ -5,20 +5,22 @@ channels:
   - defaults
   - pytorch
   - pyg
+  - nvidia
 dependencies:
-  - python=3.9.0
+  - python=3.10.0
   - pip
   - notebook
   - matplotlib
-  - rdkit=2021.09.4
-  - pytorch::pytorch=1.11.0
-  - pyg::pyg==2.0.4
+  - pytorch::pytorch=1.13.0
+  - pyg::pyg=2.1.0
+  - conda-forge::rdkit=2023.03.2
   - conda-forge::pytorch-lightning=1.7.4
   - conda-forge::jupyter
- # - conda-forge::xtb-python
+  - conda-forge::openbabel
   - pip:
-      - functorch==0.1.1
       - ase
       - py3Dmol
       - lmdb
       - nglview
+      - rmsd
+      - torch_ema

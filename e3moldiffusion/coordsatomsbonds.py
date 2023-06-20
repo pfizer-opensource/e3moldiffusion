@@ -377,12 +377,16 @@ class DenoisingNetwork(nn.Module):
         s = self.atom_mapping(x)
         s = self.atom_time_mapping(s + tnode)
         
-    
+
+        edge_attr_local_transformed = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=None, pos=pos)
+        edge_attr_global_transformed = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=None, pos=pos)
+         
+         
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
         out = self.gnn(
             s=s, v=v, p=pos,
-            edge_index_local=edge_index_local, edge_attr_local=None,
-            edge_index_global=edge_index_global, edge_attr_global=None,
+            edge_index_local=edge_index_local, edge_attr_local=edge_attr_local_transformed,
+            edge_index_global=edge_index_global, edge_attr_global=edge_attr_global_transformed,
             batch=batch
         )
         

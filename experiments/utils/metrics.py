@@ -4,8 +4,8 @@ from collections import Counter
 import numpy as np
 import torch
 import torch.nn.functional as F
-from geom.utils_data import Statistics
-from geom.utils_sampling import Molecule
+from experiments.utils.data import Statistics
+from experiments.utils.sampling import Molecule
 from rdkit import Chem
 from torch_geometric.data import Data
 from torchmetrics import (KLDivergence, MeanAbsoluteError, MeanSquaredError,

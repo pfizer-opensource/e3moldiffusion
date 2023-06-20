@@ -9,14 +9,14 @@ from torch_geometric.data import (
 )
 from torch_geometric.utils import scatter
 
-from qm9.utils_metrics import compute_all_statistics
-from qm9.utils_data import (
+from experiments.utils.metrics import compute_all_statistics
+from experiments.utils.data import (
     save_pickle,
     load_pickle,
     Statistics,
     atom_type_config,
 )
-from qm9.utils import one_hot
+from experiments.utils.utils import one_hot
 
 HAR2EV = 27.211386246
 KCALMOL2EV = 0.04336414
@@ -115,10 +115,10 @@ class QM9(QM9_geometric):
             atom_types=torch.from_numpy(np.load(self.processed_paths[1])).float(),
             bond_types=torch.from_numpy(np.load(self.processed_paths[2])).float(),
             charge_types=torch.from_numpy(np.load(self.processed_paths[3])).float(),
-            bond_angles=torch.from_numpy(np.load(self.processed_paths[4])).float(),
+            bond_angles=None, #torch.from_numpy(np.load(self.processed_paths[4])).float(),
             num_nodes=load_pickle(self.processed_paths[5]),
             valencies=load_pickle(self.processed_paths[6]),
-            bond_lengths=load_pickle(self.processed_paths[7]),
+            bond_lengths=None, #load_pickle(self.processed_paths[7]),
         )
         self.smiles = load_pickle(self.processed_paths[8])
 
@@ -261,7 +261,8 @@ class QM9(QM9_geometric):
         torch.save(self.collate(data_list), self.processed_paths[0])
 
         statistics = compute_all_statistics(
-            data_list, self.atom_encoder, charges_dic={-1: 0, 0: 1, 1: 2}
+            data_list, self.atom_encoder, charges_dic={-1: 0, 0: 1, 1: 2},
+            bonds=None, angles=None
         )
 
         np.save(self.processed_paths[1], statistics.atom_types)
@@ -270,5 +271,5 @@ class QM9(QM9_geometric):
         np.save(self.processed_paths[4], statistics.bond_angles)
         save_pickle(statistics.num_nodes, self.processed_paths[5])
         save_pickle(statistics.valencies, self.processed_paths[6])
-        save_pickle(statistics.bond_lengths, self.processed_paths[7])
+        # save_pickle(statistics.bond_lengths, self.processed_paths[7])
         save_pickle(set(smiles_list), self.processed_paths[8])

@@ -1,5 +1,5 @@
 import os
-from geom.utils import LoadFromCheckpoint, LoadFromFile
+from experiments.utils.utils import LoadFromCheckpoint, LoadFromFile
 
 DEFAULT_SAVE_DIR = os.path.join(os.getcwd(), "3DcoordsAtomsBonds_0")
 

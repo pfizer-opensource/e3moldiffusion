@@ -222,6 +222,7 @@ def add_arguments(parser):
 
     # EQGAT
     parser.add_argument("--sdim", default=64, type=int)
+    parser.add_argument("--latent_dim", default=32, type=int)
     parser.add_argument("--vdim", default=16, type=int)
     parser.add_argument("--edim", default=0, type=int)
     parser.add_argument("--tdim", default=1, type=int)

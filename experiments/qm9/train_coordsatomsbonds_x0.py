@@ -624,8 +624,13 @@ class Trainer(pl.LightningModule):
     
 
 if __name__ == "__main__":
-    from qm9.data import QM9DataModule
-    from qm9.hparams_coordsatomsbonds import add_arguments
+    
+    import sys
+    file_dir = os.path.dirname(__file__)
+    sys.path.append(file_dir)
+    
+    from data import QM9DataModule
+    from hparams_coordsatomsbonds import add_arguments
 
     parser = ArgumentParser()
     parser = add_arguments(parser)

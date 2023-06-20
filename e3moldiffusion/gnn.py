@@ -109,6 +109,7 @@ class EQGATGNN(nn.Module):
     def forward(self,
                 s: Tensor,
                 v: Tensor,
+                p: Tensor,
                 edge_index_local: Tensor,
                 edge_attr_local: Tuple[Tensor, Tensor, Tensor, OptTensor],
                 edge_index_global: Tensor,

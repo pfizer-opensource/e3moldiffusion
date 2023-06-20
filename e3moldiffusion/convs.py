@@ -519,18 +519,16 @@ class EQGATGlobalConvFinal(MessagePassing):
         dim_size: Optional[int]
     ) -> Tuple[Tensor, Tensor]:
 
-        d, a, r, e = edge_attr
+        d, a, r, _ = edge_attr
 
         de0 = d.view(-1, 1)
         a0 = a.view(-1, 1)
     
-        aij = torch.cat([sa_i + sa_j, de0, a0, e], dim=-1)
+        aij = torch.cat([sa_i + sa_j, de0, a0], dim=-1)
         aij = self.edge_net(aij)
         
         fdim = aij.shape[-1]
         aij, gij = aij.split([fdim - 1, 1], dim=-1)
-        fdim = aij.shape[-1]
-        aij, edge = aij.split([fdim - self.edge_dim, self.edge_dim], dim=-1)
         pj = gij * r
 
         if self.has_v_in:
@@ -560,7 +558,7 @@ class EQGATGlobalConvFinal(MessagePassing):
         else:
             nv_j = nv0_j
 
-        return ns_j, nv_j, pj, edge
+        return ns_j, nv_j, pj
     
 
 class EQGATLocalConvFinal(MessagePassing):
@@ -649,8 +647,6 @@ class EQGATLocalConvFinal(MessagePassing):
         s, v, p = x
         d, a, r, e = edge_attr
         
-        e = self.edge_pre(e)
-    
         ms, mv, mp, me = self.propagate(
             sa=s,
             sb=self.scalar_net(s),
@@ -664,8 +660,6 @@ class EQGATLocalConvFinal(MessagePassing):
         s = ms + s
         v = mv + v
         p = mp + p
-        e = F.silu(me + e)
-        e = self.edge_post(e)
 
         ms, mv = self.update_net(x=(s, v))
 
@@ -700,7 +694,7 @@ class EQGATLocalConvFinal(MessagePassing):
         dim_size: Optional[int]
     ) -> Tuple[Tensor, Tensor, Tensor]:
 
-        d, a, r, e = edge_attr
+        d, a, r, _ = edge_attr
 
         de = d.view(-1, 1)
         rbf = self.rbf(d)
@@ -709,7 +703,7 @@ class EQGATLocalConvFinal(MessagePassing):
         
         a0 = a.view(-1, 1)
 
-        aij = torch.cat([sa_i + sa_j, de, a0, rbf, e], dim=-1)
+        aij = torch.cat([sa_i + sa_j, de, a0, rbf], dim=-1)
         aij = self.edge_net(aij)
 
         fdim = aij.shape[-1]

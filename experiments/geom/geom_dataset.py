@@ -3,9 +3,8 @@ from typing import Optional
 import numpy as np
 import torch
 import torch.nn.functional as F
-from geom.utils_data import (Statistics, fully_connected_edge_idx, load_pickle,
-                             save_pickle)
-from geom.utils_metrics import compute_all_statistics
+from experiments.utils.data import (Statistics, fully_connected_edge_idx, load_pickle,save_pickle)
+from experiments.utils.metrics import compute_all_statistics
 from pytorch_lightning import LightningDataModule
 from rdkit import Chem, RDLogger
 from torch_geometric.data import Data, DataLoader, InMemoryDataset
@@ -40,12 +39,11 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles):
 
 
 DATAROOT = '/home/let55/workspace/projects/e3moldiffusion/geom/data'
+DATAROOT = '/sharedhome/let55/data/midi'
 root_no_h = '/home/let55/workspace/projects/e3moldiffusion/geom/data_noH'
 
 full_atom_encoder = {'H': 0, 'B': 1, 'C': 2, 'N': 3, 'O': 4, 'F': 5, 'Al': 6, 'Si': 7,
                      'P': 8, 'S': 9, 'Cl': 10, 'As': 11, 'Br': 12, 'I': 13, 'Hg': 14, 'Bi': 15}
-
-
 
 class GeomDrugsDataset(InMemoryDataset):
     def __init__(self, root,  split,  transform=None, pre_transform=None, pre_filter=None):
@@ -60,8 +58,8 @@ class GeomDrugsDataset(InMemoryDataset):
                                      bond_types=torch.from_numpy(np.load(self.processed_paths[3])),
                                      charge_types=torch.from_numpy(np.load(self.processed_paths[4])),
                                      valencies=load_pickle(self.processed_paths[5]),
-                                     bond_lengths=load_pickle(self.processed_paths[6]),
-                                     bond_angles=torch.from_numpy(np.load(self.processed_paths[7])))
+                                     bond_lengths=None, #load_pickle(self.processed_paths[6]),
+                                     bond_angles=None) #torch.from_numpy(np.load(self.processed_paths[7])))
         self.smiles = load_pickle(self.processed_paths[8])
 
     @property
@@ -117,7 +115,9 @@ class GeomDrugsDataset(InMemoryDataset):
         torch.save(self.collate(data_list), self.processed_paths[0])
 
         statistics = compute_all_statistics(data_list, self.atom_encoder, charges_dic={-2: 0, -1: 1, 0: 2,
-                                                                                       1: 3, 2: 4, 3: 5})
+                                                                                       1: 3, 2: 4, 3: 5},
+                                            bonds=False, angles=False
+                                            )
         save_pickle(statistics.num_nodes, self.processed_paths[1])
         np.save(self.processed_paths[2], statistics.atom_types)
         np.save(self.processed_paths[3], statistics.bond_types)
@@ -293,6 +293,7 @@ class GeomDataModule(LightningDataModule):
 
 if __name__ == '__main__':
     from tqdm import tqdm
+    print(DATAROOT)
     dataset = GeomDrugsDataset(root=DATAROOT, split="train")
     print(dataset)
     dataset = GeomDrugsDataset(root=DATAROOT, split="val")
@@ -303,6 +304,7 @@ if __name__ == '__main__':
     print(dataset[0].edge_attr)
     datamodule = GeomDataModule(root=DATAROOT, batch_size=64, num_workers=4)
     datamodule.setup()
-    train_loader = datamodule.train_dataloader()
-    for i, data in tqdm(enumerate(train_loader), total=len(train_loader)):
-        data = data.cuda()
+    loader = datamodule.val_dataloader()
+    for i, data in tqdm(enumerate(loader), total=len(loader)):
+        # data = data.cuda()
+        pass

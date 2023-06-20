@@ -103,7 +103,7 @@ class EncoderEdgeGNN(nn.Module):
         )
         
         self.latent_mapping = DenseLayer(hn_dim[0], latent_dim)
-        self.graph_pooling = SoftMaxAttentionAggregation(dim=hn_dim[0])
+        self.graph_pooling = SoftMaxAttentionAggregation(dim=latent_dim)
         
         self.reset_parameters()
 
