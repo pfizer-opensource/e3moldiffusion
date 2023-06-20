@@ -106,6 +106,7 @@ class Trainer(pl.LightningModule):
         if not self.hparams.no_h:
             pp = '/home/let55/workspace/projects/e3moldiffusion/'
             pp = '/sharedhome/let55/data/midi/'
+            pp = '/hpfs/userws/let55/projects/e3moldiffusion/experiments/'
             with open(f'{pp}geom/num_nodes_geom_midi.json', 'r') as f:
                 num_nodes_dict = json.load(f, object_hook=lambda d: {int(k) if k.lstrip('-').isdigit() else k: v for k, v in d.items()})
         else:
@@ -705,6 +706,7 @@ if __name__ == "__main__":
     else:
         root = '/home/let55/workspace/projects/e3moldiffusion/geom/data'
         root = '/sharedhome/let55/data/midi/'
+        root = '/hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/data'
     print(root)
     datamodule = GeomDataModule(root=root,
                                 batch_size=hparams.batch_size,
@@ -753,3 +755,4 @@ if __name__ == "__main__":
         datamodule=datamodule,
         ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
     )
+

@@ -40,6 +40,8 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles):
 
 DATAROOT = '/home/let55/workspace/projects/e3moldiffusion/geom/data'
 DATAROOT = '/sharedhome/let55/data/midi'
+DATAROOT = '/hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/data'
+
 root_no_h = '/home/let55/workspace/projects/e3moldiffusion/geom/data_noH'
 
 full_atom_encoder = {'H': 0, 'B': 1, 'C': 2, 'N': 3, 'O': 4, 'F': 5, 'Al': 6, 'Si': 7,
@@ -112,6 +114,7 @@ class GeomDrugsDataset(InMemoryDataset):
 
                 data_list.append(data)
 
+        print(f"Saving processed data file at {self.processed_paths[0]}")
         torch.save(self.collate(data_list), self.processed_paths[0])
 
         statistics = compute_all_statistics(data_list, self.atom_encoder, charges_dic={-2: 0, -1: 1, 0: 2,
@@ -126,8 +129,6 @@ class GeomDrugsDataset(InMemoryDataset):
         save_pickle(statistics.bond_lengths, self.processed_paths[6])
         np.save(self.processed_paths[7], statistics.bond_angles)
         save_pickle(set(all_smiles), self.processed_paths[8])
-        torch.save(self.collate(data_list), self.processed_paths[0])
-
 
 def get_data_no_h(data: Data) -> Data:
     select_mask = (data.x != 0)
@@ -294,11 +295,11 @@ class GeomDataModule(LightningDataModule):
 if __name__ == '__main__':
     from tqdm import tqdm
     print(DATAROOT)
-    dataset = GeomDrugsDataset(root=DATAROOT, split="train")
-    print(dataset)
     dataset = GeomDrugsDataset(root=DATAROOT, split="val")
     print(dataset)
     dataset = GeomDrugsDataset(root=DATAROOT, split="test")
+    print(dataset)
+    dataset = GeomDrugsDataset(root=DATAROOT, split="train")
     print(dataset)
     print(dataset[0])
     print(dataset[0].edge_attr)
@@ -308,3 +309,4 @@ if __name__ == '__main__':
     for i, data in tqdm(enumerate(loader), total=len(loader)):
         # data = data.cuda()
         pass
+    
