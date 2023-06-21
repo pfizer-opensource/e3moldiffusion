@@ -7,7 +7,7 @@ import numpy as np
 from torch_geometric.data import (
     Data,
 )
-from torch_geometric.utils import scatter
+from torch_scatter import scatter
 
 from experiments.utils.metrics import compute_all_statistics
 from experiments.utils.data import (
@@ -240,8 +240,8 @@ class QM9(QM9_geometric):
                 x=x,
                 z=z,
                 pos=pos,
-                bond_index=edge_index,
-                bond_attr=edge_attr,
+                edge_index=edge_index,
+                edge_attr=edge_attr,
                 y=y,
                 charges=all_charges,
                 atom_feat=atom_features,

@@ -5,7 +5,7 @@ from torch.utils.data import Subset
 from torch_geometric.loader import DataLoader
 from pytorch_lightning import LightningDataModule
 from pytorch_lightning.utilities import rank_zero_warn
-from qm9.dataset import QM9
+from experiments.qm9.dataset import QM9
 from experiments.utils.utils import make_splits, MissingEnergyException
 from torch_scatter import scatter
 

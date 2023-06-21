@@ -38,11 +38,11 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles):
     return data
 
 
-DATAROOT = '/home/let55/workspace/projects/e3moldiffusion/geom/data'
-DATAROOT = '/sharedhome/let55/data/midi'
+DATAROOT = '/home/let55/workspace/projects/e3moldiffusion/experiments/geom/data'
+DATAROOT = '/sharedhome/let55/projects/e3moldiffusion/experiments/geom/data'
 DATAROOT = '/hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/data'
 
-root_no_h = '/home/let55/workspace/projects/e3moldiffusion/geom/data_noH'
+root_no_h = '/home/let55/workspace/projects/e3moldiffusion/experiments/geom/data_noH'
 
 full_atom_encoder = {'H': 0, 'B': 1, 'C': 2, 'N': 3, 'O': 4, 'F': 5, 'Al': 6, 'Si': 7,
                      'P': 8, 'S': 9, 'Cl': 10, 'As': 11, 'Br': 12, 'I': 13, 'Hg': 14, 'Bi': 15}

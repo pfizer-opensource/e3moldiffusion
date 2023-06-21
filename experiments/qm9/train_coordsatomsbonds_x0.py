@@ -47,7 +47,8 @@ BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 class Trainer(pl.LightningModule):
     def __init__(self,
                  hparams,
-                 dataset_info: dict
+                 dataset_info: dict,
+                 smiles_list: list
                  ):
         super().__init__()
         self.save_hyperparameters(hparams)
@@ -62,7 +63,7 @@ class Trainer(pl.LightningModule):
         empirical_num_nodes = self._get_empirical_num_nodes()
         self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
         
-      
+        self.smiles_list = smiles_list
         self.edge_scaling = 1.00
         self.node_scaling = 1.00
         
@@ -174,7 +175,8 @@ class Trainer(pl.LightningModule):
         
             res = analyze_stability_for_molecules(molecule_list=molecule_list, 
                                                 dataset_info=dataset_info,
-                                                smiles_train=[], bonds_given=True
+                                                smiles_train=self.smiles_list,
+                                                bonds_given=True
                                                 )
             print(f'Run time={datetime.now() - start}')
             total_res = {k: v for k, v in zip(['validity', 'uniqueness', 'novelty'], res[1][0])}
@@ -368,8 +370,8 @@ class Trainer(pl.LightningModule):
         charges: Tensor = batch.charges
         data_batch: Tensor = batch.batch
         batch_num_nodes = torch.bincount(data_batch)
-        bond_edge_index = batch.bond_index
-        bond_edge_attr = batch.bond_attr
+        bond_edge_index = batch.edge_index
+        bond_edge_attr = batch.edge_attr
         n = batch.num_nodes
         bs = int(data_batch.max()) + 1
         
@@ -662,13 +664,12 @@ if __name__ == "__main__":
     datamodule.setup("fit")
 
     dataset_info = get_dataset_info(hparams.dataset, hparams.remove_hs)
-
-
-    dataloader = datamodule.get_dataloader(datamodule.train_dataset, "val")
-        
+    
+    
     model = Trainer(
         hparams=hparams.__dict__,
-        dataset_info=dataset_info
+        dataset_info=dataset_info,
+        smiles_list=list(datamodule.dataset.smiles)
     )
 
     strategy = (

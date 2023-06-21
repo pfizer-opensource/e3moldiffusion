@@ -24,6 +24,7 @@ from callbacks.ema import ExponentialMovingAverage
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import atom_type_config, get_bond_feature_dims
 from e3moldiffusion.sde import DiscreteDDPM
+from experiments.utils.data import load_pickle
 from experiments.utils.config_file import get_dataset_info
 from experiments.utils.sampling import (Molecule,
                                         analyze_stability_for_molecules)
@@ -49,7 +50,8 @@ BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 class Trainer(pl.LightningModule):
     def __init__(self,
                  hparams: dict,
-                 dataset_info: dict
+                 dataset_info: dict,
+                 smiles_list: list
                  ):
         super().__init__()
         self.save_hyperparameters(hparams)
@@ -62,7 +64,7 @@ class Trainer(pl.LightningModule):
             self.hparams.num_atom_types -= 1
             
         self.hparams.num_bond_types = BOND_FEATURE_DIMS + 1
-        
+        self.smiles_list = smiles_list
         self.num_atom_features = self.hparams.num_atom_types + int(self.include_charges)
         self.num_bond_classes = 5
         
@@ -104,7 +106,7 @@ class Trainer(pl.LightningModule):
                  
     def _get_empirical_num_nodes(self):
         if not self.hparams.no_h:
-            pp = '/home/let55/workspace/projects/e3moldiffusion/experiments'   # delta
+            pp = '/home/let55/workspace/projects/e3moldiffusion/experiments/'   # delta
             pp = '/sharedhome/let55/projects/e3moldiffusion/experiments/'  # aws
             pp = '/hpfs/userws/let55/projects/e3moldiffusion/experiments/' # alpha
             with open(f'{pp}geom/num_nodes_geom_midi.json', 'r') as f:
@@ -203,7 +205,8 @@ class Trainer(pl.LightningModule):
             
             res = analyze_stability_for_molecules(molecule_list=molecule_list, 
                                                 dataset_info=dataset_info,
-                                                smiles_train=[], bonds_given=True
+                                                smiles_train=self.smiles_list,
+                                                bonds_given=True
                                                 )
 
             if verbose:
@@ -725,8 +728,10 @@ if __name__ == "__main__":
                                 with_hydrogen=not hparams.no_h
                                 )
 
+    train_smiles = load_pickle(os.path.join(root, "processed", "train_smiles.pickle"))
     model = Trainer(hparams=hparams.__dict__,
-                    dataset_info=dataset_info)
+                    dataset_info=dataset_info,
+                    smiles_list=list(train_smiles))
 
     strategy = (
         pl.strategies.DDPStrategy(find_unused_parameters=False)
