@@ -51,7 +51,10 @@ cutoff_upper_global: 15.0
 #DATA
 dataset: qm9
 dataset_arg: {}
-dataset_root: /sharedhome/let55/projects/e3moldiffusion/experiments/qm9/data # /home/let55/workspace/projects/e3moldiffusion/qm9/qm9_data
+#dataset_root: /sharedhome/let55/projects/e3moldiffusion/experiments/qm9/data # aws
+#dataset_root: /home/let55/workspace/projects/e3moldiffusion/experiments/qm9/data # delta
+dataset_root: /hpfs/userws/let55/projects/e3moldiffusion/experiments/qm9/data # alpha
+
 
 derivative: false
 #Change for diffusion to VectorCategorical!

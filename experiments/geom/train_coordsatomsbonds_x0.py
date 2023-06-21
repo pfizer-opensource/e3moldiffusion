@@ -104,9 +104,9 @@ class Trainer(pl.LightningModule):
                  
     def _get_empirical_num_nodes(self):
         if not self.hparams.no_h:
-            pp = '/home/let55/workspace/projects/e3moldiffusion/'
-            pp = '/sharedhome/let55/data/midi/'
-            pp = '/hpfs/userws/let55/projects/e3moldiffusion/experiments/'
+            pp = '/home/let55/workspace/projects/e3moldiffusion/experiments'   # delta
+            pp = '/sharedhome/let55/projects/e3moldiffusion/experiments/'  # aws
+            pp = '/hpfs/userws/let55/projects/e3moldiffusion/experiments/' # alpha
             with open(f'{pp}geom/num_nodes_geom_midi.json', 'r') as f:
                 num_nodes_dict = json.load(f, object_hook=lambda d: {int(k) if k.lstrip('-').isdigit() else k: v for k, v in d.items()})
         else:
@@ -162,7 +162,7 @@ class Trainer(pl.LightningModule):
     
     
     @torch.no_grad()
-    def run_evaluation(self, step: int, dataset_info, ngraphs: int = 4000, bs: int = 500):
+    def run_evaluation(self, step: int, dataset_info, ngraphs: int = 4000, bs: int = 500, verbose: bool = False):
         b = ngraphs // bs
         l = [bs] * b
         if sum(l) != ngraphs:
@@ -170,14 +170,17 @@ class Trainer(pl.LightningModule):
         assert sum(l) == ngraphs
         
         results = []
-        for num_graphs in l:
+        if verbose:
+            print(f"Creating {ngraphs} graphs in {l} batches")
+        for i, num_graphs in enumerate(l):
             start = datetime.now()
             pos_splits, _, atom_types_integer_split, \
             edge_types, edge_index_global, batch_num_nodes, _ = self.generate_graphs(
                                                                                      num_graphs=num_graphs,
                                                                                      verbose=False,
                                                                                      device=self.empirical_num_nodes.device,
-                                                                                     empirical_distribution_num_nodes=self.empirical_num_nodes)
+                                                                                     empirical_distribution_num_nodes=self.empirical_num_nodes,
+                                                                                     save_traj=False)
             
             n = batch_num_nodes.sum().item()
             edge_attrs_dense = torch.zeros(size=(n,n,5), dtype=edge_types.dtype, device=edge_types.device)
@@ -195,12 +198,16 @@ class Trainer(pl.LightningModule):
                                     bond_types=edges)
                 molecule_list.append(molecule)
             
-        
+            if verbose:
+                print(f"Finished generating {i+1}/{len(l)}. Running analysis on batch")
+            
             res = analyze_stability_for_molecules(molecule_list=molecule_list, 
                                                 dataset_info=dataset_info,
                                                 smiles_train=[], bonds_given=True
                                                 )
-            print(f'Run time={datetime.now() - start}')
+
+            if verbose:
+                print(f'Run time={datetime.now() - start}')
             total_res = {k: v for k, v in zip(['validity', 'uniqueness', 'novelty'], res[1][0])}
             total_res.update(res[0])
             print(total_res)
@@ -223,8 +230,9 @@ class Trainer(pl.LightningModule):
         
     def validation_epoch_end(self, validation_step_outputs):
         
-        if (self.current_epoch + 1) % self.hparams.test_interval == 0:        
-            final_res = self.run_evaluation(step=self.i, dataset_info=self.dataset_info, ngraphs=1000, bs=self.hparams.batch_size)
+        if (self.current_epoch + 1) % self.hparams.test_interval == 0:  
+            print(f"Running evaluation in epoch {self.current_epoch + 1}")      
+            final_res = self.run_evaluation(step=self.i, dataset_info=self.dataset_info, ngraphs=1000, bs=self.hparams.batch_size, verbose=True)
             self.i += 1
             self.log(name='val/validity', value=final_res.validity[0], on_epoch=True)
             self.log(name='val/uniqueness', value=final_res.uniqueness[0], on_epoch=True)
@@ -702,11 +710,12 @@ if __name__ == "__main__":
    
     print("Using MIDI GEOM")
     if hparams.no_h:
+        exit()
         root = '/home/let55/workspace/projects/e3moldiffusion/geom/data_noH' 
     else:
-        root = '/home/let55/workspace/projects/e3moldiffusion/geom/data'
-        root = '/sharedhome/let55/data/midi/'
-        root = '/hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/data'
+        root = '/home/let55/workspace/projects/e3moldiffusion/experiments/geom/data' # delta
+        root = '/sharedhome/let55/projects/e3moldiffusion/experiments/geom/data' # aws
+        root = '/hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/data' # alpha
     print(root)
     datamodule = GeomDataModule(root=root,
                                 batch_size=hparams.batch_size,

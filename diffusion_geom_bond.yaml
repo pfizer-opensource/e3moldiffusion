@@ -50,7 +50,7 @@ cutoff_upper_global: 15.0
 #DATA
 dataset: geom
 dataset_arg: {}
-dataset_root: /home/let55/workspace/projects/e3moldiffusion/geom/data
+dataset_root: /home/let55/workspace/projects/e3moldiffusion/experiments/geom/data
 
 derivative: false
 #Change for diffusion to VectorCategorical!
