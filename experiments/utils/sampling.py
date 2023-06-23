@@ -82,7 +82,8 @@ class Molecule:
         self.rdkit_mol = (
              self.build_molecule_given_bonds(atom_decoder)
              if bond_types is not None
-             else self.build_molecule(
+             else 
+             self.build_molecule(
                  self.positions, self.atom_types, dataset_info
              )  # alternatively xyz_to_mol
          )
@@ -91,6 +92,8 @@ class Molecule:
         #)
         self.num_nodes = len(atom_types)
         self.num_atom_types = len(atom_decoder)
+        
+        
 
     def build_molecule_given_bonds(self, atom_decoder, verbose=False):
         if verbose:
@@ -151,6 +154,11 @@ class Molecule:
     def build_molecule(self, positions, atom_types, dataset_info):
         atom_decoder = dataset_info["atom_decoder"]
         X, A, E = self.build_xae_molecule(positions, atom_types, dataset_info)
+        
+        #E = E + E.T
+        #E = E.long().cpu()
+        #self.bond_types = E
+        
         mol = Chem.RWMol()
         for atom in X:
             a = Chem.Atom(atom_decoder[atom.item()])
@@ -427,10 +435,14 @@ def check_stability(positions, atom_type, dataset_info, debug=False):
                 dataset_info["name"] == "drugs"
                 or dataset_info["name"] == "aqm"
                 or dataset_info["name"] == "uspto"
+                or dataset_info["name"] == "geom"
             ):
                 order = bond_analyze.geom_predictor(
                     (atom_decoder[pair[0]], atom_decoder[pair[1]]), dist
                 )
+            else:
+                print(dataset_info["name"])
+                raise ValueError
 
             nr_bonds[i] += order
             nr_bonds[j] += order
@@ -614,7 +626,7 @@ def sanitize_molecules_openbabel_batch(molecule_list, dataset_info):
 
 
 def analyze_stability_for_molecules(
-    molecule_list, dataset_info, smiles_train=None, bonds_given=False
+    molecule_list, dataset_info, smiles_train=None, bonds_given=False, debug=False
 ):
     molecule_stable = 0
     nr_stable_bonds = 0
@@ -624,9 +636,9 @@ def analyze_stability_for_molecules(
     for mol in molecule_list:
         pos, atom_type = mol.positions, mol.atom_types
         if bonds_given:
-            validity_results = check_stability_given_bonds(mol, dataset_info)
+            validity_results = check_stability_given_bonds(mol, dataset_info, debug=debug)
         else:
-            validity_results = check_stability(pos.cpu(), atom_type.cpu(), dataset_info)
+            validity_results = check_stability(pos.cpu(), atom_type.cpu(), dataset_info, debug=debug)
 
         molecule_stable += int(validity_results[0])
         nr_stable_bonds += int(validity_results[1])

@@ -7,6 +7,7 @@ from typing import List, Tuple
 import pandas as pd
 import pytorch_lightning as pl
 import torch
+from torch import nn
 import torch.nn.functional as F
 from pytorch_lightning.callbacks import (LearningRateMonitor, ModelCheckpoint,
                                          ModelSummary, TQDMProgressBar)
@@ -20,8 +21,9 @@ from torch_sparse import coalesce
 from tqdm import tqdm
 
 from callbacks.ema import ExponentialMovingAverage
-from e3moldiffusion.DiffAE import EncoderEdgeGNN, DenoisingDecoderNetwork
+from e3moldiffusion.DiffAE import EncoderEdgeGNN, DenoisingDecoderNetwork, DenoisingFullDecoderNetwork
 from e3moldiffusion.modules import DenseLayer
+from e3moldiffusion.ordinal_loss import corn_loss
 
 from e3moldiffusion.molfeat import atom_type_config, get_bond_feature_dims
 from e3moldiffusion.sde import DiscreteDDPM
@@ -88,10 +90,18 @@ class Trainer(pl.LightningModule):
             recompute_radius_graph=False
         )  
         
+        self.latent_dim = hparams['latent_dim']
+        
         self.mu_logvar = DenseLayer(hparams["latent_dim"], 2*hparams["latent_dim"], bias=True)
+        self.max_num_nodes = 29
+        
+        self.num_nodes_net = nn.Sequential(
+            DenseLayer(hparams["latent_dim"], hparams["latent_dim"], activation=nn.SiLU()),
+            DenseLayer(hparams["latent_dim"], self.max_num_nodes - 1)
+        )
         
         
-        self.decoder = DenoisingDecoderNetwork(
+        self.decoder = DenoisingFullDecoderNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
             use_norm=hparams["use_norm"],
@@ -99,6 +109,7 @@ class Trainer(pl.LightningModule):
             num_atom_types=self.num_atom_features,
             num_bond_types=self.num_bond_classes,
             rbf_dim=hparams["num_rbf"],
+            edge_dim=hparams["edim"],
             cutoff_local=hparams["cutoff_upper"],
             vector_aggr="mean",
             local_global_model=hparams["fully_connected_layer"],
@@ -106,6 +117,9 @@ class Trainer(pl.LightningModule):
             recompute_edge_attributes=True,
             recompute_radius_graph=True
         )
+        
+        self.latent_hidden = DenseLayer(hparams["latent_dim"], hparams["sdim"])
+        self.atom_lin = DenseLayer(self.num_atom_features, hparams["sdim"])
                 
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
                                 beta_max=hparams["beta_max"],
@@ -225,14 +239,13 @@ class Trainer(pl.LightningModule):
     def validation_epoch_end(self, validation_step_outputs):
         
         if (self.current_epoch + 1) % self.hparams.test_interval == 0:
-            pass
-            #final_res = self.run_evaluation(step=self.i, dataset_info=self.dataset_info, ngraphs=1000, bs=self.hparams.batch_size)
-            #self.i += 1
-            #self.log(name='val/validity', value=final_res.validity[0], on_epoch=True)
-            #self.log(name='val/uniqueness', value=final_res.uniqueness[0], on_epoch=True)
-            #self.log(name='val/novelty', value=final_res.novelty[0], on_epoch=True)
-            #self.log(name='val/mol_stable', value=final_res.mol_stable[0], on_epoch=True)
-            #self.log(name='val/atm_stable', value=final_res.atm_stable[0], on_epoch=True)
+            final_res = self.run_evaluation(step=self.i, dataset_info=self.dataset_info, ngraphs=1000, bs=self.hparams.batch_size)
+            self.i += 1
+            self.log(name='val/validity', value=final_res.validity[0], on_epoch=True)
+            self.log(name='val/uniqueness', value=final_res.uniqueness[0], on_epoch=True)
+            self.log(name='val/novelty', value=final_res.novelty[0], on_epoch=True)
+            self.log(name='val/mol_stable', value=final_res.mol_stable[0], on_epoch=True)
+            self.log(name='val/atm_stable', value=final_res.atm_stable[0], on_epoch=True)
 
     def reverse_sampling(
         self,
@@ -242,13 +255,14 @@ class Trainer(pl.LightningModule):
         verbose: bool = False,
         save_traj: bool = False
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
-        
-        batch_num_nodes = torch.multinomial(input=empirical_distribution_num_nodes,
-                                            num_samples=num_graphs, replacement=True).to(device)
+    
+        z = torch.randn(size=(num_graphs, self.latent_dim), device=device, dtype=torch.float32)
+        batch_num_nodes = self.num_nodes_net(z)
+        batch_num_nodes = batch_num_nodes.argmax(dim=-1)
         batch_num_nodes = batch_num_nodes.clamp(min=1)
         batch = torch.arange(num_graphs, device=device).repeat_interleave(batch_num_nodes, dim=0)
         bs = int(batch.max()) + 1
-        
+
         # initialiaze the 0-mean point cloud from N(0, I)
         pos = torch.randn(len(batch), 3,
                           device=device,
@@ -294,9 +308,10 @@ class Trainer(pl.LightningModule):
             t = torch.full(size=(bs, ), fill_value=timestep, dtype=torch.long, device=pos.device)
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
+            zz = self.atom_lin(atom_types) + z[batch]
             
-            out = self.model(
-                x=atom_types,
+            out = self.decoder(
+                x=zz,
                 t=temb,
                 pos=pos,
                 edge_index_local=edge_index_local,
@@ -338,7 +353,7 @@ class Trainer(pl.LightningModule):
                 pdb.set_trace()
 
             # atoms 
-            mean = sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * out['atoms_perturbed'] + \
+            mean = sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * atom_types + \
                 sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * atoms_pred
             mean = (1.0 / sigmas2t[batch]) * mean
             std = rev_sigma[batch]
@@ -394,8 +409,8 @@ class Trainer(pl.LightningModule):
         charges: Tensor = batch.charges
         data_batch: Tensor = batch.batch
         batch_num_nodes = torch.bincount(data_batch)
-        bond_edge_index = batch.bond_index
-        bond_edge_attr = batch.bond_attr
+        bond_edge_index = batch.edge_index
+        bond_edge_attr = batch.edge_attr
         n = batch.num_nodes
         bs = int(data_batch.max()) + 1
         
@@ -418,7 +433,6 @@ class Trainer(pl.LightningModule):
         edge_index_global, edge_attr_global = sort_edge_index(edge_index=edge_index_global,
                                                               edge_attr=edge_attr_global, 
                                                               sort_by_row=False)
-        
         
         batch_edge_global = data_batch[edge_index_global[0]]     
         
@@ -460,6 +474,9 @@ class Trainer(pl.LightningModule):
         mu, logvar = self.mu_logvar(z).chunk(2, dim=-1)
         
         z_reparam = mu + 0.5 * logvar.exp() * torch.rand_like(z)
+        z_reparam = self.latent_hidden(z_reparam)
+        
+        num_nodes_pred = self.num_nodes_net(z_reparam)
         
         # create multiple copies as of now
         z_reparam = z_reparam[data_batch]
@@ -481,13 +498,51 @@ class Trainer(pl.LightningModule):
                                         flow="source_to_target",
                                         max_num_neighbors=self.hparams.max_num_neighbors)
         
+        # noisy edges
+        # create block diagonal matrix
+        dense_edge = torch.zeros(n, n, device=pos.device, dtype=torch.long)
+        # populate entries with integer features 
+        dense_edge[edge_index_global[0, :], edge_index_global[1, :]] = edge_attr_global        
+        dense_edge_ohe = F.one_hot(dense_edge.view(-1, 1),
+                                   num_classes=BOND_FEATURE_DIMS + 1).view(n, n, -1).float()
+        
+        assert torch.norm(dense_edge_ohe - dense_edge_ohe.permute(1, 0, 2)).item() == 0.0
+        # edge-scaling
+        dense_edge_ohe = self.edge_scaling * dense_edge_ohe
+        
+        # create symmetric noise for edge-attributes
+        noise_edges = torch.randn_like(dense_edge_ohe)
+        noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
+        assert torch.norm(noise_edges - noise_edges.permute(1, 0, 2)).item() == 0.0
+        
+        signal = self.sde.sqrt_alphas_cumprod[t]
+        std = self.sde.sqrt_1m_alphas_cumprod[t]
+        
+        signal_b = signal[data_batch].unsqueeze(-1).unsqueeze(-1)
+        std_b = std[data_batch].unsqueeze(-1).unsqueeze(-1)
+        dense_edge_ohe_perturbed = dense_edge_ohe * signal_b + noise_edges * std_b
+    
+        # retrieve as edge-attributes in PyG Format 
+        edge_attr_global_perturbed = dense_edge_ohe_perturbed[edge_index_global[0, :], edge_index_global[1, :], :]
+        
+        ohe = self.node_scaling * node_feat
+        # sample noise for OHEs in {0, 1}^NUM_CLASSES
+        noise_ohes_true = torch.randn_like(ohe)
+        mean_ohes, std_ohes = self.sde.marginal_prob(x=ohe, t=t[data_batch])
+        # perturb OHEs
+        ohes_perturbed = mean_ohes + std_ohes * noise_ohes_true
+        ohes_perturbed = self.atom_lin(ohes_perturbed)
+        
+        input = ohes_perturbed + z_reparam
         decoder_out = self.decoder(
-            x=z_reparam,
+            x=input,
             t=temb,
             pos=pos_perturbed,
             edge_index_local=edge_index_local,
             edge_index_global=edge_index_global,
+            edge_attr_global=edge_attr_global_perturbed,
             batch=data_batch,
+            batch_edge_global=batch_edge_global
         )
         
         if "coords_perturbed" not in decoder_out.keys():
@@ -497,6 +552,9 @@ class Trainer(pl.LightningModule):
         decoder_out['atoms_true'] = node_feat.argmax(dim=-1)
         decoder_out['bonds_true'] = edge_attr_global
         decoder_out['edge_index'] = (edge_index_local, edge_index_global)
+        
+        decoder_out["num_nodes_pred"] = num_nodes_pred
+        decoder_out["num_nodes_true"] = batch_num_nodes
         
         # save encoder outs
         decoder_out["emb_encoder"] = z
@@ -578,9 +636,10 @@ class Trainer(pl.LightningModule):
         else:
             rel_pos_loss = 0.0
             
-        loss = 3.0 * coords_loss +  1.0 * atoms_loss +  2.0 * bonds_loss + 1.0 * rel_pos_loss
+        num_nodes_loss = corn_loss(out_dict["num_nodes_pred"], out_dict["num_nodes_true"], num_classes=self.max_num_nodes).mean()
+            
+        loss = 3.0 * coords_loss +  1.0 * atoms_loss +  2.0 * bonds_loss + 1.0 * rel_pos_loss + 1.0 * num_nodes_loss
 
-        
         # kl 
         kld = -0.5 * torch.sum(1 + out_dict['logvar_encoder'] - out_dict['mu_encoder'].pow(2) - out_dict['logvar_encoder'].exp(),dim=1)
         kld = kld.mean(0)
@@ -628,8 +687,13 @@ class Trainer(pl.LightningModule):
             batch_size=batch_size,
         )
           
+        self.log(
+            f"{stage}/num_nodes_loss",
+            num_nodes_loss,
+            on_step=True,
+            batch_size=batch_size,
+        )
           
-        
         
         return loss
 

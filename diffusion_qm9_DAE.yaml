@@ -29,7 +29,7 @@ neighbor_embedding: true
 #EQGAT
 sdim: 128 
 latent_dim: 128
-vdim: 64
+vdim: 32
 edim: 32
 use_norm: true
 use_cross_product: false
@@ -37,7 +37,7 @@ use_bond_features: true
 use_all_atom_features: false
 
 #GENERAL MODEL SPECS
-num_layers: 7 # 7
+num_layers: 6 # 7
 num_rbf: 32
 use_local_edge_attr: false  
 fully_connected_layer: false
@@ -52,7 +52,9 @@ cutoff_upper_global: 15.0
 #DATA
 dataset: qm9
 dataset_arg: {}
-dataset_root: /sharedhome/let55/projects/e3moldiffusion/experiments/qm9/data # /home/let55/workspace/projects/e3moldiffusion/qm9/qm9_data
+#dataset_root: /sharedhome/let55/projects/e3moldiffusion/experiments/qm9/data # aws
+#dataset_root: /home/let55/workspace/projects/e3moldiffusion/experiments/qm9/data # delta
+dataset_root: /hpfs/userws/let55/projects/e3moldiffusion/experiments/qm9/data # alpha
 
 derivative: false
 #Change for diffusion to VectorCategorical!
@@ -76,7 +78,7 @@ noise_precision: 1.e-5
 loss_type: l2
 
 load_model:
-log_dir: /sharedhome/let55/projects/e3moldiffusion/experiments/qm9/logs/dae
+log_dir: /hpfs/userws/let55/projects/e3moldiffusion/experiments/qm9/logs/dae
 lr: 4.0e-4
 lr_factor: 0.5
 lr_patience: 10

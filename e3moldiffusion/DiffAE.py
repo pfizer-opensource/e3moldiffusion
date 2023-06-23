@@ -7,7 +7,7 @@ from torch_geometric.typing import OptTensor
 from torch_scatter import scatter_mean, scatter_add
 
 from e3moldiffusion.gnn import EQGATGNN, EQGATEdgeGNN
-from e3moldiffusion.coordsatomsbonds import DenoisingNetwork
+from e3moldiffusion.coordsatomsbonds import DenoisingNetwork, DenoisingEdgeNetwork
 from e3moldiffusion.modules import DenseLayer
 from torch_geometric.utils import softmax
 from torch_geometric.nn.inits import reset
@@ -289,5 +289,39 @@ class DenoisingDecoderNetwork(DenoisingNetwork):
                          vector_aggr,
                          False)
  
+class DenoisingFullDecoderNetwork(DenoisingEdgeNetwork):
+    def __init__(self,
+                 num_atom_types: int,
+                 num_bond_types: int = 5,
+                 hn_dim: Tuple[int, int] = (256, 64),
+                 rbf_dim: int = 32,
+                 edge_dim: int = 32,
+                 cutoff_local: float = 7.5,
+                 num_layers: int = 5,
+                 use_norm: bool = True,
+                 use_cross_product: bool = False,
+                 fully_connected: bool = False,
+                 local_global_model: bool = True,
+                 recompute_radius_graph: bool = True,
+                 recompute_edge_attributes: bool = True,
+                 vector_aggr: str = "mean",
+                 ) -> None:
+        super().__init__(num_atom_types,
+                         num_bond_types,
+                         hn_dim, 
+                         rbf_dim, 
+                         edge_dim,
+                         cutoff_local,
+                         num_layers, 
+                         use_norm,
+                         use_cross_product, 
+                         fully_connected, 
+                         local_global_model, 
+                         recompute_radius_graph, 
+                         recompute_edge_attributes, 
+                         vector_aggr,
+                         False,
+                         True)
+        
 if __name__ == "__main__":
     pass

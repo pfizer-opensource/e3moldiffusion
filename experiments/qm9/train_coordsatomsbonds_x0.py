@@ -15,7 +15,7 @@ from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
-from torch_scatter import scatter_mean
+from torch_scatter import scatter_mean, scatter_add
 from torch_sparse import coalesce
 from tqdm import tqdm
 
@@ -139,22 +139,26 @@ class Trainer(pl.LightningModule):
     
     
     @torch.no_grad()
-    def run_evaluation(self, step: int, dataset_info, ngraphs: int = 4000, bs: int = 500):
+    def run_evaluation(self, step: int, dataset_info, ngraphs: int = 4000, bs: int = 500,
+                       verbose: bool = False, inner_verbose=False):
         b = ngraphs // bs
         l = [bs] * b
         if sum(l) != ngraphs:
             l.append(ngraphs - sum(l))
         assert sum(l) == ngraphs
         
-        results = []
-        for num_graphs in l:
+        molecule_list = []
+        if verbose:
+            print(f"Creating {ngraphs} graphs in {l} batches")
+        for _, num_graphs in enumerate(l):
             start = datetime.now()
             pos_splits, _, atom_types_integer_split, \
             edge_types, edge_index_global, batch_num_nodes, _ = self.generate_graphs(
                                                                                      num_graphs=num_graphs,
-                                                                                     verbose=False,
+                                                                                     verbose=inner_verbose,
                                                                                      device=self.empirical_num_nodes.device,
-                                                                                     empirical_distribution_num_nodes=self.empirical_num_nodes)
+                                                                                     empirical_distribution_num_nodes=self.empirical_num_nodes,
+                                                                                     save_traj=False)
             
             n = batch_num_nodes.sum().item()
             edge_attrs_dense = torch.zeros(size=(n,n,5), dtype=edge_types.dtype, device=edge_types.device)
@@ -162,43 +166,39 @@ class Trainer(pl.LightningModule):
             edge_attrs_dense = edge_attrs_dense.argmax(-1)
             edge_attrs_splits = self.get_list_of_edge_adjs(edge_attrs_dense, batch_num_nodes)
             
-            molecule_list = []
             for positions, atom_types, edges in zip(pos_splits,
-                                                        atom_types_integer_split,
-                                                        edge_attrs_splits):
+                                                    atom_types_integer_split,
+                                                    edge_attrs_splits):
                 molecule = Molecule(atom_types=atom_types, positions=positions,
                                     dataset_info=dataset_info,
                                     charges=torch.zeros(0, device=positions.device),
-                                    bond_types=edges)
+                                    bond_types=edges
+                                    )
                 molecule_list.append(molecule)
             
         
-            res = analyze_stability_for_molecules(molecule_list=molecule_list, 
-                                                dataset_info=dataset_info,
-                                                smiles_train=self.smiles_list,
-                                                bonds_given=True
-                                                )
-            print(f'Run time={datetime.now() - start}')
-            total_res = {k: v for k, v in zip(['validity', 'uniqueness', 'novelty'], res[1][0])}
-            total_res.update(res[0])
-            print(total_res)
-            total_res = pd.DataFrame.from_dict([total_res])
-            results.append(total_res)
-            tmp_df = pd.concat(results)
-            print(tmp_df.describe())
-            print()
-        
-        final_res = dict(tmp_df.aggregate("mean", axis="rows"))
-        final_res['step'] = step
-        final_res['epoch'] = self.current_epoch
-        final_res = pd.DataFrame.from_dict([final_res])
+        res = analyze_stability_for_molecules(molecule_list=molecule_list, 
+                                              dataset_info=dataset_info,
+                                              smiles_train=self.smiles_list,
+                                              bonds_given=True
+                                             )
 
-        save_dir = os.path.join(model.hparams.log_dir, 'evaluation.csv')
-        with open(save_dir, 'a') as f:
-            final_res.to_csv(f, header=False)
-            
-        return final_res
+        if verbose:
+            print(f'Run time={datetime.now() - start}')
+        total_res = {k: v for k, v in zip(['validity', 'uniqueness', 'novelty'], res[1][0])}
+        total_res.update(res[0])
+        print(total_res)
+        total_res = pd.DataFrame.from_dict([total_res])        
+        print(total_res)
         
+        total_res['step'] = step
+        total_res['epoch'] = self.current_epoch
+        save_dir = os.path.join(self.hparams.save_dir, 'run0', 'evaluation.csv')
+        with open(save_dir, 'a') as f:
+            total_res.to_csv(f, header=False)
+        return total_res
+    
+    
     def validation_epoch_end(self, validation_step_outputs):
         
         if (self.current_epoch + 1) % self.hparams.test_interval == 0:        
@@ -262,9 +262,6 @@ class Trainer(pl.LightningModule):
         edge_type_traj = []
         
         chain = range(self.hparams.timesteps)
-    
-        if verbose:
-            print(chain)
         iterator = tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         for timestep in iterator:
             t = torch.full(size=(bs, ), fill_value=timestep, dtype=torch.long, device=pos.device)
@@ -379,6 +376,8 @@ class Trainer(pl.LightningModule):
                                                           edge_attr=bond_edge_attr,
                                                           sort_by_row=False)
 
+        valencies_true = scatter_add(bond_edge_attr, index=bond_edge_index[0], dim=0, dim_size=n)
+                
         if not hasattr(batch, "fc_edge_index"):
             edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
             edge_index_global, _ = dense_to_sparse(edge_index_global)
@@ -483,7 +482,9 @@ class Trainer(pl.LightningModule):
         out['coords_true'] = pos_centered
         out['atoms_true'] = node_feat.argmax(dim=-1)
         out['bonds_true'] = edge_attr_global
-        
+        out['valencies_true'] = valencies_true
+
+
         out['edge_index'] = (edge_index_local, edge_index_global)
         
         return out, data_batch, batch_edge_global
@@ -510,7 +511,9 @@ class Trainer(pl.LightningModule):
         coords_pred = out_dict['coords_pred']
         atoms_pred = out_dict['atoms_pred']
         edges_pred = out_dict['bonds_pred']
-         
+        valencies_pred = out_dict['valencies_pred']       
+
+
         coords_loss = torch.pow(
            coords_pred - out_dict["coords_true"], 2
         ).sum(-1)
@@ -544,6 +547,15 @@ class Trainer(pl.LightningModule):
         bonds_loss *= w
         bonds_loss = bonds_loss.sum(dim=0)
         
+        valencies_loss = F.cross_entropy(
+            valencies_pred, out_dict["valencies_true"], reduction='none'
+        )
+        valencies_loss = scatter_mean(
+            valencies_loss, index=batch.batch, dim=0, dim_size=batch_size
+        )
+        valencies_loss *= w
+        valencies_loss = torch.sum(valencies_loss, dim=0)
+        
         if self.relative_pos:
             j, i = out_dict["edge_index"][1]
             # distance 
@@ -560,7 +572,7 @@ class Trainer(pl.LightningModule):
         else:
             rel_pos_loss = 0.0
             
-        loss = 3.0 * coords_loss +  1.0 * atoms_loss +  2.0 * bonds_loss + 1.0 * rel_pos_loss
+        loss = 3.0 * coords_loss +  1.0 * atoms_loss +  2.0 * bonds_loss + 1.0 * rel_pos_loss + 1.0 * valencies_loss
 
         self.log(
             f"{stage}/loss",
@@ -596,6 +608,15 @@ class Trainer(pl.LightningModule):
             on_step=True,
             batch_size=batch_size,
         )
+        
+        self.log(
+            f"{stage}/valencies_loss",
+            valencies_loss,
+            on_step=True,
+            batch_size=batch_size,
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
+        )
+                
         
         
         return loss

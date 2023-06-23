@@ -3,7 +3,7 @@
 #SBATCH --mail-user=tuan.le@pfizer.com
 #SBATCH --mail-type=ALL
 #SBATCH --partition=gpu
-#SBATCH --time=2-00:00:00
+#SBATCH --time=1-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
@@ -26,13 +26,13 @@ echo "runnning experiment"
 
 args=(
     --gpus 4
-    --id 0
+    --id 1
     --dataset drugs
     # --accum_batch 2
     --num_workers 4
     --save_dir logs/x0
     --num_epochs 100
-    --sdim 256 --vdim 128 --rbf_dim 32 --edim 64 --num_layers 12
+    --sdim 256 --vdim 128 --rbf_dim 32 --edim 128 --num_layers 10
     --ema_decay 0.999
     --lr 4e-4
     --batch_size 50
@@ -41,9 +41,10 @@ args=(
     --vector_aggr mean
     --schedule cosine
     --num_diffusion_timesteps 500
-    --max_time 01:23:45:00
-    --test_interval 15
-    --load_ckpt /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/logs/x0/run0/last.ckpt
+    --timesteps 500
+    --max_time 00:23:45:00
+    --test_interval 50
+    # --load_ckpt /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/logs/x0/run0/last.ckpt
     )
 
 python train_coordsatomsbonds_x0.py "${args[@]}"
