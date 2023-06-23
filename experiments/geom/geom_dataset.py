@@ -40,7 +40,7 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles):
 
 DATAROOT = '/home/let55/workspace/projects/e3moldiffusion/experiments/geom/data'
 DATAROOT = '/sharedhome/let55/projects/e3moldiffusion/experiments/geom/data'
-DATAROOT = '/hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/data'
+# DATAROOT = '/hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/data'
 
 root_no_h = '/home/let55/workspace/projects/e3moldiffusion/experiments/geom/data_noH'
 

@@ -6,12 +6,12 @@ from torch import Tensor, nn
 from torch_geometric.typing import OptTensor
 from torch_scatter import scatter_mean
 
-from e3moldiffusion.gnn import EQGATGNN, EQGATEdgeGNN
+from e3moldiffusion.gnn import EQGATGNN, EQGATEdgeGNN, EQGATEdgeVirtualGNN
 from e3moldiffusion.modules import DenseLayer
 
 
 class PredictionHeadEdge(nn.Module):
-    def __init__(self, hn_dim: Tuple[int, int], edge_dim: int, num_atom_types: int, num_bond_types: int = 5) -> None:
+    def __init__(self, hn_dim: Tuple[int, int], edge_dim: int, num_atom_types: int, num_bond_types: int = 5, valency_pred: bool = False) -> None:
         super(PredictionHeadEdge, self).__init__()
         self.sdim, self.vdim = hn_dim
         self.num_atom_types = num_atom_types
@@ -24,7 +24,11 @@ class PredictionHeadEdge(nn.Module):
         self.bonds_lin_1 = DenseLayer(in_features=self.sdim, out_features=num_bond_types, bias=True)
         self.coords_lin = DenseLayer(in_features=self.vdim, out_features=1, bias=False)
         self.atoms_lin = DenseLayer(in_features=self.sdim, out_features=num_atom_types, bias=True)
-        self.valency_lin = DenseLayer(in_features=self.sdim, out_features=20, bias=True)
+        
+        if valency_pred:
+            self.valency_lin = DenseLayer(in_features=self.sdim, out_features=20, bias=True)
+        else:
+            self.valency_lin = None
 
         self.reset_parameters()
         
@@ -34,7 +38,8 @@ class PredictionHeadEdge(nn.Module):
         self.atoms_lin.reset_parameters()
         self.bonds_lin_0.reset_parameters()
         self.bonds_lin_1.reset_parameters()
-        self.valency_lin.reset_parameters()
+        if self.valency_lin:
+            self.valency_lin.reset_parameters()
         
     def forward(self,
                 x: Dict,
@@ -61,7 +66,11 @@ class PredictionHeadEdge(nn.Module):
         bonds_pred = F.silu(self.bonds_lin_0(edge))
         bonds_pred = self.bonds_lin_1(bonds_pred)
         
-        valencies = self.valency_lin(s)
+        if self.valency_lin:
+            valencies = self.valency_lin(s)
+        else:
+            valencies = None
+            
         out = {"coords_pred": coords_pred,
                "atoms_pred": atoms_pred,
                "bonds_pred": bonds_pred,
@@ -72,7 +81,7 @@ class PredictionHeadEdge(nn.Module):
 
 
 class PredictionHead(nn.Module):
-    def __init__(self, hn_dim: Tuple[int, int], num_atom_types: int, num_bond_types: int = 5) -> None:
+    def __init__(self, hn_dim: Tuple[int, int], num_atom_types: int, num_bond_types: int = 5, valency_pred: bool = False) -> None:
         super(PredictionHead, self).__init__()
         self.sdim, self.vdim = hn_dim
         self.num_atom_types = num_atom_types
@@ -83,7 +92,12 @@ class PredictionHead(nn.Module):
         self.bonds_lin_1 = DenseLayer(in_features=self.sdim, out_features=num_bond_types, bias=True)
         self.coords_lin = DenseLayer(in_features=self.vdim, out_features=1, bias=False)
         self.atoms_lin = DenseLayer(in_features=self.sdim, out_features=num_atom_types, bias=True)
-        self.valency_lin = DenseLayer(in_features=self.sdim, out_features=20, bias=True)
+        
+        if valency_pred:
+            self.valency_lin = DenseLayer(in_features=self.sdim, out_features=20, bias=True)
+        else:
+            self.valency_lin = None
+            
         self.reset_parameters()
         
     def reset_parameters(self):
@@ -92,7 +106,8 @@ class PredictionHead(nn.Module):
         self.atoms_lin.reset_parameters()
         self.bonds_lin_0.reset_parameters()
         self.bonds_lin_1.reset_parameters()
-        self.valency_lin.reset_parameters()
+        if self.valency_lin:
+            self.valency_lin.reset_parameters()
         
     def forward(self,
                 x: Dict,
@@ -117,7 +132,11 @@ class PredictionHead(nn.Module):
         edge = torch.cat([f, d], dim=-1)
         bonds_pred = F.silu(self.bonds_lin_0(edge))
         bonds_pred = self.bonds_lin_1(bonds_pred)
-        valencies = self.valency_lin(s)
+        
+        if self.valency_lin:
+            valencies = self.valency_lin(s)
+        else:
+            valencies = None
         
         out = {"coords_pred": coords_pred,
                "atoms_pred": atoms_pred,
@@ -154,6 +173,7 @@ class DenoisingEdgeNetwork(nn.Module):
                  vector_aggr: str = "mean",
                  atom_mapping: bool = True,
                  bond_mapping: bool = True,
+                 valency_pred: bool = False
                  ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
         
@@ -183,7 +203,7 @@ class DenoisingEdgeNetwork(nn.Module):
         
         assert fully_connected or local_global_model
     
-        self.gnn = EQGATEdgeGNN(
+        self.gnn = EQGATEdgeVirtualGNN(
             hn_dim=hn_dim,
             cutoff_local=cutoff_local,
             rbf_dim=rbf_dim,
@@ -201,7 +221,8 @@ class DenoisingEdgeNetwork(nn.Module):
         self.prediction_head = PredictionHeadEdge(hn_dim=hn_dim, 
                                                    edge_dim=edge_dim, 
                                                    num_atom_types=num_atom_types,
-                                                   num_bond_types=num_bond_types)
+                                                   num_bond_types=num_bond_types,
+                                                   valency_pred=valency_pred)
         
         self.reset_parameters()
 

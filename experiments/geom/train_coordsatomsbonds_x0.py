@@ -80,6 +80,7 @@ class Trainer(pl.LightningModule):
         self.edge_scaling = 1.00
         self.node_scaling = 1.00
         
+        self.valency_pred = False
         self.model = DenoisingEdgeNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
@@ -94,7 +95,8 @@ class Trainer(pl.LightningModule):
             fully_connected=hparams["fully_connected"],
             local_global_model=hparams["local_global_model"],
             recompute_edge_attributes=True,
-            recompute_radius_graph=True
+            recompute_radius_graph=True,
+            valency_pred=self.valency_pred
         )
 
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
@@ -106,8 +108,8 @@ class Trainer(pl.LightningModule):
                  
     def _get_empirical_num_nodes(self):
         if not self.hparams.no_h:
-            #pp = '/home/let55/workspace/projects/e3moldiffusion/experiments/'   # delta
-            #pp = '/sharedhome/let55/projects/e3moldiffusion/experiments/'  # aws
+            pp = '/home/let55/workspace/projects/e3moldiffusion/experiments/'   # delta
+            pp = '/sharedhome/let55/projects/e3moldiffusion/experiments/'  # aws
             pp = '/hpfs/userws/let55/projects/e3moldiffusion/experiments/' # alpha
             with open(f'{pp}geom/num_nodes_geom_midi.json', 'r') as f:
                 num_nodes_dict = json.load(f, object_hook=lambda d: {int(k) if k.lstrip('-').isdigit() else k: v for k, v in d.items()})
@@ -164,8 +166,14 @@ class Trainer(pl.LightningModule):
     
     
     @torch.no_grad()
-    def run_evaluation(self, step: int, dataset_info, ngraphs: int = 4000, bs: int = 500,
-                       verbose: bool = False, inner_verbose=False):
+    def run_evaluation(self,
+                       step: int,
+                       dataset_info,
+                       ngraphs: int = 4000,
+                       bs: int = 500,
+                       save_dir: str = None,
+                       verbose: bool = False,
+                       inner_verbose=False):
         b = ngraphs // bs
         l = [bs] * b
         if sum(l) != ngraphs:
@@ -218,9 +226,14 @@ class Trainer(pl.LightningModule):
         
         total_res['step'] = step
         total_res['epoch'] = self.current_epoch
-        save_dir = os.path.join(self.hparams.save_dir,'run0', 'evaluation.csv')
+        if save_dir is None:
+            save_dir = os.path.join(self.hparams.save_dir, 'run0', 'evaluation.csv')
+        else:
+            save_dir = os.path.join(save_dir, 'evaluation.csv')
+            
         with open(save_dir, 'a') as f:
-            total_res.to_csv(f, header=False)
+            total_res.to_csv(f, header=True)
+            
         return total_res
         
     def validation_epoch_end(self, validation_step_outputs):
@@ -585,16 +598,18 @@ class Trainer(pl.LightningModule):
         )
         bonds_loss *= w
         bonds_loss = bonds_loss.sum(dim=0)
-                
-        valencies_loss = F.cross_entropy(
-            valencies_pred, out_dict["valencies_true"], reduction='none'
-        )
-        valencies_loss = scatter_mean(
-            valencies_loss, index=batch.batch, dim=0, dim_size=batch_size
-        )
-        valencies_loss *= w
-        valencies_loss = torch.sum(valencies_loss, dim=0)
         
+        if self.valency_pred:
+            valencies_loss = F.cross_entropy(
+                valencies_pred, out_dict["valencies_true"], reduction='none'
+            )
+            valencies_loss = scatter_mean(
+                valencies_loss, index=batch.batch, dim=0, dim_size=batch_size
+            )
+            valencies_loss *= w
+            valencies_loss = torch.sum(valencies_loss, dim=0)
+        else:
+            valencies_loss = 0.0
         
         if self.relative_pos:
             j, i = out_dict["edge_index"][1]
@@ -614,7 +629,6 @@ class Trainer(pl.LightningModule):
             
         loss = 3.0 * coords_loss +  1.0 * atoms_loss +  2.0 * bonds_loss + 1.0 * rel_pos_loss + 1.0 * valencies_loss
         
-
         self.log(
             f"{stage}/loss",
             loss,

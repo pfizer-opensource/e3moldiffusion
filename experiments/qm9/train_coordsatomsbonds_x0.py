@@ -69,6 +69,8 @@ class Trainer(pl.LightningModule):
         
         self.relative_pos = True
 
+        self.valency_pred = False
+        
         self.model = DenoisingEdgeNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
@@ -83,7 +85,7 @@ class Trainer(pl.LightningModule):
             local_global_model=hparams["fully_connected_layer"],
             fully_connected=hparams["fully_connected"],
             recompute_edge_attributes=True,
-            recompute_radius_graph=True
+            recompute_radius_graph=True, valency_pred=self.valency_pred
         )  
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
                                 beta_max=hparams["beta_max"],
@@ -547,14 +549,17 @@ class Trainer(pl.LightningModule):
         bonds_loss *= w
         bonds_loss = bonds_loss.sum(dim=0)
         
-        valencies_loss = F.cross_entropy(
-            valencies_pred, out_dict["valencies_true"], reduction='none'
-        )
-        valencies_loss = scatter_mean(
-            valencies_loss, index=batch.batch, dim=0, dim_size=batch_size
-        )
-        valencies_loss *= w
-        valencies_loss = torch.sum(valencies_loss, dim=0)
+        if self.valency_pred:
+            valencies_loss = F.cross_entropy(
+                valencies_pred, out_dict["valencies_true"], reduction='none'
+            )
+            valencies_loss = scatter_mean(
+                valencies_loss, index=batch.batch, dim=0, dim_size=batch_size
+            )
+            valencies_loss *= w
+            valencies_loss = torch.sum(valencies_loss, dim=0)
+        else:
+            valencies_loss = 0.0
         
         if self.relative_pos:
             j, i = out_dict["edge_index"][1]
