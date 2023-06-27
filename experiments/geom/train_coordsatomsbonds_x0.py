@@ -629,6 +629,10 @@ class Trainer(pl.LightningModule):
             
         loss = 3.0 * coords_loss +  1.0 * atoms_loss +  2.0 * bonds_loss + 1.0 * rel_pos_loss + 1.0 * valencies_loss
         
+        if torch.any(loss.isnan()):
+            print(f"Detected NaNs. Terminating training at epoch {self.current_epoch}")
+            exit()
+            
         self.log(
             f"{stage}/loss",
             loss,

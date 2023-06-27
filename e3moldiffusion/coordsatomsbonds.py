@@ -202,8 +202,11 @@ class DenoisingEdgeNetwork(nn.Module):
         self.fully_connected = fully_connected
         
         assert fully_connected or local_global_model
-    
-        self.gnn = EQGATEdgeVirtualGNN(
+        
+        # mod = EQGATEdgeVirtualGNN
+        mod = EQGATEdgeGNN
+
+        self.gnn = mod(
             hn_dim=hn_dim,
             cutoff_local=cutoff_local,
             rbf_dim=rbf_dim,

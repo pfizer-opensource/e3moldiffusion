@@ -2,6 +2,7 @@ from typing import Dict, Optional, Tuple
 
 import torch
 from torch import Tensor, nn
+import torch.nn.functional as F
 from torch_geometric.nn import radius_graph
 from torch_geometric.typing import OptTensor
 from torch_scatter import scatter_mean, scatter_add
@@ -426,8 +427,10 @@ class EQGATEdgeVirtualGNN(nn.Module):
             
             virtual_mlps.append(
                 nn.Sequential(
+                    nn.LayerNorm(hn_dim[0]),
                     DenseLayer(hn_dim[0], hn_dim[0], activation=nn.SiLU()),
-                    DenseLayer(hn_dim[0], hn_dim[0]),
+                    nn.LayerNorm(hn_dim[0]),
+                    DenseLayer(hn_dim[0], hn_dim[0], activation=nn.SiLU()),
                 )
             )
                     
@@ -539,8 +542,8 @@ class EQGATEdgeVirtualGNN(nn.Module):
                     if self.recompute_edge_attributes:
                         edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, pos=p, edge_attr=tmp_e)
 
-            g = self.virtual_lins[i](s)
-            g = scatter_add(g, index=batch, dim=0, dim_size=bs)
+            g = self.virtual_lins[i](F.silu(s))
+            g = scatter_mean(g, index=batch, dim=0, dim_size=bs)
             g = self.virtual_mlps[i](g)
             g = g[batch]
 
