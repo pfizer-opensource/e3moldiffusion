@@ -518,7 +518,7 @@ class Trainer(pl.LightningModule):
 
         coords_loss = torch.pow(
            coords_pred - out_dict["coords_true"], 2
-        ).sum(-1)
+        ).mean(-1)
         
         coords_loss = scatter_mean(
             coords_loss, index=batch.batch, dim=0, dim_size=batch_size
@@ -691,6 +691,9 @@ if __name__ == "__main__":
 
     dataset_info = get_dataset_info(hparams.dataset, hparams.remove_hs)
     
+    atom_types_distribution = datamodule.dataset.statistics.atom_types
+    bond_types_distribution = datamodule.dataset.statistics.bond_types
+    charge_types_distribution = datamodule.dataset.statistics.charge_types
     
     model = Trainer(
         hparams=hparams.__dict__,

@@ -29,7 +29,7 @@ class QM9DataModule(LightningDataModule):
             self.hparams["val_size"],
             self.hparams["test_size"],
             self.hparams["seed"],
-            join(self.hparams["log_dir"], "splits.npz"),
+            join(self.hparams["save_dir"], "splits.npz"),
             self.hparams["splits"],
         )
         print(

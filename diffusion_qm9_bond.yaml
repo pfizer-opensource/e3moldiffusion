@@ -52,7 +52,7 @@ cutoff_upper_global: 15.0
 dataset: qm9
 dataset_arg: {}
 #dataset_root: /sharedhome/let55/projects/e3moldiffusion/experiments/qm9/data # aws
-#dataset_root: /home/let55/workspace/projects/e3moldiffusion/experiments/qm9/data # delta
+#dataset_root: /home/let55/workspace/projects/e3moldiffusion/experiments/qm9/data/ # delta
 dataset_root: /hpfs/userws/let55/projects/e3moldiffusion/experiments/qm9/data # alpha
 
 
@@ -78,7 +78,7 @@ noise_precision: 1.e-5
 loss_type: l2
 
 load_model:
-log_dir: /sharedhome/let55/projects/e3moldiffusion/experiments/qm9/logs
+save_dir: /hpfs/userws/let55/projects/e3moldiffusion/experiments/qm9/logs/x0/run50
 lr: 4.0e-4
 lr_factor: 0.5
 lr_patience: 10

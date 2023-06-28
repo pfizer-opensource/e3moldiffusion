@@ -42,11 +42,12 @@ def add_arguments(parser):
     parser.add_argument("--lr-factor", default=0.75, type=float)
     parser.add_argument("--weight-decay", default=0.0, type=float)
     parser.add_argument("--ema-decay", default=0.999, type=float)
+
     parser.add_argument("--load-ckpt", default="", type=str)
     parser.add_argument(
-        "--log-dir",
+        "--save_dir",
         "-l",
-        default="/workspace7/e3mol/qm9_logs",
+        default="logs/",
         help="log file",
     )
     parser.add_argument(
