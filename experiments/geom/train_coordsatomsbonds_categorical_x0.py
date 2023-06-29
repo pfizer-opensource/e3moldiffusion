@@ -591,6 +591,12 @@ class Trainer(pl.LightningModule):
         
         return out, data_batch, batch_edge_global
     
+    def loss_non_nans(loss: Tensor, modality: str) -> Tensor:
+        m = loss.isnan()
+        if torch.any(m):
+            print(f"Recovered NaNs in {modality}. Selecting NoN-Nans")
+        return loss[~m]
+    
     def step_fnc(self, batch, batch_idx, stage: str):
         batch_size = int(batch.batch.max()) + 1
         t = torch.randint(low=0, high=self.hparams.timesteps,
@@ -618,6 +624,7 @@ class Trainer(pl.LightningModule):
         coords_loss = scatter_mean(
             coords_loss, index=batch.batch, dim=0, dim_size=batch_size
         )
+        coords_loss = self.loss_non_nans(coords_loss, "coords")
         coords_loss *= w        
         coords_loss = torch.sum(coords_loss, dim=0)
         
@@ -627,6 +634,7 @@ class Trainer(pl.LightningModule):
         atoms_loss = scatter_mean(
             atoms_loss, index=batch.batch, dim=0, dim_size=batch_size
         )
+        atoms_loss = self.loss_non_nans(atoms_loss, "atoms")
         atoms_loss *= w
         atoms_loss = torch.sum(atoms_loss, dim=0)
 
@@ -641,6 +649,7 @@ class Trainer(pl.LightningModule):
         bonds_loss = scatter_mean(
             bonds_loss, index=batch.batch, dim=0, dim_size=batch_size
         )
+        bonds_loss = self.loss_non_nans(bonds_loss, "bonds")
         bonds_loss *= w
         bonds_loss = bonds_loss.sum(dim=0)
         

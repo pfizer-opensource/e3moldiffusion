@@ -77,26 +77,39 @@ class CategoricalDiffusionKernel(torch.nn.Module):
     #x0 = torch.eye(self.num_classes, device=xt.device, dtype=xt.dtype).unsqueeze(0)
     #x0 = x0.repeat((xt.size(0), 1, 1))
     # (n, k, k)
+    
     a = torch.einsum('nj, nji -> ni', [xt, self.Qt[t].transpose(-2, -1)])
-    # (n, k)
+    # (n, k_t-1)
+    
     a = a.unsqueeze(1)
-    # (n, 1, k)
+    # (n, 1, k_t-1)
+    
     #b = torch.einsum('naj, nji -> nai', [x0, self.Qt_bar_prev[t]])
     b = self.Qt_bar_prev[t]
-    # (n, k, k)
+    # (n, k_0, k_t-1)
+    
     p0 = a * b
-    # (n, k, k)
+    # (n, k_0, k_t-1)
+    
     # p1 = torch.einsum('naj, nji -> nai', [x0, self.Qt_bar[t]])
     p1 = self.Qt_bar[t]
-    # (n, k, k)
+    # (n, k_0, k_t)
     
-    xt_ = xt.unsqueeze(1)
+    ## xt_ = xt.unsqueeze(1)
     # (n, 1, k)
   
-    p1 = (p1 * xt_).sum(-1, keepdims=True)
-    # (n, k, 1)
+    ## p1 = (p1 * xt_).sum(-1, keepdims=True)
+    
+    p1 = torch.einsum('nij, nj -> ni', [p1, xt])
+    # (n, k_0)
+    
+    p1 = p1.unsqueeze(-1)
+     
+    # (n, k_0, 1)
+    
     probs = p0 / (p1.clamp(min=1e-5))
-    # (n, k, k)    
+    # (n, k_0, k_t-1)
+        
     # check = torch.all((probs.sum(-1) - 1.0).abs() < 1e-4)
     # assert check
     
@@ -147,6 +160,24 @@ def _some_debugging():
     C0 = CategoricalDiffusionKernel(terminal_distribution=uniform_distribution,
                                     alphas=DEFAULT_ALPHAS)
 
-    C1 = CategoricalDiffusionKernel(terminal_distribution=absorbing_distribution,
+    C1 = CategoricalDiffusionKernel(terminal_distribution=torch.tensor(edges_drugs),
                                     alphas=DEFAULT_ALPHAS)
+    
+    
+    
+    t = 290
+    a = C0.Qt_bar[t]
+    alphas_bar_t = C0.alphas_bar[t].unsqueeze(-1)
+    b =  alphas_bar_t * C0.eye \
+      + ((1.0 - alphas_bar_t) * torch.ones_like( C0.terminal_distribution)).unsqueeze(-1) * C0.terminal_distribution.unsqueeze(0)
+    
+    print(a-b)
+    
+    alphas_t = C0.alphas[t].unsqueeze(-1)
+    a = C0.Qt[t]
+    b = alphas_t * C0.eye \
+      + ((1.0 - alphas_t) * torch.ones_like( C0.terminal_distribution)).unsqueeze(-1) * C0.terminal_distribution.unsqueeze(0)
+    
+    print(a-b)
+    
     return None

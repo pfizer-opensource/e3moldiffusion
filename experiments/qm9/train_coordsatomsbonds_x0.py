@@ -197,7 +197,7 @@ class Trainer(pl.LightningModule):
         total_res['epoch'] = self.current_epoch
         save_dir = os.path.join(self.hparams.save_dir, 'run0', 'evaluation.csv')
         with open(save_dir, 'a') as f:
-            total_res.to_csv(f, header=False)
+            total_res.to_csv(f, header=True)
         return total_res
     
     
@@ -664,24 +664,24 @@ if __name__ == "__main__":
     parser = add_arguments(parser)
     hparams = parser.parse_args()
     
-    if not os.path.exists(hparams.log_dir):
-        os.makedirs(hparams.log_dir)
+    if not os.path.exists(hparams.save_dir):
+        os.makedirs(hparams.save_dir)
 
-    if not os.path.isdir(hparams.log_dir + f"/run{hparams.id}/"):
+    if not os.path.isdir(hparams.save_dir + f"/run{hparams.id}/"):
         print("Creating directory")
-        os.mkdir(hparams.log_dir + f"/run{hparams.id}/")
+        os.mkdir(hparams.save_dir + f"/run{hparams.id}/")
     print(f"Starting Run {hparams.id}")
     
     ema_callback = ExponentialMovingAverage(decay=hparams.ema_decay)
     checkpoint_callback = ModelCheckpoint(
-        dirpath=hparams.log_dir + f"/run{hparams.id}/",
+        dirpath=hparams.save_dir + f"/run{hparams.id}/",
         save_top_k=1,
         monitor="val/coords_loss",
         save_last=True,
     )
     lr_logger = LearningRateMonitor()
     tb_logger = TensorBoardLogger(
-        hparams.log_dir + f"/run{hparams.id}/", default_hp_metric=False
+        hparams.save_dir + f"/run{hparams.id}/", default_hp_metric=False
     )
 
     print(f"Loading {hparams.dataset} Datamodule.")

@@ -337,9 +337,9 @@ class Trainer(pl.LightningModule):
             
             coords_pred = out['coords_pred'].squeeze()
             atoms_pred = out['atoms_pred'].softmax(dim=-1)
-            # N x a
+            # N x a_0
             edges_pred = out['bonds_pred'].softmax(dim=-1)
-            # E x b
+            # E x b_0
           
             # update fnc
             
@@ -357,21 +357,29 @@ class Trainer(pl.LightningModule):
                 print(pos)
                 exit()
 
+            # import pdb
+            # pdb.set_trace()
+            
+            
             # atoms   
             rev_atoms = self.cat_atoms.reverse_posterior_for_every_x0(xt=atom_types, t=t[batch])
             # Eq. 4 in Austin et al. (2023) "Structured Denoising Diffusion Models in Discrete State-Spaces"
-            # (N, a, a)
+            # (N, a_0, a_t-1)
             unweighted_probs_atoms = (rev_atoms * atoms_pred.unsqueeze(-1)).sum(1)
-            # (N, a)
+            unweighted_probs_atoms[unweighted_probs_atoms.sum(dim=-1) == 0] = 1e-5
+            # (N, a_t-1)
             probs_atoms = unweighted_probs_atoms / unweighted_probs_atoms.sum(-1, keepdims=True)
             atom_types =  F.one_hot(probs_atoms.multinomial(1,).squeeze(), num_classes=self.num_atom_features).float()
 
             # edges
             edges_pred_triu = edges_pred[mask]
+            # (E, b_0)
             edges_xt_triu = edge_attr_global[mask]
+            # (E, b_t)
             rev_edges = self.cat_bonds.reverse_posterior_for_every_x0(xt=edges_xt_triu, t=t[batch[mask_i]])
-            # (E, b, b)
+            # (E, b_0, b_t-1)
             unweighted_probs_edges = (rev_edges * edges_pred_triu.unsqueeze(-1)).sum(1)
+            unweighted_probs_edges[unweighted_probs_edges.sum(dim=-1) == 0] = 1e-5
             probs_edges = unweighted_probs_edges / unweighted_probs_edges.sum(-1, keepdims=True)
             edges_triu = probs_edges.multinomial(1,).squeeze()
             edge_attr_global_dense[mask_j, mask_i] = edges_triu
@@ -440,35 +448,42 @@ class Trainer(pl.LightningModule):
         edge_index_global, edge_attr_global = sort_edge_index(edge_index=edge_index_global,
                                                               edge_attr=edge_attr_global, 
                                                               sort_by_row=False)
+        sparse = True
         
-
-        j, i = edge_index_global
-        mask = j < i
-        mask_i = i[mask]
-        mask_j = j[mask]        
-        edge_attr_triu = edge_attr_global[mask]
-        edge_attr_triu_ohe = F.one_hot(edge_attr_triu, num_classes=self.num_bond_classes).float()
-        t_edge = t[data_batch[mask_i]]
-        probs = self.cat_bonds.marginal_prob(edge_attr_triu_ohe, t=t_edge)
-        edges_t_given_0 = probs.multinomial(1,).squeeze()
-        j = torch.concat([mask_j, mask_i])
-        i = torch.concat([mask_i, mask_j])
-        edge_index_global_perturbed = torch.stack([j, i], dim=0)
-        edge_attr_global_perturbed = torch.concat([edges_t_given_0, edges_t_given_0], dim=0)
-        edge_index_global_perturbed, edge_attr_global_perturbed = sort_edge_index(edge_index=edge_index_global_perturbed,
-                                                                                  edge_attr=edge_attr_global_perturbed, 
-                                                                                  sort_by_row=False)
-        
-        if not self.train:
-            # do assertion when valdating
-            edge_attr_global_dense_perturbed = torch.zeros(n, n, device=pos.device, dtype=torch.long)
-            edge_attr_global_dense_perturbed[edge_index_global_perturbed[0], edge_index_global_perturbed[1]] = edge_attr_global_perturbed
-            assert (edge_attr_global_dense_perturbed - edge_attr_global_dense_perturbed.T).float().mean().item() == 0.0
-            assert torch.allclose(edge_index_global, edge_index_global_perturbed)
+        if sparse:
+            # SPARSE
+            j, i = edge_index_global
+            mask = j < i
+            mask_i = i[mask]
+            mask_j = j[mask]        
+            edge_attr_triu = edge_attr_global[mask]
+            edge_attr_triu_ohe = F.one_hot(edge_attr_triu, num_classes=self.num_bond_classes).float()
+            t_edge = t[data_batch[mask_i]]
+            probs = self.cat_bonds.marginal_prob(edge_attr_triu_ohe, t=t_edge)
+            edges_t_given_0 = probs.multinomial(1,).squeeze()
+            j = torch.concat([mask_j, mask_i])
+            i = torch.concat([mask_i, mask_j])
+            edge_index_global_perturbed = torch.stack([j, i], dim=0)
+            edge_attr_global_perturbed = torch.concat([edges_t_given_0, edges_t_given_0], dim=0)
+            edge_index_global_perturbed, edge_attr_global_perturbed = sort_edge_index(edge_index=edge_index_global_perturbed,
+                                                                                    edge_attr=edge_attr_global_perturbed, 
+                                                                                    sort_by_row=False)
             
-        edge_attr_global_perturbed = F.one_hot(edge_attr_global_perturbed, num_classes=self.num_bond_classes).float()
-
-
+            if not self.train:
+                # do assertion when valdating
+                edge_attr_global_dense_perturbed = torch.zeros(n, n, device=pos.device, dtype=torch.long)
+                edge_attr_global_dense_perturbed[edge_index_global_perturbed[0], edge_index_global_perturbed[1]] = edge_attr_global_perturbed
+                assert (edge_attr_global_dense_perturbed - edge_attr_global_dense_perturbed.T).float().mean().item() == 0.0
+                assert torch.allclose(edge_index_global, edge_index_global_perturbed)
+            
+            edge_attr_global_perturbed = F.one_hot(edge_attr_global_perturbed, num_classes=self.num_bond_classes).float()
+        else:
+            # DENSE
+            edge_attr_global_dense = torch.zeros(n, n, device=pos.device, dtype=torch.long)
+            edge_attr_global_dense[edge_index_global[0], edge_index_global[1]] = edge_attr_global
+            edge_attr_global_dense = F.one_hot(edge_attr_global_dense, self.num_bond_classes)
+            raise NotImplementedError
+        
         if not self.hparams.continuous:
             temb = t.float() / self.hparams.timesteps
             temb = temb.clamp(min=self.hparams.eps_min)
@@ -502,15 +517,14 @@ class Trainer(pl.LightningModule):
                                         flow="source_to_target",
                                         max_num_neighbors=self.hparams.max_num_neighbors)
         
-        
-        batch_edge_global = data_batch[edge_index_global[0]]     
+        batch_edge_global = data_batch[edge_index_global_perturbed[0]]     
         
         out = self.model(
             x=ohes_perturbed,
             t=temb,
             pos=pos_perturbed,
             edge_index_local=edge_index_local,
-            edge_index_global=edge_index_global,
+            edge_index_global=edge_index_global_perturbed,
             edge_attr_global=edge_attr_global_perturbed,
             batch=data_batch,
             batch_edge_global=batch_edge_global,
@@ -527,7 +541,6 @@ class Trainer(pl.LightningModule):
         out['atoms_true'] = node_feat.argmax(dim=-1)
         out['bonds_true'] = edge_attr_global
         out['valencies_true'] = valencies_true
-
 
         out['edge_index'] = (edge_index_local, edge_index_global)
         
