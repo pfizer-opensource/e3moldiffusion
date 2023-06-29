@@ -41,7 +41,7 @@ def add_arguments(parser):
     parser.add_argument("-b", "--batch_size", default=32, type=int)
     parser.add_argument("--lr", default=5e-4, type=float)
     parser.add_argument("--gamma", default=0.975, type=float)
-    parser.add_argument("--grad_clip_val", default=100.0, type=float)
+    parser.add_argument("--grad_clip_val", default=10.0, type=float)
     parser.add_argument("--frequency", default=5, type=int)
     parser.add_argument("--lr_frequency", default=5, type=int)
 
@@ -62,7 +62,7 @@ def add_arguments(parser):
                         help="Maximum number of conformers per molecule. \
                             Defaults to 30. Set to -1 for all conformers available in database"
                             )
-    parser.add_argument("--accum_batch", default=None, type=int)
+    parser.add_argument("--accum_batch", default=1, type=int)
     parser.add_argument("--max_num_neighbors", default=128, type=int)
     parser.add_argument("--ema_decay", default=0.9999, type=float)
 
@@ -99,8 +99,8 @@ def add_arguments(parser):
     parser.add_argument(
         "--beta_max", default=2e-2, type=float
     )
-    parser.add_argument("--num_diffusion_timesteps", default=1000, type=int)
-    parser.add_argument("--timesteps", default=1000, type=int)
+    parser.add_argument("--num_diffusion_timesteps", default=500, type=int)
+    parser.add_argument("--timesteps", default=500, type=int)
 
     parser.add_argument("--max_time", type=str, default=None)
 

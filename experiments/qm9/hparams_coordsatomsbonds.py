@@ -61,7 +61,7 @@ def add_arguments(parser):
     parser.add_argument("--dataset-arg", default={"label": "energy_U0"})
     parser.add_argument("--dataset-root", default="/workspace7/e3mol/qm9_data")
     parser.add_argument("--seed", type=int, default=1, help="random seed (default: 1)")
-    parser.add_argument("--accum_batch", default=None, type=int)
+    parser.add_argument("--accum_batch", default=1, type=int)
     parser.add_argument(
         "--splits", default=None, help="Npz with splits idx_train, idx_val, idx_test"
     )

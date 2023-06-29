@@ -236,7 +236,7 @@ class Trainer(pl.LightningModule):
             
         return total_res
         
-    def validation_epoch_end(self, validation_step_outputs):
+    def on_validation_epoch_end(self, *args, **kwargs):
         
         if (self.current_epoch + 1) % self.hparams.test_interval == 0:  
             print(f"Running evaluation in epoch {self.current_epoch + 1}")      
@@ -546,7 +546,7 @@ class Trainer(pl.LightningModule):
         
         return out, data_batch, batch_edge_global
 
-    def loss_non_nans(loss: Tensor, modality: str) -> Tensor:
+    def loss_non_nans(self, loss: Tensor, modality: str) -> Tensor:
         m = loss.isnan()
         if torch.any(m):
             print(f"Recovered NaNs in {modality}. Selecting NoN-Nans")
@@ -648,7 +648,8 @@ class Trainer(pl.LightningModule):
             loss,
             on_step=True,
             batch_size=batch_size,
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+            prog_bar=True
         )
 
         self.log(
@@ -656,7 +657,8 @@ class Trainer(pl.LightningModule):
             coords_loss,
             on_step=True,
             batch_size=batch_size,
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+            prog_bar=True
         )
 
         self.log(
@@ -664,7 +666,8 @@ class Trainer(pl.LightningModule):
             atoms_loss,
             on_step=True,
             batch_size=batch_size,
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+            prog_bar=True
         )
         
         self.log(
@@ -672,7 +675,8 @@ class Trainer(pl.LightningModule):
             bonds_loss,
             on_step=True,
             batch_size=batch_size,
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+            prog_bar=True
         )
         
         self.log(
@@ -680,7 +684,8 @@ class Trainer(pl.LightningModule):
             rel_pos_loss,
             on_step=True,
             batch_size=batch_size,
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+            prog_bar=True
         )
         
         self.log(
@@ -688,7 +693,8 @@ class Trainer(pl.LightningModule):
             valencies_loss,
             on_step=True,
             batch_size=batch_size,
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+            prog_bar=True
         )
         
         return loss
@@ -720,12 +726,13 @@ class Trainer(pl.LightningModule):
 
 if __name__ == "__main__":
     
-    import sys
-    file_dir = os.path.dirname(__file__)
-    sys.path.append(file_dir)
-    
-    from hparams_coordsatomsbonds import add_arguments
-    from geom_dataset import GeomDataModule
+    #import sys
+    #file_dir = os.path.dirname(__file__)
+    #sys.path.append(file_dir)
+    import warnings
+    warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
+    from experiments.geom.hparams_coordsatomsbonds import add_arguments
+    from experiments.geom.geom_dataset import GeomDataModule
 
     parser = ArgumentParser()
     parser = add_arguments(parser)
@@ -786,7 +793,7 @@ if __name__ == "__main__":
     strategy = (
         pl.strategies.DDPStrategy(find_unused_parameters=False)
         if hparams.gpus > 1
-        else None
+        else "auto"
     )
 
     trainer = pl.Trainer(
@@ -809,7 +816,6 @@ if __name__ == "__main__":
         num_sanity_val_steps=2,
         max_epochs=hparams.num_epochs,
         detect_anomaly=hparams.detect_anomaly,
-        resume_from_checkpoint=hparams.load_ckpt if hparams.load_ckpt != "" else None,
     )
 
     pl.seed_everything(seed=0, workers=hparams.gpus > 1)

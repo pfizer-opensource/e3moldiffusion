@@ -284,12 +284,13 @@ class EQGATEdgeGNN(nn.Module):
         
         # edge_attr_xyz (distances, cosines, relative_positions, edge_features)
         # (E, E, E x 3, E x F)
-        n = s.size(0)
-        edge_local_dense = torch.zeros(n, n, self.edge_dim, device=s.device, dtype=torch.float32)
-        edge_global_dense = torch.zeros_like(edge_local_dense)
-        edge_local_mask = torch.zeros(n, n, 1, device=s.device, dtype=torch.float32)
-        edge_local_mask[edge_index_local[0], edge_index_local[1]] = 1.0
         
+        if not self.fully_connected:
+            n = s.size(0)
+            edge_local_dense = torch.zeros(n, n, self.edge_dim, device=s.device, dtype=torch.float32)
+            edge_global_dense = torch.zeros_like(edge_local_dense)
+            edge_local_mask = torch.zeros(n, n, 1, device=s.device, dtype=torch.float32)
+            edge_local_mask[edge_index_local[0], edge_index_local[1], :] = 1.0
         
         for i in range(len(self.convs)):   
             if self.fully_connected:

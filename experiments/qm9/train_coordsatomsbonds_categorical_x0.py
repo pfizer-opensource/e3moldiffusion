@@ -228,7 +228,7 @@ class Trainer(pl.LightningModule):
         return total_res
     
     
-    def validation_epoch_end(self, validation_step_outputs):
+    def on_validation_epoch_end(self, *args, **kwargs):
         
         if (self.current_epoch + 1) % self.hparams.test_interval == 0:        
             final_res = self.run_evaluation(step=self.i, dataset_info=self.dataset_info, ngraphs=1000, bs=self.hparams.batch_size)
@@ -639,6 +639,7 @@ class Trainer(pl.LightningModule):
             loss,
             on_step=True,
             batch_size=batch_size,
+            prog_bar=True
         )
 
         self.log(
@@ -646,6 +647,7 @@ class Trainer(pl.LightningModule):
             coords_loss,
             on_step=True,
             batch_size=batch_size,
+            prog_bar=True
         )
 
         self.log(
@@ -653,6 +655,7 @@ class Trainer(pl.LightningModule):
             atoms_loss,
             on_step=True,
             batch_size=batch_size,
+            prog_bar=True
         )
         
         self.log(
@@ -660,6 +663,8 @@ class Trainer(pl.LightningModule):
             bonds_loss,
             on_step=True,
             batch_size=batch_size,
+            prog_bar=True,
+
         )
         
         self.log(
@@ -667,6 +672,7 @@ class Trainer(pl.LightningModule):
             rel_pos_loss,
             on_step=True,
             batch_size=batch_size,
+            prog_bar=True
         )
         
         self.log(
@@ -674,7 +680,8 @@ class Trainer(pl.LightningModule):
             valencies_loss,
             on_step=True,
             batch_size=batch_size,
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+            prog_bar=True
         )
                 
         
@@ -711,7 +718,8 @@ if __name__ == "__main__":
     #import sys
     #file_dir = os.path.dirname(__file__)
     #sys.path.append(file_dir)
-    
+    import warnings
+    warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
     from experiments.qm9.data import QM9DataModule
     from experiments.qm9.hparams_coordsatomsbonds import add_arguments
 
@@ -757,11 +765,8 @@ if __name__ == "__main__":
         distributions = {"atoms": atom_types_distribution, "bonds": bond_types_distribution}
     )
 
-    strategy = (
-        pl.strategies.DDPStrategy(find_unused_parameters=False)
-        if hparams.gpus > 1
-        else None
-    )
+    strategy = "ddp" if  hparams.gpus > 1 else "auto"
+
 
     trainer = pl.Trainer(
         accelerator="gpu" if hparams.gpus else "cpu",
@@ -783,9 +788,6 @@ if __name__ == "__main__":
         num_sanity_val_steps=2,
         max_epochs=hparams.num_epochs,
         detect_anomaly=hparams.detect_anomaly,
-        resume_from_checkpoint=None
-        if hparams.load_model is None
-        else hparams.load_model,
     )
 
     pl.seed_everything(seed=0, workers=hparams.gpus > 1)
@@ -793,6 +795,6 @@ if __name__ == "__main__":
     trainer.fit(
         model=model,
         datamodule=datamodule,
-        # ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
+        ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
     )
     
