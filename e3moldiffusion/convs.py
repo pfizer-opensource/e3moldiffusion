@@ -39,7 +39,6 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
     }
     
     Intention for this layer is to be used as a global fully-connected message passing layer.
-    Hidden edge embeddings are symmetrized as opposed in the original paper.
     """
     def __init__(
         self,
@@ -75,7 +74,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
 
         self.edge_pre = DenseLayer(edge_dim, edge_dim)
         self.edge_dim = edge_dim
-        self.edge_net = nn.Sequential(DenseLayer(self.si + edge_dim + 2, self.si, bias=True, activation=nn.SiLU()),
+        self.edge_net = nn.Sequential(DenseLayer(2 * self.si + edge_dim + 2, self.si, bias=True, activation=nn.SiLU()),
                                       DenseLayer(self.si, self.v_mul * self.vi + self.si + 1 + edge_dim, bias=True)
                                       )
         self.edge_post = DenseLayer(edge_dim, edge_dim)
@@ -163,7 +162,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         de0 = d.view(-1, 1)
         a0 = a.view(-1, 1)
     
-        aij = torch.cat([sa_i + sa_j, de0, a0, e], dim=-1)
+        aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e], dim=-1)
         aij = self.edge_net(aij)
         
         fdim = aij.shape[-1]

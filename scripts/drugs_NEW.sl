@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J embDIFF_LR
+#SBATCH -J EQGAT_X0_ADAMW
 #SBATCH --mail-user=tuan.le@pfizer.com
 #SBATCH --mail-type=ALL
 #SBATCH --partition=gpu

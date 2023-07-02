@@ -72,7 +72,7 @@ class Trainer(pl.LightningModule):
 
         self.i = 0
       
-        self.relative_pos = True
+        self.relative_pos = False
         
         empirical_num_nodes = self._get_empirical_num_nodes()
         self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
@@ -510,13 +510,15 @@ class Trainer(pl.LightningModule):
         # perturb OHEs
         ohes_perturbed = mean_ohes + std_ohes * noise_ohes_true
 
-        edge_index_local = radius_graph(x=pos_perturbed,
-                                        r=self.hparams.cutoff_local,
-                                        batch=data_batch, 
-                                        flow="source_to_target",
-                                        max_num_neighbors=self.hparams.max_num_neighbors)
+        if not self.hparams.fully_connected:
+            edge_index_local = radius_graph(x=pos_perturbed,
+                                            r=self.hparams.cutoff_local,
+                                            batch=data_batch, 
+                                            flow="source_to_target",
+                                            max_num_neighbors=self.hparams.max_num_neighbors)
+        else:
+            edge_index_local = None
 
-        
         batch_edge_global = data_batch[edge_index_global[0]]     
         
         #import pdb
@@ -721,7 +723,7 @@ class Trainer(pl.LightningModule):
         #)
         lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
             optimizer=optimizer,
-            gamma=0.995,
+            gamma=0.99,
             last_epoch=-1
         )
         scheduler = {

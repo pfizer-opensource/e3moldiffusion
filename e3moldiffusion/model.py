@@ -50,7 +50,8 @@ class PredictionHeadEdge(nn.Module):
         s, v, p, e = x["s"], x["v"], x['p'], x["e"]
         s = self.shared_mapping(s)
         j, i = edge_index_global
-         
+        
+        n = s.size(0)
         coords_pred = self.coords_lin(v).squeeze()
         coords_pred = coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
 
@@ -59,6 +60,11 @@ class PredictionHeadEdge(nn.Module):
         
         p = p - scatter_mean(p, index=batch, dim=0)[batch]
         coords_pred = p + coords_pred
+        
+        e_dense = torch.zeros(n, n, e.size(-1), device=e.device)
+        e_dense[edge_index_global[0], edge_index_global[1], :] = e
+        e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
+        e = e_dense[edge_index_global[0], edge_index_global[1], :]
         
         d = (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True).sqrt()
         f = s[i] + s[j] + self.bond_mapping(e)
