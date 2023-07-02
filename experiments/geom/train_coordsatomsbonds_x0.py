@@ -95,7 +95,7 @@ class Trainer(pl.LightningModule):
             fully_connected=hparams["fully_connected"],
             local_global_model=hparams["local_global_model"],
             recompute_edge_attributes=True,
-            recompute_radius_graph=True,
+            recompute_radius_graph=False,
             valency_pred=self.valency_pred
         )
 
@@ -226,13 +226,16 @@ class Trainer(pl.LightningModule):
         
         total_res['step'] = step
         total_res['epoch'] = self.current_epoch
-        if save_dir is None:
-            save_dir = os.path.join(self.hparams.save_dir, 'run0', 'evaluation.csv')
-        else:
-            save_dir = os.path.join(save_dir, 'evaluation.csv')
-            
-        with open(save_dir, 'a') as f:
-            total_res.to_csv(f, header=True)
+        try:
+            if save_dir is None:
+                save_dir = os.path.join(self.hparams.save_dir, f'run{self.hparams.id}', 'evaluation.csv')
+            else:
+                save_dir = os.path.join(save_dir, 'evaluation.csv')
+                
+            with open(save_dir, 'a') as f:
+                total_res.to_csv(f, header=True)
+        except:
+            pass
             
         return total_res
         
@@ -352,12 +355,13 @@ class Trainer(pl.LightningModule):
             pos = mean + std * noise
             
             if torch.any(pos.isnan()):
+                pos[pos.isnan()] = 0.0
                 print("nan")
-                exit()
-                import pdb
-                print(t)
-                print(pos)
-                pdb.set_trace()
+                #exit()
+                #import pdb
+                #print(t)
+                #print(pos)
+                #pdb.set_trace()
 
                 
             # atoms 
@@ -632,16 +636,18 @@ class Trainer(pl.LightningModule):
             rel_pos_loss = (pji_true - pji_pred).pow(2).mean(-1)
             rel_pos_loss = 0.5 * scatter_mean(rel_pos_loss, index=i, dim=0, dim_size=out_dict["coords_true"].size(0))
             rel_pos_loss = scatter_mean(rel_pos_loss, index=batch.batch, dim=0, dim_size=out_dict["coords_true"].size(0))
+            rel_pos_loss = self.loss_non_nans(rel_pos_loss, "rel_pos_loss")
             rel_pos_loss *= w
             rel_pos_loss = rel_pos_loss.sum(dim=0)
         else:
             rel_pos_loss = 0.0
             
-        loss = 3.0 * coords_loss +  1.0 * atoms_loss +  2.0 * bonds_loss + 1.0 * rel_pos_loss + 1.0 * valencies_loss
+        loss = 3.0 * coords_loss +  0.4 * atoms_loss +  2.0 * bonds_loss + 1.0 * rel_pos_loss + 1.0 * valencies_loss
         
         if torch.any(loss.isnan()):
+            loss = loss[~loss.isnan()]
             print(f"Detected NaNs. Terminating training at epoch {self.current_epoch}")
-            exit()
+            # exit()
             
         self.log(
             f"{stage}/loss",
@@ -649,7 +655,7 @@ class Trainer(pl.LightningModule):
             on_step=True,
             batch_size=batch_size,
             sync_dist=self.hparams.gpus > 1 and stage == "val",
-            prog_bar=True
+            prog_bar=False
         )
 
         self.log(
@@ -685,7 +691,7 @@ class Trainer(pl.LightningModule):
             on_step=True,
             batch_size=batch_size,
             sync_dist=self.hparams.gpus > 1 and stage == "val",
-            prog_bar=True
+            prog_bar=False
         )
         
         self.log(
@@ -694,7 +700,7 @@ class Trainer(pl.LightningModule):
             on_step=True,
             batch_size=batch_size,
             sync_dist=self.hparams.gpus > 1 and stage == "val",
-            prog_bar=True
+            prog_bar=False
         )
         
         return loss
@@ -706,12 +712,17 @@ class Trainer(pl.LightningModule):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="val")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hparams["lr"])
-        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.hparams["lr"], weight_decay=1e-12)
+        #lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        #    optimizer=optimizer,
+        #    patience=self.hparams["lr_patience"],
+        #    cooldown=self.hparams["lr_cooldown"],
+        #    factor=self.hparams["lr_factor"],
+        #)
+        lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
             optimizer=optimizer,
-            patience=self.hparams["lr_patience"],
-            cooldown=self.hparams["lr_cooldown"],
-            factor=self.hparams["lr_factor"],
+            gamma=0.995,
+            last_epoch=-1
         )
         scheduler = {
             "scheduler": lr_scheduler,
@@ -748,8 +759,8 @@ if __name__ == "__main__":
     ema_callback = ExponentialMovingAverage(decay=hparams.ema_decay)
     checkpoint_callback = ModelCheckpoint(
         dirpath=hparams.save_dir + f"/run{hparams.id}/",
-        save_top_k=1,
-        monitor="val/coords_loss",
+        save_top_k=5,
+        monitor="val/loss",
         save_last=True,
     )
     lr_logger = LearningRateMonitor()
@@ -790,11 +801,8 @@ if __name__ == "__main__":
                     dataset_info=dataset_info,
                     smiles_list=list(train_smiles))
 
-    strategy = (
-        pl.strategies.DDPStrategy(find_unused_parameters=False)
-        if hparams.gpus > 1
-        else "auto"
-    )
+    strategy = "ddp" if  hparams.gpus > 1 else "auto"
+
 
     trainer = pl.Trainer(
         accelerator="gpu" if hparams.gpus else "cpu",

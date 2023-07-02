@@ -4,7 +4,8 @@ import os
 
 from experiments.utils.data import load_pickle
 from experiments.utils.config_file import get_dataset_info
-from experiments.geom.train_coordsatomsbonds_x0 import Trainer
+# from experiments.geom.train_coordsatomsbonds_x0 import Trainer
+from experiments.geom.train_coordsatomsbonds_x0_embDF import Trainer
 
 
 @click.command()

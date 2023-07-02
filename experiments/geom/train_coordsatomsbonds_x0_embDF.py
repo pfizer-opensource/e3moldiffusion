@@ -10,7 +10,7 @@ import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 from pytorch_lightning.callbacks import (LearningRateMonitor, ModelCheckpoint,
-                                         ModelSummary, TQDMProgressBar)
+                                         ModelSummary, TQDMProgressBar, DeviceStatsMonitor)
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch import Tensor
 from torch_geometric.data import Batch
@@ -72,7 +72,7 @@ class Trainer(pl.LightningModule):
 
         self.i = 0
       
-        self.relative_pos = True
+        self.relative_pos = False
         
         empirical_num_nodes = self._get_empirical_num_nodes()
         self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
@@ -80,8 +80,8 @@ class Trainer(pl.LightningModule):
         self.edge_scaling = 1.00
         self.node_scaling = 1.00
         
-        self.atom_dim = self.num_atom_features
-        self.bond_dim = self.num_bond_classes
+        self.atom_dim = 3 * self.num_atom_features
+        self.bond_dim = 3 * self.num_bond_classes
         
         self.atom_embedding = DenseLayer(self.num_atom_features, self.atom_dim)
         self.bond_embedding = DenseLayer(self.num_bond_classes, self.bond_dim)
@@ -105,7 +105,7 @@ class Trainer(pl.LightningModule):
             fully_connected=hparams["fully_connected"],
             local_global_model=hparams["local_global_model"],
             recompute_edge_attributes=True,
-            recompute_radius_graph=True,
+            recompute_radius_graph=False,
         )
 
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
@@ -236,12 +236,14 @@ class Trainer(pl.LightningModule):
         total_res['step'] = step
         total_res['epoch'] = self.current_epoch
         if save_dir is None:
-            save_dir = os.path.join(self.hparams.save_dir, 'run0', 'evaluation.csv')
+            save_dir = os.path.join(self.hparams.save_dir, 'evaluation.csv')
         else:
             save_dir = os.path.join(save_dir, 'evaluation.csv')
-            
-        with open(save_dir, 'a') as f:
-            total_res.to_csv(f, header=True)
+        try:
+            with open(save_dir, 'a') as f:
+                total_res.to_csv(f, header=True)
+        except:
+            pass
             
         return total_res
         
@@ -353,7 +355,7 @@ class Trainer(pl.LightningModule):
             # update fnc
             
             # positions/coords
-            mean = sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * out['coords_perturbed'] + \
+            mean = sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * pos + \
                 sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * coords_pred
             mean = (1.0 / sigmas2t[batch]) * mean
             std = rev_sigma[batch]
@@ -362,12 +364,13 @@ class Trainer(pl.LightningModule):
             pos = mean + std * noise
             
             if torch.any(pos.isnan()):
+                pos[pos.isnan()] = 0.0 
                 print("nan")
-                exit()
-                import pdb
-                print(t)
-                print(pos)
-                pdb.set_trace()
+                # exit()
+                #import pdb
+                #print(t)
+                #print(pos)
+                #pdb.set_trace()
 
                 
             # atoms 
@@ -517,11 +520,14 @@ class Trainer(pl.LightningModule):
         atoms_embed_perturbed = mean_atoms_embed + std_atoms_embed * noise_atoms_embed
         atoms_embed_perturbed_transformed = self.atom_embedding_post(atoms_embed_perturbed)
 
-        edge_index_local = radius_graph(x=pos_perturbed,
-                                        r=self.hparams.cutoff_local,
-                                        batch=data_batch, 
-                                        flow="source_to_target",
-                                        max_num_neighbors=self.hparams.max_num_neighbors)
+        if not self.hparams.fully_connected:
+            edge_index_local = radius_graph(x=pos_perturbed,
+                                            r=self.hparams.cutoff_local,
+                                            batch=data_batch, 
+                                            flow="source_to_target",
+                                            max_num_neighbors=self.hparams.max_num_neighbors)
+        else:
+            edge_index_local = None
 
         
         batch_edge_global = data_batch[edge_index_global[0]]     
@@ -647,6 +653,7 @@ class Trainer(pl.LightningModule):
             rel_pos_loss = (pji_true - pji_pred).pow(2).mean(-1)
             rel_pos_loss = 0.5 * scatter_mean(rel_pos_loss, index=i, dim=0, dim_size=out_dict["coords_true"].size(0))
             rel_pos_loss = scatter_mean(rel_pos_loss, index=batch.batch, dim=0, dim_size=out_dict["coords_true"].size(0))
+            rel_pos_loss = self.loss_non_nans(rel_pos_loss, "rel_pos_loss")
             rel_pos_loss *= w
             rel_pos_loss = rel_pos_loss.sum(dim=0)
         else:
@@ -656,8 +663,9 @@ class Trainer(pl.LightningModule):
             + 1.0 * rel_pos_loss + 1.0 * bonds_embed_loss + 1.0 * atoms_embed_loss
         
         if torch.any(loss.isnan()):
+            loss = loss[~loss.isnan()]
             print(f"Detected NaNs. Terminating training at epoch {self.current_epoch}")
-            exit()
+            # exit()
             
         self.log(
             f"{stage}/loss",
@@ -665,7 +673,7 @@ class Trainer(pl.LightningModule):
             on_step=True,
             batch_size=batch_size,
             sync_dist=self.hparams.gpus > 1 and stage == "val",
-            prog_bar=True
+            prog_bar=False
         )
 
         self.log(
@@ -695,14 +703,15 @@ class Trainer(pl.LightningModule):
             prog_bar=True
         )
         
-        self.log(
-            f"{stage}/rel_coords_loss",
-            rel_pos_loss,
-            on_step=True,
-            batch_size=batch_size,
-            sync_dist=self.hparams.gpus > 1 and stage == "val",
-            prog_bar=True
-        )
+        if self.relative_pos:
+            self.log(
+                f"{stage}/rel_coords_loss",
+                rel_pos_loss,
+                on_step=True,
+                batch_size=batch_size,
+                sync_dist=self.hparams.gpus > 1 and stage == "val",
+                prog_bar=False
+            )
         self.log(
             f"{stage}/atoms_emb_loss",
             atoms_embed_loss,
@@ -729,13 +738,19 @@ class Trainer(pl.LightningModule):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="val")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hparams["lr"])
-        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.hparams["lr"], weight_decay=1e-12)
+        #lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        #    optimizer=optimizer,
+        #    patience=self.hparams["lr_patience"],
+        #    cooldown=self.hparams["lr_cooldown"],
+        #    factor=self.hparams["lr_factor"],
+        #)
+        lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
             optimizer=optimizer,
-            patience=self.hparams["lr_patience"],
-            cooldown=self.hparams["lr_cooldown"],
-            factor=self.hparams["lr_factor"],
+            gamma=0.99,
+            last_epoch=-1
         )
+        
         scheduler = {
             "scheduler": lr_scheduler,
             "interval": "epoch",
@@ -771,8 +786,8 @@ if __name__ == "__main__":
     ema_callback = ExponentialMovingAverage(decay=hparams.ema_decay)
     checkpoint_callback = ModelCheckpoint(
         dirpath=hparams.save_dir + f"/run{hparams.id}/",
-        save_top_k=1,
-        monitor="val/coords_loss",
+        save_top_k=5,
+        monitor="val/loss",
         save_last=True,
     )
     lr_logger = LearningRateMonitor()
@@ -812,6 +827,12 @@ if __name__ == "__main__":
     model = Trainer(hparams=hparams.__dict__,
                     dataset_info=dataset_info,
                     smiles_list=list(train_smiles))
+    
+    #model = Trainer.load_from_checkpoint(ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
+    #                                   smiles_list=list(train_smiles),
+    #                                    dataset_info=dataset_info,
+    #                                    strict=False,
+    #                                    learning_rate=4e-4)
 
     strategy = "ddp" if  hparams.gpus > 1 else "auto"
 
@@ -831,13 +852,14 @@ if __name__ == "__main__":
             checkpoint_callback,
             TQDMProgressBar(refresh_rate=5),
             ModelSummary(max_depth=2),
+            # DeviceStatsMonitor()
         ],
         precision=hparams.precision,
         num_sanity_val_steps=2,
         max_epochs=hparams.num_epochs,
         detect_anomaly=hparams.detect_anomaly,
     )
-
+    
     pl.seed_everything(seed=0, workers=hparams.gpus > 1)
 
     trainer.fit(

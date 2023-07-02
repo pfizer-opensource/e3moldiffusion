@@ -183,7 +183,7 @@ class EQGATEdgeGNN(nn.Module):
                  vector_aggr: str = "mean",
                  fully_connected: bool = True,
                  local_global_model: bool = False,
-                 recompute_radius_graph: bool = True,
+                 recompute_radius_graph: bool = False,
                  recompute_edge_attributes: bool = True
                  ):
         super(EQGATEdgeGNN, self).__init__()

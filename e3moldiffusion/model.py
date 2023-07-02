@@ -197,10 +197,16 @@ class DenoisingEdgeNetwork(nn.Module):
         edge_dense = torch.zeros(x.size(0), x.size(0), edge_attr_global_transformed.size(-1), device=s.device)
         edge_dense[edge_index_global[0], edge_index_global[1], :] = edge_attr_global_transformed
         
-        edge_attr_local_transformed = edge_dense[edge_index_local[0], edge_index_local[1], :]
+        if not self.fully_connected:
+            edge_attr_local_transformed = edge_dense[edge_index_local[0], edge_index_local[1], :]
+        else:
+            edge_attr_local_transformed = None
         
         # local
-        edge_attr_local_transformed = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local_transformed, pos=pos)        
+        if not self.fully_connected:
+            edge_attr_local_transformed = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local_transformed, pos=pos)        
+        else: 
+            edge_attr_local_transformed = (None, None, None, None)
         # global
         edge_attr_global_transformed = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global_transformed, pos=pos)
         
