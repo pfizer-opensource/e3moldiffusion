@@ -95,7 +95,7 @@ class GatedEquivBlock(nn.Module):
         else:
             vdot = vv
 
-        vdot = torch.clamp(torch.pow(vdot, 2).sum(dim=1), min=self.norm_eps).sqrt()
+        vdot = torch.clamp(torch.pow(vdot, 2).sum(dim=1), min=self.norm_eps) #.sqrt()
 
         s = torch.cat([s, vdot], dim=-1)
         s = self.Ws(s)

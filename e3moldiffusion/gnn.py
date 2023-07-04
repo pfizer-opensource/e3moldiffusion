@@ -254,12 +254,14 @@ class EQGATEdgeGNN(nn.Module):
             if self.use_norm:
                 norm.reset_parameters()
     
-    def calculate_edge_attrs(self, edge_index: Tensor, edge_attr: OptTensor, pos: Tensor):
+    def calculate_edge_attrs(self, edge_index: Tensor, edge_attr: OptTensor, pos: Tensor, sqrt: bool = True):
         source, target = edge_index
         r = pos[target] - pos[source]
         a = pos[target] * pos[source]
         a = a.sum(-1)
-        d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6).sqrt()
+        d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6)
+        if sqrt:
+            d = d.sqrt()
         r_norm = torch.div(r, d.unsqueeze(-1))
         edge_attr = (d, a, r_norm, edge_attr)
         return edge_attr
@@ -313,7 +315,7 @@ class EQGATEdgeGNN(nn.Module):
                 s, v, p, e = out["s"], out["v"], out['p'], out["e"]
                 p = p - scatter_mean(p, batch, dim=0)[batch]
                 if self.recompute_edge_attributes:
-                    edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, pos=p, edge_attr=e)
+                    edge_attr_global = self.calculate_edge_attrs(edge_index=edge_index_global, pos=p, edge_attr=e, sqrt=False)
             else:
                 if (i == self.num_layers - 2 or i == 0) and self.local_global_model:
                     s, v, p, e = out["s"], out["v"], out['p'], out["e"]

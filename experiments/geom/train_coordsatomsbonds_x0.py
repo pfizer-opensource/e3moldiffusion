@@ -29,6 +29,9 @@ from experiments.utils.config_file import get_dataset_info
 from experiments.utils.sampling import (Molecule,
                                         analyze_stability_for_molecules)
 
+from torch.nn import MSELoss
+from torch.nn import CrossEntropyLoss
+
 logging.getLogger("lightning").setLevel(logging.WARNING)
 
 def get_num_atom_types_geom(dataset: str):
@@ -105,6 +108,12 @@ class Trainer(pl.LightningModule):
                                 scaled_reverse_posterior_sigma=True,
                                 schedule="cosine",
                                 enforce_zero_terminal_snr=False)
+        
+        self.pos_loss = MSELoss(reduction='mean')
+        r = 'mean'
+        # r = 'sum'
+        self.atom_loss = CrossEntropyLoss(reduction=r)
+        self.bond_loss = CrossEntropyLoss(reduction=r)
                  
     def _get_empirical_num_nodes(self):
         if not self.hparams.no_h:
@@ -578,42 +587,49 @@ class Trainer(pl.LightningModule):
         edges_pred = out_dict['bonds_pred']
         valencies_pred = out_dict['valencies_pred']       
             
-        coords_loss = torch.pow(
-           coords_pred - out_dict["coords_true"], 2
-        ).mean(-1)
-    
-        coords_loss = scatter_mean(
-            coords_loss, index=batch.batch, dim=0, dim_size=batch_size
-        )
-        coords_loss = self.loss_non_nans(coords_loss, "coords")
-
-        coords_loss *= w        
-        coords_loss = torch.sum(coords_loss, dim=0)
+        old = False
         
-        atoms_loss = F.cross_entropy(
-            atoms_pred, out_dict["atoms_true"], reduction='none'
-            )  
-        atoms_loss = scatter_mean(
-            atoms_loss, index=batch.batch, dim=0, dim_size=batch_size
-        )
-        atoms_loss = self.loss_non_nans(atoms_loss, "atoms")
-        atoms_loss *= w
-        atoms_loss = torch.sum(atoms_loss, dim=0)
+        if old:
+            coords_loss = torch.pow(
+            coords_pred - out_dict["coords_true"], 2
+            ).mean(-1)
+        
+            coords_loss = scatter_mean(
+                coords_loss, index=batch.batch, dim=0, dim_size=batch_size
+            )
+            coords_loss = self.loss_non_nans(coords_loss, "coords")
+
+            coords_loss *= w        
+            coords_loss = torch.sum(coords_loss, dim=0)
+            
+            atoms_loss = F.cross_entropy(
+                atoms_pred, out_dict["atoms_true"], reduction='none'
+                )  
+            atoms_loss = scatter_mean(
+                atoms_loss, index=batch.batch, dim=0, dim_size=batch_size
+            )
+            atoms_loss = self.loss_non_nans(atoms_loss, "atoms")
+            atoms_loss *= w
+            atoms_loss = torch.sum(atoms_loss, dim=0)
 
 
-        bonds_loss = F.cross_entropy(
-            edges_pred, out_dict["bonds_true"], reduction='none'
-        )
-         
-        bonds_loss = 0.5 * scatter_mean(
-            bonds_loss, index=out_dict["edge_index"][1][1], dim=0, dim_size=out_dict["atoms_pred"].size(0)
-        )
-        bonds_loss = scatter_mean(
-            bonds_loss, index=batch.batch, dim=0, dim_size=batch_size
-        )
-        bonds_loss = self.loss_non_nans(bonds_loss, "bonds")
-        bonds_loss *= w
-        bonds_loss = bonds_loss.sum(dim=0)
+            bonds_loss = F.cross_entropy(
+                edges_pred, out_dict["bonds_true"], reduction='none'
+            )
+            
+            bonds_loss = 0.5 * scatter_mean(
+                bonds_loss, index=out_dict["edge_index"][1][1], dim=0, dim_size=out_dict["atoms_pred"].size(0)
+            )
+            bonds_loss = scatter_mean(
+                bonds_loss, index=batch.batch, dim=0, dim_size=batch_size
+            )
+            bonds_loss = self.loss_non_nans(bonds_loss, "bonds")
+            bonds_loss *= w
+            bonds_loss = bonds_loss.sum(dim=0)
+        else:
+            coords_loss = self.pos_loss(coords_pred, out_dict["coords_true"])
+            atoms_loss = self.atom_loss(atoms_pred, out_dict["atoms_true"])
+            bonds_loss = self.bond_loss(edges_pred, out_dict["bonds_true"])
         
         if self.valency_pred:
             valencies_loss = F.cross_entropy(
@@ -635,12 +651,15 @@ class Trainer(pl.LightningModule):
             # pos
             pji_true = out_dict["coords_true"][j] - out_dict["coords_true"][i]
             pji_pred = coords_pred[j] - coords_pred[i]
-            rel_pos_loss = (pji_true - pji_pred).pow(2).mean(-1)
-            rel_pos_loss = 0.5 * scatter_mean(rel_pos_loss, index=i, dim=0, dim_size=out_dict["coords_true"].size(0))
-            rel_pos_loss = scatter_mean(rel_pos_loss, index=batch.batch, dim=0, dim_size=out_dict["coords_true"].size(0))
-            rel_pos_loss = self.loss_non_nans(rel_pos_loss, "rel_pos_loss")
-            rel_pos_loss *= w
-            rel_pos_loss = rel_pos_loss.sum(dim=0)
+            if old:
+                rel_pos_loss = (pji_true - pji_pred).pow(2).mean(-1)
+                rel_pos_loss = 0.5 * scatter_mean(rel_pos_loss, index=i, dim=0, dim_size=out_dict["coords_true"].size(0))
+                rel_pos_loss = scatter_mean(rel_pos_loss, index=batch.batch, dim=0, dim_size=out_dict["coords_true"].size(0))
+                rel_pos_loss = self.loss_non_nans(rel_pos_loss, "rel_pos_loss")
+                rel_pos_loss *= w
+                rel_pos_loss = rel_pos_loss.sum(dim=0)
+            else:
+                rel_pos_loss = self.pos_loss(pji_pred, pji_true)
         else:
             rel_pos_loss = 0.0
             
@@ -649,7 +668,7 @@ class Trainer(pl.LightningModule):
         if torch.any(loss.isnan()):
             loss = loss[~loss.isnan()]
             print(f"Detected NaNs. Terminating training at epoch {self.current_epoch}")
-            # exit()
+            exit()
             
         self.log(
             f"{stage}/loss",
@@ -723,7 +742,7 @@ class Trainer(pl.LightningModule):
         #)
         lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
             optimizer=optimizer,
-            gamma=0.99,
+            gamma=self.hparams.gamma,
             last_epoch=-1
         )
         scheduler = {
@@ -735,7 +754,7 @@ class Trainer(pl.LightningModule):
         }
         return [optimizer], [scheduler]
 
-    
+
 
 if __name__ == "__main__":
     
@@ -764,6 +783,7 @@ if __name__ == "__main__":
         save_top_k=5,
         monitor="val/loss",
         save_last=True,
+        every_n_epochs=4
     )
     lr_logger = LearningRateMonitor()
     tb_logger = TensorBoardLogger(
@@ -803,6 +823,12 @@ if __name__ == "__main__":
                     dataset_info=dataset_info,
                     smiles_list=list(train_smiles))
 
+    #model = Trainer.load_from_checkpoint(ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
+    #                                    smiles_list=list(train_smiles),
+    #                                    dataset_info=dataset_info,
+    #                                    strict=False,
+    #                                    learning_rate=4e-4)
+    
     strategy = "ddp" if  hparams.gpus > 1 else "auto"
 
 
