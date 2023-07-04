@@ -169,8 +169,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         de0 = d.view(-1, 1)
         a0 = a.view(-1, 1)
 
-        d2_i, d2_j = torch.pow(p_i, 2).sum(-1, keepdim=True), torch.pow(p_j, 2).sum(-1, keepdim=True)
-        aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e, d2_i, d2_j], dim=-1)
+        d_i, d_j = torch.pow(p_i, 2).sum(-1, keepdim=True).clamp(min=1e-6).sqrt(), torch.pow(p_j, 2).sum(-1, keepdim=True).clamp(min=1e-6).sqrt()
+        aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e, d_i, d_j], dim=-1)
         aij = self.edge_net(aij)
         
         fdim = aij.shape[-1]

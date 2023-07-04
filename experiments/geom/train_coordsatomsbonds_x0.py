@@ -685,7 +685,7 @@ class Trainer(pl.LightningModule):
             on_step=True,
             batch_size=batch_size,
             sync_dist=self.hparams.gpus > 1 and stage == "val",
-            prog_bar=True
+            prog_bar=(stage=="train")
         )
 
         self.log(
@@ -694,7 +694,7 @@ class Trainer(pl.LightningModule):
             on_step=True,
             batch_size=batch_size,
             sync_dist=self.hparams.gpus > 1 and stage == "val",
-            prog_bar=True
+            prog_bar=(stage=="train")
         )
         
         self.log(
@@ -703,7 +703,7 @@ class Trainer(pl.LightningModule):
             on_step=True,
             batch_size=batch_size,
             sync_dist=self.hparams.gpus > 1 and stage == "val",
-            prog_bar=True
+            prog_bar=(stage=="train")
         )
         
         self.log(
