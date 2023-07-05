@@ -101,14 +101,14 @@ class Trainer(pl.LightningModule):
             num_layers=hparams["num_layers"],
             use_norm=not hparams["omit_norm"],
             use_cross_product=not hparams["omit_cross_product"],
-            num_atom_types=self.num_atom_features,
+            num_atom_types=self.num_atom_features + self.num_charge_classes,
             num_bond_types=self.num_bond_classes,
             edge_dim=hparams['edim'],
             cutoff_local=hparams["cutoff_local"],
             rbf_dim=hparams["rbf_dim"],
             vector_aggr=hparams["vector_aggr"],
             fully_connected=hparams["fully_connected"],
-            local_global_model=hparams["local_global_model"],
+            local_global_model=False,
             recompute_edge_attributes=True,
             recompute_radius_graph=False
         )
@@ -487,7 +487,7 @@ class Trainer(pl.LightningModule):
     
     def forward(self, batch: Batch, t: Tensor):
         
-        node_feat: Tensor = batch.x
+        atom_types: Tensor = batch.x
         pos: Tensor = batch.pos
         charges: Tensor = batch.charges
         data_batch: Tensor = batch.batch
@@ -572,7 +572,7 @@ class Trainer(pl.LightningModule):
     
         # one-hot-encode charges
         # offset
-        charges = charges + 1
+        charges = charges + 2
         charges = F.one_hot(charges.squeeze().long(), num_classes=self.num_charge_classes).float()
         probs = self.cat_charges.marginal_prob(charges.float(), t[data_batch])
         charges_perturbed = probs.multinomial(1,).squeeze()
@@ -603,9 +603,10 @@ class Trainer(pl.LightningModule):
         out['bonds_perturbed'] = edge_attr_global_perturbed
         
         out['coords_true'] = pos_centered
-        out['atoms_true'] = node_feat.argmax(dim=-1)
+        out['atoms_true'] = atom_types.argmax(dim=-1)
         out['bonds_true'] = edge_attr_global
-        
+        out['charges_true'] = charges.argmax(dim=-1)
+
         
         return out
     
@@ -823,7 +824,10 @@ if __name__ == "__main__":
     model = Trainer(hparams=hparams.__dict__,
                     dataset_info=dataset_info,
                     smiles_list=list(train_smiles),
-                    distributions = {"atoms": atom_types_distribution, "bonds": bond_types_distribution, "charges": charge_types_distribution}
+                    distributions = {"atoms": atom_types_distribution.float(),
+                                     "bonds": bond_types_distribution.float(), 
+                                     "charges": charge_types_distribution.float()
+                                     }
                     )
 
     strategy = "ddp" if  hparams.gpus > 1 else "auto"

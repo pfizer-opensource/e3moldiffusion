@@ -2,15 +2,15 @@
 #SBATCH -J EQGAT_DISCRETE
 #SBATCH --mail-user=tuan.le@pfizer.com
 #SBATCH --mail-type=ALL
-#SBATCH --partition=gpu
-#SBATCH --time=6-00:00:00
+#SBATCH --partition=gpu_short
+#SBATCH --time=0-04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=27G
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:a100:4
-#SBATCH --nodelist=g002
+#SBATCH --nodelist=g004
 #SBATCH --output=/hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/slurm_outs/drugs_EMBDiff_%j.out
 #SBATCH --error=/hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/slurm_outs/drugs_EMBDiff_%j.err
 
@@ -44,7 +44,7 @@ args=(
     --schedule cosine
     --num_diffusion_timesteps 500
     --timesteps 500
-    --max_time 05:23:45:00
+    --max_time 00:03:45:00
     --test_interval 10
     #--load_ckpt /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/logs/x0/run10/epoch=20-step=126383.ckpt
     --save_dir /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/logs/x0

@@ -75,7 +75,7 @@ def add_arguments(parser):
     parser.add_argument("--num_layers", default=7, type=int)
     parser.add_argument("--omit_norm", default=False, action="store_true")
     parser.add_argument("--fully_connected", default=False, action="store_true")
-    parser.add_argument("--local_global_model", default=True, action="store_true")
+    parser.add_argument("--local_global_model", default=False, action="store_true")
     parser.add_argument("--local_edge_attrs", default=False, action="store_true")
 
     parser.add_argument("--backprop_local", default=False, action="store_true")
