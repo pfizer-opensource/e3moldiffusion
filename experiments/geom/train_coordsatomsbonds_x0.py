@@ -26,9 +26,9 @@ from e3moldiffusion.molfeat import atom_type_config, get_bond_feature_dims
 from e3moldiffusion.sde import DiscreteDDPM
 from experiments.utils.data import load_pickle
 from experiments.utils.config_file import get_dataset_info
-from experiments.utils.sampling import (Molecule,
-                                        analyze_stability_for_molecules)
-
+#from experiments.utils.sampling import (Molecule,
+#                                        analyze_stability_for_molecules)
+from experiments.utils.analyze import Molecule, analyze_stability_for_molecules
 from torch.nn import MSELoss
 from torch.nn import CrossEntropyLoss
 
@@ -219,16 +219,16 @@ class Trainer(pl.LightningModule):
                 molecule_list.append(molecule)
             
         
-        res = analyze_stability_for_molecules(molecule_list=molecule_list, 
-                                              dataset_info=dataset_info,
-                                              smiles_train=self.smiles_list,
-                                              bonds_given=True
-                                             )
+        stability_dict, validity_dict, all_generated_smiles = analyze_stability_for_molecules(molecule_list=molecule_list, 
+                                                                                            dataset_info=dataset_info,
+                                                                                            smiles_train=self.smiles_list,
+                                                                                            bonds_given=True
+                                                                                            )
 
         if verbose:
             print(f'Run time={datetime.now() - start}')
-        total_res = {k: v for k, v in zip(['validity', 'uniqueness', 'novelty'], res[1][0])}
-        total_res.update(res[0])
+        total_res = dict(stability_dict)
+        total_res.update(validity_dict)
         print(total_res)
         total_res = pd.DataFrame.from_dict([total_res])        
         print(total_res)

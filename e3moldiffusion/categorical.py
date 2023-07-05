@@ -1,7 +1,9 @@
 import torch
 from e3moldiffusion.sde import get_beta_schedule
+import matplotlib.pyplot as plt
 
-DEFAULT_BETAS = get_beta_schedule(kind="cosine", num_diffusion_timesteps=300)
+
+DEFAULT_BETAS = get_beta_schedule(kind="cosine", num_diffusion_timesteps=500)
 DEFAULT_ALPHAS = 1.0 - DEFAULT_BETAS
 ALPHAS_BAR = torch.cumprod(DEFAULT_ALPHAS, dim=0)
 
@@ -56,6 +58,8 @@ class CategoricalDiffusionKernel(torch.nn.Module):
     Returns:
         _type_: _description_
     """  
+    
+    # Qt_bar (k0, k_t)
     probs = torch.einsum('nj, nji -> ni', [x0, self.Qt_bar[t]])
     check = torch.all((probs.sum(-1) - 1.0).abs() < 1e-4)
     assert check
@@ -73,12 +77,18 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         _type_: _description_
     """
       
-    # xt: (n, k)
+    # xt: (n, k_t)
+    
     #x0 = torch.eye(self.num_classes, device=xt.device, dtype=xt.dtype).unsqueeze(0)
     #x0 = x0.repeat((xt.size(0), 1, 1))
     # (n, k, k)
     
-    a = torch.einsum('nj, nji -> ni', [xt, self.Qt[t].transpose(-2, -1)])
+    Qt_T = self.Qt[t]  # (n, k_t-1, k_t)
+    assert Qt_T.ndim == 3
+    Qt_T = Qt_T.permute(0, 2, 1)
+    # (n, k_t, k_t-1)
+    
+    a = torch.einsum('nj, nji -> ni', [xt, Qt_T])
     # (n, k_t-1)
     
     a = a.unsqueeze(1)
@@ -96,7 +106,7 @@ class CategoricalDiffusionKernel(torch.nn.Module):
     # (n, k_0, k_t)
     
     ## xt_ = xt.unsqueeze(1)
-    # (n, 1, k)
+    # (n, 1, k_t)
   
     ## p1 = (p1 * xt_).sum(-1, keepdims=True)
     
@@ -104,7 +114,6 @@ class CategoricalDiffusionKernel(torch.nn.Module):
     # (n, k_0)
     
     p1 = p1.unsqueeze(-1)
-     
     # (n, k_0, 1)
     
     probs = p0 / (p1.clamp(min=1e-5))
@@ -179,5 +188,5 @@ def _some_debugging():
       + ((1.0 - alphas_t) * torch.ones_like( C0.terminal_distribution)).unsqueeze(-1) * C0.terminal_distribution.unsqueeze(0)
     
     print(a-b)
-    
+    Qt = C1.Qt[t]
     return None

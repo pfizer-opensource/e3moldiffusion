@@ -100,8 +100,10 @@ class Trainer(pl.LightningModule):
             local_global_model=hparams["fully_connected_layer"],
             fully_connected=hparams["fully_connected"],
             recompute_edge_attributes=True,
-            recompute_radius_graph=True, valency_pred=self.valency_pred
+            recompute_radius_graph=False,
+            valency_pred=self.valency_pred
         )  
+        
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
                                 beta_max=hparams["beta_max"],
                                 N=hparams["timesteps"],
@@ -115,6 +117,11 @@ class Trainer(pl.LightningModule):
         self.cat_bonds = CategoricalDiffusionKernel(terminal_distribution=bond_types_distribution,
                                                     alphas=self.sde.alphas.clone()
                                                     )
+        
+        self.pos_loss = torch.nn.MSELoss()
+        self.atoms_loss = torch.nn.CrossEntropyLoss()
+        self.bonds_loss = torch.nn.CrossEntropyLoss()
+        
                 
                         
     def _get_empirical_num_nodes(self):
@@ -218,13 +225,16 @@ class Trainer(pl.LightningModule):
         
         total_res['step'] = step
         total_res['epoch'] = self.current_epoch
-        if save_dir is None:
-            save_dir = os.path.join(self.hparams.save_dir, 'run0', 'evaluation.csv')
-        else:
-            save_dir = os.path.join(save_dir, 'evaluation.csv')
-            
-        with open(save_dir, 'a') as f:
-            total_res.to_csv(f, header=True)
+        try:
+            if save_dir is None:
+                save_dir = os.path.join(self.hparams.save_dir, 'run' + self.hparams.id, 'evaluation.csv')
+            else:
+                save_dir = os.path.join(save_dir, 'evaluation.csv')
+                
+            with open(save_dir, 'a') as f:
+                total_res.to_csv(f, header=True)
+        except:
+            pass
         return total_res
     
     
@@ -382,10 +392,18 @@ class Trainer(pl.LightningModule):
             unweighted_probs_edges[unweighted_probs_edges.sum(dim=-1) == 0] = 1e-5
             probs_edges = unweighted_probs_edges / unweighted_probs_edges.sum(-1, keepdims=True)
             edges_triu = probs_edges.multinomial(1,).squeeze()
-            edge_attr_global_dense[mask_j, mask_i] = edges_triu
-            edge_attr_global_dense = 0.5 * (edge_attr_global_dense + edge_attr_global_dense.T)
-            edge_attr_global_dense = edge_attr_global_dense.long()
-            edge_attr_global = edge_attr_global_dense[j, i]
+            
+            j, i = edge_index_global
+            mask = j < i
+            mask_i = i[mask]
+            mask_j = j[mask]
+            j = torch.concat([mask_j, mask_i])
+            i = torch.concat([mask_i, mask_j])
+            edge_index_global = torch.stack([j, i], dim=0)
+            edge_attr_global = torch.concat([edges_triu, edges_triu], dim=0)
+            edge_index_global, edge_attr_global = sort_edge_index(edge_index=edge_index_global,
+                                                                edge_attr=edge_attr_global, 
+                                                                sort_by_row=False)
             edge_attr_global = F.one_hot(edge_attr_global, num_classes=self.num_bond_classes).float()     
 
             
@@ -402,7 +420,7 @@ class Trainer(pl.LightningModule):
                 pos_traj.append(pos.detach())
                 atom_type_traj.append(atom_types.detach())
                 edge_type_traj.append(edge_attr_global.detach())
-                
+               
         return pos, atom_types, edge_attr_global, edge_index_global, batch_num_nodes, [pos_traj, atom_type_traj, edge_type_traj]
     
     def coalesce_edges(self, edge_index, bond_edge_index, bond_edge_attr, n):
@@ -553,93 +571,23 @@ class Trainer(pl.LightningModule):
                             dtype=torch.long, device=batch.x.device)
         out_dict, node_batch, edge_batch = self(batch=batch, t=t)
         
-        
-        #snr = self.sde.alphas_cumprod.pow(2) / (self.sde.sqrt_1m_alphas_cumprod.pow(2))
-        #s = t - 1
-        #s = torch.clamp(s, min=0)
-        #w = snr[s] - snr[t]
-        w = 1.0 / batch_size
-    
-        sigmast = self.sde.sqrt_1m_alphas_cumprod[t]
-        sigmas2t = sigmast.pow(2)
-        alpha_bar_t = self.sde.alphas_cumprod[t]
-        sqrt_alpha_bar_t = alpha_bar_t.sqrt()
-
         coords_pred = out_dict['coords_pred']
         atoms_pred = out_dict['atoms_pred']
         edges_pred = out_dict['bonds_pred']
-        valencies_pred = out_dict['valencies_pred']       
 
-
-        coords_loss = torch.pow(
-           coords_pred - out_dict["coords_true"], 2
-        ).mean(-1)
-        
-        coords_loss = scatter_mean(
-            coords_loss, index=batch.batch, dim=0, dim_size=batch_size
-        )
-        coords_loss *= w        
-        coords_loss = torch.sum(coords_loss, dim=0)
-        
-        atoms_loss = F.cross_entropy(
-            atoms_pred, out_dict["atoms_true"], reduction='none'
-            )  
-        atoms_loss = scatter_mean(
-            atoms_loss, index=batch.batch, dim=0, dim_size=batch_size
-        )
-        atoms_loss *= w
-        atoms_loss = torch.sum(atoms_loss, dim=0)
-
-
-        bonds_loss = F.cross_entropy(
-            edges_pred, out_dict["bonds_true"], reduction='none'
-        )
-         
-        bonds_loss = 0.5 * scatter_mean(
-            bonds_loss, index=out_dict["edge_index"][1][1], dim=0, dim_size=out_dict["coords_true"].size(0)
-        )
-        bonds_loss = scatter_mean(
-            bonds_loss, index=batch.batch, dim=0, dim_size=batch_size
-        )
-        bonds_loss *= w
-        bonds_loss = bonds_loss.sum(dim=0)
-        
-        if self.valency_pred:
-            valencies_loss = F.cross_entropy(
-                valencies_pred, out_dict["valencies_true"], reduction='none'
-            )
-            valencies_loss = scatter_mean(
-                valencies_loss, index=batch.batch, dim=0, dim_size=batch_size
-            )
-            valencies_loss *= w
-            valencies_loss = torch.sum(valencies_loss, dim=0)
-        else:
-            valencies_loss = 0.0
-        
-        if self.relative_pos:
-            j, i = out_dict["edge_index"][1]
-            # distance 
-            # pji_true = torch.pow(out_dict["coords_true"][j] - out_dict["coords_true"][i], 2).sum(-1, keepdim=True).sqrt()
-            # pji_pred = torch.pow(coords_pred[j] - coords_pred[i], 2).sum(-1, keepdim=True).sqrt()
-            # pos
-            pji_true = out_dict["coords_true"][j] - out_dict["coords_true"][i]
-            pji_pred = coords_pred[j] - coords_pred[i]
-            rel_pos_loss = (pji_true - pji_pred).pow(2).mean(-1)
-            rel_pos_loss = 0.5 * scatter_mean(rel_pos_loss, index=i, dim=0, dim_size=out_dict["coords_true"].size(0))
-            rel_pos_loss = scatter_mean(rel_pos_loss, index=batch.batch, dim=0, dim_size=out_dict["coords_true"].size(0))
-            rel_pos_loss *= w
-            rel_pos_loss = rel_pos_loss.sum(dim=0)
-        else:
-            rel_pos_loss = 0.0
-            
-        loss = 3.0 * coords_loss +  1.0 * atoms_loss +  2.0 * bonds_loss + 1.0 * rel_pos_loss + 1.0 * valencies_loss
+        coords_loss = self.pos_loss(coords_pred, out_dict["coords_true"])
+        atoms_loss = self.atoms_loss(atoms_pred, out_dict["atoms_true"])
+        bonds_loss = self.bonds_loss(edges_pred, out_dict["bonds_true"])
+     
+        loss = 3.0 * coords_loss +  0.4 * atoms_loss +  2.0 * bonds_loss
 
         self.log(
             f"{stage}/loss",
             loss,
             on_step=True,
             batch_size=batch_size,
-            prog_bar=True
+            prog_bar=False,
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
         )
 
         self.log(
@@ -647,7 +595,8 @@ class Trainer(pl.LightningModule):
             coords_loss,
             on_step=True,
             batch_size=batch_size,
-            prog_bar=True
+            prog_bar=(stage=='train'),
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
         )
 
         self.log(
@@ -655,7 +604,8 @@ class Trainer(pl.LightningModule):
             atoms_loss,
             on_step=True,
             batch_size=batch_size,
-            prog_bar=True
+            prog_bar=(stage=='train'),
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
         )
         
         self.log(
@@ -663,29 +613,10 @@ class Trainer(pl.LightningModule):
             bonds_loss,
             on_step=True,
             batch_size=batch_size,
-            prog_bar=True,
-
+            prog_bar=(stage=='train'),
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
         )
-        
-        self.log(
-            f"{stage}/rel_coords_loss",
-            rel_pos_loss,
-            on_step=True,
-            batch_size=batch_size,
-            prog_bar=True
-        )
-        
-        self.log(
-            f"{stage}/valencies_loss",
-            valencies_loss,
-            on_step=True,
-            batch_size=batch_size,
-            sync_dist=self.hparams.gpus > 1 and stage == "val",
-            prog_bar=True
-        )
-                
-        
-        
+      
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -739,7 +670,7 @@ if __name__ == "__main__":
     checkpoint_callback = ModelCheckpoint(
         dirpath=hparams.save_dir + f"/run{hparams.id}/",
         save_top_k=1,
-        monitor="val/coords_loss",
+        monitor="val/loss",
         save_last=True,
     )
     lr_logger = LearningRateMonitor()

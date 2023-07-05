@@ -66,7 +66,7 @@ remove_hs: false
 condition_time: true
 ode_regularization: 1.e-3
 gradient_clipping: true
-timesteps: 1000
+timesteps: 500
 norm_values: [1, 4, 10, 1]
 n_stability_samples: 1000
 noise_schedule: polynomial_2
