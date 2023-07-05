@@ -15,7 +15,7 @@ from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
-from torch_scatter import scatter_mean, scatter_add
+from torch_scatter import scatter_mean
 from torch_sparse import coalesce
 from tqdm import tqdm
 
@@ -26,8 +26,11 @@ from e3moldiffusion.sde import DiscreteDDPM
 from e3moldiffusion.categorical import CategoricalDiffusionKernel
 
 from experiments.utils.config_file import get_dataset_info
-from experiments.utils.sampling import (Molecule,
-                                        analyze_stability_for_molecules)
+#from experiments.utils.sampling import (Molecule,
+#                                        analyze_stability_for_molecules)
+from experiments.utils.analyze import Molecule, analyze_stability_for_molecules
+from torch.nn import MSELoss
+from torch.nn import CrossEntropyLoss
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 
@@ -60,17 +63,19 @@ class Trainer(pl.LightningModule):
         if distributions is None:
             atom_types_distribution = torch.tensor([0.5122, 0.3526, 0.0562, 0.0777, 0.0013])
             bond_types_distribution = torch.tensor([0.8818, 0.1104, 0.0060, 0.0018, 0.0000])
+            charge_types_distribution = torch.tensor([[0.01250508, 0.95520205, 0.03229287]]) # -1, 0, 1
         else:
             atom_types_distribution = distributions.get("atoms")
             bond_types_distribution = distributions.get("bonds")
+            charge_types_distribution = distributions.get("charges")
         
         self.register_buffer('atoms_prior', atom_types_distribution.clone())
         self.register_buffer('bonds_prior', bond_types_distribution.clone())
-        
-    
-        self.include_charges = False
-        self.num_atom_features = self.hparams.num_atom_types + int(self.include_charges)
+        self.register_buffer('charges_prior', charge_types_distribution.clone())
+
+        self.num_atom_features = self.hparams.num_atom_types
         self.num_bond_classes = 5
+        self.num_charge_classes = 3
         
         self.i = 0
         self.dataset_info = dataset_info
@@ -79,19 +84,13 @@ class Trainer(pl.LightningModule):
         self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
         
         self.smiles_list = smiles_list
-        self.edge_scaling = 1.00
-        self.node_scaling = 1.00
-        
-        self.relative_pos = True
 
-        self.valency_pred = False
-        
         self.model = DenoisingEdgeNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
             use_norm=hparams["use_norm"],
             use_cross_product=hparams["use_cross_product"],
-            num_atom_types=self.num_atom_features,
+            num_atom_types=self.num_atom_features + self.num_charge_classes,
             num_bond_types=self.num_bond_classes,
             rbf_dim=hparams["num_rbf"],
             edge_dim=hparams['edim'],
@@ -100,8 +99,7 @@ class Trainer(pl.LightningModule):
             local_global_model=hparams["fully_connected_layer"],
             fully_connected=hparams["fully_connected"],
             recompute_edge_attributes=True,
-            recompute_radius_graph=False,
-            valency_pred=self.valency_pred
+            recompute_radius_graph=False
         )  
         
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
@@ -117,10 +115,12 @@ class Trainer(pl.LightningModule):
         self.cat_bonds = CategoricalDiffusionKernel(terminal_distribution=bond_types_distribution,
                                                     alphas=self.sde.alphas.clone()
                                                     )
+        self.cat_charges = CategoricalDiffusionKernel(terminal_distribution=charge_types_distribution,
+                                            alphas=self.sde.alphas.clone()
+                                            )
         
-        self.pos_loss = torch.nn.MSELoss()
-        self.atoms_loss = torch.nn.CrossEntropyLoss()
-        self.bonds_loss = torch.nn.CrossEntropyLoss()
+        self.mse_loss = MSELoss()
+        self.ce_loss = CrossEntropyLoss()
         
                 
                         
@@ -154,7 +154,7 @@ class Trainer(pl.LightningModule):
                         verbose=False,
                         save_traj=False):
         
-        pos, atom_types, edge_types,\
+        pos, atom_types, charge_types, edge_types,\
         edge_index_global, batch_num_nodes, trajs = self.reverse_sampling(num_graphs=num_graphs,
                                                                         device=device,
                                                                         empirical_distribution_num_nodes=empirical_distribution_num_nodes,
@@ -162,12 +162,16 @@ class Trainer(pl.LightningModule):
                                                                         save_traj=save_traj)
 
         pos_splits = pos.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
-        atom_types_split = atom_types.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
-
+        
+        charge_types_integer = torch.argmax(charge_types, dim=-1)
+        # offset back
+        charge_types_integer = charge_types_integer - 1
+        charge_types_integer_split = charge_types_integer.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
+        
         atom_types_integer = torch.argmax(atom_types, dim=-1)
         atom_types_integer_split = atom_types_integer.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
         
-        return pos_splits, atom_types_split, atom_types_integer_split, edge_types, edge_index_global, batch_num_nodes, trajs    
+        return pos_splits, atom_types_integer_split, charge_types_integer_split, edge_types, edge_index_global, batch_num_nodes, trajs    
     
     
     @torch.no_grad()
@@ -184,7 +188,7 @@ class Trainer(pl.LightningModule):
             print(f"Creating {ngraphs} graphs in {l} batches")
         for _, num_graphs in enumerate(l):
             start = datetime.now()
-            pos_splits, _, atom_types_integer_split, \
+            pos_splits, atom_types_integer_split, charge_types_integer_split, \
             edge_types, edge_index_global, batch_num_nodes, _ = self.generate_graphs(
                                                                                      num_graphs=num_graphs,
                                                                                      verbose=inner_verbose,
@@ -198,27 +202,28 @@ class Trainer(pl.LightningModule):
             edge_attrs_dense = edge_attrs_dense.argmax(-1)
             edge_attrs_splits = self.get_list_of_edge_adjs(edge_attrs_dense, batch_num_nodes)
             
-            for positions, atom_types, edges in zip(pos_splits,
+            for positions, atom_types, charges, edges in zip(pos_splits,
                                                     atom_types_integer_split,
+                                                    charge_types_integer_split,
                                                     edge_attrs_splits):
                 molecule = Molecule(atom_types=atom_types, positions=positions,
                                     dataset_info=dataset_info,
-                                    charges=torch.zeros(0, device=positions.device),
+                                    charges=charges,
                                     bond_types=edges
                                     )
                 molecule_list.append(molecule)
             
         
-        res = analyze_stability_for_molecules(molecule_list=molecule_list, 
-                                              dataset_info=dataset_info,
-                                              smiles_train=self.smiles_list,
-                                              bonds_given=True
-                                             )
+        stability_dict, validity_dict, all_generated_smiles = analyze_stability_for_molecules(molecule_list=molecule_list, 
+                                                                                            dataset_info=dataset_info,
+                                                                                            smiles_train=self.smiles_list,
+                                                                                            bonds_given=True
+                                                                                            )
 
         if verbose:
             print(f'Run time={datetime.now() - start}')
-        total_res = {k: v for k, v in zip(['validity', 'uniqueness', 'novelty'], res[1][0])}
-        total_res.update(res[0])
+        total_res = dict(stability_dict)
+        total_res.update(validity_dict)
         print(total_res)
         total_res = pd.DataFrame.from_dict([total_res])        
         print(total_res)
@@ -230,7 +235,6 @@ class Trainer(pl.LightningModule):
                 save_dir = os.path.join(self.hparams.save_dir, 'run' + self.hparams.id, 'evaluation.csv')
             else:
                 save_dir = os.path.join(save_dir, 'evaluation.csv')
-                
             with open(save_dir, 'a') as f:
                 total_res.to_csv(f, header=True)
         except:
@@ -276,6 +280,9 @@ class Trainer(pl.LightningModule):
         atom_types = torch.multinomial(self.atoms_prior, num_samples=n, replacement=True)
         atom_types = F.one_hot(atom_types, self.num_atom_features).float()
         
+        charge_types = torch.multinomial(self.charges_prior, num_samples=n, replacement=True)
+        charge_types = F.one_hot(charge_types, self.num_charge_classes).float()
+        
         edge_index_local = radius_graph(x=pos,
                                         r=self.hparams.cutoff_upper,
                                         batch=batch, 
@@ -315,6 +322,7 @@ class Trainer(pl.LightningModule):
         
         pos_traj = []
         atom_type_traj = []
+        charge_type_traj = []
         edge_type_traj = []
         
         chain = range(self.hparams.timesteps)
@@ -324,8 +332,9 @@ class Trainer(pl.LightningModule):
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
             
+            node_feats_in = torch.cat([atom_types, charge_types], dim=-1)
             out = self.model(
-                x=atom_types,
+                x=node_feats_in,
                 t=temb,
                 pos=pos,
                 edge_index_local=edge_index_local,
@@ -346,30 +355,23 @@ class Trainer(pl.LightningModule):
             one_m_alphas = self.sde.discrete_betas[t].unsqueeze(-1)
             
             coords_pred = out['coords_pred'].squeeze()
-            atoms_pred = out['atoms_pred'].softmax(dim=-1)
+            atoms_pred, charges_pred = out['atoms_pred'].split([self.num_atom_features, self.num_charge_classes], dim=-1)
+            atoms_pred = atoms_pred.softmax(dim=-1)
             # N x a_0
             edges_pred = out['bonds_pred'].softmax(dim=-1)
             # E x b_0
+            charges_pred = charges_pred.softmax(dim=-1)
           
             # update fnc
             
             # positions/coords
-            mean = sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * out['coords_perturbed'] + \
+            mean = sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * pos + \
                 sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * coords_pred
             mean = (1.0 / sigmas2t[batch]) * mean
             std = rev_sigma[batch]
             noise = torch.randn_like(mean)
             noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
             pos = mean + std * noise
-            
-            if torch.any(pos.isnan()):
-                print(t)
-                print(pos)
-                exit()
-
-            # import pdb
-            # pdb.set_trace()
-            
             
             # atoms   
             rev_atoms = self.cat_atoms.reverse_posterior_for_every_x0(xt=atom_types, t=t[batch])
@@ -381,6 +383,16 @@ class Trainer(pl.LightningModule):
             probs_atoms = unweighted_probs_atoms / unweighted_probs_atoms.sum(-1, keepdims=True)
             atom_types =  F.one_hot(probs_atoms.multinomial(1,).squeeze(), num_classes=self.num_atom_features).float()
 
+            # charges
+            rev_charges = self.cat_charges.reverse_posterior_for_every_x0(xt=charge_types, t=t[batch])
+            # Eq. 4 in Austin et al. (2023) "Structured Denoising Diffusion Models in Discrete State-Spaces"
+            # (N, a_0, a_t-1)
+            unweighted_probs_charges = (rev_charges * charges_pred.unsqueeze(-1)).sum(1)
+            unweighted_probs_charges[unweighted_probs_charges.sum(dim=-1) == 0] = 1e-5
+            # (N, a_t-1)
+            probs_charges = unweighted_probs_charges / unweighted_probs_charges.sum(-1, keepdims=True)
+            charge_types =  F.one_hot(probs_charges.multinomial(1,).squeeze(), num_classes=self.num_charge_classes).float()
+            
             # edges
             edges_pred_triu = edges_pred[mask]
             # (E, b_0)
@@ -420,8 +432,9 @@ class Trainer(pl.LightningModule):
                 pos_traj.append(pos.detach())
                 atom_type_traj.append(atom_types.detach())
                 edge_type_traj.append(edge_attr_global.detach())
+                charge_type_traj.append(charge_types.detach())
                
-        return pos, atom_types, edge_attr_global, edge_index_global, batch_num_nodes, [pos_traj, atom_type_traj, edge_type_traj]
+        return pos, atom_types, charge_types, edge_attr_global, edge_index_global, batch_num_nodes, [pos_traj, atom_type_traj, charge_type_traj, edge_type_traj]
     
     def coalesce_edges(self, edge_index, bond_edge_index, bond_edge_attr, n):
         edge_attr = torch.full(size=(edge_index.size(-1), ),
@@ -435,11 +448,10 @@ class Trainer(pl.LightningModule):
     
     def forward(self, batch: Batch, t: Tensor):
         
-        node_feat: Tensor = batch.x
+        atom_types: Tensor = batch.x
         pos: Tensor = batch.pos
         charges: Tensor = batch.charges
         data_batch: Tensor = batch.batch
-        batch_num_nodes = torch.bincount(data_batch)
         bond_edge_index = batch.edge_index
         bond_edge_attr = batch.edge_attr
         n = batch.num_nodes
@@ -448,8 +460,6 @@ class Trainer(pl.LightningModule):
         bond_edge_index, bond_edge_attr = sort_edge_index(edge_index=bond_edge_index,
                                                           edge_attr=bond_edge_attr,
                                                           sort_by_row=False)
-
-        valencies_true = scatter_add(bond_edge_attr, index=bond_edge_index[0], dim=0, dim_size=n)
                 
         if not hasattr(batch, "fc_edge_index"):
             edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
@@ -466,48 +476,35 @@ class Trainer(pl.LightningModule):
         edge_index_global, edge_attr_global = sort_edge_index(edge_index=edge_index_global,
                                                               edge_attr=edge_attr_global, 
                                                               sort_by_row=False)
-        sparse = True
+     
+        j, i = edge_index_global
+        mask = j < i
+        mask_i = i[mask]
+        mask_j = j[mask]        
+        edge_attr_triu = edge_attr_global[mask]
+        edge_attr_triu_ohe = F.one_hot(edge_attr_triu, num_classes=self.num_bond_classes).float()
+        t_edge = t[data_batch[mask_i]]
+        probs = self.cat_bonds.marginal_prob(edge_attr_triu_ohe, t=t_edge)
+        edges_t_given_0 = probs.multinomial(1,).squeeze()
+        j = torch.concat([mask_j, mask_i])
+        i = torch.concat([mask_i, mask_j])
+        edge_index_global_perturbed = torch.stack([j, i], dim=0)
+        edge_attr_global_perturbed = torch.concat([edges_t_given_0, edges_t_given_0], dim=0)
+        edge_index_global_perturbed, edge_attr_global_perturbed = sort_edge_index(edge_index=edge_index_global_perturbed,
+                                                                                edge_attr=edge_attr_global_perturbed, 
+                                                                                sort_by_row=False)
         
-        if sparse:
-            # SPARSE
-            j, i = edge_index_global
-            mask = j < i
-            mask_i = i[mask]
-            mask_j = j[mask]        
-            edge_attr_triu = edge_attr_global[mask]
-            edge_attr_triu_ohe = F.one_hot(edge_attr_triu, num_classes=self.num_bond_classes).float()
-            t_edge = t[data_batch[mask_i]]
-            probs = self.cat_bonds.marginal_prob(edge_attr_triu_ohe, t=t_edge)
-            edges_t_given_0 = probs.multinomial(1,).squeeze()
-            j = torch.concat([mask_j, mask_i])
-            i = torch.concat([mask_i, mask_j])
-            edge_index_global_perturbed = torch.stack([j, i], dim=0)
-            edge_attr_global_perturbed = torch.concat([edges_t_given_0, edges_t_given_0], dim=0)
-            edge_index_global_perturbed, edge_attr_global_perturbed = sort_edge_index(edge_index=edge_index_global_perturbed,
-                                                                                    edge_attr=edge_attr_global_perturbed, 
-                                                                                    sort_by_row=False)
-            
-            if not self.train:
-                # do assertion when valdating
-                edge_attr_global_dense_perturbed = torch.zeros(n, n, device=pos.device, dtype=torch.long)
-                edge_attr_global_dense_perturbed[edge_index_global_perturbed[0], edge_index_global_perturbed[1]] = edge_attr_global_perturbed
-                assert (edge_attr_global_dense_perturbed - edge_attr_global_dense_perturbed.T).float().mean().item() == 0.0
-                assert torch.allclose(edge_index_global, edge_index_global_perturbed)
-            
-            edge_attr_global_perturbed = F.one_hot(edge_attr_global_perturbed, num_classes=self.num_bond_classes).float()
-        else:
-            # DENSE
-            edge_attr_global_dense = torch.zeros(n, n, device=pos.device, dtype=torch.long)
-            edge_attr_global_dense[edge_index_global[0], edge_index_global[1]] = edge_attr_global
-            edge_attr_global_dense = F.one_hot(edge_attr_global_dense, self.num_bond_classes)
-            raise NotImplementedError
+        if not self.train:
+            # do assertion when valdating
+            edge_attr_global_dense_perturbed = torch.zeros(n, n, device=pos.device, dtype=torch.long)
+            edge_attr_global_dense_perturbed[edge_index_global_perturbed[0], edge_index_global_perturbed[1]] = edge_attr_global_perturbed
+            assert (edge_attr_global_dense_perturbed - edge_attr_global_dense_perturbed.T).float().mean().item() == 0.0
+            assert torch.allclose(edge_index_global, edge_index_global_perturbed)
         
-        if not self.hparams.continuous:
-            temb = t.float() / self.hparams.timesteps
-            temb = temb.clamp(min=self.hparams.eps_min)
-        else:
-            temb = t
-            
+        edge_attr_global_perturbed = F.one_hot(edge_attr_global_perturbed, num_classes=self.num_bond_classes).float()
+
+        temb = t.float() / self.hparams.timesteps
+        temb = temb.clamp(min=self.hparams.eps_min)
         temb = temb.unsqueeze(dim=1)
         
         # Coords: point cloud in R^3
@@ -521,65 +518,67 @@ class Trainer(pl.LightningModule):
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
         
-        # one-hot-encode
-        node_feat = F.one_hot(node_feat.squeeze().long(), num_classes=self.num_atom_features).float()
-        xohe = self.node_scaling * node_feat
-        probs = self.cat_atoms.marginal_prob(xohe.float(), t[data_batch])
-           
-        ohes_perturbed = probs.multinomial(1,).squeeze()
-        ohes_perturbed = F.one_hot(ohes_perturbed, num_classes=self.num_atom_features).float()
+        # one-hot-encode atom types
+        atom_types = F.one_hot(atom_types.squeeze().long(), num_classes=self.num_atom_features).float()
+        probs = self.cat_atoms.marginal_prob(atom_types.float(), t[data_batch])
+        atom_types_perturbed = probs.multinomial(1,).squeeze()
+        atom_types_perturbed = F.one_hot(atom_types_perturbed, num_classes=self.num_atom_features).float()
         
-        edge_index_local = radius_graph(x=pos_perturbed,
-                                        r=self.hparams.cutoff_upper,
-                                        batch=data_batch, 
-                                        flow="source_to_target",
-                                        max_num_neighbors=self.hparams.max_num_neighbors)
-        
+        # one-hot-encode charges
+        # offset
+        charges = charges + 1
+        charges = F.one_hot(charges.squeeze().long(), num_classes=self.num_charge_classes).float()
+        probs = self.cat_charges.marginal_prob(charges.float(), t[data_batch])
+        charges_perturbed = probs.multinomial(1,).squeeze()
+        charges_perturbed = F.one_hot(charges_perturbed, num_classes=self.num_charge_classes).float()
+
         batch_edge_global = data_batch[edge_index_global_perturbed[0]]     
         
+        atom_feats_in_perturbed = torch.cat([atom_types_perturbed, charges_perturbed], dim=-1)
+        
         out = self.model(
-            x=ohes_perturbed,
+            x=atom_feats_in_perturbed,
             t=temb,
             pos=pos_perturbed,
-            edge_index_local=edge_index_local,
+            edge_index_local=None,
             edge_index_global=edge_index_global_perturbed,
             edge_attr_global=edge_attr_global_perturbed,
             batch=data_batch,
             batch_edge_global=batch_edge_global,
         )
         
-        if "coords_perturbed" not in out.keys():
-            out['coords_perturbed'] = pos_perturbed
-        if "atoms_perturbed" not in out.keys():
-            out['atoms_perturbed'] = ohes_perturbed
-        if "bonds_perturbed" not in out.keys():
-            out['bonds_perturbed'] = edge_attr_global_perturbed
-        
+   
+        out['coords_perturbed'] = pos_perturbed
+        out['atoms_perturbed'] = atom_types_perturbed
+        out['charges_perturbed'] = charges_perturbed
+        out['bonds_perturbed'] = edge_attr_global_perturbed
+    
         out['coords_true'] = pos_centered
-        out['atoms_true'] = node_feat.argmax(dim=-1)
+        out['atoms_true'] = atom_types.argmax(dim=-1)
+        out['charges_true'] = charges.argmax(dim=-1)
         out['bonds_true'] = edge_attr_global
-        out['valencies_true'] = valencies_true
-
-        out['edge_index'] = (edge_index_local, edge_index_global)
         
-        return out, data_batch, batch_edge_global
+        return out
     
     def step_fnc(self, batch, batch_idx, stage: str):
+        
         batch_size = int(batch.batch.max()) + 1
         t = torch.randint(low=0, high=self.hparams.timesteps,
                             size=(batch_size,), 
                             dtype=torch.long, device=batch.x.device)
-        out_dict, node_batch, edge_batch = self(batch=batch, t=t)
+        out_dict = self(batch=batch, t=t)
         
         coords_pred = out_dict['coords_pred']
         atoms_pred = out_dict['atoms_pred']
         edges_pred = out_dict['bonds_pred']
+        atoms_pred, charges_pred = atoms_pred.split([self.num_atom_features, self.num_charge_classes], dim=-1)
 
-        coords_loss = self.pos_loss(coords_pred, out_dict["coords_true"])
-        atoms_loss = self.atoms_loss(atoms_pred, out_dict["atoms_true"])
-        bonds_loss = self.bonds_loss(edges_pred, out_dict["bonds_true"])
+        coords_loss = self.mse_loss(coords_pred, out_dict["coords_true"])
+        atoms_loss = self.ce_loss(atoms_pred, out_dict["atoms_true"])
+        charges_loss = self.ce_loss(charges_pred, out_dict["charges_true"])
+        bonds_loss = self.ce_loss(edges_pred, out_dict["bonds_true"])
      
-        loss = 3.0 * coords_loss +  0.4 * atoms_loss +  2.0 * bonds_loss
+        loss = 3.0 * coords_loss +  0.4 * atoms_loss +  2.0 * bonds_loss + 1.0 * charges_loss
 
         self.log(
             f"{stage}/loss",
@@ -609,6 +608,15 @@ class Trainer(pl.LightningModule):
         )
         
         self.log(
+            f"{stage}/charges_loss",
+            atoms_loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage=='train'),
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
+        )
+        
+        self.log(
             f"{stage}/bonds_loss",
             bonds_loss,
             on_step=True,
@@ -626,29 +634,26 @@ class Trainer(pl.LightningModule):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="val")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hparams["lr"])
-        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer=optimizer,
-            patience=self.hparams["lr_patience"],
-            cooldown=self.hparams["lr_cooldown"],
-            factor=self.hparams["lr_factor"],
-        )
-        scheduler = {
-            "scheduler": lr_scheduler,
-            "interval": "epoch",
-            "frequency": self.hparams["lr_frequency"],
-            "monitor": "val/loss",
-            "strict": False,
-        }
-        return [optimizer], [scheduler]
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.hparams["lr"], amsgrad=True, weight_decay=1e-12)
+        #lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        #    optimizer=optimizer,
+        #    patience=self.hparams["lr_patience"],
+        #    cooldown=self.hparams["lr_cooldown"],
+        #    factor=self.hparams["lr_factor"],
+        #)
+        #scheduler = {
+        #    "scheduler": lr_scheduler,
+        #    "interval": "epoch",
+        #    "frequency": self.hparams["lr_frequency"],
+        #    "monitor": "val/loss",
+        #    "strict": False,
+        #}
+        return [optimizer]# , [scheduler]
 
     
 
 if __name__ == "__main__":
     
-    #import sys
-    #file_dir = os.path.dirname(__file__)
-    #sys.path.append(file_dir)
     import warnings
     warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
     from experiments.qm9.data import QM9DataModule
@@ -688,12 +693,18 @@ if __name__ == "__main__":
     atom_types_distribution = datamodule.dataset.statistics.atom_types
     bond_types_distribution = datamodule.dataset.statistics.bond_types
     charge_types_distribution = datamodule.dataset.statistics.charge_types
+    if charge_types_distribution.ndim == 2:
+        charge_types_distribution = charge_types_distribution.mean(0) / charge_types_distribution.mean(0).sum()
+    
+    print("Atom type distribution: ", atom_types_distribution)
+    print("Bond type distribution: ", bond_types_distribution)
+    print("Charge type distribution: ", charge_types_distribution)
     
     model = Trainer(
         hparams=hparams.__dict__,
         dataset_info=dataset_info,
         smiles_list=list(datamodule.dataset.smiles),
-        distributions = {"atoms": atom_types_distribution, "bonds": bond_types_distribution}
+        distributions = {"atoms": atom_types_distribution, "bonds": bond_types_distribution, "charges": charge_types_distribution}
     )
 
     strategy = "ddp" if  hparams.gpus > 1 else "auto"

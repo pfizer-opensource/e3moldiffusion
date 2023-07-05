@@ -28,8 +28,12 @@ from e3moldiffusion.categorical import CategoricalDiffusionKernel
 
 from experiments.utils.data import load_pickle
 from experiments.utils.config_file import get_dataset_info
-from experiments.utils.sampling import (Molecule,
-                                        analyze_stability_for_molecules)
+from experiments.utils.config_file import get_dataset_info
+#from experiments.utils.sampling import (Molecule,
+#                                        analyze_stability_for_molecules)
+from experiments.utils.analyze import Molecule, analyze_stability_for_molecules
+from torch.nn import MSELoss
+from torch.nn import CrossEntropyLoss
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 
@@ -64,34 +68,32 @@ class Trainer(pl.LightningModule):
                                                     0.0000e+00, 9.1150e-07, 1.0847e-04, 1.2260e-02, 4.0306e-03, 0.0000e+00,
                                                     1.0503e-03, 1.9806e-05, 0.0000e+00, 7.5958e-08])
             bond_types_distribution = torch.tensor([9.5523e-01, 3.0681e-02, 2.0021e-03, 4.4172e-05, 1.2045e-02])
+            charge_types_distribution = torch.tensor([1.35509982e-06, 1.84150896e-02, 8.86377311e-01, 3.72757628e-02,
+                                                      5.79157076e-02, 1.47740195e-05]) # -2, -1, 0, 1, 2, 3
         else:
             atom_types_distribution = distributions.get("atoms")
             bond_types_distribution = distributions.get("bonds")
+            charge_types_distribution = distributions.get("charges")
             
-            
-        self.include_charges = False
-        
         self.hparams.num_atom_types = get_num_atom_types_geom(dataset="drugs")
+        self.hparams.num_charge_classes = 6
         if hparams.get('no_h'):
             print("Training without hydrogen")
             self.hparams.num_atom_types -= 1
             
-        self.hparams.num_bond_types = BOND_FEATURE_DIMS + 1
+        self.hparams.num_bond_types = 5
         self.smiles_list = smiles_list
-        self.num_atom_features = self.hparams.num_atom_types + int(self.include_charges)
+        self.num_atom_features = self.hparams.num_atom_types
         self.num_bond_classes = 5
+        self.num_charge_classes = 6
         
         self.dataset_info = dataset_info
 
         self.i = 0
-      
-        self.relative_pos = True
-        
+            
         empirical_num_nodes = self._get_empirical_num_nodes()
         self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
-        
-        self.edge_scaling = 1.00
-        self.node_scaling = 1.00
+
         
         self.valency_pred = False
         self.model = DenoisingEdgeNetwork(
@@ -108,8 +110,7 @@ class Trainer(pl.LightningModule):
             fully_connected=hparams["fully_connected"],
             local_global_model=hparams["local_global_model"],
             recompute_edge_attributes=True,
-            recompute_radius_graph=True,
-            valency_pred=self.valency_pred
+            recompute_radius_graph=False
         )
 
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
@@ -125,6 +126,13 @@ class Trainer(pl.LightningModule):
         self.cat_bonds = CategoricalDiffusionKernel(terminal_distribution=bond_types_distribution,
                                                     alphas=self.sde.alphas.clone()
                                                     )
+        self.cat_charges = CategoricalDiffusionKernel(terminal_distribution=charge_types_distribution,
+                                                    alphas=self.sde.alphas.clone()
+                                                    )
+        
+        self.mse_loss = MSELoss()
+        self.ce_loss = CrossEntropyLoss()
+        
         
                  
     def _get_empirical_num_nodes(self):
@@ -167,7 +175,7 @@ class Trainer(pl.LightningModule):
                         verbose=False,
                         save_traj=False):
         
-        pos, atom_types, edge_types,\
+        pos, atom_types, charge_types, edge_types,\
         edge_index_global, batch_num_nodes, trajs = self.reverse_sampling(num_graphs=num_graphs,
                                                                         device=device,
                                                                         empirical_distribution_num_nodes=empirical_distribution_num_nodes,
@@ -175,10 +183,16 @@ class Trainer(pl.LightningModule):
                                                                         save_traj=save_traj)
 
         pos_splits = pos.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
+        charge_types_integer = torch.argmax(charge_types, dim=-1)
+        # offset back
+        charge_types_integer = charge_types_integer - 2
+        charge_types_integer_split = charge_types_integer.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
+        
         atom_types_split = atom_types.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
 
         atom_types_integer = torch.argmax(atom_types, dim=-1)
         if self.hparams.no_h:
+            raise NotImplementedError # remove in future ir implement
             atom_types_integer += 1
             
         atom_types_integer_split = atom_types_integer.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
@@ -769,9 +783,6 @@ class Trainer(pl.LightningModule):
 
 if __name__ == "__main__":
     
-    #import sys
-    #file_dir = os.path.dirname(__file__)
-    #sys.path.append(file_dir)
     import warnings
     warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
 
@@ -807,6 +818,7 @@ if __name__ == "__main__":
    
     print("Using MIDI GEOM")
     if hparams.no_h:
+        raise NotImplementedError
         exit()
         root = '/home/let55/workspace/projects/e3moldiffusion/geom/data_noH' 
     else:
@@ -827,13 +839,19 @@ if __name__ == "__main__":
     atom_types_distribution = datamodule.train_dataset.statistics.atom_types
     bond_types_distribution = datamodule.train_dataset.statistics.bond_types
     charge_types_distribution = datamodule.train_dataset.statistics.charge_types
-
+    if charge_types_distribution.ndim == 2:
+            charge_types_distribution = charge_types_distribution.mean(0) / charge_types_distribution.mean(0).sum()
+        
+    print("Atom type distribution: ", atom_types_distribution)
+    print("Bond type distribution: ", bond_types_distribution)
+    print("Charge type distribution: ", charge_types_distribution)
+    
     train_smiles = load_pickle(os.path.join(root, "processed", "train_smiles.pickle"))
     
     model = Trainer(hparams=hparams.__dict__,
                     dataset_info=dataset_info,
                     smiles_list=list(train_smiles),
-                    distributions = {"atoms": atom_types_distribution, "bonds": bond_types_distribution}
+                    distributions = {"atoms": atom_types_distribution, "bonds": bond_types_distribution, "charges": charge_types_distribution}
                     )
 
     strategy = "ddp" if  hparams.gpus > 1 else "auto"

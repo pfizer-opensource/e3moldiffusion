@@ -70,10 +70,6 @@ class Trainer(pl.LightningModule):
         self.edge_scaling = 1.00
         self.node_scaling = 1.00
         
-        self.relative_pos = True
-
-        self.valency_pred = False
-        
         self.model = DenoisingEdgeNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
@@ -88,7 +84,7 @@ class Trainer(pl.LightningModule):
             local_global_model=hparams["fully_connected_layer"],
             fully_connected=hparams["fully_connected"],
             recompute_edge_attributes=True,
-            recompute_radius_graph=True, valency_pred=self.valency_pred
+            recompute_radius_graph=False,
         )  
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
                                 beta_max=hparams["beta_max"],
@@ -389,9 +385,7 @@ class Trainer(pl.LightningModule):
         bond_edge_index, bond_edge_attr = sort_edge_index(edge_index=bond_edge_index,
                                                           edge_attr=bond_edge_attr,
                                                           sort_by_row=False)
-
-        valencies_true = scatter_add(bond_edge_attr, index=bond_edge_index[0], dim=0, dim_size=n)
-                
+                        
         if not hasattr(batch, "fc_edge_index"):
             edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
             edge_index_global, _ = dense_to_sparse(edge_index_global)
@@ -496,8 +490,6 @@ class Trainer(pl.LightningModule):
         out['coords_true'] = pos_centered
         out['atoms_true'] = node_feat.argmax(dim=-1)
         out['bonds_true'] = edge_attr_global
-        out['valencies_true'] = valencies_true
-
 
         out['edge_index'] = (edge_index_local, edge_index_global)
         
@@ -516,19 +508,12 @@ class Trainer(pl.LightningModule):
         #s = torch.clamp(s, min=0)
         #w = snr[s] - snr[t]
         w = 1.0 / batch_size
-
         
         old = False
         
-        sigmast = self.sde.sqrt_1m_alphas_cumprod[t]
-        sigmas2t = sigmast.pow(2)
-        alpha_bar_t = self.sde.alphas_cumprod[t]
-        sqrt_alpha_bar_t = alpha_bar_t.sqrt()
-
         coords_pred = out_dict['coords_pred']
         atoms_pred = out_dict['atoms_pred']
         edges_pred = out_dict['bonds_pred']
-        valencies_pred = out_dict['valencies_pred']       
 
         if old:
             coords_loss = torch.pow(
@@ -564,40 +549,12 @@ class Trainer(pl.LightningModule):
             bonds_loss *= w
             bonds_loss = bonds_loss.sum(dim=0)
             
-            if self.valency_pred:
-                valencies_loss = F.cross_entropy(
-                    valencies_pred, out_dict["valencies_true"], reduction='none'
-                )
-                valencies_loss = scatter_mean(
-                    valencies_loss, index=batch.batch, dim=0, dim_size=batch_size
-                )
-                valencies_loss *= w
-                valencies_loss = torch.sum(valencies_loss, dim=0)
-            else:
-                valencies_loss = 0.0
-            
-            if self.relative_pos:
-                j, i = out_dict["edge_index"][1]
-                # distance 
-                # pji_true = torch.pow(out_dict["coords_true"][j] - out_dict["coords_true"][i], 2).sum(-1, keepdim=True).sqrt()
-                # pji_pred = torch.pow(coords_pred[j] - coords_pred[i], 2).sum(-1, keepdim=True).sqrt()
-                # pos
-                pji_true = out_dict["coords_true"][j] - out_dict["coords_true"][i]
-                pji_pred = coords_pred[j] - coords_pred[i]
-                rel_pos_loss = (pji_true - pji_pred).pow(2).mean(-1)
-                rel_pos_loss = 0.5 * scatter_mean(rel_pos_loss, index=i, dim=0, dim_size=out_dict["coords_true"].size(0))
-                rel_pos_loss = scatter_mean(rel_pos_loss, index=batch.batch, dim=0, dim_size=out_dict["coords_true"].size(0))
-                rel_pos_loss *= w
-                rel_pos_loss = rel_pos_loss.sum(dim=0)
-            else:
-                rel_pos_loss = 0.0
         else:
             coords_loss = self.mse_loss(coords_pred, out_dict["coords_true"])
             atoms_loss = self.ce_loss(atoms_pred, out_dict["atoms_true"])
             bonds_loss = self.ce_loss(edges_pred, out_dict["bonds_true"])
-            rel_pos_loss = valencies_loss = 0.0
             
-        loss = 3.0 * coords_loss +  1.0 * atoms_loss +  2.0 * bonds_loss + 1.0 * rel_pos_loss + 1.0 * valencies_loss
+        loss = 3.0 * coords_loss +  0.4 * atoms_loss +  2.0 * bonds_loss
 
         self.log(
             f"{stage}/loss",
@@ -631,25 +588,6 @@ class Trainer(pl.LightningModule):
             prog_bar=(stage=="train"),
         )
         
-        self.log(
-            f"{stage}/rel_coords_loss",
-            rel_pos_loss,
-            on_step=True,
-            batch_size=batch_size,
-            prog_bar=False,
-        )
-        
-        self.log(
-            f"{stage}/valencies_loss",
-            valencies_loss,
-            on_step=True,
-            batch_size=batch_size,
-            sync_dist=self.hparams.gpus > 1 and stage == "val",
-            prog_bar=False,
-        )
-                
-        
-        
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -659,29 +597,26 @@ class Trainer(pl.LightningModule):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="val")
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.hparams["lr"], weight_decay=1e-12)
-        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer=optimizer,
-            patience=self.hparams["lr_patience"],
-            cooldown=self.hparams["lr_cooldown"],
-            factor=self.hparams["lr_factor"],
-        )
-        scheduler = {
-            "scheduler": lr_scheduler,
-            "interval": "epoch",
-            "frequency": self.hparams["lr_frequency"],
-            "monitor": "val/loss",
-            "strict": False,
-        }
-        return [optimizer], [scheduler]
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.hparams["lr"], amsgrad=True, weight_decay=1e-12)
+        #lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        #    optimizer=optimizer,
+        #    patience=self.hparams["lr_patience"],
+        #    cooldown=self.hparams["lr_cooldown"],
+        #    factor=self.hparams["lr_factor"],
+        #)
+        #scheduler = {
+        #    "scheduler": lr_scheduler,
+        #    "interval": "epoch",
+        #    "frequency": self.hparams["lr_frequency"],
+        #    "monitor": "val/loss",
+        #    "strict": False,
+        #}
+        return [optimizer]# , [scheduler]
 
     
 
 if __name__ == "__main__":
     
-    #import sys
-    #file_dir = os.path.dirname(__file__)
-    #sys.path.append(file_dir)
     import warnings
     warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
     from experiments.qm9.data import QM9DataModule

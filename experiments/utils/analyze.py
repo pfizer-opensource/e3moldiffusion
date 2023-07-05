@@ -333,9 +333,9 @@ class BasicMolecularMetrics(object):
         )
         # Save in any case in the graphs folder
         validity_dict = {
-            "Validity": validity.item(),
-            "Novelty": novelty.item(),
-            "Uniqueness": uniqueness.item() 
+            "validity": validity.item(),
+            "novelty": novelty.item(),
+            "uniqueness": uniqueness.item() 
         }
         self.reset()
         return stability_dict, validity_dict, all_generated_smiles

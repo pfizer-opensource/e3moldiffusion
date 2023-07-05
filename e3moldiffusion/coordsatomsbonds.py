@@ -6,12 +6,12 @@ from torch import Tensor, nn
 from torch_geometric.typing import OptTensor
 from torch_scatter import scatter_mean
 
-from e3moldiffusion.gnn import EQGATGNN, EQGATEdgeGNN, EQGATEdgeVirtualGNN
+from e3moldiffusion.gnn import EQGATEdgeGNN
 from e3moldiffusion.modules import DenseLayer
 
 
 class PredictionHeadEdge(nn.Module):
-    def __init__(self, hn_dim: Tuple[int, int], edge_dim: int, num_atom_types: int, num_bond_types: int = 5, valency_pred: bool = False) -> None:
+    def __init__(self, hn_dim: Tuple[int, int], edge_dim: int, num_atom_types: int, num_bond_types: int = 5) -> None:
         super(PredictionHeadEdge, self).__init__()
         self.sdim, self.vdim = hn_dim
         self.num_atom_types = num_atom_types
@@ -25,11 +25,6 @@ class PredictionHeadEdge(nn.Module):
         self.coords_lin = DenseLayer(in_features=self.vdim, out_features=1, bias=False)
         self.atoms_lin = DenseLayer(in_features=self.sdim, out_features=num_atom_types, bias=True)
         
-        if valency_pred:
-            self.valency_lin = DenseLayer(in_features=self.sdim, out_features=20, bias=True)
-        else:
-            self.valency_lin = None
-
         self.reset_parameters()
         
     def reset_parameters(self):
@@ -38,8 +33,6 @@ class PredictionHeadEdge(nn.Module):
         self.atoms_lin.reset_parameters()
         self.bonds_lin_0.reset_parameters()
         self.bonds_lin_1.reset_parameters()
-        if self.valency_lin:
-            self.valency_lin.reset_parameters()
         
     def forward(self,
                 x: Dict,
@@ -53,13 +46,12 @@ class PredictionHeadEdge(nn.Module):
         n = s.size(0)
         
         coords_pred = self.coords_lin(v).squeeze()
-        coords_pred = coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
 
         atoms_pred = self.atoms_lin(s)
-        
-        p = p - scatter_mean(p, index=batch, dim=0)[batch]
+
         coords_pred = p + coords_pred
-        
+        coords_pred = coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
+
         e_dense = torch.zeros(n, n, e.size(-1), device=e.device)
         e_dense[edge_index_global[0], edge_index_global[1], :] = e
         e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
@@ -71,88 +63,15 @@ class PredictionHeadEdge(nn.Module):
         
         bonds_pred = F.silu(self.bonds_lin_0(edge))
         bonds_pred = self.bonds_lin_1(bonds_pred)
-        
-        if self.valency_lin:
-            valencies = self.valency_lin(s)
-        else:
-            valencies = None
-            
+
         out = {"coords_pred": coords_pred,
                "atoms_pred": atoms_pred,
-               "bonds_pred": bonds_pred,
-               "valencies_pred": valencies
+               "bonds_pred": bonds_pred
                }
         
         return out
 
 
-class PredictionHead(nn.Module):
-    def __init__(self, hn_dim: Tuple[int, int], num_atom_types: int, num_bond_types: int = 5, valency_pred: bool = False) -> None:
-        super(PredictionHead, self).__init__()
-        self.sdim, self.vdim = hn_dim
-        self.num_atom_types = num_atom_types
-        
-        self.shared_mapping = DenseLayer(self.sdim, self.sdim, bias=True, activation=nn.SiLU())
-        
-        self.bonds_lin_0 = DenseLayer(in_features=self.sdim + 1, out_features=self.sdim, bias=True)
-        self.bonds_lin_1 = DenseLayer(in_features=self.sdim, out_features=num_bond_types, bias=True)
-        self.coords_lin = DenseLayer(in_features=self.vdim, out_features=1, bias=False)
-        self.atoms_lin = DenseLayer(in_features=self.sdim, out_features=num_atom_types, bias=True)
-        
-        if valency_pred:
-            self.valency_lin = DenseLayer(in_features=self.sdim, out_features=20, bias=True)
-        else:
-            self.valency_lin = None
-            
-        self.reset_parameters()
-        
-    def reset_parameters(self):
-        self.shared_mapping.reset_parameters()
-        self.coords_lin.reset_parameters()
-        self.atoms_lin.reset_parameters()
-        self.bonds_lin_0.reset_parameters()
-        self.bonds_lin_1.reset_parameters()
-        if self.valency_lin:
-            self.valency_lin.reset_parameters()
-        
-    def forward(self,
-                x: Dict,
-                batch: Tensor,
-                edge_index_global: Tensor
-                ) -> Dict:
-        
-        s, v, p = x["s"], x["v"], x['p']
-        s = self.shared_mapping(s)
-        j, i = edge_index_global
-         
-        coords_pred = self.coords_lin(v).squeeze()
-        coords_pred = coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
-
-        atoms_pred = self.atoms_lin(s)
-        
-        p = p - scatter_mean(p, index=batch, dim=0)[batch]
-        coords_pred = p + coords_pred
-        
-        d = (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)# .sqrt()
-        f = s[i] + s[j]
-        edge = torch.cat([f, d], dim=-1)
-        bonds_pred = F.silu(self.bonds_lin_0(edge))
-        bonds_pred = self.bonds_lin_1(bonds_pred)
-        
-        if self.valency_lin:
-            valencies = self.valency_lin(s)
-        else:
-            valencies = None
-        
-        out = {"coords_pred": coords_pred,
-               "atoms_pred": atoms_pred,
-               "bonds_pred": bonds_pred,
-               "valencies_pred": valencies
-               }
-        
-        return out
-
-    
 class DenoisingEdgeNetwork(nn.Module):
     """_summary_
     Denoising network that inputs:
@@ -179,7 +98,6 @@ class DenoisingEdgeNetwork(nn.Module):
                  vector_aggr: str = "mean",
                  atom_mapping: bool = True,
                  bond_mapping: bool = True,
-                 valency_pred: bool = False
                  ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
         
@@ -207,12 +125,10 @@ class DenoisingEdgeNetwork(nn.Module):
         self.local_global_model = local_global_model
         self.fully_connected = fully_connected
         
-        assert fully_connected or local_global_model
+        assert fully_connected
+        assert not local_global_model
         
-        # mod = EQGATEdgeVirtualGNN
-        mod = EQGATEdgeGNN
-
-        self.gnn = mod(
+        self.gnn = EQGATEdgeGNN(
             hn_dim=hn_dim,
             cutoff_local=cutoff_local,
             rbf_dim=rbf_dim,
@@ -230,8 +146,8 @@ class DenoisingEdgeNetwork(nn.Module):
         self.prediction_head = PredictionHeadEdge(hn_dim=hn_dim, 
                                                    edge_dim=edge_dim, 
                                                    num_atom_types=num_atom_types,
-                                                   num_bond_types=num_bond_types,
-                                                   valency_pred=valency_pred)
+                                                   num_bond_types=num_bond_types
+                                                   )
         
         self.reset_parameters()
 
@@ -313,137 +229,11 @@ class DenoisingEdgeNetwork(nn.Module):
         
         out = self.prediction_head(x=out, batch=batch, edge_index_global=edge_index_global)
         
-        out['coords_perturbed'] = pos
-        out['atoms_perturbed'] = x
-        out['bonds_perturbed'] = edge_attr_global
+        #out['coords_perturbed'] = pos
+        #out['atoms_perturbed'] = x
+        #out['bonds_perturbed'] = edge_attr_global
         
         return out
-    
-    
-class DenoisingNetwork(nn.Module):
-    """_summary_
-    Denoising network that inputs:
-        atom features, position features
-    The network is tasked for data prediction, i.e. x0 parameterization as commonly known in the literature:
-        atom features, edge features, position features
-    Args:
-        nn (_type_): _description_
-    """
-    def __init__(self,
-                 num_atom_types: int,
-                 num_bond_types: int = 5,
-                 hn_dim: Tuple[int, int] = (256, 64),
-                 rbf_dim: int = 32,
-                 cutoff_local: float = 7.5,
-                 num_layers: int = 5,
-                 use_norm: bool = True,
-                 use_cross_product: bool = False,
-                 fully_connected: bool = False,
-                 local_global_model: bool = True,
-                 recompute_radius_graph: bool = True,
-                 recompute_edge_attributes: bool = True,
-                 vector_aggr: str = "mean",
-                 atom_mapping: bool = True,
-                 ) -> None:
-        super(DenoisingNetwork, self).__init__()
-        
-        self.time_mapping_atom = DenseLayer(1, hn_dim[0])
-        
-        if atom_mapping:
-            self.atom_mapping = DenseLayer(num_atom_types, hn_dim[0])
-        else:
-            self.atom_mapping = nn.Identity()
-        
-        self.atom_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
-        
-        assert fully_connected or local_global_model
-        self.sdim, self.vdim = hn_dim
-        
-        self.local_global_model = local_global_model
-        self.fully_connected = fully_connected
-        
-        assert fully_connected or local_global_model
-    
-        self.gnn = EQGATGNN(
-            hn_dim=hn_dim,
-            cutoff_local=cutoff_local,
-            rbf_dim=rbf_dim,
-            num_layers=num_layers,
-            use_norm=use_norm,
-            use_cross_product=use_cross_product,
-            vector_aggr=vector_aggr,
-            fully_connected=fully_connected, 
-            local_global_model=local_global_model,
-            recompute_radius_graph=recompute_radius_graph,
-            recompute_edge_attributes=recompute_edge_attributes
-        )
-        
-        self.prediction_head = PredictionHead(hn_dim=hn_dim, 
-                                              num_atom_types=num_atom_types,
-                                              num_bond_types=num_bond_types)
-        
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        if hasattr(self.atom_mapping, "reset_parameters"):
-            self.atom_mapping.reset_parameters()
-        self.time_mapping_atom.reset_parameters()
-        self.atom_time_mapping.reset_parameters()
-        self.gnn.reset_parameters()
-        self.prediction_head.reset_parameters()
-        
-    def calculate_edge_attrs(self, edge_index: Tensor, edge_attr: OptTensor, pos: Tensor, sqrt: bool = True):
-        source, target = edge_index
-        r = pos[target] - pos[source]
-        a = pos[target] * pos[source]
-        a = a.sum(-1)
-        d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6)
-        if sqrt:
-            d = d.sqrt()
-        r_norm = torch.div(r, (1.0 + d.unsqueeze(-1)))
-        edge_attr = (d, a, r_norm, edge_attr)
-        return edge_attr
-    
-    def forward(
-        self,
-        x: Tensor,
-        t: Tensor,
-        pos: Tensor,
-        edge_index_local: Tensor,
-        edge_index_global: Tensor,
-        batch: OptTensor = None) -> Dict:
-        
-        pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
-        # t: (batch_size,)
-        ta = self.time_mapping_atom(t)
-        tnode = ta[batch]
-                
-        if batch is None:
-            batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)
-     
-        s = self.atom_mapping(x)
-        s = self.atom_time_mapping(s + tnode)
-        
-
-        edge_attr_local_transformed = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=None, pos=pos, sqrt=True)
-        edge_attr_global_transformed = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=None, pos=pos, sqrt=True)
-         
-         
-        v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
-        out = self.gnn(
-            s=s, v=v, p=pos,
-            edge_index_local=edge_index_local, edge_attr_local=edge_attr_local_transformed,
-            edge_index_global=edge_index_global, edge_attr_global=edge_attr_global_transformed,
-            batch=batch
-        )
-        
-        out = self.prediction_head(x=out, batch=batch, edge_index_global=edge_index_global)
-        
-        out['coords_perturbed'] = pos
-        out['atoms_perturbed'] = x
-        
-        return out
-    
     
 if __name__ == "__main__":
     pass
