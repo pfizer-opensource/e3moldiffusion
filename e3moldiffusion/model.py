@@ -66,7 +66,7 @@ class PredictionHeadEdge(nn.Module):
         e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
         e = e_dense[edge_index_global[0], edge_index_global[1], :]
         
-        d = (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True).sqrt()
+        d = (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)#.sqrt()
         f = s[i] + s[j] + self.bond_mapping(e)
         edge = torch.cat([f, d], dim=-1)
         
@@ -162,13 +162,15 @@ class DenoisingEdgeNetwork(nn.Module):
         self.gnn.reset_parameters()
         # self.prediction_head.reset_parameters()
         
-    def calculate_edge_attrs(self, edge_index: Tensor, edge_attr: OptTensor, pos: Tensor):
+    def calculate_edge_attrs(self, edge_index: Tensor, edge_attr: OptTensor, pos: Tensor, sqrt: bool = True):
         source, target = edge_index
         r = pos[target] - pos[source]
         a = pos[target] * pos[source]
         a = a.sum(-1)
-        d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6).sqrt()
-        r_norm = torch.div(r, d.unsqueeze(-1))
+        d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6)
+        if sqrt:
+            d = d.sqrt()
+        r_norm = torch.div(r, (1.0 + d.unsqueeze(-1)))
         edge_attr = (d, a, r_norm, edge_attr)
         return edge_attr
     
@@ -210,11 +212,11 @@ class DenoisingEdgeNetwork(nn.Module):
         
         # local
         if not self.fully_connected:
-            edge_attr_local_transformed = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local_transformed, pos=pos)        
+            edge_attr_local_transformed = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local_transformed, pos=pos, sqrt=True)     
         else: 
             edge_attr_local_transformed = (None, None, None, None)
         # global
-        edge_attr_global_transformed = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global_transformed, pos=pos)
+        edge_attr_global_transformed = self.calculate_edge_attrs(edge_index=edge_index_global, edge_attr=edge_attr_global_transformed, pos=pos, sqrt=True)
         
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
 
