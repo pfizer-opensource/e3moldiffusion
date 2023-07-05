@@ -148,7 +148,7 @@ class Trainer(pl.LightningModule):
     
     @torch.no_grad()
     def run_evaluation(self, step: int, dataset_info, ngraphs: int = 4000, bs: int = 500,
-                       verbose: bool = False, inner_verbose=False):
+                       verbose: bool = False, inner_verbose=False, save_dir=None):
         b = ngraphs // bs
         l = [bs] * b
         if sum(l) != ngraphs:
@@ -185,25 +185,31 @@ class Trainer(pl.LightningModule):
                 molecule_list.append(molecule)
             
         
-        res = analyze_stability_for_molecules(molecule_list=molecule_list, 
-                                              dataset_info=dataset_info,
-                                              smiles_train=self.smiles_list,
-                                              bonds_given=True
-                                             )
+        stability_dict, validity_dict, all_generated_smiles = analyze_stability_for_molecules(molecule_list=molecule_list, 
+                                                                                            dataset_info=dataset_info,
+                                                                                            smiles_train=self.smiles_list,
+                                                                                            bonds_given=True
+                                                                                            )
 
         if verbose:
             print(f'Run time={datetime.now() - start}')
-        total_res = {k: v for k, v in zip(['validity', 'uniqueness', 'novelty'], res[1][0])}
-        total_res.update(res[0])
+        total_res = dict(stability_dict)
+        total_res.update(validity_dict)
         print(total_res)
         total_res = pd.DataFrame.from_dict([total_res])        
         print(total_res)
         
         total_res['step'] = step
         total_res['epoch'] = self.current_epoch
-        save_dir = os.path.join(self.hparams.save_dir, 'run0', 'evaluation.csv')
-        with open(save_dir, 'a') as f:
-            total_res.to_csv(f, header=True)
+        try:
+            if save_dir is None:
+                save_dir = os.path.join(self.hparams.save_dir, 'run' + self.hparams.id, 'evaluation.csv')
+            else:
+                save_dir = os.path.join(save_dir, 'evaluation.csv')
+            with open(save_dir, 'a') as f:
+                total_res.to_csv(f, header=True)
+        except:
+            pass
         return total_res
     
     
