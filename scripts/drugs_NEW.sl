@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J EQGAT_X0
+#SBATCH -J EQGAT_DISCRETE
 #SBATCH --mail-user=tuan.le@pfizer.com
 #SBATCH --mail-type=ALL
 #SBATCH --partition=gpu
@@ -26,7 +26,7 @@ echo "runnning experiment"
 
 args=(
     --gpus 4
-    --id 11
+    --id 12
     --dataset drugs
     --accum_batch 1
     --grad_clip_val 10.0
@@ -50,4 +50,4 @@ args=(
     --save_dir /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/logs/x0
     )
 
-python train_coordsatomsbonds_x0.py "${args[@]}"
+python train_coordsatomsbonds_categorical_x0.py "${args[@]}"

@@ -283,11 +283,12 @@ class Trainer(pl.LightningModule):
         charge_types = torch.multinomial(self.charges_prior, num_samples=n, replacement=True)
         charge_types = F.one_hot(charge_types, self.num_charge_classes).float()
         
-        edge_index_local = radius_graph(x=pos,
-                                        r=self.hparams.cutoff_upper,
-                                        batch=batch, 
-                                        max_num_neighbors=self.hparams.max_num_neighbors)
-       
+        #edge_index_local = radius_graph(x=pos,
+        #                                r=self.hparams.cutoff_upper,
+        #                                batch=batch, 
+        #                                max_num_neighbors=self.hparams.max_num_neighbors)
+        edge_index_local = None
+        
         # edge types for FC graph 
         edge_index_global = torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
         edge_index_global, _ = dense_to_sparse(edge_index_global)
