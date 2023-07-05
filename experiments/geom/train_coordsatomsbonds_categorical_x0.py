@@ -74,7 +74,11 @@ class Trainer(pl.LightningModule):
             atom_types_distribution = distributions.get("atoms")
             bond_types_distribution = distributions.get("bonds")
             charge_types_distribution = distributions.get("charges")
-            
+        
+        self.register_buffer('atoms_prior', atom_types_distribution.clone())
+        self.register_buffer('bonds_prior', bond_types_distribution.clone())
+        self.register_buffer('charges_prior', charge_types_distribution.clone())
+        
         self.hparams.num_atom_types = get_num_atom_types_geom(dataset="drugs")
         self.hparams.num_charge_classes = 6
         if hparams.get('no_h'):
@@ -773,7 +777,7 @@ if __name__ == "__main__":
         print("Creating directory")
         os.mkdir(hparams.save_dir + f"/run{hparams.id}/")
     print(f"Starting Run {hparams.id}")
-    ema_callback = ExponentialMovingAverage(decay=hparams.ema_decay)
+    # ema_callback = ExponentialMovingAverage(decay=hparams.ema_decay)
     checkpoint_callback = ModelCheckpoint(
         dirpath=hparams.save_dir + f"/run{hparams.id}/",
         save_top_k=1,
@@ -842,7 +846,7 @@ if __name__ == "__main__":
         val_check_interval=hparams.eval_freq,
         gradient_clip_val=hparams.grad_clip_val,
         callbacks=[
-            ema_callback,
+            # ema_callback,
             lr_logger,
             checkpoint_callback,
             TQDMProgressBar(refresh_rate=5),
