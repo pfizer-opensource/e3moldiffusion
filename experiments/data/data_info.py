@@ -14,6 +14,7 @@ class GEOMInfos(AbstractDatasetInfos):
         self.statistics = datamodule.statistics
         self.name = 'drugs'
         self.atom_encoder = full_atom_encoder_drugs
+        self.charge_offset = 2
         self.collapse_charges = torch.Tensor([-2, -1, 0, 1, 2, 3]).int()
         if self.remove_h:
             self.atom_encoder = {k: v - 1 for k, v in self.atom_encoder.items() if k != 'H'}
@@ -26,13 +27,13 @@ class GEOMInfos(AbstractDatasetInfos):
     def to_one_hot(self, X, C, E, node_mask):
         X = F.one_hot(X, num_classes=self.num_atom_types).float()
         E = F.one_hot(E, num_classes=5).float()
-        C = F.one_hot(C + 2, num_classes=6).float()
+        C = F.one_hot(C + self.charge_offset, num_classes=6).float()
         placeholder = PlaceHolder(X=X, C=C, E=E, y=None, pos=None)
         pl = placeholder.mask(node_mask)
         return pl.X, pl.C, pl.E
 
     def one_hot_charges(self, C):
-        return F.one_hot((C + 2).long(), num_classes=6).float()
+        return F.one_hot((C + self.charge_offset).long(), num_classes=6).float()
     
 
 full_atom_encoder_qm9 = {'H': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4}
@@ -42,6 +43,7 @@ class QM9Infos(AbstractDatasetInfos):
         self.statistics = datamodule.statistics
         self.name = 'qm9'
         self.atom_encoder = full_atom_encoder_qm9
+        self.charge_offset = 1
         self.collapse_charges = torch.Tensor([-1, 0, 1]).int()
         if self.remove_h:
             self.atom_encoder = {k: v - 1 for k, v in self.atom_encoder.items() if k != 'H'}
@@ -52,10 +54,10 @@ class QM9Infos(AbstractDatasetInfos):
     def to_one_hot(self, X, C, E, node_mask):
         X = F.one_hot(X, num_classes=self.num_atom_types).float()
         E = F.one_hot(E, num_classes=5).float()
-        C = F.one_hot(C + 1, num_classes=3).float()
+        C = F.one_hot(C + self.charge_offset, num_classes=3).float()
         placeholder = PlaceHolder(X=X, C=C, E=E,  y=None, pos=None)
         pl = placeholder.mask(node_mask)
         return pl.X, pl.C, pl.E
 
     def one_hot_charges(self, charges):
-        return F.one_hot((charges + 1).long(), num_classes=3).float()
+        return F.one_hot((charges + self.charge_offset).long(), num_classes=3).float()

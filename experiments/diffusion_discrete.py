@@ -387,7 +387,7 @@ class Trainer(pl.LightningModule):
         
         charge_types_integer = torch.argmax(charge_types, dim=-1)
         # offset back
-        charge_types_integer = charge_types_integer - 2
+        charge_types_integer = charge_types_integer - self.dataset_statistics.charge_offset
         charge_types_integer_split = charge_types_integer.detach().split(batch_num_nodes.cpu().tolist(), dim=0)
         atom_types_integer = torch.argmax(atom_types, dim=-1)
         if self.hparams.no_h:
