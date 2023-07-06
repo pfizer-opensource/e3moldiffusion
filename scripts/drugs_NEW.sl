@@ -45,8 +45,8 @@ args=(
     --num_diffusion_timesteps 500
     --timesteps 500
     --max_time 04:23:45:00
-    --test_interval 5
-    # --load_ckpt /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/logs/x0/run12/last.ckpt
+    --test_interval 1
+    --load_ckpt /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/logs/x0/run12/last.ckpt
     --save_dir /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/logs/x0
     )
 

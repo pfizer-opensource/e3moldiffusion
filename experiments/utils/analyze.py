@@ -60,14 +60,14 @@ class Molecule:
         assert len(positions.shape) == 2
 
         atom_decoder = dataset_info["atom_decoder"]
-        self.atom_types = atom_types.long().cpu()
-        self.bond_types = bond_types.long().cpu()
-        self.positions = positions.cpu()
+        self.atom_types = atom_types.long()#.cpu()
+        self.bond_types = bond_types.long()#.cpu()
+        self.positions = positions#.cpu()
         if charges.ndim == 2:
             charges = charges.squeeze()
         elif charges.shape[0] == 0:
             charges = torch.zeros_like(self.atom_types)
-        self.charges=charges.cpu()
+        self.charges=charges#.cpu()
         self.rdkit_mol = self.build_molecule(atom_decoder)
         self.num_nodes = len(atom_types)
         self.num_atom_types = len(atom_decoder)
@@ -172,7 +172,7 @@ def check_stability(molecule, dataset_info, debug=False, atom_decoder=None, smil
            len(atom_types)
            
 class BasicMolecularMetrics(object):
-    def __init__(self, dataset_info, smiles_train=None, device="cpu"):
+    def __init__(self, dataset_info, smiles_train=None, device="cuda"):
         self.atom_decoder = dataset_info["atom_decoder"]
         self.dataset_info = dataset_info
 
@@ -342,9 +342,9 @@ class BasicMolecularMetrics(object):
 
 
 def analyze_stability_for_molecules(
-    molecule_list, dataset_info, smiles_train=None, bonds_given=False
+    molecule_list, dataset_info, smiles_train=None, bonds_given=False, device="cuda"
 ):
-    metrics = BasicMolecularMetrics(dataset_info, smiles_train=smiles_train, device="cpu")
+    metrics = BasicMolecularMetrics(dataset_info, smiles_train=smiles_train, device=device)
     stability_dict, validity_dict, sampled_smiles = metrics(molecule_list)
     # print("Unique molecules:", rdkit_metrics[1])
     return stability_dict, validity_dict, sampled_smiles

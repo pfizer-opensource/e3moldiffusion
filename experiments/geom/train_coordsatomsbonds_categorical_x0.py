@@ -186,18 +186,18 @@ class Trainer(pl.LightningModule):
                                                                         verbose=verbose,
                                                                         save_traj=save_traj)
 
-        pos_splits = pos.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
+        pos_splits = pos.detach().split(batch_num_nodes.cpu().tolist(), dim=0)
         
         charge_types_integer = torch.argmax(charge_types, dim=-1)
         # offset back
         charge_types_integer = charge_types_integer - 2
-        charge_types_integer_split = charge_types_integer.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
+        charge_types_integer_split = charge_types_integer.detach().split(batch_num_nodes.cpu().tolist(), dim=0)
         atom_types_integer = torch.argmax(atom_types, dim=-1)
         if self.hparams.no_h:
             raise NotImplementedError # remove in future or implement
             atom_types_integer += 1
             
-        atom_types_integer_split = atom_types_integer.detach().cpu().split(batch_num_nodes.cpu().tolist(), dim=0)
+        atom_types_integer_split = atom_types_integer.detach().split(batch_num_nodes.cpu().tolist(), dim=0)
         
         return pos_splits, atom_types_integer_split, charge_types_integer_split, edge_types, edge_index_global, batch_num_nodes, trajs    
     
@@ -251,7 +251,8 @@ class Trainer(pl.LightningModule):
         stability_dict, validity_dict, all_generated_smiles = analyze_stability_for_molecules(molecule_list=molecule_list, 
                                                                                             dataset_info=dataset_info,
                                                                                             smiles_train=self.smiles_list,
-                                                                                            bonds_given=True
+                                                                                            bonds_given=True,
+                                                                                            device=edge_types.device
                                                                                             )
 
         if verbose:
