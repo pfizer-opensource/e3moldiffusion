@@ -11,10 +11,10 @@ from e3moldiffusion.modules import DenseLayer
 
 
 class PredictionHeadEdge(nn.Module):
-    def __init__(self, hn_dim: Tuple[int, int], edge_dim: int, num_atom_types: int, num_bond_types: int = 5) -> None:
+    def __init__(self, hn_dim: Tuple[int, int], edge_dim: int, num_atom_features: int, num_bond_types: int = 5) -> None:
         super(PredictionHeadEdge, self).__init__()
         self.sdim, self.vdim = hn_dim
-        self.num_atom_types = num_atom_types
+        self.num_atom_features = num_atom_features
         
         self.shared_mapping = DenseLayer(self.sdim, self.sdim, bias=True, activation=nn.SiLU())
         
@@ -23,7 +23,7 @@ class PredictionHeadEdge(nn.Module):
         self.bonds_lin_0 = DenseLayer(in_features=self.sdim + 1, out_features=self.sdim, bias=True)
         self.bonds_lin_1 = DenseLayer(in_features=self.sdim, out_features=num_bond_types, bias=True)
         self.coords_lin = DenseLayer(in_features=self.vdim, out_features=1, bias=False)
-        self.atoms_lin = DenseLayer(in_features=self.sdim, out_features=num_atom_types, bias=True)
+        self.atoms_lin = DenseLayer(in_features=self.sdim, out_features=num_atom_features, bias=True)
         
         self.reset_parameters()
         
@@ -82,7 +82,7 @@ class DenoisingEdgeNetwork(nn.Module):
         nn (_type_): _description_
     """
     def __init__(self,
-                 num_atom_types: int,
+                 num_atom_features: int,
                  num_bond_types: int = 5,
                  hn_dim: Tuple[int, int] = (256, 64),
                  rbf_dim: int = 32,
@@ -105,7 +105,7 @@ class DenoisingEdgeNetwork(nn.Module):
         self.time_mapping_bond = DenseLayer(1, edge_dim) 
         
         if atom_mapping:
-            self.atom_mapping = DenseLayer(num_atom_types, hn_dim[0])
+            self.atom_mapping = DenseLayer(num_atom_features, hn_dim[0])
         else:
             self.atom_mapping = nn.Identity()
         
@@ -145,7 +145,7 @@ class DenoisingEdgeNetwork(nn.Module):
         
         self.prediction_head = PredictionHeadEdge(hn_dim=hn_dim, 
                                                    edge_dim=edge_dim, 
-                                                   num_atom_types=num_atom_types,
+                                                   num_atom_features=num_atom_features,
                                                    num_bond_types=num_bond_types
                                                    )
         

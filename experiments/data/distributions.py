@@ -2,7 +2,29 @@ from torch.distributions.categorical import Categorical
 import numpy as np
 import torch
 
-PROP_TO_IDX = {
+PROP_TO_IDX_AQM = {
+    "DIP": 0,
+    "HLgap": 1,
+    "eAT": 2,
+    "eC": 3,
+    "eEE": 4,
+    "eH": 5,
+    "eKIN": 6,
+    "eKSE": 7,
+    "eL": 8,
+    "eNE": 9,
+    "eNN": 10,
+    "eMBD": 11,
+    "eTS": 12,
+    "eX": 13,
+    "eXC": 14,
+    "eXX": 15,
+    "mPOL": 16,
+}
+
+IDX_TO_PROP_AQM = {v: k for k, v in PROP_TO_IDX_AQM.items()}
+
+PROP_TO_IDX_QM9 = {
     "dipole_moment": 0,
     "isotropic_polarizability": 1,
     "homo": 2,
@@ -17,8 +39,7 @@ PROP_TO_IDX = {
     "heat_capacity": 11,
 }
 
-IDX_TO_PROP = {v: k for k, v in PROP_TO_IDX.items()}
-
+IDX_TO_PROP_QM9 = {v: k for k, v in PROP_TO_IDX_QM9.items()}
 
 def get_distributions(args, dataset_info, datamodule):
     histogram = dataset_info["n_nodes"]
@@ -31,44 +52,32 @@ def get_distributions(args, dataset_info, datamodule):
 
     return nodes_dist, prop_dist
 
-
 class DistributionNodes:
     def __init__(self, histogram):
-        self.n_nodes = []
-        prob = []
-        self.keys = {}
-        for i, nodes in enumerate(histogram):
-            self.n_nodes.append(nodes)
-            self.keys[nodes] = i
-            prob.append(histogram[nodes])
-        self.n_nodes = torch.tensor(self.n_nodes)
-        prob = np.array(prob)
-        prob = prob / np.sum(prob)
+        """ Compute the distribution of the number of nodes in the dataset, and sample from this distribution.
+            historgram: dict. The keys are num_nodes, the values are counts
+        """
 
-        self.prob = torch.from_numpy(prob).float()
+        if type(histogram) == dict:
+            max_n_nodes = max(histogram.keys())
+            prob = torch.zeros(max_n_nodes + 1)
+            for num_nodes, count in histogram.items():
+                prob[num_nodes] = count
+        else:
+            prob = histogram
 
-        entropy = torch.sum(self.prob * torch.log(self.prob + 1e-30))
-        print("Entropy of n_nodes: H[N]", entropy.item())
+        self.prob = prob / prob.sum()
+        self.m = torch.distributions.Categorical(prob)
 
-        self.m = Categorical(torch.tensor(prob))
-
-    def sample(self, n_samples=1):
+    def sample_n(self, n_samples, device):
         idx = self.m.sample((n_samples,))
-        return self.n_nodes[idx]
+        return idx.to(device)
 
     def log_prob(self, batch_n_nodes):
         assert len(batch_n_nodes.size()) == 1
-
-        idcs = [self.keys[i.item()] for i in batch_n_nodes]
-        idcs = torch.tensor(idcs).to(batch_n_nodes.device)
-
-        log_p = torch.log(self.prob + 1e-30)
-
-        log_p = log_p.to(batch_n_nodes.device)
-
-        log_probs = log_p[idcs]
-
-        return log_probs
+        probas = self.prob[batch_n_nodes.to(self.prob.device)]
+        log_p = torch.log(probas + 1e-10)
+        return log_p.to(batch_n_nodes.device)
 
 
 class DistributionProperty:

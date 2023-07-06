@@ -2,9 +2,8 @@ from typing import Optional
 
 import numpy as np
 import torch
-import torch.nn.functional as F
-from experiments.utils.data import (Statistics, fully_connected_edge_idx, load_pickle,save_pickle)
-from experiments.utils.metrics import compute_all_statistics
+from experiments.data.utils import (Statistics, fully_connected_edge_idx, load_pickle, save_pickle)
+from experiments.data.metrics import compute_all_statistics
 from pytorch_lightning import LightningDataModule
 from rdkit import Chem, RDLogger
 from torch_geometric.data import Data, DataLoader, InMemoryDataset

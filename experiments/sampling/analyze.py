@@ -1,5 +1,4 @@
 from collections import Counter
-
 import torch
 from rdkit import Chem, RDLogger
 from rdkit.Geometry import Point3D
@@ -39,95 +38,6 @@ bond_dict = [
     Chem.rdchem.BondType.AROMATIC,
 ]
 ATOM_VALENCY = {6: 4, 7: 3, 8: 2, 9: 1, 15: 3, 16: 2, 17: 1, 35: 1, 53: 1}
-
-
-class Molecule:
-    def __init__(self, atom_types, positions, bond_types, charges=None, dataset_info=None):
-        """atom_types: n      LongTensor
-        charges: n         LongTensor
-        bond_types: n x n  LongTensor
-        positions: n x 3   FloatTensor
-        atom_decoder: extracted from dataset_infos."""
-        atom_decoder = dataset_info["atom_decoder"]
-        assert atom_types.dim() == 1 and atom_types.dtype == torch.long, (
-            f"shape of atoms {atom_types.shape} " f"and dtype {atom_types.dtype}"
-        )
-        assert bond_types.dim() == 2 and bond_types.dtype == torch.long, (
-            f"shape of bonds {bond_types.shape} --" f" {bond_types.dtype}"
-        )
-        assert len(atom_types.shape) == 1
-        assert len(bond_types.shape) == 2
-        assert len(positions.shape) == 2
-
-        atom_decoder = dataset_info["atom_decoder"]
-        self.atom_types = atom_types.long()#.cpu()
-        self.bond_types = bond_types.long()#.cpu()
-        self.positions = positions#.cpu()
-        if charges.ndim == 2:
-            charges = charges.squeeze()
-        elif charges.shape[0] == 0:
-            charges = torch.zeros_like(self.atom_types)
-        self.charges=charges#.cpu()
-        self.rdkit_mol = self.build_molecule(atom_decoder)
-        self.num_nodes = len(atom_types)
-        self.num_atom_types = len(atom_decoder)
-
-    def build_molecule(self, atom_decoder, verbose=False):
-        """If positions is None,"""
-        if verbose:
-            print("building new molecule")
-
-        mol = Chem.RWMol()
-        for atom, charge in zip(self.atom_types, self.charges):
-            if atom == -1:
-                continue
-            a = Chem.Atom(atom_decoder[int(atom.item())])
-            if charge.item() != 0:
-                a.SetFormalCharge(charge.item())
-            mol.AddAtom(a)
-            if verbose:
-                print("Atom added: ", atom.item(), atom_decoder[atom.item()])
-
-        edge_types = torch.triu(self.bond_types, diagonal=1)
-        edge_types[edge_types == -1] = 0
-        all_bonds = torch.nonzero(edge_types)
-        for i, bond in enumerate(all_bonds):
-            if bond[0].item() != bond[1].item():
-                mol.AddBond(
-                    bond[0].item(),
-                    bond[1].item(),
-                    bond_dict[edge_types[bond[0], bond[1]].item()],
-                )
-                if verbose:
-                    print(
-                        "bond added:",
-                        bond[0].item(),
-                        bond[1].item(),
-                        edge_types[bond[0], bond[1]].item(),
-                        bond_dict[edge_types[bond[0], bond[1]].item()],
-                    )
-
-        try:
-            mol = mol.GetMol()
-        except Chem.KekulizeException:
-            print("Can't kekulize molecule")
-            return None
-
-        # Set coordinates
-        positions = self.positions.double()
-        conf = Chem.Conformer(mol.GetNumAtoms())
-        for i in range(mol.GetNumAtoms()):
-            conf.SetAtomPosition(
-                i,
-                Point3D(
-                    positions[i][0].item(),
-                    positions[i][1].item(),
-                    positions[i][2].item(),
-                ),
-            )
-        mol.AddConformer(conf)
-
-        return mol
 
 
 def check_stability(molecule, dataset_info, debug=False, atom_decoder=None, smiles=None):
@@ -172,7 +82,7 @@ def check_stability(molecule, dataset_info, debug=False, atom_decoder=None, smil
            len(atom_types)
            
 class BasicMolecularMetrics(object):
-    def __init__(self, dataset_info, smiles_train=None, device="cuda"):
+    def __init__(self, dataset_info, smiles_train=None, device="cpu"):
         self.atom_decoder = dataset_info["atom_decoder"]
         self.dataset_info = dataset_info
 
@@ -202,7 +112,7 @@ class BasicMolecularMetrics(object):
         ]:
             metric.reset()
 
-    def compute_validity(self, generated):
+    def compute_validity(self, generated, local_rank=0):
         """generated: list of couples (positions, atom_types)"""
         valid = []
         num_components = []
@@ -234,10 +144,11 @@ class BasicMolecularMetrics(object):
                     # print("Can't kekulize molecule")
                 except Chem.rdchem.AtomKekulizeException or ValueError:
                     error_message[3] += 1
-        print(
-            f"Error messages: AtomValence {error_message[1]}, Kekulize {error_message[2]}, other {error_message[3]}, "
-            f" -- No error {error_message[-1]}"
-        )
+        if local_rank == 0:
+            print(
+                f"Error messages: AtomValence {error_message[1]}, Kekulize {error_message[2]}, other {error_message[3]}, "
+                f" -- No error {error_message[-1]}"
+            )
         self.validity_metric.update(
             value=len(valid) / len(generated), weight=len(generated)
         )
@@ -271,7 +182,7 @@ class BasicMolecularMetrics(object):
         the positions and atom types should already be masked."""
         # Validity
         valid, connected_components, all_smiles, error_message = self.compute_validity(
-            generated
+            generated, local_rank=local_rank
         )
 
         validity = self.validity_metric.compute()
@@ -294,25 +205,23 @@ class BasicMolecularMetrics(object):
             novelty = self.novelty.compute()
 
         num_molecules = int(self.validity_metric.weight.item())
-        print(f"Validity over {num_molecules} molecules:" f" {validity * 100 :.2f}%")
-        print(
-            f"Number of connected components of {num_molecules} molecules: "
-            f"mean:{mean_components:.2f} max:{max_components:.2f}"
-        )
-        print(
-            f"Connected components of {num_molecules} molecules: "
-            f"{connected_components:.2f}"
-        )
-        print(
-            f"Uniqueness: {uniqueness * 100 :.2f}% WARNING: do not trust this metric on multi-gpu"
-        )
-        print(f"Novelty: {novelty * 100 :.2f}%")
+        if local_rank == 0:
+            print(f"Validity over {num_molecules} molecules:" f" {validity * 100 :.2f}%")
+            print(
+                f"Number of connected components of {num_molecules} molecules: "
+                f"mean:{mean_components:.2f} max:{max_components:.2f}"
+            )
+            print(
+                f"Connected components of {num_molecules} molecules: "
+                f"{connected_components:.2f}"
+            )
 
         return all_smiles, validity, novelty, uniqueness
 
     def __call__(self, molecules: list, local_rank=0):
         # Atom and molecule stability
-        print(f"Analyzing molecule stability on {local_rank}...")
+        if local_rank == 0:
+            print(f"Analyzing molecule stability on ...")
         for i, mol in enumerate(molecules):
             mol_stable, at_stable, num_bonds = check_stability(
                 mol, self.dataset_info
@@ -324,9 +233,6 @@ class BasicMolecularMetrics(object):
             "mol_stable": self.mol_stable.compute().item(),
             "atm_stable": self.atom_stable.compute().item(),
         }
-        if local_rank == 0:
-            print("Stability metrics:", stability_dict)
-
         # Validity, uniqueness, novelty
         all_generated_smiles, validity, novelty, uniqueness = self.evaluate(
             molecules, local_rank=local_rank
@@ -334,17 +240,17 @@ class BasicMolecularMetrics(object):
         # Save in any case in the graphs folder
         validity_dict = {
             "validity": validity.item(),
-            "novelty": novelty.item(),
-            "uniqueness": uniqueness.item() 
+            "novelty": novelty,
+            "uniqueness": uniqueness,
         }
         self.reset()
         return stability_dict, validity_dict, all_generated_smiles
 
 
 def analyze_stability_for_molecules(
-    molecule_list, dataset_info, smiles_train=None, bonds_given=False, device="cuda"
+    molecule_list, dataset_info, smiles_train, local_rank, device="cuda"
 ):
     metrics = BasicMolecularMetrics(dataset_info, smiles_train=smiles_train, device=device)
-    stability_dict, validity_dict, sampled_smiles = metrics(molecule_list)
+    stability_dict, validity_dict, sampled_smiles = metrics(molecule_list, local_rank=local_rank)
     # print("Unique molecules:", rdkit_metrics[1])
     return stability_dict, validity_dict, sampled_smiles

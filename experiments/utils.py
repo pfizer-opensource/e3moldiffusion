@@ -5,6 +5,10 @@ import torch
 from os.path import dirname, join, exists
 from pytorch_lightning.utilities import rank_zero_warn
 from torch_geometric.data.collate import collate
+from rdkit import Chem
+from torch_sparse import coalesce
+from e3moldiffusion.molfeat import atom_type_config
+from torch_scatter import scatter_mean
 
 # fmt: off
 # Atomic masses are based on:
@@ -220,39 +224,6 @@ class MissingEnergyException(Exception):
     pass
 
 
-class PlaceHolder:
-    def __init__(self, pos, atom_types, charges, bond_types):
-        self.pos = pos
-        self.atom_types = atom_types
-        self.charges = charges
-        self.bond_types = bond_types
-
-    def device_as(self, x: torch.Tensor):
-        """Changes the device and dtype of X, E, y."""
-        self.pos = self.pos.to(x.device) if self.pos is not None else None
-        self.atom_types = (
-            self.atom_types.to(x.device) if self.atom_types is not None else None
-        )
-        self.charges = self.charges.to(x.device) if self.charges is not None else None
-        self.bond_types = (
-            self.bond_types.to(x.device) if self.bond_types is not None else None
-        )
-        return self
-
-
-def _collate(data_list):
-    if len(data_list) == 1:
-        return data_list[0], None
-
-    data, slices, _ = collate(
-        data_list[0].__class__,
-        data_list=data_list,
-        increment=False,
-        add_batch=False,
-    )
-    return data, slices
-
-
 mol_properties = [
     "DIP",
     "HLgap",
@@ -358,3 +329,49 @@ def one_hot(
 
     out = torch.zeros((index.size(0), num_classes), dtype=dtype, device=index.device)
     return out.scatter_(1, index.unsqueeze(1), 1)
+
+
+def coalesce_edges(edge_index, bond_edge_index, bond_edge_attr, n):
+    edge_attr = torch.full(size=(edge_index.size(-1), ),
+                            fill_value=0,
+                            device=edge_index.device,
+                            dtype=torch.long)
+    edge_index = torch.cat([edge_index, bond_edge_index], dim=-1)
+    edge_attr =  torch.cat([edge_attr, bond_edge_attr], dim=0)
+    edge_index, edge_attr = coalesce(index=edge_index, value=edge_attr, m=n, n=n, op="max")
+    return edge_index, edge_attr
+
+def get_empirical_num_nodes(dataset_info):
+
+    num_nodes_dict = dataset_info.get('n_nodes')
+    max_num_nodes = max(num_nodes_dict.keys())
+    empirical_distribution_num_nodes = {i: num_nodes_dict.get(i) for i in range(max_num_nodes)}
+    empirical_distribution_num_nodes_tensor = {}
+
+    for key, value in empirical_distribution_num_nodes.items():
+        if value is None:
+            value = 0
+        empirical_distribution_num_nodes_tensor[key] = value
+    empirical_distribution_num_nodes_tensor = torch.tensor(list(empirical_distribution_num_nodes_tensor.values())).float()
+    return empirical_distribution_num_nodes_tensor
+            
+def get_list_of_edge_adjs(edge_attrs_dense, batch_num_nodes):
+    ptr = torch.cat([torch.zeros(1, device=batch_num_nodes.device, dtype=torch.long), batch_num_nodes.cumsum(0)])
+    edge_tensor_lists = []
+    for i in range(len(ptr) - 1):
+        select_slice = slice(ptr[i].item(), ptr[i+1].item())
+        e = edge_attrs_dense[select_slice, select_slice]
+        edge_tensor_lists.append(e)
+    return edge_tensor_lists
+
+def get_num_atom_types_geom(dataset: str):
+    assert dataset in ["qm9", "drugs"]
+    return len(atom_type_config(dataset=dataset))
+
+def zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0):
+    out = x - scatter_mean(x, index=batch, dim=dim, dim_size=dim_size)[batch]
+    return out
+
+def assert_zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0, eps: float = 1e-6):
+    out = scatter_mean(x, index=batch, dim=dim, dim_size=dim_size).mean()
+    return abs(out) < eps
