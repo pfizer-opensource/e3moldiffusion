@@ -59,8 +59,8 @@ class GeomDrugsDataset(InMemoryDataset):
                                      bond_types=torch.from_numpy(np.load(self.processed_paths[3])),
                                      charge_types=torch.from_numpy(np.load(self.processed_paths[4])),
                                      valencies=load_pickle(self.processed_paths[5]),
-                                     bond_lengths=None, #load_pickle(self.processed_paths[6]),
-                                     bond_angles=None) #torch.from_numpy(np.load(self.processed_paths[7])))
+                                     bond_lengths=load_pickle(self.processed_paths[6]),
+                                     bond_angles=torch.from_numpy(np.load(self.processed_paths[7])))
         self.smiles = load_pickle(self.processed_paths[8])
 
     @property
@@ -232,6 +232,23 @@ class GeomDataModule(LightningDataModule):
         with_hydrogen: bool = True
     ):
         super().__init__()
+        
+        
+        train_dataset = GeomDrugsDataset(
+            split="train", root=root
+        )
+        val_dataset = GeomDrugsDataset(
+            split="val", root=root
+        )
+        test_dataset = GeomDrugsDataset(
+            split="test", root=root
+        )
+        self.statistics = {
+            "train": train_dataset.statistics,
+            "val": val_dataset.statistics,
+            "test": test_dataset.statistics,
+        }
+        
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.root = DATAROOT if root is None else root
@@ -257,7 +274,7 @@ class GeomDataModule(LightningDataModule):
             self.train_dataset = train_dataset
             self.val_dataset = val_dataset
             self.test_dataset = test_dataset
-
+            
     def train_dataloader(self, shuffle=False):
         dataloader = DataLoader(
             dataset=self.train_dataset,
