@@ -1,5 +1,5 @@
 import torch
-from e3moldiffusion.sde import get_beta_schedule
+from experiments.diffusion.continuous import get_beta_schedule
 import matplotlib.pyplot as plt
 
 
