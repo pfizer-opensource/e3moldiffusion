@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.nn import radius_graph
-from torch_geometric.utils import dense_to_sparse, sort_edge_index
+from torch_geometric.utils import dense_to_sparse, sort_edge_index, dropout_node
 from torch_scatter import scatter_mean
 from tqdm import tqdm
 
@@ -274,6 +274,15 @@ class Trainer(pl.LightningModule):
                                                               edge_attr=edge_attr_global, 
                                                               sort_by_row=False)
         
+        if self.hparams.masked_pretraining:
+            # MASKING
+            edge_index_global, edge_mask, node_mask = dropout_node(edge_index_global)
+            edge_attr_global = edge_attr_global[edge_mask]
+            pos = pos[node_mask]
+            atom_types = atom_types[node_mask]
+            charges = charges[node_mask]
+            data_batch = data_batch[node_mask]
+
         j, i = edge_index_global
         mask = j < i
         mask_i = i[mask]
@@ -418,7 +427,7 @@ class Trainer(pl.LightningModule):
         if verbose:
             if self.local_rank == 0:
                 print(f"Creating {ngraphs} graphs in {l} batches")
-        for _, num_graphs in tqdm(enumerate(l)):
+        for _, num_graphs in enumerate(l):
             start = datetime.now()
             pos_splits, atom_types_integer_split, charge_types_integer_split, \
             edge_types, edge_index_global, batch_num_nodes, _ = self.generate_graphs(

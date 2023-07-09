@@ -72,6 +72,7 @@ def add_arguments(parser):
     parser.add_argument("--beta-max", default=2e-2, type=float)
     parser.add_argument("--timesteps", default=500, type=int)
     parser.add_argument("--max-time", type=str, default=None)
+    parser.add_argument("--masked-pretraining", default=False, action='store_true')
 
     # GENERAL
     parser.add_argument("-i", "--id", type=int, default=0)
