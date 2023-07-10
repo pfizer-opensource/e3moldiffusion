@@ -1,11 +1,17 @@
 import torch
 import click
-import os
+from typing import NamedTuple
+from collections import namedtuple
 
-from experiments.utils.data import load_pickle
-from experiments.utils.config_file import get_dataset_info
+from experiments.data.config_file import get_dataset_info
+from experiments.data.data_info import GEOMInfos
+from experiments.data.geom_dataset_nonadaptive import GeomDataModule
 
-
+class TmpCfg():
+    def __init__(self) -> None:
+        self.remove_hs = False
+        
+              
 @click.command()
 @click.option('--ckpt_path', help='Full path to the checkpoint file.')
 @click.option('--save_dir', help='Where the evaluation csv should be saved')
@@ -28,34 +34,37 @@ def main(ckpt_path, save_dir, step, type, server, num_graphs, batch_size, device
     else:
         raise ValueError
     
-    train_smiles = load_pickle(os.path.join(root, "processed", "train_smiles.pickle"))
+    datamodule = GeomDataModule(root=root,
+                                batch_size=1,
+                                num_workers=1,
+                                pin_memory=True,
+                                persistent_workers=True,
+                                with_hydrogen=True
+                                )
+    datamodule.prepare_data()
+    datamodule.setup("fit")
+
+    hparams = TmpCfg()
+        
+    dataset_statistics = GEOMInfos(datamodule, hparams)
+    dataset_info = get_dataset_info("drugs", remove_h=False)
+    train_smiles = datamodule.train_dataset.smiles
+    
     
     if type == "cont":
-        from experiments.geom.train_coordsatomsbonds_x0 import Trainer
-        model = Trainer.load_from_checkpoint(ckpt_path,
-                                            smiles_list=list(train_smiles),
-                                            dataset_info=dataset_info,
-                                            strict=False).to(device)
+        from experiments.diffusion_continuous import Trainer
+       
     elif type == "cat":
-        from experiments.geom.train_coordsatomsbonds_categorical_x0 import Trainer
-        atom_types_distribution = torch.tensor([4.4119e-01, 1.0254e-06, 4.0564e-01, 6.4677e-02, 6.6144e-02, 4.8741e-03,
-                                                    0.0000e+00, 9.1150e-07, 1.0847e-04, 1.2260e-02, 4.0306e-03, 0.0000e+00,
-                                                    1.0503e-03, 1.9806e-05, 0.0000e+00, 7.5958e-08])
-        bond_types_distribution = torch.tensor([9.5523e-01, 3.0681e-02, 2.0021e-03, 4.4172e-05, 1.2045e-02])
-        charge_types_distribution = torch.tensor([1.35509982e-06, 1.84150896e-02, 8.86377311e-01, 3.72757628e-02,
-                                                    5.79157076e-02, 1.47740195e-05]) # -2, -1, 0, 1, 2, 3
-        distributions = {"atoms": atom_types_distribution.float(),
-                                     "bonds": bond_types_distribution.float(), 
-                                     "charges": charge_types_distribution.float()
-                                     }
-        model = Trainer.load_from_checkpoint(ckpt_path,
-                                            smiles_list=list(train_smiles),
-                                            dataset_info=dataset_info,
-                                            strict=False, distributions=distributions).to(device)
+        from experiments.diffusion_discrete import Trainer
     else:
         raise ValueError
     
 
+    model = Trainer.load_from_checkpoint(ckpt_path,
+                                         dataset_info=dataset_info,
+                                         dataset_statistics=dataset_statistics,
+                                         smiles_list=list(train_smiles)).to(device)
+    
     model.run_evaluation(step=step,
                          dataset_info=model.dataset_info,
                          ngraphs=num_graphs,

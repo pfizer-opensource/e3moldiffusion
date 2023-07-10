@@ -16,8 +16,8 @@ from tqdm import tqdm
 
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
-from e3moldiffusion.sde import DiscreteDDPM
-from e3moldiffusion.categorical import CategoricalDiffusionKernel
+from experiments.diffusion.continuous import DiscreteDDPM
+from experiments.diffusion.categorical import CategoricalDiffusionKernel
 
 from experiments.molecule_utils import Molecule
 from experiments.utils import coalesce_edges, get_empirical_num_nodes, get_list_of_edge_adjs, zero_mean
@@ -462,9 +462,10 @@ class Trainer(pl.LightningModule):
                                                                                             device=self.device
                                                                                             )
 
+        run_time = datetime.now() - start
         if verbose:
             if self.local_rank == 0:
-                print(f'Run time={datetime.now() - start}')
+                print(f'Run time={run_time}')
         total_res = dict(stability_dict)
         total_res.update(validity_dict)
         if self.local_rank == 0:
@@ -472,17 +473,20 @@ class Trainer(pl.LightningModule):
         total_res = pd.DataFrame.from_dict([total_res])   
         if self.local_rank == 0:     
             print(total_res)
-        
         total_res['step'] = step
         total_res['epoch'] = self.current_epoch
+        total_res['run_time'] = str(run_time)
+        total_res['ngraphs'] = num_graphs
         try:
             if save_dir is None:
                 save_dir = os.path.join(self.hparams.save_dir, 'run' + self.hparams.id, 'evaluation.csv')
+                print(f"Saving evaluation csv file to {save_dir}")
             else:
                 save_dir = os.path.join(save_dir, 'evaluation.csv')
             with open(save_dir, 'a') as f:
                 total_res.to_csv(f, header=True)
-        except:
+        except Exception as e:
+            print(e)
             pass
         return total_res
            

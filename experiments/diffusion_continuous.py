@@ -22,7 +22,7 @@ from torch_sparse import coalesce
 from callbacks.ema import ExponentialMovingAverage
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
-from e3moldiffusion.sde import DiscreteDDPM
+from experiments.diffusion.continuous import DiscreteDDPM
 
 from experiments.data.config_file import get_dataset_info
 from experiments.molecule_utils import Molecule

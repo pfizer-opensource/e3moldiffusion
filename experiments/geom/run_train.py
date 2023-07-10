@@ -28,9 +28,9 @@ if __name__ == "__main__":
     ema_callback = ExponentialMovingAverage(decay=hparams.ema_decay)
     checkpoint_callback = ModelCheckpoint(
         dirpath=hparams.save_dir + f"/run{hparams.id}/",
-        save_top_k=1,
-        monitor="val/coords_loss",
-        save_last=True,
+        save_top_k=3,
+        monitor="val/loss",
+        save_last=True
     )
     lr_logger = LearningRateMonitor()
     tb_logger = TensorBoardLogger(
