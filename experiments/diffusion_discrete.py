@@ -424,11 +424,11 @@ class Trainer(pl.LightningModule):
         assert sum(l) == ngraphs
         
         molecule_list = []
+        start = datetime.now()
         if verbose:
             if self.local_rank == 0:
                 print(f"Creating {ngraphs} graphs in {l} batches")
         for _, num_graphs in enumerate(l):
-            start = datetime.now()
             pos_splits, atom_types_integer_split, charge_types_integer_split, \
             edge_types, edge_index_global, batch_num_nodes, _ = self.generate_graphs(
                                                                                      num_graphs=num_graphs,
@@ -476,7 +476,7 @@ class Trainer(pl.LightningModule):
         total_res['step'] = step
         total_res['epoch'] = self.current_epoch
         total_res['run_time'] = str(run_time)
-        total_res['ngraphs'] = num_graphs
+        total_res['ngraphs'] = ngraphs
         try:
             if save_dir is None:
                 save_dir = os.path.join(self.hparams.save_dir, 'run' + self.hparams.id, 'evaluation.csv')
