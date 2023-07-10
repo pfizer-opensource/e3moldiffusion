@@ -11,7 +11,6 @@ from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index, dropout_node
-from torch_scatter import scatter_mean
 from tqdm import tqdm
 
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
@@ -22,9 +21,7 @@ from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.molecule_utils import Molecule
 from experiments.utils import coalesce_edges, get_empirical_num_nodes, get_list_of_edge_adjs, zero_mean
 from experiments.sampling.analyze import analyze_stability_for_molecules
-
-from torch.nn import MSELoss
-from torch.nn import CrossEntropyLoss
+from experiments.losses import DiffusionLoss
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(logging.NullHandler())
@@ -71,7 +68,6 @@ class Trainer(pl.LightningModule):
         empirical_num_nodes = get_empirical_num_nodes(dataset_info)
         self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
 
-        self.valency_pred = False
         self.model = DenoisingEdgeNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
@@ -84,7 +80,7 @@ class Trainer(pl.LightningModule):
             rbf_dim=hparams["rbf_dim"],
             vector_aggr=hparams["vector_aggr"],
             fully_connected=hparams["fully_connected"],
-            local_global_model=False,
+            local_global_model=hparams["local_global_model"],
             recompute_edge_attributes=True,
             recompute_radius_graph=False
         )
@@ -106,8 +102,7 @@ class Trainer(pl.LightningModule):
                                                     alphas=self.sde.alphas.clone()
                                                     )
         
-        self.mse_loss = MSELoss()
-        self.ce_loss = CrossEntropyLoss()
+        self.diffusion_loss = DiffusionLoss(modalities=["coords", "atoms", "charges", "bonds"])
 
 
     def training_step(self, batch, batch_idx):
@@ -139,109 +134,40 @@ class Trainer(pl.LightningModule):
                             dtype=torch.long, device=batch.x.device)
         out_dict = self(batch=batch, t=t)
         
-        #snr = self.sde.alphas_cumprod.pow(2) / (self.sde.sqrt_1m_alphas_cumprod.pow(2))
-        #s = t - 1
-        #s = torch.clamp(s, min=0)
-        #w = snr[s] - snr[t]
-        
-        old = False
+        true_data = {"coords": out_dict["coords_true"],
+                     "atoms": out_dict["atoms_true"],
+                     "charges": out_dict["charges_true"],
+                     "bonds": out_dict["bonds_true"]
+                     }
         
         coords_pred = out_dict['coords_pred']
         atoms_pred = out_dict['atoms_pred']
         atoms_pred, charges_pred = atoms_pred.split([self.num_atom_types, self.num_charge_classes], dim=-1)
         edges_pred = out_dict['bonds_pred']
         
-        if old:
-            w = 1 / batch_size
-            coords_loss = torch.pow(
-            coords_pred - out_dict["coords_true"], 2
-            ).mean(-1)
-        
-            coords_loss = scatter_mean(
-                coords_loss, index=batch.batch, dim=0, dim_size=batch_size
-            )
-            coords_loss = self.loss_non_nans(coords_loss, "coords")
-            coords_loss *= w        
-            coords_loss = torch.sum(coords_loss, dim=0)
-            
-            atoms_loss = F.cross_entropy(
-                atoms_pred, out_dict["atoms_true"], reduction='none'
-                )  
-            atoms_loss = scatter_mean(
-                atoms_loss, index=batch.batch, dim=0, dim_size=batch_size
-            )
-            atoms_loss = self.loss_non_nans(atoms_loss, "atoms")
-            atoms_loss *= w
-            atoms_loss = torch.sum(atoms_loss, dim=0)
-            
-            bonds_loss = F.cross_entropy(
-                edges_pred, out_dict["bonds_true"], reduction='none'
-            )
-            
-            bonds_loss = 0.5 * scatter_mean(
-                bonds_loss, index=out_dict["edge_index"][1][1], dim=0, dim_size=out_dict["atoms_pred"].size(0)
-            )
-            bonds_loss = scatter_mean(
-                bonds_loss, index=batch.batch, dim=0, dim_size=batch_size
-            )
-            bonds_loss = self.loss_non_nans(bonds_loss, "bonds")
-            bonds_loss *= w
-            bonds_loss = bonds_loss.sum(dim=0)
-        else:
-            coords_loss = self.mse_loss(coords_pred, out_dict["coords_true"])
-            atoms_loss = self.ce_loss(atoms_pred, out_dict["atoms_true"])
-            charges_loss = self.ce_loss(charges_pred, out_dict["charges_true"])
-            bonds_loss = self.ce_loss(edges_pred, out_dict["bonds_true"])
-        
-       
-        loss = 3.0 * coords_loss +  0.4 * atoms_loss +  2.0 * bonds_loss + 1.0 * charges_loss
+        pred_data =  {"coords": coords_pred,
+                     "atoms": atoms_pred,
+                     "charges": charges_pred,
+                     "bonds": edges_pred
+                     }
 
-        self.log(
-            f"{stage}/loss",
-            loss,
-            on_step=True,
-            batch_size=batch_size,
-            prog_bar=False,
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
-        )
-
-        self.log(
-            f"{stage}/coords_loss",
-            coords_loss,
-            on_step=True,
-            batch_size=batch_size,
-            prog_bar=(stage=='train'),
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
-        )
-
-        self.log(
-            f"{stage}/atoms_loss",
-            atoms_loss,
-            on_step=True,
-            batch_size=batch_size,
-            prog_bar=(stage=='train'),
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
-        )
+        loss = self.diffusion_loss(true_data=true_data,
+                                   pred_data=pred_data,
+                                   batch=batch.batch,
+                                   bond_aggregation_index=out_dict["bond_aggregation_index"],
+                                   weights=None
+                                   )
         
-        self.log(
-            f"{stage}/charges_loss",
-            atoms_loss,
-            on_step=True,
-            batch_size=batch_size,
-            prog_bar=(stage=='train'),
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
-        )
-        
-        self.log(
-            f"{stage}/bonds_loss",
-            bonds_loss,
-            on_step=True,
-            batch_size=batch_size,
-            prog_bar=(stage=='train'),
-            sync_dist=self.hparams.gpus > 1 and stage == "val"
-        )
-      
-        return loss
+        final_loss = 3.0 * loss["coords"] + 0.4 * loss["atoms"] +  2.0 * loss["bonds"] + 1.0 * loss["charges"]
+
+        if torch.any(final_loss.isnan()):
+            final_loss = final_loss[~final_loss.isnan()]
+            print(f"Detected NaNs. Terminating training at epoch {self.current_epoch}")
+            exit()
+            
+        self._log(final_loss, loss["coords"], loss["atoms"], loss["charges"], loss["bonds"], batch_size, stage)
+
+        return final_loss
     
     def forward(self, batch: Batch, t: Tensor):
         
@@ -346,9 +272,6 @@ class Trainer(pl.LightningModule):
         
         batch_edge_global = data_batch[edge_index_global[0]]     
         
-        #import pdb
-        #print(ohes_perturbed.shape)
-        #pdb.set_trace()
         atom_feats_in_perturbed = torch.cat([atom_types_perturbed, charges_perturbed], dim=-1)
 
 
@@ -373,6 +296,7 @@ class Trainer(pl.LightningModule):
         out['bonds_true'] = edge_attr_global
         out['charges_true'] = charges.argmax(dim=-1)
 
+        out["bond_aggregation_index"] = edge_index_global[1]
         
         return out
     
@@ -589,7 +513,6 @@ class Trainer(pl.LightningModule):
             rev_sigma = self.sde.reverse_posterior_sigma[t].unsqueeze(-1)
             sigmast = self.sde.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
             sigmas2t = sigmast.pow(2)
-            alpha_bar_t = self.sde.alphas_cumprod[t].unsqueeze(-1)
             
             sqrt_alphas = self.sde.sqrt_alphas[t].unsqueeze(-1)
             sqrt_1m_alphas_cumprod_prev = torch.sqrt(1.0 - self.sde.alphas_cumprod_prev[t]).unsqueeze(-1)
@@ -678,14 +601,54 @@ class Trainer(pl.LightningModule):
                 edge_type_traj.append(edge_attr_global.detach())
                 charge_type_traj.append(charge_types.detach())
                 
-        return pos, atom_types, charge_types, edge_attr_global, edge_index_global, batch_num_nodes, [pos_traj, atom_type_traj, edge_type_traj]
+        return pos, atom_types, charge_types, edge_attr_global, edge_index_global, batch_num_nodes, [pos_traj, atom_type_traj, charge_type_traj, edge_type_traj]
     
-    def loss_non_nans(self, loss: Tensor, modality: str) -> Tensor:
-        m = loss.isnan()
-        if torch.any(m):
-            print(f"Recovered NaNs in {modality}. Selecting NoN-Nans")
-        return loss[~m]
-    
+    def _log(self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, batch_size, stage):
+        self.log(
+            f"{stage}/loss",
+            loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=False,
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
+        )
+
+        self.log(
+            f"{stage}/coords_loss",
+            coords_loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage=='train'),
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
+        )
+
+        self.log(
+            f"{stage}/atoms_loss",
+            atoms_loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage=='train'),
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
+        )
+        
+        self.log(
+            f"{stage}/charges_loss",
+            charges_loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage=='train'),
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
+        )
+        
+        self.log(
+            f"{stage}/bonds_loss",
+            bonds_loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage=='train'),
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
+        )
+          
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.hparams["lr"], amsgrad=True, weight_decay=1e-12)
         #lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
