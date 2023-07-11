@@ -11,10 +11,10 @@ dependencies:
   - pip
   - notebook
   - matplotlib
-  - pytorch::pytorch=1.13.0
-  - pyg::pyg=2.1.0
+  - pytorch::pytorch=2.0.1
+  - pyg::pyg=2.3.0
   - conda-forge::rdkit=2023.03.2
-  - conda-forge::pytorch-lightning=1.7.4
+  - conda-forge::pytorch-lightning=2.0.4
   - conda-forge::jupyter
   - conda-forge::openbabel
   - pip:
@@ -24,3 +24,6 @@ dependencies:
       - nglview
       - rmsd
       - torch_ema
+      - torch_sparse
+      - torch_scatter
+      - tensorboard

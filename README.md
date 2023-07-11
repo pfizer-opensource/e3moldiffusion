@@ -1,19 +1,11 @@
 # E(3) Equivariant Diffusion for Molecules
 
-Research repository exploring the capabalities of (continuous) denoising diffusion probabilistic models applied on molecular data.
+Research repository exploring the capabalities of (continuous and discrete) denoising diffusion probabilistic models applied on molecular data.
 
 ## Installation
-Best installed using conda.
+Best installed using mamba.
 ```bash
-conda env create -f environment.yml
-```
-For training on the HPC, a gclib error can occur. This is most likely due to `pytorch-spline-conv` package.
-Just uninstall and install pytorch geometric again
-
-```bash
-conda activate e3moldiffusion
-conda uninstall pytorch-spline-conv
-conda install pyg -c pyg
+mamba env create -f environment.yml
 ```
 
 ## Experiments

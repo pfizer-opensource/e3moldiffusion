@@ -17,7 +17,7 @@ test_interval: 10
 
 #EQGAT
 sdim: 256
-vdim: 128
+vdim: 256
 edim: 128
 num_layers: 12
 rbf_dim: 64
