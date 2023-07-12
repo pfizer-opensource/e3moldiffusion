@@ -21,8 +21,7 @@ vdim: 128
 edim: 64
 num_layers: 12
 rbf_dim: 32
-omit_norm: false
-omit_cross_product: true
+use_cross_product: false
 local_edge_attrs: false
 fully_connected: true
 local_global_model: false

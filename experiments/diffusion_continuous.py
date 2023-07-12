@@ -68,13 +68,12 @@ class Trainer(pl.LightningModule):
         self.model = DenoisingEdgeNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
-            use_norm=not hparams["omit_norm"],
-            use_cross_product=not hparams["omit_cross_product"],
+            latent_dim=None,
+            use_cross_product=hparams["use_cross_product"],
             num_atom_features=self.num_atom_features,
             num_bond_types=self.num_bond_classes,
             edge_dim=hparams['edim'],
             cutoff_local=hparams["cutoff_local"],
-            rbf_dim=hparams["rbf_dim"],
             vector_aggr=hparams["vector_aggr"],
             fully_connected=hparams["fully_connected"],
             local_global_model=hparams["local_global_model"],
@@ -384,10 +383,10 @@ class Trainer(pl.LightningModule):
         total_res = pd.DataFrame.from_dict([total_res])   
         if self.local_rank == 0:     
             print(total_res)
-        total_res['step'] = step
-        total_res['epoch'] = self.current_epoch
+        total_res['step'] = str(step)
+        total_res['epoch'] = str(self.current_epoch)
         total_res['run_time'] = str(run_time)
-        total_res['ngraphs'] = ngraphs
+        total_res['ngraphs'] = str(ngraphs)
         try:
             if save_dir is None:
                 save_dir = os.path.join(self.hparams.save_dir, 'run' + self.hparams.id, 'evaluation.csv')

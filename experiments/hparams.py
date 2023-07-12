@@ -49,15 +49,15 @@ def add_arguments(parser):
     # MODEL
     parser.add_argument("--sdim", default=256, type=int)
     parser.add_argument("--vdim", default=64, type=int)
+    parser.add_argument("--latent_dim", default=None, type=int)
     parser.add_argument("--rbf-dim", default=32, type=int)
     parser.add_argument("--edim", default=32, type=int)
     parser.add_argument("--vector-aggr", default="mean", type=str)
     parser.add_argument("--num-layers", default=7, type=int)
-    parser.add_argument("--omit-norm", default=False, action="store_true")
     parser.add_argument("--fully-connected", default=True, action="store_true")
-    parser.add_argument("--local-global-model", default=True, action="store_true")
+    parser.add_argument("--local-global-model", default=False, action="store_true")
     parser.add_argument("--local-edge-attrs", default=False, action="store_true")
-    parser.add_argument("--omit-cross-product", default=True, action="store_true")
+    parser.add_argument("--use-cross-product", default=False, action="store_true")
     parser.add_argument("--cutoff-local", default=7.0, type=float)
     parser.add_argument("--cutoff-global", default=10.0, type=float)
 
@@ -73,6 +73,16 @@ def add_arguments(parser):
     parser.add_argument("--timesteps", default=500, type=int)
     parser.add_argument("--max-time", type=str, default=None)
     parser.add_argument("--masked-pretraining", default=False, action='store_true')
+
+
+    # LATENT
+    parser.add_argument("--vae-beta", default=1.0, type=float)
+    parser.add_argument("--sdim-latent", default=256, type=int)
+    parser.add_argument("--vdim-latent", default=64, type=int)
+    parser.add_argument("--latent-dim", default=None, type=int)
+    parser.add_argument("--edim-latent", default=32, type=int)
+    parser.add_argument("--num-layers-latent", default=7, type=int)
+
 
     # GENERAL
     parser.add_argument("-i", "--id", type=int, default=0)

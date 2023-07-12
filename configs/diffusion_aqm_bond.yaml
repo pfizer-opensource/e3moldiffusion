@@ -29,7 +29,6 @@ neighbor_embedding: true
 sdim: 256 #256
 vdim: 256 #256
 edim: 256 #256
-use_norm: true
 use_cross_product: false
 use_bond_features: true
 use_all_atom_features: false
