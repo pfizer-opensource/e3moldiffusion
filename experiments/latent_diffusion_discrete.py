@@ -446,7 +446,7 @@ class Trainer(pl.LightningModule):
         total_res['ngraphs'] = str(ngraphs)
         try:
             if save_dir is None:
-                save_dir = os.path.join(self.hparams.save_dir, 'run' + self.hparams.id, 'evaluation.csv')
+                save_dir = os.path.join(self.hparams.save_dir, 'run' + str(self.hparams.id), 'evaluation.csv')
                 print(f"Saving evaluation csv file to {save_dir}")
             else:
                 save_dir = os.path.join(save_dir, 'evaluation.csv')

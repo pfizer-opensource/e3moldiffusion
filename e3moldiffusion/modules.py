@@ -173,7 +173,7 @@ class AdaptiveLayerNorm(nn.Module):
         self.eps = eps
         self.affine = affine
         if affine:
-            self.weight_bias = DenseLayer(latent_dim, 2*self.sdim, bias=True)
+            self.weight_bias = DenseLayer(latent_dim, 3*self.sdim, bias=True)
             self.weight = nn.Parameter(torch.Tensor(self.sdim))
             self.bias = nn.Parameter(torch.Tensor(self.sdim))
         else:
@@ -197,6 +197,11 @@ class AdaptiveLayerNorm(nn.Module):
         s, v , z = x["s"], x["v"], x["z"]
         batch_size = int(batch.max()) + 1
         
+        weight, bias, activation = self.weight_bias(z).chunk(3, dim=-1)
+        gate = torch.sigmoid(activation)
+        weight, bias, gate = weight[batch], bias[batch], gate[batch]
+        s = gate * (weight * s + bias)
+        
         smean = s.mean(dim=-1, keepdim=True)
         smean = scatter_mean(smean, batch, dim=0, dim_size=batch_size)
     
@@ -206,13 +211,9 @@ class AdaptiveLayerNorm(nn.Module):
         var = scatter_mean(var, batch, dim=0, dim_size=batch_size)
         var = torch.clamp(var, min=self.eps) # .sqrt()
         sout = s / var[batch]
+    
+        sout = sout * self.weight + self.bias
         
-        weight, bias = self.weight_bias(z).chunk(2, dim=-1)
-        weight, bias = weight[batch], bias[batch]
-        ww, bb = weight + self.weight, bias + self.bias
-        
-        sout = sout * ww + bb
-
         if v is not None:
             vmean = torch.pow(v, 2).sum(dim=1, keepdim=True).mean(dim=-1, keepdim=True)
             vmean = scatter_mean(vmean, batch, dim=0, dim_size=batch_size)

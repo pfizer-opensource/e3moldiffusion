@@ -1,10 +1,9 @@
 
-# load_ckpt: /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/logs/x0/newRun/run0/last.ckpt
+# load_ckpt:
 
+# batch_size 40 without adaptive, and 200 with adaptive
 batch_size: 200
 inference_batch_size: 70
-batch_size: 200 # 40
-inference_batch_size: 40
 ema_decay: 0.999
 grad_clip_val: 10
 accum_batch: 1
@@ -19,10 +18,9 @@ test_interval: 20
 
 #EQGAT
 sdim: 256
-vdim: 128
+vdim: 256
 edim: 128
 num_layers: 12
-rbf_dim: 32
 use_cross_product: false
 local_edge_attrs: false
 fully_connected: true
@@ -45,9 +43,11 @@ timesteps: 500
 max_time: 06:00:00:00
 
 # save_dir: /hpfs/userws/cremej01/projects/logs/geom/x0
-save_dir: /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/logs/x0/newRun_discr
+save_dir: /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/logs/x0/discrete_256s_256v_128e_12l/
 
-lr: 2.e-4
+
+# tested: 4.0e-4 for non-adaptive and 2.0e-4 for adaptive
+lr: 2.0e-4
 lr_factor: 0.5
 lr_patience: 10
 max_num_neighbors: 128

@@ -1,6 +1,6 @@
-# load_ckpt: /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/logs/x0/newRun/run0/last.ckpt
+# load_ckpt: 
 
-batch_size: 40
+batch_size: 32
 inference_batch_size: 40
 ema_decay: 0.999
 grad_clip_val: 10
@@ -16,9 +16,9 @@ test_interval: 10
 
 #EQGAT
 sdim: 256
-vdim: 128
+vdim: 256
 edim: 128
-num_layers: 10
+num_layers: 12
 use_cross_product: false
 local_edge_attrs: false
 fully_connected: true
@@ -27,16 +27,16 @@ vector_aggr: mean
 
 # LATENT
 sdim_latent: 128
-vdim_latent: 32
-edim_latent: 32
-num_layers_latent: 8
+vdim_latent: 64
+edim_latent: 64
+num_layers_latent: 6
 latent_dim: 128
 use_cross_product: false
 local_edge_attrs: false
 fully_connected: true
 local_global_model: false
 vector_aggr: mean
-vae_beta: 0.05
+vae_beta: 1.0
 
 #DATA
 dataset: drugs
@@ -54,9 +54,9 @@ timesteps: 500
 max_time: 06:00:00:00
 
 # save_dir: /hpfs/userws/cremej01/projects/logs/geom/x0
-save_dir: /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/logs/x0/latentdiffusion
+save_dir: /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/logs/x0/latentdiffusion_12M
 
-lr: 4.e-4
+lr: 2.e-4
 lr_factor: 0.5
 lr_patience: 10
 max_num_neighbors: 128
