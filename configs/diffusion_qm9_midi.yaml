@@ -1,0 +1,52 @@
+
+#load_ckpt: geom_midi/logs/eqgat_fc_500T_lr2_midi_emb512_l12/run0/last.ckpt
+
+batch_size: 64
+inference_batch_size: 64
+ema_decay: 0.999
+grad_clip_val: 10
+accum_batch: 1
+gamma: 0.99
+
+use_adaptive_loader: false
+remove_hs: false
+
+gpus: 4
+num_epochs: 3000
+test_interval: 10
+
+#EQGAT
+sdim: 256
+vdim: 128
+edim: 64
+num_layers: 12
+rbf_dim: 32
+use_cross_product: false
+local_edge_attrs: false
+fully_connected: true
+local_global_model: false
+vector_aggr: mean
+
+#DATA
+dataset: qm9
+dataset_root: /hpfs/userws/cremej01/projects/data/qm9
+
+# DIFFUSION
+continuous: false
+schedule: cosine
+eps_min: 1.e-3
+beta_min: 1.e-4
+beta_max: 2.e-2
+timesteps: 500
+max_time: 06:00:00:00
+
+save_dir: /hpfs/userws/cremej01/projects/logs/qm9/x0
+lr: 2.e-4
+lr_factor: 0.5
+lr_patience: 10
+max_num_neighbors: 128
+
+weight_decay: 1.e-12
+
+num_workers: 4
+precision: 32

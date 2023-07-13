@@ -8,11 +8,11 @@
 #SBATCH --time=1-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=8
 #SBATCH --mem-per-cpu=4G
-#SBATCH --gres=gpu:v100:4
-#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_coordsatoms_%j.out
-#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_coordsatoms_%j.err
+#SBATCH --gres=gpu:v100:2
+#SBATCH --output=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_full_multiGPU_%j.out
+#SBATCH --error=/home/let55/workspace/projects/e3moldiffusion/geom/slurm_outs/drugs_full_multiGPU_%j.err
 
 # attempting to access the data directory
 ls /hpfs/projects/mlcs/e3moldiffusion
@@ -22,8 +22,8 @@ source activate e3moldiffusion
 echo "runnning multi-gpu experiment"
 
 args=(
-    --gpus 4
-    --id 12
+    --gpus 2
+    --id 11
     --dataset drugs
     --max_num_conformers 30
     --num_workers 4
@@ -33,8 +33,7 @@ args=(
     --cutoff_local 7.5
     --lr 5e-4
     --batch_size 256
-    # --local_global_model
-    --fully_connected
+    --local_global_model
     --omit_cross_product
     --vector_aggr mean
     --schedule cosine
