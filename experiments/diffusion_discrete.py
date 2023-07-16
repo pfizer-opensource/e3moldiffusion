@@ -85,15 +85,14 @@ class Trainer(pl.LightningModule):
             self.model = load_model(
                 self.hparams.load_ckpt_from_pretrained, dataset_statistics
             )
-            num_params = len(self.model.state_dict())
-            for i, param in enumerate(self.model.parameters()):
-                if i < num_params // 2:
-                    param.requires_grad = False
+            # num_params = len(self.model.state_dict())
+            # for i, param in enumerate(self.model.parameters()):
+            #     if i < num_params // 2:
+            #         param.requires_grad = False
         else:
             self.model = DenoisingEdgeNetwork(
                 hn_dim=(hparams["sdim"], hparams["vdim"]),
                 num_layers=hparams["num_layers"],
-                use_norm=not hparams["omit_norm"],
                 latent_dim=None,
                 use_cross_product=hparams["use_cross_product"],
                 num_atom_features=self.num_atom_features,
@@ -868,19 +867,19 @@ class Trainer(pl.LightningModule):
             self.model.parameters(),
             lr=self.hparams["lr"],
             amsgrad=True,
-            weight_decay=1e-12,
+            weight_decay=1.0e-8,
         )
-        # lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        #    optimizer=optimizer,
-        #    patience=self.hparams["lr_patience"],
-        #    cooldown=self.hparams["lr_cooldown"],
-        #    factor=self.hparams["lr_factor"],
-        # )
-        # scheduler = {
-        #    "scheduler": lr_scheduler,
-        #    "interval": "epoch",
-        #    "frequency": self.hparams["lr_frequency"],
-        #    "monitor": "val/loss",
-        #    "strict": False,
-        # }
-        return [optimizer]  # , [scheduler]
+        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer=optimizer,
+            patience=self.hparams["lr_patience"],
+            cooldown=self.hparams["lr_cooldown"],
+            factor=self.hparams["lr_factor"],
+        )
+        scheduler = {
+            "scheduler": lr_scheduler,
+            "interval": "epoch",
+            "frequency": self.hparams["lr_frequency"],
+            "monitor": "val/coords_loss",
+            "strict": False,
+        }
+        return [optimizer], [scheduler]
