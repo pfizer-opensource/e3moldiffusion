@@ -410,7 +410,7 @@ class EdgePredictionNetwork(nn.Module):
             recompute_edge_attributes=recompute_edge_attributes,
         )
 
-        self.prediction_head = EdgePredictionNetwork(
+        self.prediction_head = EdgePredictionHead(
             hn_dim=hn_dim,
             edge_dim=edge_dim,
             num_atom_features=num_atom_features,
@@ -478,7 +478,6 @@ class EdgePredictionNetwork(nn.Module):
         edge_attr_global_transformed = self.bond_time_mapping(
             edge_attr_global_transformed + tedge_global
         )
-
         edge_dense = torch.zeros(
             x.size(0), x.size(0), edge_attr_global_transformed.size(-1), device=s.device
         )
@@ -523,10 +522,6 @@ class EdgePredictionNetwork(nn.Module):
         out = self.prediction_head(
             x=out, batch=batch, edge_index_global=edge_index_global
         )
-
-        # out['coords_perturbed'] = pos
-        # out['atoms_perturbed'] = x
-        # out['bonds_perturbed'] = edge_attr_global
 
         return out
 

@@ -337,7 +337,11 @@ class Trainer(pl.LightningModule):
             .fill_diagonal_(0)
         )
         edge_index_global, _ = dense_to_sparse(edge_index_global)
-        edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
+        edge_index_global, edge_attr_global_perturbed = sort_edge_index(
+            edge_index=edge_index_global,
+            edge_attr=edge_attr_global_perturbed,
+            sort_by_row=False,
+        )
         out = self.model(
             x=atom_feats_in_perturbed,
             t=temb,

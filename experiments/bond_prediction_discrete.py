@@ -144,7 +144,14 @@ class Trainer(pl.LightningModule):
             true_data=edges_true,
             pred_data=edges_pred,
         )
-
+        self.log(
+            f"{stage}/loss",
+            loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=stage == "train",
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+        )
         return loss
 
     def forward(self, batch: Batch, t: Tensor):
@@ -182,48 +189,6 @@ class Trainer(pl.LightningModule):
         edge_index_global, edge_attr_global = sort_edge_index(
             edge_index=edge_index_global, edge_attr=edge_attr_global, sort_by_row=False
         )
-
-        j, i = edge_index_global
-        mask = j < i
-        mask_i = i[mask]
-        mask_j = j[mask]
-        edge_attr_triu = edge_attr_global[mask]
-        edge_attr_triu_ohe = F.one_hot(
-            edge_attr_triu, num_classes=self.num_bond_classes
-        ).float()
-        t_edge = t[data_batch[mask_i]]
-        probs = self.cat_bonds.marginal_prob(edge_attr_triu_ohe, t=t_edge)
-        edges_t_given_0 = probs.multinomial(
-            1,
-        ).squeeze()
-        j = torch.concat([mask_j, mask_i])
-        i = torch.concat([mask_i, mask_j])
-        edge_index_global_perturbed = torch.stack([j, i], dim=0)
-        edge_attr_global_perturbed = torch.concat(
-            [edges_t_given_0, edges_t_given_0], dim=0
-        )
-        edge_index_global_perturbed, edge_attr_global_perturbed = sort_edge_index(
-            edge_index=edge_index_global_perturbed,
-            edge_attr=edge_attr_global_perturbed,
-            sort_by_row=False,
-        )
-
-        if not self.train:
-            # do assertion when valdating
-            edge_attr_global_dense_perturbed = torch.zeros(
-                n, n, device=pos.device, dtype=torch.long
-            )
-            edge_attr_global_dense_perturbed[
-                edge_index_global_perturbed[0], edge_index_global_perturbed[1]
-            ] = edge_attr_global_perturbed
-            assert (
-                edge_attr_global_dense_perturbed - edge_attr_global_dense_perturbed.T
-            ).float().mean().item() == 0.0
-            assert torch.allclose(edge_index_global, edge_index_global_perturbed)
-
-        edge_attr_global_perturbed = F.one_hot(
-            edge_attr_global_perturbed, num_classes=self.num_bond_classes
-        ).float()
 
         temb = t.float() / self.hparams.timesteps
         temb = temb.clamp(min=self.hparams.eps_min)
@@ -278,49 +243,38 @@ class Trainer(pl.LightningModule):
             [atom_types_perturbed, charges_perturbed], dim=-1
         )
 
-        out = self.model(
+        edge_pred = self.model(
             x=atom_feats_in_perturbed,
             t=temb,
             pos=pos_perturbed,
             edge_index_local=None,
             edge_index_global=edge_index_global,
-            edge_attr_global=edge_attr_global_perturbed,
+            edge_attr_global=edge_attr_global,
             batch=data_batch,
             batch_edge_global=batch_edge_global,
         )
 
-        out["coords_perturbed"] = pos_perturbed
-        out["atoms_perturbed"] = atom_types_perturbed
-        out["charges_perturbed"] = charges_perturbed
-        out["bonds_perturbed"] = edge_attr_global_perturbed
-
-        out["coords_true"] = pos_centered
-        out["atoms_true"] = atom_types.argmax(dim=-1)
-        out["bonds_true"] = edge_attr_global
-        out["charges_true"] = charges.argmax(dim=-1)
-
-        out["bond_aggregation_index"] = edge_index_global[1]
-
-        return out
+        out_dict = {"bonds_true": edge_attr_global, "bonds_pred": edge_pred}
+        return out_dict
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.hparams["lr"],
             amsgrad=True,
-            weight_decay=1e-12,
+            weight_decay=1e-8,
         )
-        # lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        #    optimizer=optimizer,
-        #    patience=self.hparams["lr_patience"],
-        #    cooldown=self.hparams["lr_cooldown"],
-        #    factor=self.hparams["lr_factor"],
-        # )
-        # scheduler = {
-        #    "scheduler": lr_scheduler,
-        #    "interval": "epoch",
-        #    "frequency": self.hparams["lr_frequency"],
-        #    "monitor": "val/loss",
-        #    "strict": False,
-        # }
-        return [optimizer]  # , [scheduler]
+        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer=optimizer,
+            patience=self.hparams["lr_patience"],
+            cooldown=self.hparams["lr_cooldown"],
+            factor=self.hparams["lr_factor"],
+        )
+        scheduler = {
+            "scheduler": lr_scheduler,
+            "interval": "epoch",
+            "frequency": self.hparams["lr_frequency"],
+            "monitor": "val/loss",
+            "strict": False,
+        }
+        return [optimizer], [scheduler]
