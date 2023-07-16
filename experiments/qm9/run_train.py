@@ -3,11 +3,18 @@ from callbacks.ema import ExponentialMovingAverage
 from argparse import ArgumentParser
 import pytorch_lightning as pl
 import torch.nn.functional as F
-from pytorch_lightning.callbacks import (LearningRateMonitor, ModelCheckpoint,
-                                         ModelSummary, TQDMProgressBar)
+from pytorch_lightning.callbacks import (
+    LearningRateMonitor,
+    ModelCheckpoint,
+    ModelSummary,
+    TQDMProgressBar,
+)
 from pytorch_lightning.loggers import TensorBoardLogger
 import warnings
-warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
+
+warnings.filterwarnings(
+    "ignore", category=UserWarning, message="TypedStorage is deprecated"
+)
 
 from experiments.hparams import add_arguments
 from experiments.data.config_file import get_dataset_info
@@ -38,6 +45,7 @@ if __name__ == "__main__":
     )
 
     from experiments.data.qm9_dataset import QM9DataModule
+
     datamodule = QM9DataModule(hparams)
 
     dataset_statistics = QM9Infos(datamodule, hparams)
@@ -51,16 +59,17 @@ if __name__ == "__main__":
     else:
         print("Using discrete diffusion")
         from experiments.diffusion_discrete import Trainer
-        
+
     if hparams.latent_dim:
         print("Using latent diffusion")
-        from experiments.latent_diffusion_discrete import Trainer
-        
-    model = Trainer(hparams=hparams.__dict__,
-                    dataset_info=dataset_info,
-                    dataset_statistics=dataset_statistics,
-                    smiles_list=list(train_smiles),
-                    )
+        from experiments.diffusion_latent_discrete import Trainer
+
+    model = Trainer(
+        hparams=hparams.__dict__,
+        dataset_info=dataset_info,
+        dataset_statistics=dataset_statistics,
+        smiles_list=list(train_smiles),
+    )
 
     strategy = "ddp" if hparams.gpus > 1 else "auto"
 

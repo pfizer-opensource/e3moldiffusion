@@ -64,13 +64,13 @@ if __name__ == "__main__":
         datamodule.setup("fit")
 
     if hparams.continuous:
-        from experiments.diffusion_continuous_pretrain import Trainer
+        from experiments.diffusion_pretrain_continuous import Trainer
 
         model = Trainer(
             hparams=hparams.__dict__,
         )
     else:
-        from experiments.diffusion_discrete_pretrain import Trainer
+        from experiments.diffusion_pretrain_discrete import Trainer
 
         # TO-DO!
         # model = Trainer(

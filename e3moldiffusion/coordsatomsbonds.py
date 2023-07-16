@@ -93,18 +93,16 @@ class DenoisingEdgeNetwork(nn.Module):
     Args:
         nn (_type_): _description_
     """
-<<<<<<< HEAD
 
     def __init__(
         self,
         num_atom_features: int,
         num_bond_types: int = 5,
         hn_dim: Tuple[int, int] = (256, 64),
-        rbf_dim: int = 32,
         edge_dim: int = 32,
         cutoff_local: float = 7.5,
         num_layers: int = 5,
-        use_norm: bool = True,
+        latent_dim: Optional[int] = None,
         use_cross_product: bool = False,
         fully_connected: bool = True,
         local_global_model: bool = False,
@@ -114,25 +112,6 @@ class DenoisingEdgeNetwork(nn.Module):
         atom_mapping: bool = True,
         bond_mapping: bool = True,
     ) -> None:
-=======
-    def __init__(self,
-                 num_atom_features: int,
-                 num_bond_types: int = 5,
-                 hn_dim: Tuple[int, int] = (256, 64),
-                 edge_dim: int = 32,
-                 cutoff_local: float = 7.5,
-                 num_layers: int = 5,
-                 latent_dim: Optional[int] = None,
-                 use_cross_product: bool = False,
-                 fully_connected: bool = True,
-                 local_global_model: bool = False,
-                 recompute_radius_graph: bool = True,
-                 recompute_edge_attributes: bool = True,
-                 vector_aggr: str = "mean",
-                 atom_mapping: bool = True,
-                 bond_mapping: bool = True,
-                 ) -> None:
->>>>>>> 94eb740a4fd50139a039c8c264e48850970391f1
         super(DenoisingEdgeNetwork, self).__init__()
 
         self.time_mapping_atom = DenseLayer(1, hn_dim[0])
@@ -220,12 +199,8 @@ class DenoisingEdgeNetwork(nn.Module):
         edge_attr_global: OptTensor = Tensor,
         batch: OptTensor = None,
         batch_edge_global: OptTensor = None,
-<<<<<<< HEAD
+        z: OptTensor = None,
     ) -> Dict:
-=======
-        z: OptTensor = None) -> Dict:
-        
->>>>>>> 94eb740a4fd50139a039c8c264e48850970391f1
         pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
         # t: (batch_size,)
         ta = self.time_mapping_atom(t)
@@ -277,21 +252,15 @@ class DenoisingEdgeNetwork(nn.Module):
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
 
         out = self.gnn(
-<<<<<<< HEAD
             s=s,
             v=v,
             p=pos,
+            z=z,
             edge_index_local=edge_index_local,
             edge_attr_local=edge_attr_local_transformed,
             edge_index_global=edge_index_global,
             edge_attr_global=edge_attr_global_transformed,
             batch=batch,
-=======
-            s=s, v=v, p=pos, z=z,
-            edge_index_local=edge_index_local, edge_attr_local=edge_attr_local_transformed,
-            edge_index_global=edge_index_global, edge_attr_global=edge_attr_global_transformed,
-            batch=batch
->>>>>>> 94eb740a4fd50139a039c8c264e48850970391f1
         )
 
         out = self.prediction_head(
@@ -303,7 +272,147 @@ class DenoisingEdgeNetwork(nn.Module):
         # out['bonds_perturbed'] = edge_attr_global
 
         return out
-<<<<<<< HEAD
+
+
+class LatentEncoderNetwork(nn.Module):
+    def __init__(
+        self,
+        num_atom_features: int,
+        num_bond_types: int = 5,
+        hn_dim: Tuple[int, int] = (256, 64),
+        edge_dim: int = 32,
+        cutoff_local: float = 7.5,
+        num_layers: int = 5,
+        use_cross_product: bool = False,
+        vector_aggr: str = "mean",
+        atom_mapping: bool = True,
+        bond_mapping: bool = True,
+    ) -> None:
+        super(LatentEncoderNetwork, self).__init__()
+
+        if atom_mapping:
+            self.atom_mapping = DenseLayer(num_atom_features, hn_dim[0])
+        else:
+            self.atom_mapping = nn.Identity()
+
+        if bond_mapping:
+            self.bond_mapping = DenseLayer(num_bond_types, edge_dim)
+        else:
+            self.bond_mapping = nn.Identity()
+
+        self.sdim, self.vdim = hn_dim
+
+        self.gnn = EQGATLocalGNN(
+            hn_dim=hn_dim,
+            cutoff_local=cutoff_local,
+            edge_dim=edge_dim,
+            num_layers=num_layers,
+            use_cross_product=use_cross_product,
+            vector_aggr=vector_aggr,
+        )
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        if hasattr(self.atom_mapping, "reset_parameters"):
+            self.atom_mapping.reset_parameters()
+        if hasattr(self.bond_mapping, "reset_parameters"):
+            self.bond_mapping.reset_parameters()
+        self.gnn.reset_parameters()
+
+    def calculate_edge_attrs(
+        self, edge_index: Tensor, edge_attr: OptTensor, pos: Tensor, sqrt: bool = True
+    ):
+        source, target = edge_index
+        r = pos[target] - pos[source]
+        a = pos[target] * pos[source]
+        a = a.sum(-1)
+        d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6)
+        if sqrt:
+            d = d.sqrt()
+        r_norm = torch.div(r, (1.0 + d.unsqueeze(-1)))
+        edge_attr = (d, a, r_norm, edge_attr)
+        return edge_attr
+
+    def forward(
+        self,
+        x: Tensor,
+        pos: Tensor,
+        edge_index_local: Tensor,
+        edge_attr_local: OptTensor = Tensor,
+        batch: OptTensor = None,
+    ) -> Dict:
+        pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
+
+        if batch is None:
+            batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)
+
+        s = self.atom_mapping(x)
+
+        edge_attr_local_transformed = self.bond_mapping(edge_attr_local)
+        edge_attr_local_transformed = self.calculate_edge_attrs(
+            edge_index=edge_index_local,
+            edge_attr=edge_attr_local_transformed,
+            pos=pos,
+            sqrt=True,
+        )
+
+        v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
+
+        out = self.gnn(
+            s=s,
+            v=v,
+            p=pos,
+            edge_index_local=edge_index_local,
+            edge_attr_local=edge_attr_local_transformed,
+            edge_index_global=None,
+            edge_attr_global=None,
+            batch=batch,
+        )
+
+        return out
+
+
+class SoftMaxAttentionAggregation(nn.Module):
+    """
+    Softmax Attention Pooling as proposed "Graph Matching Networks
+    for Learning the Similarity of Graph Structured Objects"
+    <https://arxiv.org/abs/1904.12787>
+    """
+
+    def __init__(self, dim: int):
+        super(SoftMaxAttentionAggregation, self).__init__()
+
+        self.node_net = nn.Sequential(
+            DenseLayer(dim, dim, activation=nn.SiLU()), DenseLayer(dim, dim)
+        )
+        self.gate_net = nn.Sequential(
+            DenseLayer(dim, dim, activation=nn.SiLU()), DenseLayer(dim, 1)
+        )
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        reset(self.node_net)
+        reset(self.gate_net)
+
+    def forward(
+        self,
+        x: Tensor,
+        index: Optional[Tensor] = None,
+        dim_size: Optional[int] = None,
+        dim: int = -2,
+    ) -> Tensor:
+        if index is None:
+            index = torch.zeros(size=(x.size(0)), device=x.device, dtype=torch.long)
+        if dim_size is None:
+            dim_size = int(index.max()) + 1
+        gate = self.gate_net(x)
+
+        gate = softmax(gate, index, dim=0)
+        x = self.node_net(x)
+        x = gate * x
+        x = scatter_add(src=x, index=index, dim=dim, dim_size=dim_size)
+        return x
 
 
 class EdgePredictionHead(nn.Module):
@@ -387,11 +496,10 @@ class EdgePredictionNetwork(nn.Module):
         num_atom_features: int,
         num_bond_types: int = 5,
         hn_dim: Tuple[int, int] = (256, 64),
-        rbf_dim: int = 32,
         edge_dim: int = 32,
         cutoff_local: float = 7.5,
         num_layers: int = 5,
-        use_norm: bool = True,
+        latent_dim: Optional[int] = None,
         use_cross_product: bool = False,
         fully_connected: bool = True,
         local_global_model: bool = False,
@@ -406,39 +514,15 @@ class EdgePredictionNetwork(nn.Module):
         self.time_mapping_atom = DenseLayer(1, hn_dim[0])
         self.time_mapping_bond = DenseLayer(1, edge_dim)
 
-=======
-    
-
-class LatentEncoderNetwork(nn.Module):
-    def __init__(self,
-                 num_atom_features: int,
-                 num_bond_types: int = 5,
-                 hn_dim: Tuple[int, int] = (256, 64),
-                 edge_dim: int = 32,
-                 cutoff_local: float = 7.5,
-                 num_layers: int = 5,
-                 use_cross_product: bool = False,
-                 vector_aggr: str = "mean",
-                 atom_mapping: bool = True,
-                 bond_mapping: bool = True,
-                 ) -> None:
-        super(LatentEncoderNetwork, self).__init__()
-        
->>>>>>> 94eb740a4fd50139a039c8c264e48850970391f1
         if atom_mapping:
             self.atom_mapping = DenseLayer(num_atom_features, hn_dim[0])
         else:
             self.atom_mapping = nn.Identity()
-<<<<<<< HEAD
 
-=======
-        
->>>>>>> 94eb740a4fd50139a039c8c264e48850970391f1
         if bond_mapping:
             self.bond_mapping = DenseLayer(num_bond_types, edge_dim)
         else:
             self.bond_mapping = nn.Identity()
-<<<<<<< HEAD
 
         self.atom_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
         self.bond_time_mapping = DenseLayer(edge_dim, edge_dim)
@@ -456,10 +540,9 @@ class LatentEncoderNetwork(nn.Module):
         self.gnn = EQGATEdgeGNN(
             hn_dim=hn_dim,
             cutoff_local=cutoff_local,
-            rbf_dim=rbf_dim,
             edge_dim=edge_dim,
+            latent_dim=latent_dim,
             num_layers=num_layers,
-            use_norm=use_norm,
             use_cross_product=use_cross_product,
             vector_aggr=vector_aggr,
             fully_connected=fully_connected,
@@ -475,20 +558,6 @@ class LatentEncoderNetwork(nn.Module):
             num_bond_types=num_bond_types,
         )
 
-=======
-         
-        self.sdim, self.vdim = hn_dim
-        
-        self.gnn = EQGATLocalGNN(
-            hn_dim=hn_dim,
-            cutoff_local=cutoff_local,
-            edge_dim=edge_dim,
-            num_layers=num_layers,
-            use_cross_product=use_cross_product,
-            vector_aggr=vector_aggr
-        )
-         
->>>>>>> 94eb740a4fd50139a039c8c264e48850970391f1
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -496,7 +565,6 @@ class LatentEncoderNetwork(nn.Module):
             self.atom_mapping.reset_parameters()
         if hasattr(self.bond_mapping, "reset_parameters"):
             self.bond_mapping.reset_parameters()
-<<<<<<< HEAD
         self.time_mapping_atom.reset_parameters()
         self.atom_time_mapping.reset_parameters()
         self.time_mapping_bond.reset_parameters()
@@ -507,11 +575,6 @@ class LatentEncoderNetwork(nn.Module):
     def calculate_edge_attrs(
         self, edge_index: Tensor, edge_attr: OptTensor, pos: Tensor, sqrt: bool = True
     ):
-=======
-        self.gnn.reset_parameters()
-        
-    def calculate_edge_attrs(self, edge_index: Tensor, edge_attr: OptTensor, pos: Tensor, sqrt: bool = True):
->>>>>>> 94eb740a4fd50139a039c8c264e48850970391f1
         source, target = edge_index
         r = pos[target] - pos[source]
         a = pos[target] * pos[source]
@@ -522,7 +585,6 @@ class LatentEncoderNetwork(nn.Module):
         r_norm = torch.div(r, (1.0 + d.unsqueeze(-1)))
         edge_attr = (d, a, r_norm, edge_attr)
         return edge_attr
-<<<<<<< HEAD
 
     def forward(
         self,
@@ -534,7 +596,8 @@ class LatentEncoderNetwork(nn.Module):
         edge_attr_global: OptTensor = Tensor,
         batch: OptTensor = None,
         batch_edge_global: OptTensor = None,
-    ) -> Dict:
+        z: OptTensor = None,
+    ):
         pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
         # t: (batch_size,)
         ta = self.time_mapping_atom(t)
@@ -591,6 +654,7 @@ class LatentEncoderNetwork(nn.Module):
             s=s,
             v=v,
             p=pos,
+            z=z,
             edge_index_local=edge_index_local,
             edge_attr_local=edge_attr_local_transformed,
             edge_index_global=edge_index_global,
@@ -605,81 +669,5 @@ class LatentEncoderNetwork(nn.Module):
         return out
 
 
-=======
-    
-    def forward(
-        self,
-        x: Tensor,
-        pos: Tensor,
-        edge_index_local: Tensor,
-        edge_attr_local: OptTensor = Tensor,
-        batch: OptTensor = None) -> Dict:
-        
-        pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
-       
-        if batch is None:
-            batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)
-     
-        s = self.atom_mapping(x)
-        
-        edge_attr_local_transformed = self.bond_mapping(edge_attr_local)
-        edge_attr_local_transformed = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local_transformed, pos=pos, sqrt=True)  
-       
-        v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
-
-        out = self.gnn(
-            s=s, v=v, p=pos,
-            edge_index_local=edge_index_local, edge_attr_local=edge_attr_local_transformed,
-            edge_index_global=None, edge_attr_global=None,
-            batch=batch
-        )
-        
-      
-        return out
-    
-
-class SoftMaxAttentionAggregation(nn.Module):
-    """
-    Softmax Attention Pooling as proposed "Graph Matching Networks
-    for Learning the Similarity of Graph Structured Objects"
-    <https://arxiv.org/abs/1904.12787>
-    """
-
-    def __init__(
-        self,
-        dim: int
-    ):
-        super(SoftMaxAttentionAggregation, self).__init__()
-
-        self.node_net = nn.Sequential(
-            DenseLayer(dim, dim, activation=nn.SiLU()),
-            DenseLayer(dim, dim)
-        )
-        self.gate_net = nn.Sequential(
-            DenseLayer(dim, dim, activation=nn.SiLU()),
-            DenseLayer(dim, 1)
-        )
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        reset(self.node_net)
-        reset(self.gate_net)
-
-    def forward(self, x: Tensor, index: Optional[Tensor] = None,  dim_size: Optional[int] = None,
-                dim: int = -2) -> Tensor:
-
-        if index is None:
-            index = torch.zeros(size=(x.size(0)), device=x.device, dtype=torch.long)
-        if dim_size is None:
-            dim_size = int(index.max()) + 1
-        gate = self.gate_net(x)
-        
-        gate = softmax(gate, index, dim=0)
-        x = self.node_net(x)
-        x = gate * x
-        x = scatter_add(src=x, index=index, dim=dim, dim_size=dim_size)
-        return x
-    
->>>>>>> 94eb740a4fd50139a039c8c264e48850970391f1
 if __name__ == "__main__":
     pass
