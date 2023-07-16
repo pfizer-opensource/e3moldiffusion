@@ -13,7 +13,7 @@ from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index, dropout_node
 from tqdm import tqdm
 
-from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
+from e3moldiffusion.coordsatomsbonds import EdgePredictionNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
@@ -22,11 +22,10 @@ from experiments.molecule_utils import Molecule
 from experiments.utils import (
     coalesce_edges,
     get_empirical_num_nodes,
-    get_list_of_edge_adjs,
     zero_mean,
 )
 from experiments.sampling.analyze import analyze_stability_for_molecules
-from experiments.losses import DiffusionLoss
+from experiments.losses import PredictionLoss
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(
@@ -44,14 +43,13 @@ class Trainer(pl.LightningModule):
         self,
         hparams: dict,
         dataset_info: dict,
-        smiles_list: list = None,
+        smiles_list: list,
         dataset_statistics=None,
     ):
         super().__init__()
         self.save_hyperparameters(hparams)
         self.i = 0
 
-        # TO-DO: calculate the statistics on PubChem to be able to sample the limit dist!
         self.dataset_statistics = dataset_statistics
 
         atom_types_distribution = dataset_statistics.atom_types.float()
@@ -79,7 +77,7 @@ class Trainer(pl.LightningModule):
         empirical_num_nodes = get_empirical_num_nodes(dataset_info)
         self.register_buffer(name="empirical_num_nodes", tensor=empirical_num_nodes)
 
-        self.model = DenoisingEdgeNetwork(
+        self.model = EdgePredictionNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
             use_norm=not hparams["omit_norm"],
@@ -118,9 +116,7 @@ class Trainer(pl.LightningModule):
             alphas=self.sde.alphas.clone(),
         )
 
-        self.diffusion_loss = DiffusionLoss(
-            modalities=["coords", "atoms", "charges", "bonds"]
-        )
+        self.prediction_loss = PredictionLoss()
 
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
@@ -139,58 +135,17 @@ class Trainer(pl.LightningModule):
         )
         out_dict = self(batch=batch, t=t)
 
-        true_data = {
-            "coords": out_dict["coords_true"],
-            "atoms": out_dict["atoms_true"],
-            "charges": out_dict["charges_true"],
+        edges_true = {
             "bonds": out_dict["bonds_true"],
         }
-
-        coords_pred = out_dict["coords_pred"]
-        atoms_pred = out_dict["atoms_pred"]
-        atoms_pred, charges_pred = atoms_pred.split(
-            [self.num_atom_types, self.num_charge_classes], dim=-1
-        )
         edges_pred = out_dict["bonds_pred"]
 
-        pred_data = {
-            "coords": coords_pred,
-            "atoms": atoms_pred,
-            "charges": charges_pred,
-            "bonds": edges_pred,
-        }
-
-        loss = self.diffusion_loss(
-            true_data=true_data,
-            pred_data=pred_data,
-            batch=batch.batch,
-            bond_aggregation_index=out_dict["bond_aggregation_index"],
-            weights=None,
+        loss = self.prediction_loss(
+            true_data=edges_true,
+            pred_data=edges_pred,
         )
 
-        final_loss = (
-            3.0 * loss["coords"]
-            + 0.4 * loss["atoms"]
-            + 2.0 * loss["bonds"]
-            + 1.0 * loss["charges"]
-        )
-
-        if torch.any(final_loss.isnan()):
-            final_loss = final_loss[~final_loss.isnan()]
-            print(f"Detected NaNs. Terminating training at epoch {self.current_epoch}")
-            exit()
-
-        self._log(
-            final_loss,
-            loss["coords"],
-            loss["atoms"],
-            loss["charges"],
-            loss["bonds"],
-            batch_size,
-            stage,
-        )
-
-        return final_loss
+        return loss
 
     def forward(self, batch: Batch, t: Tensor):
         atom_types: Tensor = batch.x
@@ -317,27 +272,12 @@ class Trainer(pl.LightningModule):
             charges_perturbed, num_classes=self.num_charge_classes
         ).float()
 
-        # MASKING PREDICTION
-        edge_index_global, edge_mask, node_mask = dropout_node(edge_index_global)
-        edge_attr_global_perturbed = edge_attr_global_perturbed[edge_mask]
-        pos_perturbed = pos_perturbed[node_mask]
-        atom_types_perturbed = atom_types_perturbed[node_mask]
-        charges_perturbed = charges_perturbed[node_mask]
-
         batch_edge_global = data_batch[edge_index_global[0]]
-        data_batch = data_batch[node_mask]
 
         atom_feats_in_perturbed = torch.cat(
             [atom_types_perturbed, charges_perturbed], dim=-1
         )
 
-        edge_index_global = (
-            torch.eq(data_batch.unsqueeze(0), data_batch.unsqueeze(-1))
-            .int()
-            .fill_diagonal_(0)
-        )
-        edge_index_global, _ = dense_to_sparse(edge_index_global)
-        edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
         out = self.model(
             x=atom_feats_in_perturbed,
             t=temb,
@@ -354,12 +294,6 @@ class Trainer(pl.LightningModule):
         out["charges_perturbed"] = charges_perturbed
         out["bonds_perturbed"] = edge_attr_global_perturbed
 
-        # MASKING LABELS
-        edge_attr_global = edge_attr_global[edge_mask]
-        pos_centered = pos_centered[node_mask]
-        atom_types = atom_types[node_mask]
-        charges = charges[node_mask]
-
         out["coords_true"] = pos_centered
         out["atoms_true"] = atom_types.argmax(dim=-1)
         out["bonds_true"] = edge_attr_global
@@ -368,54 +302,6 @@ class Trainer(pl.LightningModule):
         out["bond_aggregation_index"] = edge_index_global[1]
 
         return out
-
-    def _log(
-        self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, batch_size, stage
-    ):
-        self.log(
-            f"{stage}/loss",
-            loss,
-            on_step=True,
-            batch_size=batch_size,
-            prog_bar=False,
-            sync_dist=self.hparams.gpus > 1 and stage == "val",
-        )
-
-        self.log(
-            f"{stage}/coords_loss",
-            coords_loss,
-            on_step=True,
-            batch_size=batch_size,
-            prog_bar=(stage == "train"),
-            sync_dist=self.hparams.gpus > 1 and stage == "val",
-        )
-
-        self.log(
-            f"{stage}/atoms_loss",
-            atoms_loss,
-            on_step=True,
-            batch_size=batch_size,
-            prog_bar=(stage == "train"),
-            sync_dist=self.hparams.gpus > 1 and stage == "val",
-        )
-
-        self.log(
-            f"{stage}/charges_loss",
-            charges_loss,
-            on_step=True,
-            batch_size=batch_size,
-            prog_bar=(stage == "train"),
-            sync_dist=self.hparams.gpus > 1 and stage == "val",
-        )
-
-        self.log(
-            f"{stage}/bonds_loss",
-            bonds_loss,
-            on_step=True,
-            batch_size=batch_size,
-            prog_bar=(stage == "train"),
-            sync_dist=self.hparams.gpus > 1 and stage == "val",
-        )
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(

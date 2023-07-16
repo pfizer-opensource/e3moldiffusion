@@ -1,5 +1,6 @@
 
 #load_ckpt: geom_midi/logs/eqgat_fc_500T_lr2_midi_emb512_l12/run0/last.ckpt
+load_ckpt_from_pretrained: /hpfs/userws/cremej01/projects/logs/geom/pretrain_x0/run0/epoch=254-step=373830.ckpt
 
 batch_size: 200
 inference_batch_size: 70
@@ -17,7 +18,7 @@ test_interval: 10
 
 #EQGAT
 sdim: 256
-vdim: 128
+vdim: 256
 edim: 128
 num_layers: 12
 rbf_dim: 64
@@ -41,7 +42,7 @@ beta_max: 2.e-2
 timesteps: 500
 max_time: 06:00:00:00
 
-save_dir: /hpfs/userws/cremej01/projects/logs/geom/x0
+save_dir: /hpfs/userws/cremej01/projects/logs/geom/pretrain_x0
 lr: 2.e-4
 lr_factor: 0.5
 lr_patience: 10

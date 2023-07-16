@@ -22,7 +22,8 @@ def add_arguments(parser):
     )  # keep first
 
     # Load from checkpoint
-    parser.add_argument("--load_ckpt", default="", type=str)
+    parser.add_argument("--load-ckpt", default="", type=str)
+    parser.add_argument("--load-ckpt-from-pretrained", default=None, type=str)
 
     # DATA and FILES
     parser.add_argument("-s", "--save-dir", default=DEFAULT_SAVE_DIR, type=str)

@@ -45,14 +45,14 @@ if __name__ == "__main__":
     print(f"Loading {hparams.dataset} Datamodule.")
     if hparams.use_adaptive_loader:
         print("Using adaptive dataloader")
-        from experiments.data.pubchem_dataset_adaptive import PubChemDataModule
+        from experiments.data.geom_dataset_adaptive import GeomDataModule
 
-        datamodule = PubChemDataModule(hparams)
+        datamodule = GeomDataModule(hparams)
     else:
         print("Using non-adaptive dataloader")
-        from experiments.data.pubchem_dataset_nonadaptive import PubChemDataModule
+        from experiments.data.geom_dataset_nonadaptive import GeomDataModule
 
-        datamodule = PubChemDataModule(
+        datamodule = GeomDataModule(
             root=hparams.dataset_root,
             batch_size=hparams.batch_size,
             num_workers=hparams.num_workers,
