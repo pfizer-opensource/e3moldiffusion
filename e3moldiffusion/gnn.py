@@ -4,8 +4,8 @@ import torch
 from torch import Tensor, nn
 from torch_geometric.typing import OptTensor
 
-from e3moldiffusion.convs import EQGATGlobalEdgeConvFinal
-from e3moldiffusion.modules import LayerNorm
+from e3moldiffusion.convs import EQGATGlobalEdgeConvFinal, EQGATLocalConvFinal
+from e3moldiffusion.modules import LayerNorm, AdaptiveLayerNorm
 
 
 class EQGATEdgeGNN(nn.Module):
@@ -16,11 +16,10 @@ class EQGATEdgeGNN(nn.Module):
     """
     def __init__(self,
                  hn_dim: Tuple[int, int] = (64, 16),
-                 rbf_dim: int = 64,
                  edge_dim: Optional[int] = 16,
                  cutoff_local: float = 5.0,
                  num_layers: int = 5,
-                 use_norm: bool = True,
+                 latent_dim: Optional[int] = None,
                  use_cross_product: bool = False,
                  vector_aggr: str = "mean",
                  fully_connected: bool = True,
@@ -58,9 +57,14 @@ class EQGATEdgeGNN(nn.Module):
                 )
            
         self.convs = nn.ModuleList(convs)
-        self.use_norm = use_norm
+        
+        if latent_dim:
+            norm_module = AdaptiveLayerNorm
+        else:
+            norm_module = LayerNorm
+            
         self.norms = nn.ModuleList([
-            LayerNorm(dims=hn_dim) if use_norm else nn.Identity()
+            norm_module(dims=hn_dim, latent_dim=latent_dim)
             for _ in range(num_layers)
         ])
         
@@ -69,8 +73,7 @@ class EQGATEdgeGNN(nn.Module):
     def reset_parameters(self):
         for conv, norm in zip(self.convs, self.norms):
             conv.reset_parameters()
-            if self.use_norm:
-                norm.reset_parameters()
+            norm.reset_parameters()
     
     def calculate_edge_attrs(self, edge_index: Tensor, edge_attr: OptTensor, pos: Tensor, sqrt: bool = True):
         source, target = edge_index
@@ -100,6 +103,7 @@ class EQGATEdgeGNN(nn.Module):
                 edge_attr_local: Tuple[Tensor, Tensor, Tensor, Tensor],
                 edge_index_global: Tensor,
                 edge_attr_global: Tuple[Tensor, Tensor, Tensor, Tensor],
+                z: OptTensor = None,
                 batch: Tensor = None) -> Dict:
         
         # edge_attr_xyz (distances, cosines, relative_positions, edge_features)
@@ -111,9 +115,7 @@ class EQGATEdgeGNN(nn.Module):
             edge_index_in = edge_index_global
             edge_attr_in = edge_attr_global
             
-            if self.use_norm:
-                s, v = self.norms[i](x=(s, v), batch=batch)
-            
+            s, v = self.norms[i](x={"s": s, "v": v, "z": z}, batch=batch)
             out = self.convs[i](x=(s, v, p), batch=batch, edge_index=edge_index_in, edge_attr=edge_attr_in)
             s, v, p, e = out["s"], out["v"], out['p'], out["e"]
             # p = p - scatter_mean(p, batch, dim=0)[batch]
@@ -127,3 +129,80 @@ class EQGATEdgeGNN(nn.Module):
         return out
     
     
+class EQGATLocalGNN(nn.Module):
+    """_summary_
+    EQGAT GNN Network updating node-level scalar, vectors.
+    Args:
+        nn (_type_): _description_
+    """
+    def __init__(self,
+                 hn_dim: Tuple[int, int] = (64, 16),
+                 edge_dim: Optional[int] = 16,
+                 cutoff_local: float = 5.0,
+                 num_layers: int = 5,
+                 use_cross_product: bool = False,
+                 vector_aggr: str = "mean"
+                 ):
+        super(EQGATLocalGNN, self).__init__()
+
+        
+        self.num_layers = num_layers
+        self.cutoff_local = cutoff_local
+
+        self.sdim, self.vdim = hn_dim
+        self.edge_dim = edge_dim
+        
+        convs = []
+        
+        for i in range(num_layers):
+            convs.append(
+                    EQGATLocalConvFinal(in_dims=hn_dim,
+                                        out_dims=hn_dim,
+                                        edge_dim=edge_dim,
+                                        has_v_in=i>0,
+                                        use_mlp_update= i < (num_layers - 1),
+                                        vector_aggr=vector_aggr,
+                                        use_cross_product=use_cross_product
+                                        )
+                )
+           
+        self.convs = nn.ModuleList(convs)
+        self.norms = nn.ModuleList([
+            LayerNorm(dims=hn_dim)
+            for _ in range(num_layers)
+        ])
+        
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        for conv, norm in zip(self.convs, self.norms):
+            conv.reset_parameters()
+            norm.reset_parameters()
+    
+    def forward(self,
+                s: Tensor,
+                v: Tensor,
+                p: Tensor,
+                edge_index_local: Tensor,
+                edge_attr_local: Tuple[Tensor, Tensor, Tensor, Tensor],
+                edge_index_global: Tensor,
+                edge_attr_global: Tuple[Tensor, Tensor, Tensor, Tensor],
+                batch: Tensor = None) -> Dict:
+        
+        # edge_attr_xyz (distances, cosines, relative_positions, edge_features)
+        # (E, E, E x 3, E x F)
+        
+
+        for i in range(len(self.convs)):   
+
+            edge_index_in = edge_index_local
+            edge_attr_in = edge_attr_local
+            
+            s, v = self.norms[i](x={"s": s, "v": v}, batch=batch)
+            
+            out = self.convs[i](x=(s, v, p), batch=batch, edge_index=edge_index_in, edge_attr=edge_attr_in)
+            s, v = out["s"], out["v"]
+             
+        out = {"s": s, "v": v}
+        
+        return out

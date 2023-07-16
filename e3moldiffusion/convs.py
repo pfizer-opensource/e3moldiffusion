@@ -210,3 +210,170 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
             nv_j = nv0_j
 
         return ns_j, nv_j, pj, edge
+    
+    
+########### Local Without Edge Features ###########
+class EQGATLocalConvFinal(MessagePassing):
+    """
+    Slightly modified SO(3) equivariant graph attention convolution described in
+    @inproceedings{
+        le2022representation,
+        title={Representation Learning on Biomolecular Structures using Equivariant Graph Attention},
+        author={Tuan Le and Frank Noe and Djork-Arn{\'e} Clevert},
+        booktitle={The First Learning on Graphs Conference},
+        year={2022},
+        url={https://openreview.net/forum?id=kv4xUo5Pu6}
+    }
+    
+    Intention for this layer is to be used as a local message passing layer.
+    """
+    def __init__(
+        self,
+        in_dims: Tuple[int, Optional[int]],
+        out_dims: Tuple[int, Optional[int]],
+        edge_dim: int,
+        eps: float = 1e-6,
+        has_v_in: bool = False,
+        use_mlp_update: bool = True,
+        vector_aggr: str = "mean",
+        use_cross_product: bool = True
+    ):
+        super(EQGATLocalConvFinal, self).__init__(
+            node_dim=0, aggr=None, flow="source_to_target"
+        )
+        
+        assert edge_dim is not None
+        
+        self.vector_aggr = vector_aggr
+        self.in_dims = in_dims
+        self.si, self.vi = in_dims
+        self.out_dims = out_dims
+        self.so, self.vo = out_dims
+        self.has_v_in = has_v_in
+        self.use_cross_product = use_cross_product
+        self.silu = nn.SiLU()
+        if has_v_in:
+            self.vector_net = DenseLayer(self.vi, self.vi, bias=False)
+            self.v_mul = 3 if use_cross_product else 2
+        else:
+            self.v_mul = 1
+            self.vector_net = nn.Identity()
+        
+        self.edge_net = nn.Sequential(DenseLayer(2 * self.si + edge_dim + 2 + 2, 
+                                                 self.si, bias=True, 
+                                                 activation=nn.SiLU()),
+                                      DenseLayer(self.si,
+                                                 self.v_mul * self.vi + self.si,
+                                                 bias=True)
+                                      )        
+        self.scalar_net = DenseLayer(self.si, self.si, bias=True)
+        self.update_net = GatedEquivBlock(in_dims=(self.si, self.vi),
+                                          hs_dim=self.si, hv_dim=self.vi,
+                                          out_dims=(self.so, self.vo),
+                                          norm_eps=eps,
+                                          use_mlp=use_mlp_update
+                                          )
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        reset(self.edge_net)
+        if self.has_v_in:
+            reset(self.vector_net)
+        reset(self.scalar_net)
+        reset(self.update_net)
+
+    def forward(
+        self,
+        x: Tuple[Tensor, Tensor, Tensor],
+        edge_index: Tensor,
+        edge_attr: Tuple[Tensor, Tensor, Tensor, Tensor],
+        batch: Tensor
+    ):
+
+        s, v, p = x
+        d, a, r, e = edge_attr
+            
+        ms, mv = self.propagate(
+            sa=s,
+            sb=self.scalar_net(s),
+            va=v,
+            vb=self.vector_net(v),
+            p=p,
+            edge_attr=(d, a, r, e),
+            edge_index=edge_index,
+            dim_size=s.size(0),
+        )
+
+        s = ms + s
+        v = mv + v
+ 
+        ms, mv = self.update_net(x=(s, v))
+
+        s = ms + s
+        v = mv + v
+    
+        out = {"s": s, "v": v, 'p': p, 'e': e}
+        return out
+
+    def aggregate(
+        self,
+            inputs: Tuple[Tensor, Tensor],
+            index: Tensor,
+            dim_size: Optional[int] = None
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        s = scatter(inputs[0], index=index, dim=0, reduce="add", dim_size=dim_size)
+        v = scatter(inputs[1], index=index, dim=0, reduce=self.vector_aggr, dim_size=dim_size)
+        return s, v
+
+    def message(
+        self,
+        sa_i: Tensor,
+        sa_j: Tensor,
+        sb_j: Tensor,
+        va_i: Tensor,
+        va_j: Tensor,
+        vb_j: Tensor,
+        p_i: Tensor,
+        p_j: Tensor,
+        index: Tensor,
+        edge_attr: Tuple[Tensor, Tensor, Tensor, Tensor],
+        dim_size: Optional[int]
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+
+        d, a, r, e = edge_attr
+
+        de0 = d.view(-1, 1)
+        a0 = a.view(-1, 1)
+
+        d_i, d_j = torch.pow(p_i, 2).sum(-1, keepdim=True).clamp(min=1e-6).sqrt(), torch.pow(p_j, 2).sum(-1, keepdim=True).clamp(min=1e-6).sqrt()
+        aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e, d_i, d_j], dim=-1)
+        aij = self.edge_net(aij)
+        
+        if self.has_v_in:
+            aij, vij0 = aij.split([self.si, self.v_mul*self.vi], dim=-1)
+            vij0 = vij0.unsqueeze(1)
+            if self.use_cross_product:
+                vij0, vij1, vij2 = vij0.chunk(3, dim=-1)
+            else:
+                vij0, vij1 = vij0.chunk(2, dim=-1)
+        else:
+            aij, vij0 = aij.split([self.si, self.vi], dim=-1)
+            vij0 = vij0.unsqueeze(1)
+
+        # feature attention
+        aij = scatter_softmax(aij, index=index, dim=0, dim_size=dim_size)
+        ns_j = aij * sb_j
+        nv0_j = r.unsqueeze(-1) * vij0
+
+        if self.has_v_in:
+            nv1_j = vij1 * vb_j
+            if self.use_cross_product:
+                v_ij_cross = cross_product(va_i, va_j, dim=1)
+                nv2_j = vij2 * v_ij_cross
+                nv_j = nv0_j + nv1_j + nv2_j
+            else:
+                nv_j = nv0_j + nv1_j
+        else:
+            nv_j = nv0_j
+
+        return ns_j, nv_j

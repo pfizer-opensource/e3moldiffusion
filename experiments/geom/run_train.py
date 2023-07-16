@@ -61,9 +61,16 @@ if __name__ == "__main__":
     train_smiles = datamodule.train_dataset.smiles
 
     if hparams.continuous:
+        print("Using continuous diffusion")
         from experiments.diffusion_continuous import Trainer
     else:
+        print("Using discrete diffusion")
         from experiments.diffusion_discrete import Trainer
+        
+    if hparams.latent_dim:
+        print("Using latent diffusion")
+        from experiments.latent_diffusion_discrete import Trainer
+        
     model = Trainer(hparams=hparams.__dict__,
                     dataset_info=dataset_info,
                     dataset_statistics=dataset_statistics,

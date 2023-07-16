@@ -1,5 +1,5 @@
 import math
-from typing import Callable, Optional, Tuple, Union
+from typing import Callable, Optional, Tuple, Union, Dict
 
 import torch
 import torch.nn as nn
@@ -109,7 +109,7 @@ class GatedEquivBlock(nn.Module):
 
 
 class LayerNorm(nn.Module):
-    def __init__(self, dims: Tuple[int, Optional[int]], eps: float = 1e-6, affine: bool = True):
+    def __init__(self, dims: Tuple[int, Optional[int]], eps: float = 1e-6, affine: bool = True, latent_dim=None):
         super().__init__()
 
         self.dims = dims
@@ -130,8 +130,8 @@ class LayerNorm(nn.Module):
             self.weight.data.fill_(1.0)
             self.bias.data.fill_(0.0)
 
-    def forward(self, x: Tuple[Tensor, Optional[Tensor]], batch: Tensor) -> Tuple[Tensor, Optional[Tensor]]:
-        s, v = x
+    def forward(self, x: Dict, batch: Tensor) -> Tuple[Tensor, Optional[Tensor]]:
+        s, v = x["s"], x["v"]
         batch_size = int(batch.max()) + 1
         smean = s.mean(dim=-1, keepdim=True)
         smean = scatter_mean(smean, batch, dim=0, dim_size=batch_size)
@@ -162,6 +162,73 @@ class LayerNorm(nn.Module):
         return (f'{self.__class__.__name__}(dims={self.dims}, '
                 f'affine={self.affine})')
 
+
+class AdaptiveLayerNorm(nn.Module):
+    def __init__(self, dims: Tuple[int, Optional[int]], latent_dim: int,  eps: float = 1e-6, affine: bool = True):
+        super().__init__()
+
+        self.dims = dims
+        self.sdim, self.vdim = dims
+        self.latent_dim = latent_dim
+        self.eps = eps
+        self.affine = affine
+        if affine:
+            self.weight_bias = DenseLayer(latent_dim, 3*self.sdim, bias=True)
+            self.weight = nn.Parameter(torch.Tensor(self.sdim))
+            self.bias = nn.Parameter(torch.Tensor(self.sdim))
+        else:
+            print("Affine was set to False. This layer should used the affine transformation")
+            raise ValueError
+            self.register_parameter('weight', None)
+            self.register_parameter('bias', None)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.weight_bias.bias.data[:self.sdim] = 1.0
+        self.weight_bias.bias.data[self.sdim:] = 0.0
+        
+        self.weight.data.fill_(1.0)
+        self.bias.data.fill_(0.0)
+            
+        
+
+    def forward(self, x: Dict, batch: Tensor) -> Tuple[Tensor, Optional[Tensor]]:
+        s, v , z = x["s"], x["v"], x["z"]
+        batch_size = int(batch.max()) + 1
+        
+        weight, bias, activation = self.weight_bias(z).chunk(3, dim=-1)
+        gate = torch.sigmoid(activation)
+        weight, bias, gate = weight[batch], bias[batch], gate[batch]
+        s = gate * (weight * s + bias)
+        
+        smean = s.mean(dim=-1, keepdim=True)
+        smean = scatter_mean(smean, batch, dim=0, dim_size=batch_size)
+    
+        s = s - smean[batch]
+
+        var = (s * s).mean(dim=-1, keepdim=True)
+        var = scatter_mean(var, batch, dim=0, dim_size=batch_size)
+        var = torch.clamp(var, min=self.eps) # .sqrt()
+        sout = s / var[batch]
+    
+        sout = sout * self.weight + self.bias
+        
+        if v is not None:
+            vmean = torch.pow(v, 2).sum(dim=1, keepdim=True).mean(dim=-1, keepdim=True)
+            vmean = scatter_mean(vmean, batch, dim=0, dim_size=batch_size)
+            vmean = torch.clamp(vmean, min=self.eps)
+            vout = v / vmean[batch]
+        else:
+            vout = None
+
+        out = sout, vout
+
+        return out
+
+    def __repr__(self):
+        return (f'{self.__class__.__name__}(dims={self.dims}, '
+                f'affine={self.affine})')
 
 class SE3Norm(nn.Module):
     def __init__(self, eps: float = 1e-5, device=None, dtype=None) -> None:
