@@ -9,7 +9,14 @@ class DiffusionLoss(nn.Module):
     def __init__(self, modalities: List = ["coords", "atoms", "charges", "bonds"]) -> None:
         super().__init__()
         self.modalities = modalities
-                
+        
+        if "coords" in modalities:
+            self.regression_key = "coords"
+        elif "latents" in modalities:
+            self.regression_key = "latents"
+        else:
+            raise ValueError
+                        
     def loss_non_nans(self, loss: Tensor, modality: str) -> Tensor:
         m = loss.isnan()
         if torch.any(m):
@@ -29,13 +36,13 @@ class DiffusionLoss(nn.Module):
         if weights is not None:
             assert len(weights) == batch_size
             
-            coords_loss = F.mse_loss(pred_data["coords"], true_data["coords"], reduction="none").mean(-1)
-            coords_loss = scatter_mean(
-                coords_loss, index=batch, dim=0, dim_size=batch_size
+            regr_loss = F.mse_loss(pred_data[self.regression_key], true_data[self.regression_key], reduction="none").mean(-1)
+            regr_loss = scatter_mean(
+                regr_loss, index=batch, dim=0, dim_size=batch_size
             )
-            coords_loss = self.loss_non_nans(coords_loss, "coords")
-            coords_loss *= weights        
-            coords_loss = torch.sum(coords_loss, dim=0)
+            regr_loss = self.loss_non_nans(regr_loss, self.regression_key)
+            regr_loss *= weights        
+            regr_loss = torch.sum(regr_loss, dim=0)
             
             atoms_loss = F.cross_entropy(
                 pred_data["atoms"], true_data["atoms"], reduction='none'
@@ -70,7 +77,7 @@ class DiffusionLoss(nn.Module):
             bonds_loss *= weights
             bonds_loss = bonds_loss.sum(dim=0)
         else:
-            coords_loss = F.mse_loss(pred_data["coords"], true_data["coords"], reduction="mean").mean(-1)
+            regr_loss = F.mse_loss(pred_data[self.regression_key], true_data[self.regression_key], reduction="mean").mean(-1)
             atoms_loss = F.cross_entropy(
                 pred_data["atoms"], true_data["atoms"], reduction='mean'
                 )  
@@ -81,6 +88,6 @@ class DiffusionLoss(nn.Module):
                 pred_data["bonds"], true_data["bonds"], reduction='mean'
                 )  
         
-        loss = {"coords": coords_loss, "atoms": atoms_loss, "charges": charges_loss, "bonds": bonds_loss}
+        loss = {self.regression_key: regr_loss, "atoms": atoms_loss, "charges": charges_loss, "bonds": bonds_loss}
         
         return loss

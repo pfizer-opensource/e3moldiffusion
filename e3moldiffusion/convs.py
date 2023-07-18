@@ -6,8 +6,10 @@ from torch import Tensor, nn
 from torch_geometric.nn import MessagePassing
 from torch_geometric.nn.inits import reset
 from torch_geometric.typing import OptTensor
+from torch_sparse import SparseTensor
 from torch_scatter import scatter
 from torch_scatter.composite import scatter_softmax
+from torch_geometric.nn import knn_graph
 
 from e3moldiffusion.modules import (DenseLayer, GatedEquivBlock, SE3Norm)
 
@@ -21,8 +23,6 @@ def cross_product(a: Tensor, b: Tensor, dim: int) -> Tensor:
         s3 = a[:, 0, :] * b[:, 1, :] - a[:, 1, :] * b[:, 0, :]
         cross = torch.stack([s1, s2, s3], dim=dim)
         return cross
-
-
 
 ########### With Edge Features ###########
 class EQGATGlobalEdgeConvFinal(MessagePassing):
@@ -48,7 +48,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         has_v_in: bool = False,
         use_mlp_update: bool = True,
         vector_aggr: str = "mean",
-        use_cross_product: bool = True
+        use_cross_product: bool = True,
+        edge_mp: bool = False
     ):
         super(EQGATGlobalEdgeConvFinal, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
@@ -84,6 +85,13 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
                                       )
         self.edge_post = DenseLayer(edge_dim, edge_dim)
         
+        self.edge_mp = edge_mp
+        
+        if edge_mp:
+            self.edge_lin = DenseLayer(2 * edge_dim + 3, edge_dim)
+        else:
+            self.edge_lin = None
+        
         
         self.scalar_net = DenseLayer(self.si, self.si, bias=True)
         self.update_net = GatedEquivBlock(in_dims=(self.si, self.vi),
@@ -101,7 +109,81 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         reset(self.scalar_net)
         reset(self.update_net)
         self.posnorm.reset_parameters()
+        
+    
+    @staticmethod
+    def get_triplet(edge_index: torch.Tensor, num_nodes: int):
+        assert edge_index.size(0) == 2
+        input_edge_index = edge_index.clone()
+        source, target = edge_index  # j->i
+        # create identifiers for edges based on (source, target)
+        value = torch.arange(source.size(0), device=source.device)
+        # as row-index select the target (column) nodes --> transpose
+        # create neighbours from j
+        adj_t = SparseTensor(row=target, col=source, value=value,
+                             sparse_sizes=(num_nodes, num_nodes))
+        # get neighbours from j
+        adj_t_row = adj_t[source]
+        # returns the target nodes (k) that include the source (j)
+        # note there can be path i->j->k where k is i
+        num_triplets = adj_t_row.set_value(None).sum(dim=1).to(torch.long)
+        # print(num_triplets)
+        # Node indices (k->j->i) for triplets.
+        idx_i = target.repeat_interleave(num_triplets)
+        idx_j = source.repeat_interleave(num_triplets)
+        idx_k = adj_t_row.storage.col()  # get index for k
+        mask = idx_i != idx_k  # Remove i == k triplets.
+        idx_i, idx_j, idx_k = idx_i[mask], idx_j[mask], idx_k[mask]
+        # print(idx_i); print(idx_j); print(idx_k)
+        # Edge indices (k-j, j->i) for triplets.
+        idx_kj = adj_t_row.storage.value()[mask]
+        idx_ji = adj_t_row.storage.row()[mask]
 
+        return input_edge_index, idx_i, idx_j, idx_k, idx_kj, idx_ji
+    
+    
+    def edge_message_passing(self, p: Tensor, batch: Tensor, k: int, edge_index_full: Tensor, edge_attr_full: Tensor):
+        
+        num_nodes = p.size(0)
+        
+        E_full = torch.zeros(size=(num_nodes, num_nodes, edge_attr_full.size(-1)), device=edge_attr_full.device, dtype=edge_attr_full.dtype)
+        E_full[edge_index_full[0], edge_index_full[1], :] = edge_attr_full
+        
+        # create kNN graph
+        edge_index_knn = knn_graph(x=p, k=k, batch=batch, flow="source_to_target")
+        j, i = edge_index_knn
+        
+        p_ij = p[j] - p[i]
+        p_ij_n = F.normalize(p_ij, p=2, dim=-1)
+        d_ij = torch.pow(p_ij, 2).sum(-1, keepdim=True).sqrt()
+        
+        edge_ij = E_full[j, i, :]
+        
+        edge_index_knn,\
+        idx_i, idx_j, idx_k,\
+        idx_kj, idx_ji = self.get_triplet(edge_index_knn, num_nodes=num_nodes)
+        
+        p_jk = -1.0 * p_ij_n[idx_kj]
+        p_ji = p_ij_n[idx_ji]
+        
+        theta_ijk = torch.sum(p_jk*p_ji, -1, keepdim=True).clamp_(-1.0 + 1e-7, 1.0 - 1e-7)
+        theta_ijk = torch.arccos(theta_ijk)
+        d_ji = d_ij[idx_ji]
+        d_jk = d_ij[idx_kj]
+        edge_0 = edge_ij[idx_ji]
+        edge_1 = edge_ij[idx_kj]
+        f_ijk = torch.cat([edge_0, edge_1, theta_ijk, d_ji, d_jk], dim=-1)
+        f_ijk = self.edge_lin(f_ijk)
+        aggr_edges = scatter(src=f_ijk, index=idx_ji, dim=0, reduce="mean", dim_size=edge_index_knn.size(-1))
+        E_aggr = torch.zeros_like(E_full)
+        E_aggr[edge_index_knn[0], edge_index_knn[1], :] = aggr_edges
+        
+        E_out = E_full + E_aggr
+        
+        edge_attr_full = E_out[edge_index_full[0], edge_index_full[1], :]
+        
+        return edge_attr_full
+        
     def forward(
         self,
         x: Tuple[Tensor, Tensor, Tensor],
@@ -113,8 +195,12 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         s, v, p = x
         d, a, r, e = edge_attr
         
+        
         e = self.edge_pre(e)
-    
+        
+        if self.edge_mp:
+            e = self.edge_message_passing(p=p, batch=batch, k=4, edge_index_full=edge_index, edge_attr_full=e)
+        
         ms, mv, mp, me = self.propagate(
             sa=s,
             sb=self.scalar_net(s),
@@ -210,8 +296,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
             nv_j = nv0_j
 
         return ns_j, nv_j, pj, edge
-    
-    
+        
 ########### Local Without Edge Features ###########
 class EQGATLocalConvFinal(MessagePassing):
     """
@@ -377,3 +462,67 @@ class EQGATLocalConvFinal(MessagePassing):
             nv_j = nv0_j
 
         return ns_j, nv_j
+    
+
+# Topological Conv without 3d coords
+class TopoEdgeConvLayer(MessagePassing):
+    def __init__(
+        self, in_dim: int, out_dim: int, edge_dim: int, aggr: str = "mean"
+    ):
+        super(TopoEdgeConvLayer, self).__init__(aggr=None)
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.edge_pre = DenseLayer(edge_dim, edge_dim)
+        self.edge_dim = edge_dim
+        self.edge_post = DenseLayer(edge_dim, edge_dim)
+        self._aggr = aggr
+
+        self.neighbour_lin = DenseLayer(in_dim, in_dim)
+        self.msg_mlp = nn.Sequential(
+            DenseLayer(2*in_dim + edge_dim, in_dim, activation=nn.SiLU()),
+            DenseLayer(in_dim, in_dim)
+            )
+        self.update_mlp = nn.Sequential(
+            DenseLayer(in_dim, in_dim, activation=nn.SiLU()),
+            DenseLayer(in_dim, out_dim),
+        )
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.edge_pre.reset_parameters()
+        self.edge_post.reset_parameters()
+        self.neighbour_lin.reset_parameters()
+        reset(self.msg_mlp)
+        reset(self.update_mlp)
+
+    def forward(self, x: Tensor, edge_index: Tensor, edge_attr: Tensor) -> Tensor:
+        xn = self.neighbour_lin(x)
+        
+        e = self.edge_pre(edge_attr)
+        mx, me = self.propagate(x=x, xu=xn, edge_index=edge_index, edge_attr=e)
+        x = mx + x
+        e = F.silu(me + e)
+        e = self.edge_post(e)
+        
+        ox = self.update_mlp(x)
+        x = ox + x
+        return x, e
+
+    def aggregate(
+        self,
+            inputs: Tuple[Tensor, Tensor],
+            index: Tensor,
+            dim_size: Optional[int] = None
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        s = scatter(inputs[0], index=index, dim=0, reduce=self._aggr, dim_size=dim_size)
+        edge = inputs[1]
+        return s, edge
+
+
+    def message(
+        self, x_i: Tensor, x_j: Tensor, xu_j: Tensor, edge_attr: Tensor
+    ) -> Tensor:
+        msg = torch.cat([x_i, x_j, edge_attr], dim=-1)
+        msg, e = self.msg_mlp(msg).split([self.in_dim, self.edge_dim], dim=-1)
+        x_j = msg * xu_j
+        return x_j, e

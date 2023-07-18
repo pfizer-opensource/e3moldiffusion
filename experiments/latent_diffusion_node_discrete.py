@@ -10,24 +10,50 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.nn import radius_graph
-from torch_geometric.utils import dense_to_sparse, sort_edge_index, dropout_node
+from torch_geometric.utils import (dense_to_sparse, dropout_node,
+                                   sort_edge_index)
 from tqdm import tqdm
+from torch_scatter import scatter
 
-from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
+from e3moldiffusion.latentdiffusion import (Encoder, Decoder, DenoisingLatentEdgeNetwork)
+from e3moldiffusion.modules import GatedEquivBlock
 from e3moldiffusion.molfeat import get_bond_feature_dims
-from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
-
-from experiments.molecule_utils import Molecule
-from experiments.utils import coalesce_edges, get_empirical_num_nodes, get_list_of_edge_adjs, zero_mean
-from experiments.sampling.analyze import analyze_stability_for_molecules
+from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.losses import DiffusionLoss
+from experiments.molecule_utils import Molecule
+from experiments.sampling.analyze import analyze_stability_for_molecules
+from experiments.utils import (coalesce_edges, get_empirical_num_nodes,
+                               get_list_of_edge_adjs, zero_mean)
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(logging.NullHandler())
 logging.getLogger("pytorch_lightning.accelerators.cuda").addHandler(logging.NullHandler())
 
 BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
+
+
+def normalize_vector(v, eps: float = 1e-6):
+    vnorm = torch.clamp(torch.pow(v, 2).sum(-1, keepdim=True), min=eps).sqrt()
+    v = torch.div(v, vnorm)
+    return v
+
+
+def orthogonal_projection(v1, v2):
+    dot_prod = torch.mul(v1, v2).sum(dim=-1, keepdim=True)
+    v2 = v2 - dot_prod * v1
+    return v2
+
+
+def get_rotation_matrix_from_two_vector(v1, v2):
+    v1 = normalize_vector(v1)
+    v2 = normalize_vector(v2)
+    v2 = orthogonal_projection(v1, v2)
+    v2 = normalize_vector(v2)
+    v3 = torch.cross(v1, v2, dim=-1)
+    rot = torch.stack((v1, v2, v3), dim=-1)
+    return rot
+
 
 
 class Trainer(pl.LightningModule):
@@ -68,23 +94,43 @@ class Trainer(pl.LightningModule):
         empirical_num_nodes = get_empirical_num_nodes(dataset_info)
         self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
 
-        self.model = DenoisingEdgeNetwork(
-            hn_dim=(hparams["sdim"], hparams["vdim"]),
-            num_layers=hparams["num_layers"],
-            latent_dim=None,
-            use_cross_product=hparams["use_cross_product"],
+        self.encoder = Encoder(
             num_atom_features=self.num_atom_features,
             num_bond_types=self.num_bond_classes,
+            hn_dim=(hparams["sdim"], hparams["vdim"]),
             edge_dim=hparams['edim'],
             cutoff_local=hparams["cutoff_local"],
-            vector_aggr=hparams["vector_aggr"],
-            fully_connected=hparams["fully_connected"],
-            local_global_model=hparams["local_global_model"],
-            recompute_edge_attributes=True,
-            recompute_radius_graph=False,
-            edge_mp=hparams["edge_mp"]
+            num_layers=hparams["num_layers"],
+            use_cross_product=False,
+            vector_aggr="mean",
+            atom_mapping=True,
+            bond_mapping=True,
         )
-
+        self.latent_lin = GatedEquivBlock(in_dims=(hparams["sdim_latent"], hparams["vdim_latent"]),
+                                          out_dims=(hparams["latent_dim"], 2))  
+        self.decoder = Decoder(
+            num_atom_features=self.num_atom_features,
+            num_bond_types=self.num_bond_classes,
+            hn_dim=(hparams["sdim"], hparams["vdim"]),
+            edge_dim=hparams['edim'],
+            num_layers=hparams["num_layers"],
+            latent_dim=hparams["latent_dim"],
+            use_cross_product=False,
+            recompute_edge_attributes=True,
+            vector_aggr="mean"
+        )
+        
+        self.denoiser = DenoisingLatentEdgeNetwork(
+            num_atom_features=self.num_atom_features,
+            num_bond_types=self.num_bond_classes,
+            in_dim=hparams["sdim"],
+            edge_dim=hparams["edim"],
+            num_layers=hparams["num_layers"],
+            latent_dim=hparams["latent_dim"],
+            atom_mapping=True,
+            bond_mapping=True
+        )
+        
         self.sde = DiscreteDDPM(beta_min=hparams["beta_min"],
                                 beta_max=hparams["beta_max"],
                                 N=hparams["timesteps"],
@@ -102,7 +148,8 @@ class Trainer(pl.LightningModule):
                                                     alphas=self.sde.alphas.clone()
                                                     )
         
-        self.diffusion_loss = DiffusionLoss(modalities=["coords", "atoms", "charges", "bonds"])
+        self.decoding_loss = DiffusionLoss(modalities=["coords", "atoms", "charges", "bonds"])
+        self.diffusion_loss = DiffusionLoss(modalities=["latents", "atoms", "charges", "bonds"])
 
 
     def training_step(self, batch, batch_idx):
@@ -134,38 +181,34 @@ class Trainer(pl.LightningModule):
                             dtype=torch.long, device=batch.x.device)
         out_dict = self(batch=batch, t=t)
         
-        true_data = {"coords": out_dict["coords_true"],
-                     "atoms": out_dict["atoms_true"],
-                     "charges": out_dict["charges_true"],
-                     "bonds": out_dict["bonds_true"]
-                     }
+       
+        decoding_loss = self.decoding_loss(true_data=out_dict["true"],
+                                           pred_data=out_dict["pred"]["decoder"],
+                                           batch=batch.batch,
+                                           bond_aggregation_index=out_dict["bond_aggregation_index"],
+                                           weights=None
+                                           )
+        # encoder-decoder
+        decoding_loss_aggr = 1.0 * decoding_loss["coords"] + 1.0 * decoding_loss["atoms"] +  1.0 * decoding_loss["bonds"] + 1.0 * decoding_loss["charges"]
         
-        coords_pred = out_dict['coords_pred']
-        atoms_pred = out_dict['atoms_pred']
-        atoms_pred, charges_pred = atoms_pred.split([self.num_atom_types, self.num_charge_classes], dim=-1)
-        edges_pred = out_dict['bonds_pred']
         
-        pred_data =  {"coords": coords_pred,
-                     "atoms": atoms_pred,
-                     "charges": charges_pred,
-                     "bonds": edges_pred
-                     }
-
-        loss = self.diffusion_loss(true_data=true_data,
-                                   pred_data=pred_data,
-                                   batch=batch.batch,
-                                   bond_aggregation_index=out_dict["bond_aggregation_index"],
-                                   weights=None
-                                   )
+        # diffusion
+        diffusion_loss = self.diffusion_loss(true_data=out_dict["true"],
+                                           pred_data=out_dict["pred"]["denoiser"],
+                                           batch=batch.batch,
+                                           bond_aggregation_index=out_dict["bond_aggregation_index"],
+                                           weights=None
+                                           )
+        diffusion_loss_aggr = 1.0 * diffusion_loss["coords"] + 1.0 * diffusion_loss["atoms"] +  1.0 * diffusion_loss["bonds"] + 1.0 * diffusion_loss["charges"]
         
-        final_loss = 3.0 * loss["coords"] + 0.4 * loss["atoms"] +  2.0 * loss["bonds"] + 1.0 * loss["charges"]
-
+        final_loss = 0.5 * (decoding_loss_aggr * diffusion_loss_aggr)
+        
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
             print(f"Detected NaNs. Terminating training at epoch {self.current_epoch}")
             exit()
             
-        self._log(final_loss, loss["coords"], loss["atoms"], loss["charges"], loss["bonds"], batch_size, stage)
+        self._log(final_loss, decoding_loss, diffusion_loss, batch_size, stage)
 
         return final_loss
     
@@ -180,9 +223,13 @@ class Trainer(pl.LightningModule):
         n = batch.num_nodes
         bs = int(data_batch.max()) + 1
         
+        pos_centered = pos - scatter(pos, index=batch, dim=0, reduce="mean")[batch]
+
+
         bond_edge_index, bond_edge_attr = sort_edge_index(edge_index=bond_edge_index,
                                                           edge_attr=bond_edge_attr,
                                                           sort_by_row=False)
+        
         
         if not hasattr(batch, "fc_edge_index"):
             edge_index_global = torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1)).int().fill_diagonal_(0)
@@ -190,6 +237,7 @@ class Trainer(pl.LightningModule):
             edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
         else:
             edge_index_global = batch.fc_edge_index
+        
         
         edge_index_global, edge_attr_global = coalesce_edges(edge_index=edge_index_global,
                                                                   bond_edge_index=bond_edge_index, 
@@ -200,15 +248,36 @@ class Trainer(pl.LightningModule):
                                                               edge_attr=edge_attr_global, 
                                                               sort_by_row=False)
         
-        if self.hparams.masked_pretraining:
-            # MASKING
-            edge_index_global, edge_mask, node_mask = dropout_node(edge_index_global)
-            edge_attr_global = edge_attr_global[edge_mask]
-            pos = pos[node_mask]
-            atom_types = atom_types[node_mask]
-            charges = charges[node_mask]
-            data_batch = data_batch[node_mask]
+        # OHE the atom-types as well as charges
+        atom_types = F.one_hot(atom_types.squeeze().long(), num_classes=self.num_atom_types).float()
+        charges = self.dataset_statistics.one_hot_charges(charges)
 
+        atom_features_in = torch.cat([atom_types, charges], dim=-1)
+        edge_attr_global_ohe = F.one_hot(edge_attr_global, num_classes=self.num_bond_classes).float()
+
+        # Encoder: mapping to latent space Z still on node-level. Z is only SE(3) invariant
+        latent_out = self.encoder(x=atom_features_in,
+                                  pos=pos_centered,
+                                  edge_index_local=edge_index_global,
+                                  edge_attr_local=edge_attr_global_ohe,
+                                  batch=data_batch)
+        latent_out, vector_out = self.latent_lin(x=(latent_out["s"], latent_out["v"]))
+        vector_out = scatter(vector_out, index=batch, dim=0, reduce='add', dim_size=int(data_batch.max()) + 1)
+        rot = get_rotation_matrix_from_two_vector(vector_out[:, :, 0], vector_out[:, :, 1])
+        
+        # Decoder: mapping from latent Z as well as Topology through Atom Features (A) and Edge-features (E) to Coordinate space as well graph space (A, E).
+        decoder_out = self.decoder(
+             x=atom_features_in,
+             z=latent_out,
+             rot=rot,
+             edge_index_global=edge_index_global,
+             edge_attr_global=edge_attr_global_ohe,
+             batch=batch
+        )
+        # essentially the decoder needs to learn to map a latent point cloud to the ambient coordinate space
+
+
+        # Denoising latent model that learns latent space Z as well as graph space (A, E)
         j, i = edge_index_global
         mask = j < i
         mask_i = i[mask]
@@ -240,32 +309,25 @@ class Trainer(pl.LightningModule):
         temb = temb.clamp(min=self.hparams.eps_min)
         temb = temb.unsqueeze(dim=1)
         
-        # Coords: point cloud in R^3
-        # sample noise for coords and recenter
-        noise_coords_true = torch.randn_like(pos)
-        noise_coords_true = zero_mean(noise_coords_true, batch=data_batch, dim_size=bs, dim=0)
-        # center the true point cloud
-        pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
-        # get signal and noise coefficients for coords
-        mean_coords, std_coords = self.sde.marginal_prob(x=pos_centered, t=t[data_batch])
-        # perturb coords
-        pos_perturbed = mean_coords + std_coords * noise_coords_true
+        # latent space
+        # sample noise for latents
+        noise_latent_true = torch.randn_like(latent_out)
+        # get signal and noise coefficients for latents
+        mean_latent, std_latent = self.sde.marginal_prob(x=noise_latent_true, t=t[data_batch])
+        # perturb latents
+        latent_perturbed = mean_latent + std_latent * noise_latent_true
         
         # one-hot-encode
         if self.hparams.no_h:
             raise NotImplementedError
             node_feat -= 1 
             
-        # one-hot-encode atom types
-        atom_types = F.one_hot(atom_types.squeeze().long(), num_classes=self.num_atom_types).float()
+        # perturb atom-types
         probs = self.cat_atoms.marginal_prob(atom_types.float(), t[data_batch])
         atom_types_perturbed = probs.multinomial(1,).squeeze()
         atom_types_perturbed = F.one_hot(atom_types_perturbed, num_classes=self.num_atom_types).float()
     
-    
-        # one-hot-encode charges
-        # offset
-        charges = self.dataset_statistics.one_hot_charges(charges)
+        # perturb charges
         probs = self.cat_charges.marginal_prob(charges.float(), t[data_batch])
         charges_perturbed = probs.multinomial(1,).squeeze()
         charges_perturbed = F.one_hot(charges_perturbed, num_classes=self.num_charge_classes).float()
@@ -274,31 +336,49 @@ class Trainer(pl.LightningModule):
         
         atom_feats_in_perturbed = torch.cat([atom_types_perturbed, charges_perturbed], dim=-1)
 
-
-        out = self.model(
+        denoising_out = self.denoiser(
             x=atom_feats_in_perturbed,
+            z=latent_perturbed,
             t=temb,
-            pos=pos_perturbed,
-            edge_index_local=None,
-            edge_index_global=edge_index_global,
-            edge_attr_global=edge_attr_global_perturbed,
-            batch=data_batch,
-            batch_edge_global=batch_edge_global,
-        )
+            edge_index=edge_index_global,
+            edge_attr=edge_attr_global_perturbed,
+            batch=data_batch    ,
+            batch_edge_global=batch_edge_global    
+            )
         
-        out['coords_perturbed'] = pos_perturbed
-        out['atoms_perturbed'] = atom_types_perturbed
-        out['charges_perturbed'] = charges_perturbed
-        out['bonds_perturbed'] = edge_attr_global_perturbed
+        true_data = {"coords": pos_centered, 
+                     "atoms": atom_types.argmax(dim=-1),
+                     "bonds": edge_attr_global_ohe.argmax(dim=-1),
+                     "charges": charges.argmax(dim=-1),
+                     "latents": latent_out
+                     }
         
-        out['coords_true'] = pos_centered
-        out['atoms_true'] = atom_types.argmax(dim=-1)
-        out['bonds_true'] = edge_attr_global
-        out['charges_true'] = charges.argmax(dim=-1)
+        atoms_pred_decoder = decoder_out["atoms_pred"]
+        atoms_pred_decoder, charges_pred_decoder = atoms_pred_decoder.split([self.num_atom_types, self.num_charge_classes], dim=-1)
 
-        out["bond_aggregation_index"] = edge_index_global[1]
         
-        return out
+        atoms_pred_denoising = denoising_out["atoms_pred"]
+        atoms_pred_denoising, charges_pred_denoising = atoms_pred_denoising.split([self.num_atom_types, self.num_charge_classes], dim=-1)
+        
+        
+        pred_data = {
+            "decoder": {
+                "atoms": atoms_pred_decoder,
+                "charges": charges_pred_decoder,
+                "coords": decoder_out["coords_pred"],
+                "bonds": decoder_out["bonds_pred"]
+            },
+            "denoiser": {
+                "atoms": atoms_pred_denoising,
+                "charges": charges_pred_denoising,
+                "latents": denoising_out["latent_pred"],
+                "bonds": denoising_out["bonds_pred"]
+            },
+            "vectors": vector_out,
+            "bond_aggregation_index": edge_index_global[1]
+        }
+        
+        return {"true": true_data, "pred": pred_data}
     
 
     @torch.no_grad()
@@ -429,6 +509,9 @@ class Trainer(pl.LightningModule):
         batch = torch.arange(num_graphs, device=device).repeat_interleave(batch_num_nodes, dim=0)
         bs = int(batch.max()) + 1
         
+        # sample prior
+        z = torch.randn(bs, self.hparams.latent_dim, device=device)
+        
         # initialiaze the 0-mean point cloud from N(0, I)
         pos = torch.randn(len(batch), 3,
                           device=device,
@@ -501,6 +584,7 @@ class Trainer(pl.LightningModule):
             out = self.model(
                 x=node_feats_in,
                 t=temb,
+                z=z,
                 pos=pos,
                 edge_index_local=edge_index_local,
                 edge_index_global=edge_index_global,
@@ -603,7 +687,9 @@ class Trainer(pl.LightningModule):
                 
         return pos, atom_types, charge_types, edge_attr_global, edge_index_global, batch_num_nodes, [pos_traj, atom_type_traj, charge_type_traj, edge_type_traj]
     
-    def _log(self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, batch_size, stage):
+    def _log(self, loss, decoder_loss: dict, diffusion_loss: dict, batch_size, stage):
+        
+        # total
         self.log(
             f"{stage}/loss",
             loss,
@@ -613,9 +699,10 @@ class Trainer(pl.LightningModule):
             sync_dist=self.hparams.gpus > 1 and stage == "val"
         )
 
+        # decoder
         self.log(
-            f"{stage}/coords_loss",
-            coords_loss,
+            f"{stage}/dec_coords_loss",
+            decoder_loss["coords"],
             on_step=True,
             batch_size=batch_size,
             prog_bar=(stage=='train'),
@@ -623,8 +710,8 @@ class Trainer(pl.LightningModule):
         )
 
         self.log(
-            f"{stage}/atoms_loss",
-            atoms_loss,
+            f"{stage}/dec_atoms_loss",
+            decoder_loss["atoms"],
             on_step=True,
             batch_size=batch_size,
             prog_bar=(stage=='train'),
@@ -632,8 +719,8 @@ class Trainer(pl.LightningModule):
         )
         
         self.log(
-            f"{stage}/charges_loss",
-            charges_loss,
+            f"{stage}/dec_charges_loss",
+            decoder_loss["charges"],
             on_step=True,
             batch_size=batch_size,
             prog_bar=(stage=='train'),
@@ -641,16 +728,59 @@ class Trainer(pl.LightningModule):
         )
         
         self.log(
-            f"{stage}/bonds_loss",
-            bonds_loss,
+            f"{stage}/dec_bonds_loss",
+            decoder_loss["bonds"],
             on_step=True,
             batch_size=batch_size,
             prog_bar=(stage=='train'),
             sync_dist=self.hparams.gpus > 1 and stage == "val"
         )
+        
+        # diffusion
+        self.log(
+            f"{stage}/diff_latent_loss",
+            diffusion_loss["latents"],
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage=='train'),
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
+        )
+
+        self.log(
+            f"{stage}/diff_atoms_loss",
+            diffusion_loss["atoms"],
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage=='train'),
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
+        )
+        
+        self.log(
+            f"{stage}/diff_charges_loss",
+            diffusion_loss["charges"],
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage=='train'),
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
+        )
+        
+        self.log(
+            f"{stage}/diff_bonds_loss",
+            diffusion_loss["bonds"],
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage=='train'),
+            sync_dist=self.hparams.gpus > 1 and stage == "val"
+        )
+        
           
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.hparams["lr"], amsgrad=True, weight_decay=1e-12)
+        all_params = list(self.encoder.parameters()) \
+                    + list(self.latent_lin.parameters()) \
+                    + list(self.decoder.parameters()) \
+                    + list(self.denoiser.parameters())
+                                
+        optimizer = torch.optim.AdamW(all_params, lr=self.hparams["lr"], amsgrad=True, weight_decay=1e-12)
         #lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         #    optimizer=optimizer,
         #    patience=self.hparams["lr_patience"],

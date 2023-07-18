@@ -10,19 +10,22 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.nn import radius_graph
-from torch_geometric.utils import dense_to_sparse, sort_edge_index, dropout_node
+from torch_geometric.utils import (dense_to_sparse, dropout_node,
+                                   sort_edge_index)
 from tqdm import tqdm
 
+from e3moldiffusion.coordsatomsbonds import (DenoisingEdgeNetwork,
+                                             LatentEncoderNetwork,
+                                             SoftMaxAttentionAggregation)
 from e3moldiffusion.modules import DenseLayer, GatedEquivBlock
-from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork, LatentEncoderNetwork, SoftMaxAttentionAggregation
 from e3moldiffusion.molfeat import get_bond_feature_dims
-from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
-
-from experiments.molecule_utils import Molecule
-from experiments.utils import coalesce_edges, get_empirical_num_nodes, get_list_of_edge_adjs, zero_mean
-from experiments.sampling.analyze import analyze_stability_for_molecules
+from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.losses import DiffusionLoss
+from experiments.molecule_utils import Molecule
+from experiments.sampling.analyze import analyze_stability_for_molecules
+from experiments.utils import (coalesce_edges, get_empirical_num_nodes,
+                               get_list_of_edge_adjs, zero_mean)
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(logging.NullHandler())
@@ -68,7 +71,7 @@ class Trainer(pl.LightningModule):
             
         empirical_num_nodes = get_empirical_num_nodes(dataset_info)
         self.register_buffer(name='empirical_num_nodes', tensor=empirical_num_nodes)
-
+        
         self.model = DenoisingEdgeNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             latent_dim=hparams["latent_dim"],
@@ -707,7 +710,14 @@ class Trainer(pl.LightningModule):
         
           
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.hparams["lr"], amsgrad=True, weight_decay=1e-12)
+        
+        all_params = list(self.model.parameters()) \
+            + list(self.encoder.parameters()) \
+            + list(self.latent_lin.parameters()) \
+            + list(self.graph_pooling.parameters()) \
+            + list(self.mu_logvar.parameters())
+            
+        optimizer = torch.optim.AdamW(all_params, lr=self.hparams["lr"], amsgrad=True, weight_decay=1e-12)
         #lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         #    optimizer=optimizer,
         #    patience=self.hparams["lr_patience"],

@@ -54,6 +54,7 @@ def add_arguments(parser):
     parser.add_argument("--latent_dim", default=None, type=int)
     parser.add_argument("--rbf-dim", default=32, type=int)
     parser.add_argument("--edim", default=32, type=int)
+    parser.add_argument("--edge-mp", default=False, action="store_true")
     parser.add_argument("--vector-aggr", default="mean", type=str)
     parser.add_argument("--num-layers", default=7, type=int)
     parser.add_argument("--fully-connected", default=True, action="store_true")

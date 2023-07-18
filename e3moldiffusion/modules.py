@@ -131,7 +131,7 @@ class LayerNorm(nn.Module):
             self.bias.data.fill_(0.0)
 
     def forward(self, x: Dict, batch: Tensor) -> Tuple[Tensor, Optional[Tensor]]:
-        s, v = x["s"], x["v"]
+        s, v = x.get("s"), x.get("v")
         batch_size = int(batch.max()) + 1
         smean = s.mean(dim=-1, keepdim=True)
         smean = scatter_mean(smean, batch, dim=0, dim_size=batch_size)
