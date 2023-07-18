@@ -332,46 +332,109 @@ def one_hot(
 
 
 def coalesce_edges(edge_index, bond_edge_index, bond_edge_attr, n):
-    edge_attr = torch.full(size=(edge_index.size(-1), ),
-                            fill_value=0,
-                            device=edge_index.device,
-                            dtype=torch.long)
+    edge_attr = torch.full(
+        size=(edge_index.size(-1),),
+        fill_value=0,
+        device=edge_index.device,
+        dtype=torch.long,
+    )
     edge_index = torch.cat([edge_index, bond_edge_index], dim=-1)
-    edge_attr =  torch.cat([edge_attr, bond_edge_attr], dim=0)
-    edge_index, edge_attr = coalesce(index=edge_index, value=edge_attr, m=n, n=n, op="max")
+    edge_attr = torch.cat([edge_attr, bond_edge_attr], dim=0)
+    edge_index, edge_attr = coalesce(
+        index=edge_index, value=edge_attr, m=n, n=n, op="max"
+    )
     return edge_index, edge_attr
 
-def get_empirical_num_nodes(dataset_info):
 
-    num_nodes_dict = dataset_info.get('n_nodes')
+def get_empirical_num_nodes(dataset_info):
+    num_nodes_dict = dataset_info.get("n_nodes")
     max_num_nodes = max(num_nodes_dict.keys())
-    empirical_distribution_num_nodes = {i: num_nodes_dict.get(i) for i in range(max_num_nodes)}
+    empirical_distribution_num_nodes = {
+        i: num_nodes_dict.get(i) for i in range(max_num_nodes)
+    }
     empirical_distribution_num_nodes_tensor = {}
 
     for key, value in empirical_distribution_num_nodes.items():
         if value is None:
             value = 0
         empirical_distribution_num_nodes_tensor[key] = value
-    empirical_distribution_num_nodes_tensor = torch.tensor(list(empirical_distribution_num_nodes_tensor.values())).float()
+    empirical_distribution_num_nodes_tensor = torch.tensor(
+        list(empirical_distribution_num_nodes_tensor.values())
+    ).float()
     return empirical_distribution_num_nodes_tensor
-            
+
+
 def get_list_of_edge_adjs(edge_attrs_dense, batch_num_nodes):
-    ptr = torch.cat([torch.zeros(1, device=batch_num_nodes.device, dtype=torch.long), batch_num_nodes.cumsum(0)])
+    ptr = torch.cat(
+        [
+            torch.zeros(1, device=batch_num_nodes.device, dtype=torch.long),
+            batch_num_nodes.cumsum(0),
+        ]
+    )
     edge_tensor_lists = []
     for i in range(len(ptr) - 1):
-        select_slice = slice(ptr[i].item(), ptr[i+1].item())
+        select_slice = slice(ptr[i].item(), ptr[i + 1].item())
         e = edge_attrs_dense[select_slice, select_slice]
         edge_tensor_lists.append(e)
     return edge_tensor_lists
+
 
 def get_num_atom_types_geom(dataset: str):
     assert dataset in ["qm9", "drugs"]
     return len(atom_type_config(dataset=dataset))
 
+
 def zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0):
     out = x - scatter_mean(x, index=batch, dim=dim, dim_size=dim_size)[batch]
     return out
 
+
 def assert_zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0, eps: float = 1e-6):
     out = scatter_mean(x, index=batch, dim=dim, dim_size=dim_size).mean()
     return abs(out) < eps
+
+
+def load_model(filepath, dataset_statistics, device="cpu", **kwargs):
+    import re
+
+    ckpt = torch.load(filepath, map_location="cpu")
+    args = ckpt["hyper_parameters"]
+    model = create_model(args, dataset_statistics)
+
+    state_dict = ckpt["state_dict"]
+    state_dict = {
+        re.sub(r"^model\.", "", k): v
+        for k, v in ckpt["state_dict"].items()
+        if k.startswith("model")
+    }
+    state_dict = {
+        k: v
+        for k, v in state_dict.items()
+        if not any(x in k for x in ["prior", "sde", "cat"])
+    }
+    model.load_state_dict(state_dict)
+    return model.to(device)
+
+
+def create_model(hparams, dataset_statistics):
+    from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
+
+    num_atom_types = dataset_statistics.input_dims.X
+    num_charge_classes = dataset_statistics.input_dims.C
+    num_atom_features = num_atom_types + num_charge_classes
+    model = DenoisingEdgeNetwork(
+        hn_dim=(hparams["sdim"], hparams["vdim"]),
+        num_layers=hparams["num_layers"],
+        latent_dim=None,
+        use_cross_product=not hparams["omit_cross_product"],
+        num_atom_features=num_atom_features,
+        num_bond_types=5,
+        edge_dim=hparams["edim"],
+        cutoff_local=hparams["cutoff_local"],
+        vector_aggr=hparams["vector_aggr"],
+        fully_connected=hparams["fully_connected"],
+        local_global_model=hparams["local_global_model"],
+        recompute_edge_attributes=True,
+        recompute_radius_graph=False,
+    )
+    return model

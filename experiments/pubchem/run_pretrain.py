@@ -17,8 +17,6 @@ warnings.filterwarnings(
 )
 
 from experiments.hparams import add_arguments
-from experiments.data.config_file import get_dataset_info
-from experiments.data.data_info import QM9Infos
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -35,8 +33,8 @@ if __name__ == "__main__":
     ema_callback = ExponentialMovingAverage(decay=hparams.ema_decay)
     checkpoint_callback = ModelCheckpoint(
         dirpath=hparams.save_dir + f"/run{hparams.id}/",
-        save_top_k=3,
-        monitor="val/loss",
+        save_top_k=1,
+        monitor="val/coords_loss",
         save_last=True,
     )
     lr_logger = LearningRateMonitor()
@@ -44,38 +42,49 @@ if __name__ == "__main__":
         hparams.save_dir + f"/run{hparams.id}/", default_hp_metric=False
     )
 
-    from experiments.data.qm9_dataset import QM9DataModule
+    print(f"Loading {hparams.dataset} Datamodule.")
+    if hparams.use_adaptive_loader:
+        print("Using adaptive dataloader")
+        from experiments.data.geom_dataset_adaptive import GeomDataModule
 
-    datamodule = QM9DataModule(hparams)
+        datamodule = GeomDataModule(hparams)
+    else:
+        print("Using non-adaptive dataloader")
+        from experiments.data.geom_dataset_nonadaptive import GeomDataModule
 
-    dataset_statistics = QM9Infos(datamodule, hparams)
-    dataset_info = get_dataset_info("qm9", remove_h=hparams.remove_hs)
-
-    train_smiles = datamodule.train_dataset.smiles
+        datamodule = GeomDataModule(
+            root=hparams.dataset_root,
+            batch_size=hparams.batch_size,
+            num_workers=hparams.num_workers,
+            pin_memory=True,
+            persistent_workers=True,
+            with_hydrogen=not hparams.no_h,
+        )
+        datamodule.prepare_data()
+        datamodule.setup("fit")
 
     if hparams.continuous:
-        print("Using continuous diffusion")
-        from experiments.diffusion_continuous import Trainer
+        from experiments.diffusion_pretrain_continuous import Trainer
+
+        model = Trainer(
+            hparams=hparams.__dict__,
+        )
     else:
-        print("Using discrete diffusion")
-        from experiments.diffusion_discrete import Trainer
+        from experiments.diffusion_pretrain_discrete import Trainer
 
-    if hparams.latent_dim:
-        print("Using latent diffusion")
-        from experiments.diffusion_latent_discrete import Trainer
-
-    model = Trainer(
-        hparams=hparams.__dict__,
-        dataset_info=dataset_info,
-        dataset_statistics=dataset_statistics,
-        smiles_list=list(train_smiles),
-    )
+        # TO-DO!
+        # model = Trainer(
+        #     hparams=hparams.__dict__,
+        #     dataset_info=dataset_info,
+        #     dataset_statistics=dataset_statistics,
+        #     smiles_list=list(train_smiles),
+        # )
 
     strategy = "ddp" if hparams.gpus > 1 else "auto"
 
     trainer = pl.Trainer(
-        accelerator="gpu" if hparams.gpus >= 1 else "cpu",
-        devices=hparams.gpus if hparams.gpus >= 1 else 1,
+        accelerator="gpu" if hparams.gpus else "cpu",
+        devices=hparams.gpus if hparams.gpus else None,
         strategy=strategy,
         logger=tb_logger,
         enable_checkpointing=True,

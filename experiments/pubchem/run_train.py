@@ -17,8 +17,6 @@ warnings.filterwarnings(
 )
 
 from experiments.hparams import add_arguments
-from experiments.data.config_file import get_dataset_info
-from experiments.data.data_info import PubChemInfos
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -47,12 +45,12 @@ if __name__ == "__main__":
     print(f"Loading {hparams.dataset} Datamodule.")
     if hparams.use_adaptive_loader:
         print("Using adaptive dataloader")
-        from experiments.data.geom_dataset_adaptive import PubChemDataModule
+        from experiments.data.pubchem_dataset_adaptive import PubChemDataModule
 
         datamodule = PubChemDataModule(hparams)
     else:
         print("Using non-adaptive dataloader")
-        from experiments.data.geom_dataset_nonadaptive import PubChemDataModule
+        from experiments.data.pubchem_dataset_nonadaptive import PubChemDataModule
 
         datamodule = PubChemDataModule(
             root=hparams.dataset_root,
@@ -66,13 +64,13 @@ if __name__ == "__main__":
         datamodule.setup("fit")
 
     if hparams.continuous:
-        from experiments.diffusion_continuous_pretrain import Trainer
+        from experiments.diffusion_pretrain_continuous import Trainer
 
         model = Trainer(
             hparams=hparams.__dict__,
         )
     else:
-        from experiments.diffusion_discrete_pretrain import Trainer
+        from experiments.diffusion_pretrain_discrete import Trainer
 
         # TO-DO!
         # model = Trainer(

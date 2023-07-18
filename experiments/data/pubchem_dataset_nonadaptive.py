@@ -8,12 +8,7 @@ from experiments.data.abstract_dataset import (
 )
 from experiments.utils import make_splits
 from torch.utils.data import Subset
-from rdkit import Chem
-import gzip
-from glob import glob
-import experiments.data.utils as dataset_utils
-import os
-from tqdm import tqdm
+
 
 full_atom_encoder = {
     "H": 0,
@@ -49,7 +44,12 @@ class PubChemDataset(InMemoryDataset):
 
     @property
     def raw_file_names(self):
-        return ""
+        return [
+            "data_list_0.pickle", 
+            "data_list_3.pickle", 
+            "data_list_4.pickle", 
+            "data_list_5.pickle"
+            ]
 
     @property
     def processed_file_names(self):
@@ -64,35 +64,17 @@ class PubChemDataset(InMemoryDataset):
         )
 
     def process(self):
-        files = glob(os.path.join(self.raw_paths[0], "*.gz"))
-
-        data_list = []
-        for i, file in tqdm(enumerate(files)):
-            if i % 5 == 0:
-                continue
-            else:
-                inf = gzip.open(file)
-                with Chem.ForwardSDMolSupplier(inf) as gzsuppl:
-                    molecules = [x for x in gzsuppl if x is not None]
-                for mol in molecules:
-                    try:
-                        smiles = Chem.MolToSmiles(mol)
-                        data = dataset_utils.mol_to_torch_geometric(
-                            mol, full_atom_encoder, smiles
-                        )
-                        if data.pos.shape[0] != data.x.shape[0]:
-                            print(f"Molecule {smiles} does not have 3D information!")
-                            continue
-                        if data.pos.ndim != 2:
-                            print(f"Molecule {smiles} does not have 3D information!")
-                            continue
-                        if len(data.pos) < 2:
-                            print(f"Molecule {smiles} does not have 3D information!")
-                            continue
-                        data_list.append(data)
-                    except:
-                        continue
-
+        RDLogger.DisableLog("rdApp.*")
+        file_1 = load_pickle(self.raw_paths[0])
+        file_2 = load_pickle(self.raw_paths[0])
+        file_3 = load_pickle(self.raw_paths[0])
+        file_4 = load_pickle(self.raw_paths[0])
+        data_list = file_1 + file_2 + file_3 + file_4
+        del file_1
+        del file_2
+        del file_3
+        del file_4
+        
         torch.save(self.collate(data_list), self.processed_paths[0])
 
 
@@ -102,7 +84,9 @@ class PubChemDataModule(AbstractAdaptiveDataModule):
         root_path = cfg.dataset_root
         self.pin_memory = True
 
-        dataset = PubChemDataset(split="train", root=root_path, remove_h=cfg.remove_hs)
+        dataset = PubChemDataset(
+            split="train", root=root_path, remove_h=cfg.remove_hs
+        )
         self.idx_train, self.idx_val, self.idx_test = make_splits(
             len(dataset),
             0.9,
@@ -205,3 +189,4 @@ class PubChemDataModule(AbstractAdaptiveDataModule):
         )
 
         return dl
+
