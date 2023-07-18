@@ -109,6 +109,7 @@ class DenoisingEdgeNetwork(nn.Module):
                  vector_aggr: str = "mean",
                  atom_mapping: bool = True,
                  bond_mapping: bool = True,
+                 edge_mp: bool = False
                  ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
@@ -149,7 +150,7 @@ class DenoisingEdgeNetwork(nn.Module):
             fully_connected=fully_connected,
             local_global_model=local_global_model,
             recompute_radius_graph=recompute_radius_graph,
-            recompute_edge_attributes=recompute_edge_attributes,,
+            recompute_edge_attributes=recompute_edge_attributes,
             edge_mp=edge_mp
         )
 
@@ -218,15 +219,15 @@ class DenoisingEdgeNetwork(nn.Module):
         edge_attr_global_transformed = self.bond_mapping(edge_attr_global)
         edge_attr_global_transformed = self.bond_time_mapping(edge_attr_global_transformed + tedge_global)
         
-        edge_dense = torch.zeros(x.size(0), x.size(0), edge_attr_global_transformed.size(-1), device=s.device)
-        edge_dense[edge_index_global[0], edge_index_global[1], :] = edge_attr_global_transformed
+        #edge_dense = torch.zeros(x.size(0), x.size(0), edge_attr_global_transformed.size(-1), device=s.device)
+        #edge_dense[edge_index_global[0], edge_index_global[1], :] = edge_attr_global_transformed
         
-        if not self.fully_connected:
-            edge_attr_local_transformed = edge_dense[edge_index_local[0], edge_index_local[1], :]
-            # local
-            edge_attr_local_transformed = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local_transformed, pos=pos)  
-        else:
-            edge_attr_local_transformed = (None, None, None)
+        #if not self.fully_connected:
+        #    edge_attr_local_transformed = edge_dense[edge_index_local[0], edge_index_local[1], :]
+        #    # local
+        #    edge_attr_local_transformed = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local_transformed, pos=pos)  
+        #else:
+        #    edge_attr_local_transformed = (None, None, None)
             
         # global
         edge_attr_global_transformed = self.calculate_edge_attrs(
@@ -243,8 +244,8 @@ class DenoisingEdgeNetwork(nn.Module):
             v=v,
             p=pos,
             z=z,
-            edge_index_local=edge_index_local,
-            edge_attr_local=edge_attr_local_transformed,
+            edge_index_local=None,
+            edge_attr_local=(None, None, None),
             edge_index_global=edge_index_global,
             edge_attr_global=edge_attr_global_transformed,
             batch=batch,

@@ -27,8 +27,8 @@ class EQGATEdgeGNN(nn.Module):
         fully_connected: bool = True,
         local_global_model: bool = False,
         recompute_radius_graph: bool = False,
-        recompute_edge_attributes: bool = True,,
-                 edge_mp: bool = False
+        recompute_edge_attributes: bool = True,
+        edge_mp: bool = False
     ):
         super(EQGATEdgeGNN, self).__init__()
 
