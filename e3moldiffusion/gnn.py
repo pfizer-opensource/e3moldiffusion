@@ -28,7 +28,9 @@ class EQGATEdgeGNN(nn.Module):
         local_global_model: bool = False,
         recompute_radius_graph: bool = False,
         recompute_edge_attributes: bool = True,
-        edge_mp: bool = False
+        edge_mp: bool = False,
+        p1: bool = True,
+        use_pos_norm: bool = True
     ):
         super(EQGATEdgeGNN, self).__init__()
 
@@ -41,7 +43,8 @@ class EQGATEdgeGNN(nn.Module):
         self.cutoff_local = cutoff_local
         self.recompute_radius_graph = recompute_radius_graph
         self.recompute_edge_attributes = recompute_edge_attributes
-
+        self.p1 = p1
+        
         self.sdim, self.vdim = hn_dim
         self.edge_dim = edge_dim
 
@@ -60,7 +63,8 @@ class EQGATEdgeGNN(nn.Module):
                                              use_mlp_update= i < (num_layers - 1),
                                              vector_aggr=vector_aggr,
                                              use_cross_product=use_cross_product,
-                                             edge_mp=edge_mp_select
+                                             edge_mp=edge_mp_select,
+                                             use_pos_norm=use_pos_norm
                                              )
                 )
             
@@ -93,7 +97,7 @@ class EQGATEdgeGNN(nn.Module):
         d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6)
         if sqrt:
             d = d.sqrt()
-        r_norm = torch.div(r, (1.0 + d.unsqueeze(-1)))
+        r_norm = torch.div(r, (1.0 + d.unsqueeze(-1) if self.p1 else d.unsqueeze(-1)))
         edge_attr = (d, a, r_norm, edge_attr)
         return edge_attr
 
@@ -275,7 +279,7 @@ class TopoEdgeGNN(nn.Module):
         
         for i in range(len(self.convs)):              
             s, _ = self.norms[i](x={"s": s, "v": None}, batch=batch)
-            out, edge_attr = self.convs[i](x=s, batch=batch, edge_index=edge_index, edge_attr=edge_attr)
+            out, edge_attr = self.convs[i](x=s, edge_index=edge_index, edge_attr=edge_attr)
         out = {"s": s, "e": edge_attr}
         
         return out

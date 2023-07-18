@@ -50,7 +50,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         use_mlp_update: bool = True,
         vector_aggr: str = "mean",
         use_cross_product: bool = True,
-        edge_mp: bool = False
+        edge_mp: bool = False,
+        use_pos_norm: bool = True
     ):
         super(EQGATGlobalEdgeConvFinal, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
@@ -66,14 +67,18 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         self.has_v_in = has_v_in
         self.use_cross_product = use_cross_product
         self.silu = nn.SiLU()
+        self.use_pos_norm = use_pos_norm
         if has_v_in:
             self.vector_net = DenseLayer(self.vi, self.vi, bias=False)
             self.v_mul = 3 if use_cross_product else 2
         else:
             self.v_mul = 1
             self.vector_net = nn.Identity()
-
-        self.posnorm = SE3Norm()
+            
+        if use_pos_norm:
+            self.posnorm = SE3Norm()
+        else:
+            self.posnorm = None
 
         self.edge_pre = DenseLayer(edge_dim, edge_dim)
         self.edge_dim = edge_dim
@@ -112,7 +117,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
             reset(self.vector_net)
         reset(self.scalar_net)
         reset(self.update_net)
-        self.posnorm.reset_parameters()
+        if self.posnorm:
+            self.posnorm.reset_parameters()
         
     
     @staticmethod
@@ -217,7 +223,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
 
         s = ms + s
         v = mv + v
-        p = self.posnorm(mp, batch) + p
+        if self.posnorm:
+            p = self.posnorm(mp, batch) + p
         e = F.silu(me + e)
         e = self.edge_post(e)
 
@@ -494,7 +501,7 @@ class TopoEdgeConvLayer(MessagePassing):
         self.neighbour_lin = DenseLayer(in_dim, in_dim)
         self.msg_mlp = nn.Sequential(
             DenseLayer(2*in_dim + edge_dim, in_dim, activation=nn.SiLU()),
-            DenseLayer(in_dim, in_dim)
+            DenseLayer(in_dim, in_dim + edge_dim)
             )
         self.update_mlp = nn.Sequential(
             DenseLayer(in_dim, in_dim, activation=nn.SiLU()),

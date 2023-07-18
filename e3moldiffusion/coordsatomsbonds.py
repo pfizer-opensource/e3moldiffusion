@@ -109,7 +109,9 @@ class DenoisingEdgeNetwork(nn.Module):
                  vector_aggr: str = "mean",
                  atom_mapping: bool = True,
                  bond_mapping: bool = True,
-                 edge_mp: bool = False
+                 edge_mp: bool = False,
+                 p1: bool = True,
+                 use_pos_norm: bool = True
                  ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
@@ -151,7 +153,8 @@ class DenoisingEdgeNetwork(nn.Module):
             local_global_model=local_global_model,
             recompute_radius_graph=recompute_radius_graph,
             recompute_edge_attributes=recompute_edge_attributes,
-            edge_mp=edge_mp
+            edge_mp=edge_mp,
+            p1=p1, use_pos_norm=use_pos_norm
         )
 
         self.prediction_head = PredictionHeadEdge(
@@ -318,7 +321,7 @@ class LatentEncoderNetwork(nn.Module):
         d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6)
         if sqrt:
             d = d.sqrt()
-        r_norm = torch.div(r, (1.0 + d.unsqueeze(-1)))
+        r_norm = torch.div(r, (d.unsqueeze(-1) + 1.0))
         edge_attr = (d, a, r_norm, edge_attr)
         return edge_attr
 
