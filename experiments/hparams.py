@@ -40,13 +40,9 @@ def add_arguments(parser):
     parser.add_argument("--lr", default=5e-4, type=float)
     parser.add_argument("--gamma", default=0.975, type=float)
     parser.add_argument("--grad-clip-val", default=10.0, type=float)
-    parser.add_argument("--frequency", default=5, type=int)
     parser.add_argument("--lr-frequency", default=5, type=int)
-    parser.add_argument("--patience", default=5, type=int)
-    parser.add_argument("--lr-patience", default=5, type=int)
-    parser.add_argument("--cooldown", default=5, type=int)
+    parser.add_argument("--lr-patience", default=20, type=int)
     parser.add_argument("--lr-cooldown", default=5, type=int)
-    parser.add_argument("--factor", default=0.75, type=float)
     parser.add_argument("--lr-factor", default=0.75, type=float)
 
     # MODEL
