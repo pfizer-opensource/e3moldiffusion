@@ -1,6 +1,6 @@
 
 #load_ckpt: geom_midi/logs/eqgat_fc_500T_lr2_midi_emb512_l12/run0/last.ckpt
-load_ckpt_from_pretrained: /hpfs/userws/cremej01/projects/logs/geom/pretrain_x0/run0/epoch=254-step=373830.ckpt
+# load_ckpt_from_pretrained: /hpfs/userws/cremej01/projects/logs/geom/pretrain_x0/run0/epoch=254-step=373830.ckpt
 
 # batch_size 40 without adaptive, and 200 with adaptive
 batch_size: 200
@@ -34,7 +34,6 @@ dataset_root: /hpfs/userws/cremej01/projects/data/geom
 # dataset_root: /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/data
 
 # DIFFUSION
-masked_pretraining: false
 continuous: false
 schedule: cosine
 eps_min: 1.e-3
