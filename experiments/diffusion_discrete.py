@@ -104,29 +104,48 @@ class Trainer(pl.LightningModule):
                 local_global_model=hparams["local_global_model"],
                 recompute_edge_attributes=True,
                 recompute_radius_graph=False,
-                edge_mp=hparams["edge_mp"]
+                edge_mp=hparams["edge_mp"],
             )
 
-        self.sde = DiscreteDDPM(
+        self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
             beta_max=hparams["beta_max"],
             N=hparams["timesteps"],
             scaled_reverse_posterior_sigma=True,
-            schedule="cosine",
+            schedule=self.hparams.noise_scheduler,
+            nu=1.5,
+            enforce_zero_terminal_snr=False,
+        )
+        self.sde_atom_charge = DiscreteDDPM(
+            beta_min=hparams["beta_min"],
+            beta_max=hparams["beta_max"],
+            N=hparams["timesteps"],
+            scaled_reverse_posterior_sigma=True,
+            schedule=self.hparams.noise_scheduler,
+            nu=1,
+            enforce_zero_terminal_snr=False,
+        )
+        self.sde_bonds = DiscreteDDPM(
+            beta_min=hparams["beta_min"],
+            beta_max=hparams["beta_max"],
+            N=hparams["timesteps"],
+            scaled_reverse_posterior_sigma=True,
+            schedule=self.hparams.noise_scheduler,
+            nu=1.5,
             enforce_zero_terminal_snr=False,
         )
 
         self.cat_atoms = CategoricalDiffusionKernel(
             terminal_distribution=atom_types_distribution,
-            alphas=self.sde.alphas.clone(),
+            alphas=self.sde_atom_charge.alphas.clone(),
         )
         self.cat_bonds = CategoricalDiffusionKernel(
             terminal_distribution=bond_types_distribution,
-            alphas=self.sde.alphas.clone(),
+            alphas=self.sde_bonds.alphas.clone(),
         )
         self.cat_charges = CategoricalDiffusionKernel(
             terminal_distribution=charge_types_distribution,
-            alphas=self.sde.alphas.clone(),
+            alphas=self.sde_atom_charge.alphas.clone(),
         )
 
         self.diffusion_loss = DiffusionLoss(
@@ -192,6 +211,10 @@ class Trainer(pl.LightningModule):
             dtype=torch.long,
             device=batch.x.device,
         )
+        if self.hparams.use_loss_weighting:
+            weights = torch.clip(torch.exp(-t / 200), min=0.1).to(self.device)
+        else:
+            weights = None
         out_dict = self(batch=batch, t=t)
 
         true_data = {
@@ -220,7 +243,7 @@ class Trainer(pl.LightningModule):
             pred_data=pred_data,
             batch=batch.batch,
             bond_aggregation_index=out_dict["bond_aggregation_index"],
-            weights=None,
+            weights=weights,
         )
 
         final_loss = (
@@ -338,7 +361,7 @@ class Trainer(pl.LightningModule):
         # center the true point cloud
         pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
         # get signal and noise coefficients for coords
-        mean_coords, std_coords = self.sde.marginal_prob(
+        mean_coords, std_coords = self.sde_pos.marginal_prob(
             x=pos_centered, t=t[data_batch]
         )
         # perturb coords
@@ -678,19 +701,19 @@ class Trainer(pl.LightningModule):
                 batch_edge_global=batch_edge_global,
             )
 
-            rev_sigma = self.sde.reverse_posterior_sigma[t].unsqueeze(-1)
-            sigmast = self.sde.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
+            rev_sigma = self.sde_pos.reverse_posterior_sigma[t].unsqueeze(-1)
+            sigmast = self.sde_pos.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
             sigmas2t = sigmast.pow(2)
 
-            sqrt_alphas = self.sde.sqrt_alphas[t].unsqueeze(-1)
+            sqrt_alphas = self.sde_pos.sqrt_alphas[t].unsqueeze(-1)
             sqrt_1m_alphas_cumprod_prev = torch.sqrt(
-                1.0 - self.sde.alphas_cumprod_prev[t]
+                1.0 - self.sde_pos.alphas_cumprod_prev[t]
             ).unsqueeze(-1)
             one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
             sqrt_alphas_cumprod_prev = torch.sqrt(
-                self.sde.alphas_cumprod_prev[t].unsqueeze(-1)
+                self.sde_pos.alphas_cumprod_prev[t].unsqueeze(-1)
             )
-            one_m_alphas = self.sde.discrete_betas[t].unsqueeze(-1)
+            one_m_alphas = self.sde_pos.discrete_betas[t].unsqueeze(-1)
 
             coords_pred = out["coords_pred"].squeeze()
             atoms_pred, charges_pred = out["atoms_pred"].split(
@@ -868,7 +891,7 @@ class Trainer(pl.LightningModule):
             self.model.parameters(),
             lr=self.hparams["lr"],
             amsgrad=True,
-            weight_decay=1.0e-8,
+            weight_decay=1.0e-12,
         )
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer=optimizer,

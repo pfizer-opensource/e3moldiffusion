@@ -69,13 +69,16 @@ def add_arguments(parser):
         help="If the diffusion process is applied on continuous time variable. Defaults to False",
     )
     parser.add_argument(
-        "--schedule", default="cosine", choices=["linear", "cosine", "quad", "sigmoid"]
+        "--noise-scheduler",
+        default="cosine",
+        choices=["linear", "cosine", "quad", "sigmoid", "adaptive"],
     )
     parser.add_argument("--eps-min", default=1e-3, type=float)
     parser.add_argument("--beta-min", default=1e-4, type=float)
     parser.add_argument("--beta-max", default=2e-2, type=float)
     parser.add_argument("--timesteps", default=500, type=int)
     parser.add_argument("--max-time", type=str, default=None)
+    parser.add_argument("--use-loss-weighting", default=False, action="store_true")
 
     # LATENT
     parser.add_argument("--vae-beta", default=1.0, type=float)
