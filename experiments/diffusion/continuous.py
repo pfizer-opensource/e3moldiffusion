@@ -78,6 +78,8 @@ def get_beta_schedule(
         betas = torch.from_numpy(betas).float()
     elif kind == "adaptive":
         s = kwargs.get("s")
+        if s is None:
+            s = 0.008
         steps = num_diffusion_timesteps + 2
         x = np.linspace(0, steps, steps)
         x = np.expand_dims(x, 0)  # ((1, steps))
