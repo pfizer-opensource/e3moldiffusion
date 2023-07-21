@@ -8,6 +8,24 @@ from openbabel import pybel
 from rdkit import Chem, RDLogger
 from torch_geometric.data import Data
 from torch_geometric.utils import sort_edge_index
+import rdkit
+
+x_map = {
+    'is_aromatic': [False, True],
+    'is_in_ring': [False, True],
+    'hybridization': [
+        rdkit.Chem.rdchem.HybridizationType.UNSPECIFIED,
+        rdkit.Chem.rdchem.HybridizationType.S,
+        rdkit.Chem.rdchem.HybridizationType.SP,
+        rdkit.Chem.rdchem.HybridizationType.SP2,
+        rdkit.Chem.rdchem.HybridizationType.SP3,
+        rdkit.Chem.rdchem.HybridizationType.SP2D,
+        rdkit.Chem.rdchem.HybridizationType.SP3D,
+        rdkit.Chem.rdchem.HybridizationType.SP3D2,
+        rdkit.Chem.rdchem.HybridizationType.OTHER
+    ]
+}
+
 
 def mol_to_torch_geometric(mol, atom_encoder, smiles):
     adj = torch.from_numpy(Chem.rdmolops.GetAdjacencyMatrix(mol, useBO=True))
@@ -20,14 +38,33 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles):
     pos = pos - torch.mean(pos, dim=0, keepdim=True)
     atom_types = []
     all_charges = []
+    is_aromatic = []
+    is_in_ring = []
+    sp_hybridization = []
+    
     for atom in mol.GetAtoms():
         atom_types.append(atom_encoder[atom.GetSymbol()])
         all_charges.append(
             atom.GetFormalCharge()
         )  # TODO: check if implicit Hs should be kept
+        
+        is_aromatic.append(
+            x_map["is_aromatic"].index(atom.GetIsAromatic())
+        )
+        is_in_ring.append(
+            x_map["is_in_ring"].index(atom.IsInRing())
+        )
+        sp_hybridization.append(
+            x_map["hybridization"].index(atom.GetHybridization())
+        )
+        
 
     atom_types = torch.Tensor(atom_types).long()
     all_charges = torch.Tensor(all_charges).long()
+    
+    is_aromatic = torch.Tensor(is_aromatic).long()
+    is_in_ring = torch.Tensor(is_in_ring).long()
+    hybridization = torch.Tensor(sp_hybridization).long()
 
     data = Data(
         x=atom_types,
@@ -36,7 +73,11 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles):
         pos=pos,
         charges=all_charges,
         smiles=smiles,
+        is_aromatic=is_aromatic,
+        is_in_ring=is_in_ring,
+        hybridization=hybridization
     )
+    
     return data
 
 
@@ -67,28 +108,6 @@ def save_pickle(array, path):
 def load_pickle(path):
     with open(path, "rb") as f:
         return pickle.load(f)
-
-
-class Statistics:
-    def __init__(
-        self,
-        num_nodes,
-        atom_types,
-        bond_types,
-        charge_types,
-        valencies,
-        bond_lengths,
-        bond_angles,
-    ):
-        self.num_nodes = num_nodes
-        # print("NUM NODES IN STATISTICS", num_nodes)
-        self.atom_types = atom_types
-        self.bond_types = bond_types
-        self.charge_types = charge_types
-        self.valencies = valencies
-        self.bond_lengths = bond_lengths
-        self.bond_angles = bond_angles
-
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -225,6 +244,9 @@ class Statistics:
         valencies,
         bond_lengths,
         bond_angles,
+        is_in_ring=None,
+        is_aromatic=None,
+        hybridization=None,
     ):
         self.num_nodes = num_nodes
         # print("NUM NODES IN STATISTICS", num_nodes)
@@ -234,4 +256,6 @@ class Statistics:
         self.valencies = valencies
         self.bond_lengths = bond_lengths
         self.bond_angles = bond_angles
-
+        self.is_in_ring = is_in_ring
+        self.is_aromatic = is_aromatic
+        self.hybridization = hybridization

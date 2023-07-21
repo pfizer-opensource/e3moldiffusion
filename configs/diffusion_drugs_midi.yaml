@@ -34,6 +34,7 @@ dataset_root: /hpfs/userws/cremej01/projects/data/geom
 # dataset_root: /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/data
 
 # DIFFUSION
+additional_feats: false
 continuous: false
 noise_scheduler: adaptive
 eps_min: 1.e-3
@@ -44,6 +45,7 @@ max_time: 06:00:00:00
 use_loss_weighting: false
 
 save_dir: /hpfs/userws/cremej01/projects/logs/geom/pretrain_x0
+id: 0
 lr: 2.e-4
 lr_factor: 0.5
 lr_patience: 10

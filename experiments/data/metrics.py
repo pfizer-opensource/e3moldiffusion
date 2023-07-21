@@ -43,7 +43,7 @@ bond_dict = [
 ATOM_VALENCY = {6: 4, 7: 3, 8: 2, 9: 1, 15: 3, 16: 2, 17: 1, 35: 1, 53: 1}
 
 
-def compute_all_statistics(data_list, atom_encoder, charges_dic, bonds: bool = True, angles: bool = True):
+def compute_all_statistics(data_list, atom_encoder, charges_dic, bonds: bool = True, angles: bool = True, additional_feats: bool = True):
     num_nodes = node_counts(data_list)
     atom_types = atom_type_counts(data_list, num_classes=len(atom_encoder))
     print(f"Atom types: {atom_types}")
@@ -61,20 +61,59 @@ def compute_all_statistics(data_list, atom_encoder, charges_dic, bonds: bool = T
         print("Bond lengths: ", bond_lengths)
     else:
         bond_lengths = None
+        print("Skipping bond lengths computation")
     if angles:
         angles = bond_angles(data_list, atom_encoder)
+        print("Skipping bond angles computation")
     else:
         angles = None
+    
+    if additional_feats:
+        feats = additional_feat_counts(data_list=data_list)
+        return Statistics(
+            num_nodes=num_nodes,
+            atom_types=atom_types,
+            bond_types=bond_types,
+            charge_types=charge_types,
+            valencies=valency,
+            bond_lengths=bond_lengths,
+            bond_angles=angles,
+            **feats
+        )
+    else:
+        return Statistics(
+            num_nodes=num_nodes,
+            atom_types=atom_types,
+            bond_types=bond_types,
+            charge_types=charge_types,
+            valencies=valency,
+            bond_lengths=bond_lengths,
+            bond_angles=angles
+        )
         
-    return Statistics(
-        num_nodes=num_nodes,
-        atom_types=atom_types,
-        bond_types=bond_types,
-        charge_types=charge_types,
-        valencies=valency,
-        bond_lengths=bond_lengths,
-        bond_angles=angles,
-    )
+
+def additional_feat_counts(data_list, keys: list = ["is_aromatic", "is_in_ring", "hybridization"]):
+    print(f"Computing node counts for features = {str(keys)}")
+    from experiments.data.utils import x_map
+    num_classes_list = [len(x_map.get(key)) for key in keys]
+    counts_list = [np.zeros(num_classes) for num_classes in num_classes_list]
+
+    for data in data_list:
+        for i, key, num_classes in zip(range(len(keys)), keys, num_classes_list):
+            x = torch.nn.functional.one_hot(data.get(key), num_classes=num_classes)      
+            counts_list[i] += x.sum(dim=0).numpy()
+
+    for i in range(len(counts_list)):
+        counts_list[i] = counts_list[i] / counts_list[i].sum()
+    print("Done")
+    
+    results = dict()
+    for key, count in zip(keys, counts_list):
+        results[key] = count
+        
+    print(results)
+    
+    return results
 
 
 def node_counts(data_list):

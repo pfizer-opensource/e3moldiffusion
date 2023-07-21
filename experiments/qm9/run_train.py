@@ -58,7 +58,11 @@ if __name__ == "__main__":
         from experiments.diffusion_continuous import Trainer
     else:
         print("Using discrete diffusion")
-        from experiments.diffusion_discrete import Trainer
+        if hparams.additional_feats:
+            print("Using additional features")
+            from experiments.diffusion_discrete_moreFeats import Trainer
+        else:
+            from experiments.diffusion_discrete import Trainer
 
     if hparams.latent_dim:
         print("Using latent diffusion")

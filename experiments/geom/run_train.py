@@ -48,20 +48,11 @@ if __name__ == "__main__":
     if hparams.use_adaptive_loader:
         print("Using adaptive dataloader")
         from experiments.data.geom_dataset_adaptive import GeomDataModule
-
         datamodule = GeomDataModule(hparams)
     else:
         print("Using non-adaptive dataloader")
         from experiments.data.geom_dataset_nonadaptive import GeomDataModule
-
-        datamodule = GeomDataModule(
-            root=hparams.dataset_root,
-            batch_size=hparams.batch_size,
-            num_workers=hparams.num_workers,
-            pin_memory=True,
-            persistent_workers=True,
-            with_hydrogen=not hparams.no_h,
-        )
+        datamodule = GeomDataModule(hparams)
         datamodule.prepare_data()
         datamodule.setup("fit")
 
@@ -75,8 +66,12 @@ if __name__ == "__main__":
         from experiments.diffusion_continuous import Trainer
     else:
         print("Using discrete diffusion")
-        from experiments.diffusion_discrete import Trainer
-
+        if hparams.additional_feats:
+            print("Using additional features")
+            from experiments.diffusion_discrete_moreFeats import Trainer
+        else:
+            from experiments.diffusion_discrete import Trainer
+            
     if hparams.latent_dim:
         print("Using latent diffusion")
         #from experiments.diffusion_latent_discrete import Trainer

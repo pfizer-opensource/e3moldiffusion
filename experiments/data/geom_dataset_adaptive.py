@@ -39,6 +39,8 @@ class GeomDrugsDataset(InMemoryDataset):
         self.split = split
         self.remove_h = remove_h
 
+        self.compute_bond_distance_angles = False
+        
         self.atom_encoder = full_atom_encoder
         if remove_h:
             self.atom_encoder = {
@@ -53,8 +55,11 @@ class GeomDrugsDataset(InMemoryDataset):
             bond_types=torch.from_numpy(np.load(self.processed_paths[3])),
             charge_types=torch.from_numpy(np.load(self.processed_paths[4])),
             valencies=load_pickle(self.processed_paths[5]),
-            bond_lengths=load_pickle(self.processed_paths[6]),
-            bond_angles=torch.from_numpy(np.load(self.processed_paths[7])),
+            bond_lengths=load_pickle(self.processed_paths[6]) if self.compute_bond_distance_angles else None,
+            bond_angles=torch.from_numpy(np.load(self.processed_paths[7])) if self.compute_bond_distance_angles else None,
+            is_aromatic=torch.from_numpy(np.load(self.processed_paths[9])).float(),
+            is_in_ring=torch.from_numpy(np.load(self.processed_paths[10])).float(),
+            hybridization=torch.from_numpy(np.load(self.processed_paths[11])).float()
         )
         self.smiles = load_pickle(self.processed_paths[8])
 
@@ -67,7 +72,6 @@ class GeomDrugsDataset(InMemoryDataset):
         else:
             return ["test_data.pickle"]
 
-    @property
     def processed_file_names(self):
         h = "noh" if self.remove_h else "h"
         if self.split == "train":
@@ -81,6 +85,9 @@ class GeomDrugsDataset(InMemoryDataset):
                 f"train_bond_lengths_{h}.pickle",
                 f"train_angles_{h}.npy",
                 "train_smiles.pickle",
+                f"train_is_aromatic_{h}.npy",
+                f"train_is_in_ring_{h}.npy",
+                f"train_hybridization_{h}.npy",
             ]
         elif self.split == "val":
             return [
@@ -93,6 +100,9 @@ class GeomDrugsDataset(InMemoryDataset):
                 f"val_bond_lengths_{h}.pickle",
                 f"val_angles_{h}.npy",
                 "val_smiles.pickle",
+                f"val_is_aromatic_{h}.npy",
+                f"val_is_in_ring_{h}.npy",
+                f"val_hybridization_{h}.npy",
             ]
         else:
             return [
@@ -105,6 +115,9 @@ class GeomDrugsDataset(InMemoryDataset):
                 f"test_bond_lengths_{h}.pickle",
                 f"test_angles_{h}.npy",
                 "test_smiles.pickle",
+                f"test_is_aromatic_{h}.npy",
+                f"test_is_in_ring_{h}.npy",
+                f"test_hybridization_{h}.npy",
             ]
 
     def download(self):
@@ -144,6 +157,10 @@ class GeomDrugsDataset(InMemoryDataset):
             data_list,
             self.atom_encoder,
             charges_dic={-2: 0, -1: 1, 0: 2, 1: 3, 2: 4, 3: 5},
+            additional_feats=True,
+            bonds=self.compute_bond_distance_angles,
+            angles=self.compute_bond_distance_angles 
+            # do not compute bond distance and bond angle statistics due to time and we do not use it anyways currently
         )
         save_pickle(statistics.num_nodes, self.processed_paths[1])
         np.save(self.processed_paths[2], statistics.atom_types)
@@ -153,8 +170,12 @@ class GeomDrugsDataset(InMemoryDataset):
         save_pickle(statistics.bond_lengths, self.processed_paths[6])
         np.save(self.processed_paths[7], statistics.bond_angles)
         save_pickle(set(all_smiles), self.processed_paths[8])
-
-
+        
+        np.save(self.processed_paths[9], statistics.is_aromatic)
+        np.save(self.processed_paths[10], statistics.is_in_ring)
+        np.save(self.processed_paths[11], statistics.hybridization)
+    
+    
 class GeomDataModule(AbstractAdaptiveDataModule):
     def __init__(self, cfg):
         self.datadir = cfg.dataset_root
@@ -261,3 +282,14 @@ class GeomDataModule(AbstractAdaptiveDataModule):
 
         return dl
 
+if __name__ == "__main__":
+    # Creating the Pytorch Geometric InMemoryDatasets
+    DATAROOT = "/sharedhome/let55/projects/e3moldiffusion/experiments/geom/data"
+    dataset = GeomDrugsDataset(root=DATAROOT, split="val", remove_h=False)
+    print(dataset)
+    dataset = GeomDrugsDataset(root=DATAROOT, split="test", remove_h=False)
+    print(dataset)
+    dataset = GeomDrugsDataset(root=DATAROOT, split="train", remove_h=False)
+    print(dataset)
+    print(dataset[0])
+    print(dataset[0].edge_attr)

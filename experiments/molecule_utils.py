@@ -1,4 +1,5 @@
 import torch
+import rdkit
 from rdkit import Chem, RDLogger
 from rdkit.Geometry import Point3D
 from rdkit import Chem, RDLogger
@@ -14,8 +15,12 @@ bond_dict = [
     Chem.rdchem.BondType.TRIPLE,
     Chem.rdchem.BondType.AROMATIC,
 ]
+
+from experiments.data.utils import x_map as additional_node_map
+
+
 class Molecule:
-    def __init__(self, atom_types, bond_types, positions, charges, dataset_info):
+    def __init__(self, atom_types, bond_types, positions, charges, dataset_info, is_aromatic=None, hybridization=None):
         """atom_types: n      LongTensor
         charges: n         LongTensor
         bond_types: n x n  LongTensor
@@ -36,9 +41,28 @@ class Molecule:
         self.bond_types = bond_types.long()
         self.positions = positions
         self.charges = charges
+        
+        if isinstance(is_aromatic, torch.Tensor):
+            assert len(is_aromatic.shape) == 1
+            assert is_aromatic.max().item() <= len(additional_node_map["is_aromatic"]) - 1
+            self.is_aromatic = is_aromatic
+        else:
+            self.is_aromatic = None
+            
+        if isinstance(hybridization, torch.Tensor):
+            assert len(hybridization.shape) == 1
+            assert hybridization.max().item() <= len(additional_node_map["hybridization"]) - 1
+            self.hybridization = hybridization
+        else:
+            self.hybridization = None
+            
+        self.additional_feats = isinstance(self.is_aromatic, torch.Tensor) and isinstance(self.hybridization, torch.Tensor)
+        
         self.rdkit_mol = self.build_molecule(atom_decoder)
         self.num_nodes = len(atom_types)
         self.num_atom_types = len(atom_decoder)
+        
+        
 
     def build_molecule(self, atom_decoder, verbose=False):
         """If positions is None,"""
@@ -46,15 +70,30 @@ class Molecule:
             print("building new molecule")
 
         mol = Chem.RWMol()
-        for atom, charge in zip(self.atom_types, self.charges):
-            if atom == -1:
-                continue
-            a = Chem.Atom(atom_decoder[int(atom.item())])
-            if charge.item() != 0:
-                a.SetFormalCharge(charge.item())
-            mol.AddAtom(a)
-            if verbose:
-                print("Atom added: ", atom.item(), atom_decoder[atom.item()])
+        
+        if self.additional_feats:
+            for atom, charge, is_aromatic, sp_hybridization in zip(self.atom_types, self.charges, self.is_aromatic, self.hybridization):
+                if atom == -1:
+                    continue
+                a = Chem.Atom(atom_decoder[int(atom.item())])
+                if charge.item() != 0:
+                    a.SetFormalCharge(charge.item())
+                a.SetIsAromatic(additional_node_map["is_aromatic"][is_aromatic.item()])
+                a.SetHybridization(additional_node_map["hybridization"][sp_hybridization.item()])
+                mol.AddAtom(a)
+                if verbose:
+                    print("Atom added: ", atom.item(), atom_decoder[atom.item()])
+        else:
+            for atom, charge in zip(self.atom_types, self.charges):
+                if atom == -1:
+                    continue
+                a = Chem.Atom(atom_decoder[int(atom.item())])
+                if charge.item() != 0:
+                    a.SetFormalCharge(charge.item())
+                mol.AddAtom(a)
+                if verbose:
+                    print("Atom added: ", atom.item(), atom_decoder[atom.item()])
+            
 
         edge_types = torch.triu(self.bond_types, diagonal=1)
         edge_types[edge_types == -1] = 0
