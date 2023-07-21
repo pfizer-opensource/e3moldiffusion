@@ -113,7 +113,7 @@ class Trainer(pl.LightningModule):
             N=hparams["timesteps"],
             scaled_reverse_posterior_sigma=True,
             schedule=self.hparams.noise_scheduler,
-            nu=1.5,
+            nu=2.5,
             enforce_zero_terminal_snr=False,
         )
         self.sde_atom_charge = DiscreteDDPM(
