@@ -62,7 +62,7 @@ class DiffusionLoss(nn.Module):
             charges_loss = scatter_mean(
                 charges_loss, index=batch, dim=0, dim_size=batch_size
             )
-            charges_loss = self.loss_non_nans(atoms_loss, "charges")
+            charges_loss = self.loss_non_nans(charges_loss, "charges")
             charges_loss *= weights
             charges_loss = torch.sum(charges_loss, dim=0)
 

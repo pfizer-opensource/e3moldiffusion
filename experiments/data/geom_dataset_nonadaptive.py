@@ -31,6 +31,7 @@ class GeomDataModule(LightningDataModule):
         
         self.datadir = cfg.dataset_root
         root_path = cfg.dataset_root
+        self.cfg = cfg
         self.pin_memory = True
         self.persistent_workers = False
         

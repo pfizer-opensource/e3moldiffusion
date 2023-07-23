@@ -52,8 +52,10 @@ class EQGATEdgeGNN(nn.Module):
 
         for i in range(num_layers):
             
-            # second or second last layer
-            lb = (i == 1 or i == num_layers - 2)
+            ## second or second last layer
+            # lb = (i == 1 or i == num_layers - 2)
+            lb = (i % 2 == 0) and (i != 0)
+            # new: every second layer
             edge_mp_select = lb & edge_mp
             convs.append(
                     EQGATGlobalEdgeConvFinal(in_dims=hn_dim,
