@@ -28,3 +28,4 @@ dependencies:
       - rmsd
       - torch_ema
       - tensorboard
+      - biopython

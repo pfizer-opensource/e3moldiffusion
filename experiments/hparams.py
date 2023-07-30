@@ -68,7 +68,6 @@ def add_arguments(parser):
     parser.add_argument("--cutoff-local", default=7.0, type=float)
     parser.add_argument("--cutoff-global", default=10.0, type=float)
 
-
     # For Discrete: Include more features: (is_aromatic, is_in_ring, hybridization)
     parser.add_argument("--additional-feats", default=False, action="store_true")
 

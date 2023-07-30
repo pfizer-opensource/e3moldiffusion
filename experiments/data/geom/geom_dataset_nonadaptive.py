@@ -1,6 +1,6 @@
 from typing import Optional
 
-from experiments.data.geom_dataset_adaptive import GeomDrugsDataset
+from experiments.data.geom.geom_dataset_adaptive import GeomDrugsDataset
 from pytorch_lightning import LightningDataModule
 from torch_geometric.data import DataLoader
 from tqdm import tqdm
@@ -26,15 +26,15 @@ full_atom_encoder = {
 
 
 class GeomDataModule(LightningDataModule):
-    def __init__( self, cfg):
+    def __init__(self, cfg):
         super().__init__()
-        
+
         self.datadir = cfg.dataset_root
         root_path = cfg.dataset_root
         self.cfg = cfg
         self.pin_memory = True
         self.persistent_workers = False
-        
+
         train_dataset = GeomDrugsDataset(
             split="train", root=root_path, remove_h=cfg.remove_hs
         )
@@ -50,11 +50,17 @@ class GeomDataModule(LightningDataModule):
             "val": val_dataset.statistics,
             "test": test_dataset.statistics,
         }
-        
+
     def setup(self, stage: Optional[str] = None) -> None:
-        train_dataset = GeomDrugsDataset(root=self.cfg.dataset_root, split="train", remove_h=self.cfg.remove_hs)
-        val_dataset = GeomDrugsDataset(root=self.cfg.dataset_root, split="val", remove_h=self.cfg.remove_hs)
-        test_dataset = GeomDrugsDataset(root=self.cfg.dataset_root, split="test", remove_h=self.cfg.remove_hs)
+        train_dataset = GeomDrugsDataset(
+            root=self.cfg.dataset_root, split="train", remove_h=self.cfg.remove_hs
+        )
+        val_dataset = GeomDrugsDataset(
+            root=self.cfg.dataset_root, split="val", remove_h=self.cfg.remove_hs
+        )
+        test_dataset = GeomDrugsDataset(
+            root=self.cfg.dataset_root, split="test", remove_h=self.cfg.remove_hs
+        )
 
         if stage == "fit" or stage is None:
             self.train_dataset = train_dataset

@@ -18,7 +18,6 @@ warnings.filterwarnings(
 
 from experiments.hparams import add_arguments
 from experiments.data.config_file import get_dataset_info
-from experiments.data.data_info import QM9Infos
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -44,18 +43,65 @@ if __name__ == "__main__":
         hparams.save_dir + f"/run{hparams.id}/", default_hp_metric=False
     )
 
-    from experiments.data.qm9.qm9_dataset import QM9DataModule
+    print(f"Loading {hparams.dataset} Datamodule.")
+    non_adaptive = True
+    if hparams.dataset == "drugs":
+        dataset = "drugs"
+        from experiments.data.data_info import GEOMInfos as DataInfos
 
-    datamodule = QM9DataModule(hparams)
+        if hparams.use_adaptive_loader:
+            print("Using adaptive dataloader")
+            from experiments.data.geom.geom_dataset_adaptive import (
+                GeomDataModule as DataModule,
+            )
+        else:
+            print("Using non-adaptive dataloader")
+            non_adaptive = False
+            from experiments.data.geom.geom_dataset_nonadaptive import (
+                GeomDataModule as DataModule,
+            )
+    elif hparams.dataset == "qm9":
+        dataset = "qm9"
+        non_adaptive = False
+        from experiments.data.data_info import QM9Infos as DataInfos
+        from experiments.data.qm9.qm9_dataset import QM9DataModule as DataModule
 
-    dataset_statistics = QM9Infos(datamodule, hparams)
-    dataset_info = get_dataset_info("qm9", remove_h=hparams.remove_hs)
+    elif hparams.dataset == "pubchem":
+        dataset = "drugs"  # take dataset infos from GEOM for simplicity
+        from experiments.data.data_info import PubChemInfos as DataInfos
+
+        if hparams.use_adaptive_loader:
+            print("Using adaptive dataloader")
+            from experiments.data.pubchem.pubchem_dataset_adaptive import (
+                PubChemDataModule as DataModule,
+            )
+        else:
+            print("Using non-adaptive dataloader")
+            non_adaptive = True
+            from experiments.data.pubchem.pubchem_dataset_nonadaptive import (
+                PubChemDataModule as DataModule,
+            )
+
+    datamodule = DataModule(hparams)
+    if non_adaptive:
+        datamodule.prepare_data()
+        datamodule.setup("fit")
+
+    dataset_statistics = DataInfos(datamodule, hparams)
+    dataset_info = get_dataset_info(dataset, remove_h=False)
 
     train_smiles = datamodule.train_dataset.smiles
 
     if hparams.continuous:
         print("Using continuous diffusion")
         from experiments.diffusion_continuous import Trainer
+    elif hparams.bond_prediction:
+        print("Starting bond prediction model via discrete diffusion")
+        from experiments.bond_prediction_discrete import Trainer
+    elif hparams.latent_dim:
+        print("Using latent diffusion")
+        # from experiments.diffusion_latent_discrete import Trainer
+        from experiments.diffusion_latent_discrete_new import Trainer
     else:
         print("Using discrete diffusion")
         if hparams.additional_feats:
@@ -63,11 +109,6 @@ if __name__ == "__main__":
             from experiments.diffusion_discrete_moreFeats import Trainer
         else:
             from experiments.diffusion_discrete import Trainer
-
-    if hparams.latent_dim:
-        print("Using latent diffusion")
-        # from experiments.diffusion_latent_discrete import Trainer
-        from experiments.diffusion_latent_discrete_new import Trainer
 
     model = Trainer(
         hparams=hparams.__dict__,
@@ -79,8 +120,8 @@ if __name__ == "__main__":
     strategy = "ddp" if hparams.gpus > 1 else "auto"
 
     trainer = pl.Trainer(
-        accelerator="gpu" if hparams.gpus >= 1 else "cpu",
-        devices=hparams.gpus if hparams.gpus >= 1 else 1,
+        accelerator="gpu" if hparams.gpus else "cpu",
+        devices=hparams.gpus if hparams.gpus else None,
         strategy=strategy,
         logger=tb_logger,
         enable_checkpointing=True,
@@ -100,7 +141,7 @@ if __name__ == "__main__":
         detect_anomaly=hparams.detect_anomaly,
     )
 
-    pl.seed_everything(seed=0, workers=hparams.gpus > 1)
+    pl.seed_everything(seed=hparams.seed, workers=hparams.gpus > 1)
 
     trainer.fit(
         model=model,

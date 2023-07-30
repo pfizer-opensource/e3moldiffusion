@@ -47,11 +47,13 @@ if __name__ == "__main__":
     print(f"Loading {hparams.dataset} Datamodule.")
     if hparams.use_adaptive_loader:
         print("Using adaptive dataloader")
-        from experiments.data.geom_dataset_adaptive import GeomDataModule
+        from experiments.data.geom.geom_dataset_adaptive import GeomDataModule
+
         datamodule = GeomDataModule(hparams)
     else:
         print("Using non-adaptive dataloader")
-        from experiments.data.geom_dataset_nonadaptive import GeomDataModule
+        from experiments.data.geom.geom_dataset_nonadaptive import GeomDataModule
+
         datamodule = GeomDataModule(hparams)
         datamodule.prepare_data()
         datamodule.setup("fit")
@@ -73,22 +75,12 @@ if __name__ == "__main__":
         from experiments.diffusion_latent_discrete_new import Trainer
     else:
         print("Using discrete diffusion")
-<<<<<<< Updated upstream
         if hparams.additional_feats:
             print("Using additional features")
             from experiments.diffusion_discrete_moreFeats import Trainer
         else:
             from experiments.diffusion_discrete import Trainer
-            
-    if hparams.latent_dim:
-        print("Using latent diffusion")
-        #from experiments.diffusion_latent_discrete import Trainer
-        from experiments.diffusion_latent_discrete_new import Trainer
-        
-=======
-        from experiments.diffusion_discrete import Trainer
 
->>>>>>> Stashed changes
     model = Trainer(
         hparams=hparams.__dict__,
         dataset_info=dataset_info,

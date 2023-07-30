@@ -166,7 +166,7 @@ class AbstractDatasetInfos:
         self.valency_distribution = statistics["train"].valencies
         self.max_n_nodes = len(n_nodes) - 1
         self.nodes_dist = DistributionNodes(n_nodes)
-        
+
         if hasattr(statistics["train"], "is_aromatic"):
             self.is_aromatic = statistics["train"].is_aromatic
         if hasattr(statistics["train"], "is_in_ring"):
