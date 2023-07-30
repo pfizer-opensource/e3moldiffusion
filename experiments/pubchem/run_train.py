@@ -11,6 +11,8 @@ from pytorch_lightning.callbacks import (
 )
 from pytorch_lightning.loggers import TensorBoardLogger
 import warnings
+from experiments.data.config_file import get_dataset_info
+from experiments.data.data_info import PubChemInfos
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
@@ -53,15 +55,13 @@ if __name__ == "__main__":
         from experiments.data.pubchem_dataset_nonadaptive import PubChemDataModule
 
         datamodule = PubChemDataModule(
-            root=hparams.dataset_root,
-            batch_size=hparams.batch_size,
-            num_workers=hparams.num_workers,
-            pin_memory=True,
-            persistent_workers=True,
-            with_hydrogen=not hparams.no_h,
+            hparams=hparams,
         )
         datamodule.prepare_data()
         datamodule.setup("fit")
+
+    dataset_statistics = PubChemInfos(datamodule, hparams)
+    dataset_info = get_dataset_info("drugs", remove_h=False)
 
     if hparams.continuous:
         from experiments.diffusion_pretrain_continuous import Trainer
@@ -72,19 +72,18 @@ if __name__ == "__main__":
     else:
         from experiments.diffusion_pretrain_discrete import Trainer
 
-        # TO-DO!
-        # model = Trainer(
-        #     hparams=hparams.__dict__,
-        #     dataset_info=dataset_info,
-        #     dataset_statistics=dataset_statistics,
-        #     smiles_list=list(train_smiles),
-        # )
+        model = Trainer(
+            hparams=hparams.__dict__,
+            dataset_info=dataset_info,
+            dataset_statistics=dataset_statistics,
+            smiles_list=None,
+        )
 
     strategy = "ddp" if hparams.gpus > 1 else "auto"
 
     trainer = pl.Trainer(
         accelerator="gpu" if hparams.gpus else "cpu",
-        devices=hparams.gpus if hparams.gpus else None,
+        devices=hparams.gpus if hparams.gpus else hparams.num_workers,
         strategy=strategy,
         logger=tb_logger,
         enable_checkpointing=True,

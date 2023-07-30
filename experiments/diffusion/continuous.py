@@ -96,7 +96,7 @@ def get_beta_schedule(
 
         betas = 1 - alphas  # ((components, steps)) # X, charges, E, y, pos
         betas = np.swapaxes(betas, 0, 1)
-        betas = torch.clip(torch.from_numpy(betas), 0.0, 0.999).squeeze()
+        betas = torch.clip(torch.from_numpy(betas), 0.0, 0.999).squeeze().float()
 
     if plot:
         plt.plot(range(len(betas)), betas)
@@ -166,7 +166,12 @@ class DiscreteDDPM(nn.Module):
         alphas = 1.0 - discrete_betas
 
         sqrt_alphas = torch.sqrt(alphas)
-        alphas_cumprod = torch.cumprod(alphas, dim=0)
+        if schedule == "adaptive":
+            log_alpha = torch.log(alphas)
+            log_alpha_bar = torch.cumsum(log_alpha, dim=0)
+            alphas_cumprod = torch.exp(log_alpha_bar)
+        else:
+            alphas_cumprod = torch.cumprod(alphas, dim=0)
         alphas_cumprod_prev = torch.nn.functional.pad(
             alphas_cumprod[:-1], (1, 0), value=1.0
         )

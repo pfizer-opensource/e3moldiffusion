@@ -24,8 +24,7 @@ from experiments.utils import (
     get_empirical_num_nodes,
     zero_mean,
 )
-from experiments.sampling.analyze import analyze_stability_for_molecules
-from experiments.losses import PredictionLoss
+from experiments.losses import EdgePredictionLoss
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(
@@ -77,46 +76,76 @@ class Trainer(pl.LightningModule):
         empirical_num_nodes = get_empirical_num_nodes(dataset_info)
         self.register_buffer(name="empirical_num_nodes", tensor=empirical_num_nodes)
 
-        self.model = EdgePredictionNetwork(
-            hn_dim=(hparams["sdim"], hparams["vdim"]),
-            num_layers=hparams["num_layers"],
-            use_norm=not hparams["omit_norm"],
-            use_cross_product=not hparams["omit_cross_product"],
-            num_atom_features=self.num_atom_features,
-            num_bond_types=self.num_bond_classes,
-            edge_dim=hparams["edim"],
-            cutoff_local=hparams["cutoff_local"],
-            rbf_dim=hparams["rbf_dim"],
-            vector_aggr=hparams["vector_aggr"],
-            fully_connected=hparams["fully_connected"],
-            local_global_model=hparams["local_global_model"],
-            recompute_edge_attributes=True,
-            recompute_radius_graph=False,
-        )
+        if self.hparams.load_ckpt_from_pretrained is not None:
+            print("Loading from pre-trained model checkpoint...")
+
+            self.model = load_model(
+                self.hparams.load_ckpt_from_pretrained, dataset_statistics
+            )
+            # num_params = len(self.model.state_dict())
+            # for i, param in enumerate(self.model.parameters()):
+            #     if i < num_params // 2:
+            #         param.requires_grad = False
+        else:
+            self.model = EdgePredictionNetwork(
+                hn_dim=(hparams["sdim"], hparams["vdim"]),
+                num_layers=hparams["num_layers"],
+                latent_dim=None,
+                use_cross_product=hparams["use_cross_product"],
+                num_atom_features=self.num_atom_features,
+                num_bond_types=self.num_bond_classes,
+                edge_dim=hparams["edim"],
+                cutoff_local=hparams["cutoff_local"],
+                vector_aggr=hparams["vector_aggr"],
+                fully_connected=hparams["fully_connected"],
+                local_global_model=hparams["local_global_model"],
+                recompute_edge_attributes=True,
+                recompute_radius_graph=False,
+                edge_mp=hparams["edge_mp"],
+            )
 
         self.sde = DiscreteDDPM(
             beta_min=hparams["beta_min"],
             beta_max=hparams["beta_max"],
             N=hparams["timesteps"],
             scaled_reverse_posterior_sigma=True,
-            schedule="cosine",
+            schedule=self.hparams.noise_scheduler,
+            nu=2.5,
+            enforce_zero_terminal_snr=False,
+        )
+        self.sde_atom_charge = DiscreteDDPM(
+            beta_min=hparams["beta_min"],
+            beta_max=hparams["beta_max"],
+            N=hparams["timesteps"],
+            scaled_reverse_posterior_sigma=True,
+            schedule=self.hparams.noise_scheduler,
+            nu=1,
+            enforce_zero_terminal_snr=False,
+        )
+        self.sde_bonds = DiscreteDDPM(
+            beta_min=hparams["beta_min"],
+            beta_max=hparams["beta_max"],
+            N=hparams["timesteps"],
+            scaled_reverse_posterior_sigma=True,
+            schedule=self.hparams.noise_scheduler,
+            nu=1.5,
             enforce_zero_terminal_snr=False,
         )
 
         self.cat_atoms = CategoricalDiffusionKernel(
             terminal_distribution=atom_types_distribution,
-            alphas=self.sde.alphas.clone(),
+            alphas=self.sde_atom_charge.alphas.clone(),
         )
         self.cat_bonds = CategoricalDiffusionKernel(
             terminal_distribution=bond_types_distribution,
-            alphas=self.sde.alphas.clone(),
+            alphas=self.sde_bonds.alphas.clone(),
         )
         self.cat_charges = CategoricalDiffusionKernel(
             terminal_distribution=charge_types_distribution,
-            alphas=self.sde.alphas.clone(),
+            alphas=self.sde_atom_charge.alphas.clone(),
         )
 
-        self.prediction_loss = PredictionLoss()
+        self.prediction_loss = EdgePredictionLoss()
 
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
@@ -135,9 +164,7 @@ class Trainer(pl.LightningModule):
         )
         out_dict = self(batch=batch, t=t)
 
-        edges_true = {
-            "bonds": out_dict["bonds_true"],
-        }
+        edges_true = out_dict["bonds_true"]
         edges_pred = out_dict["bonds_pred"]
 
         loss = self.prediction_loss(

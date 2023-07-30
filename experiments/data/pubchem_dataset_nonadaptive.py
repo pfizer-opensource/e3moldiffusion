@@ -1,14 +1,18 @@
 from rdkit import RDLogger
 import torch
+import numpy as np
 from os.path import join
-from torch_geometric.data import InMemoryDataset, DataLoader
+from torch_geometric.data import Dataset, DataLoader
 from experiments.data.utils import load_pickle
-from experiments.data.abstract_dataset import (
-    AbstractAdaptiveDataModule,
-)
 from experiments.utils import make_splits
 from torch.utils.data import Subset
-
+import lmdb
+import pickle
+import gzip
+import io
+from pytorch_lightning import LightningDataModule
+import os
+import experiments.data.utils as dataset_utils
 
 full_atom_encoder = {
     "H": 0,
@@ -23,117 +27,148 @@ full_atom_encoder = {
     "Br": 9,
     "I": 10,
 }
+GEOM_DATADIR = "/hpfs/userws/cremej01/projects/data/geom/processed"
 
 
-class PubChemDataset(InMemoryDataset):
+class PubChemLMDBDataset(Dataset):
     def __init__(
-        self, split, root, remove_h, transform=None, pre_transform=None, pre_filter=None
+        self,
+        root: str,
     ):
-        assert split in ["train", "val", "test"]
-        self.split = split
-        self.remove_h = remove_h
+        """
+        Constructor
+        """
+        self.data_file = root
+        self._num_graphs = 95173205
+        super().__init__(root)
 
-        self.atom_encoder = full_atom_encoder
-        if remove_h:
-            self.atom_encoder = {
-                k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
-            }
+        self.remove_h = False
+        self.statistics = dataset_utils.Statistics(
+            num_nodes=load_pickle(os.path.join(GEOM_DATADIR, self.processed_files[0])),
+            atom_types=torch.from_numpy(
+                np.load((os.path.join(GEOM_DATADIR, self.processed_files[1])))
+            ),
+            bond_types=torch.from_numpy(
+                np.load((os.path.join(GEOM_DATADIR, self.processed_files[2])))
+            ),
+            charge_types=torch.from_numpy(
+                np.load((os.path.join(GEOM_DATADIR, self.processed_files[3])))
+            ),
+            valencies=load_pickle(
+                (os.path.join(GEOM_DATADIR, self.processed_files[4]))
+            ),
+            bond_lengths=load_pickle(
+                (os.path.join(GEOM_DATADIR, self.processed_files[5]))
+            ),
+            bond_angles=torch.from_numpy(
+                np.load((os.path.join(GEOM_DATADIR, self.processed_files[6])))
+            ),
+        )
 
-        super().__init__(root, transform, pre_transform, pre_filter)
-        self.data, self.slices = torch.load(self.processed_paths[0])
+    def _init_db(self):
+        self._env = lmdb.open(
+            str(self.data_file),
+            readonly=True,
+            lock=False,
+            readahead=False,
+            meminit=False,
+            create=False,
+        )
+
+    def get(self, index: int):
+        self._init_db()
+
+        with self._env.begin(write=False) as txn:
+            compressed = txn.get(str(index).encode())
+            buf = io.BytesIO(compressed)
+            with gzip.GzipFile(fileobj=buf, mode="rb") as f:
+                serialized = f.read()
+            try:
+                item = pickle.loads(serialized)["data"]
+            except:
+                return None
+
+        return item
+
+    def len(self) -> int:
+        r"""Returns the number of graphs stored in the dataset."""
+        return self._num_graphs
+
+    def __len__(self) -> int:
+        return self._num_graphs
 
     @property
-    def raw_file_names(self):
+    def processed_files(self):
+        h = "noh" if self.remove_h else "h"
         return [
-            "data_list_0.pickle", 
-            "data_list_3.pickle", 
-            "data_list_4.pickle", 
-            "data_list_5.pickle"
-            ]
-
-    @property
-    def processed_file_names(self):
-        return [
-            f"pubchem_data.pt",
+            f"train_n_{h}.pickle",
+            f"train_atom_types_{h}.npy",
+            f"train_bond_types_{h}.npy",
+            f"train_charges_{h}.npy",
+            f"train_valency_{h}.pickle",
+            f"train_bond_lengths_{h}.pickle",
+            f"train_angles_{h}.npy",
         ]
 
-    def download(self):
-        raise ValueError(
-            "Download and preprocessing is manual. If the data is already downloaded, "
-            f"check that the paths are correct. Root dir = {self.root} -- raw files {self.raw_paths}"
-        )
 
-    def process(self):
-        RDLogger.DisableLog("rdApp.*")
-        file_1 = load_pickle(self.raw_paths[0])
-        file_2 = load_pickle(self.raw_paths[0])
-        file_3 = load_pickle(self.raw_paths[0])
-        file_4 = load_pickle(self.raw_paths[0])
-        data_list = file_1 + file_2 + file_3 + file_4
-        del file_1
-        del file_2
-        del file_3
-        del file_4
-        
-        torch.save(self.collate(data_list), self.processed_paths[0])
-
-
-class PubChemDataModule(AbstractAdaptiveDataModule):
-    def __init__(self, cfg):
-        self.datadir = cfg.dataset_root
-        root_path = cfg.dataset_root
+class PubChemDataModule(LightningDataModule):
+    def __init__(self, hparams):
+        super(PubChemDataModule, self).__init__()
+        self.save_hyperparameters(hparams)
+        self.datadir = hparams.dataset_root
         self.pin_memory = True
+        self.remove_h = False
 
-        dataset = PubChemDataset(
-            split="train", root=root_path, remove_h=cfg.remove_hs
-        )
+        self.dataset = PubChemLMDBDataset(root=self.datadir)
         self.idx_train, self.idx_val, self.idx_test = make_splits(
-            len(dataset),
-            0.9,
-            0.1,
-            None,
-            42,
-            join(self.hparams["save_dir"], "splits.npz"),
-            None,
+            len(self.dataset),
+            train_size=0.8,
+            val_size=0.1,
+            test_size=0.1,
+            seed=42,
+            filename=join(self.hparams["save_dir"], "splits.npz"),
+            splits=None,
         )
         print(
             f"train {len(self.idx_train)}, val {len(self.idx_val)}, test {len(self.idx_test)}"
         )
-        train_dataset = Subset(dataset, self.idx_train)
-        val_dataset = Subset(dataset, self.idx_val)
-        test_dataset = Subset(dataset, self.idx_test)
+        self.train_dataset = Subset(self.dataset, self.idx_train)
+        self.val_dataset = Subset(self.dataset, self.idx_val)
+        self.test_dataset = Subset(self.dataset, self.idx_test)
 
-        self.remove_h = cfg.remove_hs
+        self.statistics = {
+            "train": self.dataset.statistics,
+            "val": self.dataset.statistics,
+            "test": self.dataset.statistics,
+        }
 
-        super().__init__(cfg, train_dataset, val_dataset, test_dataset)
-
-    def _train_dataloader(self, shuffle=True):
+    def train_dataloader(self, shuffle=False):
         dataloader = DataLoader(
             dataset=self.train_dataset,
-            batch_size=self.cfg.batch_size,
-            num_workers=self.cfg.num_workers,
+            batch_size=self.hparams.batch_size,
+            num_workers=self.hparams.num_workers,
             pin_memory=self.pin_memory,
-            shuffle=shuffle,
+            shuffle=True,
             persistent_workers=False,
         )
         return dataloader
 
-    def _val_dataloader(self, shuffle=False):
+    def val_dataloader(self, shuffle=False):
         dataloader = DataLoader(
             dataset=self.val_dataset,
-            batch_size=self.cfg.batch_size,
-            num_workers=self.cfg.num_workers,
+            batch_size=self.hparams.batch_size,
+            num_workers=self.hparams.num_workers,
             pin_memory=self.pin_memory,
             shuffle=shuffle,
             persistent_workers=False,
         )
         return dataloader
 
-    def _test_dataloader(self, shuffle=False):
+    def test_dataloader(self, shuffle=False):
         dataloader = DataLoader(
             dataset=self.test_dataset,
-            batch_size=self.cfg.batch_size,
-            num_workers=self.cfg.num_workers,
+            batch_size=self.hparams.batch_size,
+            num_workers=self.hparams.num_workers,
             pin_memory=self.pin_memory,
             shuffle=shuffle,
             persistent_workers=False,
@@ -189,4 +224,3 @@ class PubChemDataModule(AbstractAdaptiveDataModule):
         )
 
         return dl
-

@@ -37,9 +37,16 @@ def add_arguments(parser):
     # LEARNING
     parser.add_argument("-b", "--batch-size", default=32, type=int)
     parser.add_argument("-ib", "--inference-batch-size", default=32, type=int)
-    parser.add_argument("--lr", default=5e-4, type=float)
     parser.add_argument("--gamma", default=0.975, type=float)
     parser.add_argument("--grad-clip-val", default=10.0, type=float)
+    parser.add_argument(
+        "--lr-scheduler",
+        default="reduce_on_plateau",
+        choices=["reduce_on_plateau", "cosine_annealing", "cyclic"],
+    )
+    parser.add_argument("--lr", default=5e-4, type=float)
+    parser.add_argument("--lr-min", default=5e-5, type=float)
+    parser.add_argument("--lr-step-size", default=10000, type=int)
     parser.add_argument("--lr-frequency", default=5, type=int)
     parser.add_argument("--lr-patience", default=20, type=int)
     parser.add_argument("--lr-cooldown", default=5, type=int)
@@ -84,6 +91,9 @@ def add_arguments(parser):
     parser.add_argument("--max-time", type=str, default=None)
     parser.add_argument("--use-loss-weighting", default=False, action="store_true")
 
+    # BOND PREDICTION:
+    parser.add_argument("--bond-prediction", default=False, action="store_true")
+
     # LATENT
     parser.add_argument("--vae-beta", default=1.0, type=float)
     parser.add_argument("--sdim-latent", default=256, type=int)
@@ -113,6 +123,7 @@ def add_arguments(parser):
     parser.add_argument("--max-num-neighbors", default=128, type=int)
     parser.add_argument("--ema-decay", default=0.9999, type=float)
     parser.add_argument("--weight-decay", default=0.9999, type=float)
+    parser.add_argument("--seed", default=42, type=int)
 
     parser.add_argument("--backprop-local", default=False, action="store_true")
 
