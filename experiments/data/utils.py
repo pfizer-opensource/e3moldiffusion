@@ -11,9 +11,9 @@ from torch_geometric.utils import sort_edge_index
 import rdkit
 
 x_map = {
-    'is_aromatic': [False, True],
-    'is_in_ring': [False, True],
-    'hybridization': [
+    "is_aromatic": [False, True],
+    "is_in_ring": [False, True],
+    "hybridization": [
         rdkit.Chem.rdchem.HybridizationType.UNSPECIFIED,
         rdkit.Chem.rdchem.HybridizationType.S,
         rdkit.Chem.rdchem.HybridizationType.SP,
@@ -22,8 +22,8 @@ x_map = {
         rdkit.Chem.rdchem.HybridizationType.SP2D,
         rdkit.Chem.rdchem.HybridizationType.SP3D,
         rdkit.Chem.rdchem.HybridizationType.SP3D2,
-        rdkit.Chem.rdchem.HybridizationType.OTHER
-    ]
+        rdkit.Chem.rdchem.HybridizationType.OTHER,
+    ],
 }
 
 
@@ -41,27 +41,20 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles):
     is_aromatic = []
     is_in_ring = []
     sp_hybridization = []
-    
+
     for atom in mol.GetAtoms():
         atom_types.append(atom_encoder[atom.GetSymbol()])
         all_charges.append(
             atom.GetFormalCharge()
         )  # TODO: check if implicit Hs should be kept
-        
-        is_aromatic.append(
-            x_map["is_aromatic"].index(atom.GetIsAromatic())
-        )
-        is_in_ring.append(
-            x_map["is_in_ring"].index(atom.IsInRing())
-        )
-        sp_hybridization.append(
-            x_map["hybridization"].index(atom.GetHybridization())
-        )
-        
+
+        is_aromatic.append(x_map["is_aromatic"].index(atom.GetIsAromatic()))
+        is_in_ring.append(x_map["is_in_ring"].index(atom.IsInRing()))
+        sp_hybridization.append(x_map["hybridization"].index(atom.GetHybridization()))
 
     atom_types = torch.Tensor(atom_types).long()
     all_charges = torch.Tensor(all_charges).long()
-    
+
     is_aromatic = torch.Tensor(is_aromatic).long()
     is_in_ring = torch.Tensor(is_in_ring).long()
     hybridization = torch.Tensor(sp_hybridization).long()
@@ -75,9 +68,9 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles):
         smiles=smiles,
         is_aromatic=is_aromatic,
         is_in_ring=is_in_ring,
-        hybridization=hybridization
+        hybridization=hybridization,
     )
-    
+
     return data
 
 
@@ -109,7 +102,9 @@ def load_pickle(path):
     with open(path, "rb") as f:
         return pickle.load(f)
 
+
 RDLogger.DisableLog("rdApp.*")
+
 
 def write_xyz_file(coords, atom_types, filename):
     out = f"{len(coords)}\n\n"
@@ -197,10 +192,10 @@ def fully_connected_edge_idx(data: Data, without_self_loop: bool = True):
     if without_self_loop:
         mask = fc_edge_index[0] != fc_edge_index[1]
         fc_edge_index = fc_edge_index[:, mask]
-        
+
     fc_edge_index = sort_edge_index(fc_edge_index, sort_by_row=False, num_nodes=N)
     data.fc_edge_index = fc_edge_index
-    
+
     return data
 
 
@@ -233,6 +228,7 @@ def atom_type_config(dataset: str = "qm9"):
     else:
         raise ValueError("Dataset not found!")
     return mapping
+
 
 class Statistics:
     def __init__(

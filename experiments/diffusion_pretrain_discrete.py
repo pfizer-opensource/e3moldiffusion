@@ -1,31 +1,20 @@
 import logging
-import os
-from datetime import datetime
-from typing import List, Tuple
-
-import pandas as pd
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 from torch import Tensor
 from torch_geometric.data import Batch
-from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index, dropout_node
-from tqdm import tqdm
 
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 
-from experiments.molecule_utils import Molecule
 from experiments.utils import (
     coalesce_edges,
-    get_empirical_num_nodes,
-    get_list_of_edge_adjs,
     zero_mean,
 )
-from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.losses import DiffusionLoss
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
@@ -54,7 +43,10 @@ class Trainer(pl.LightningModule):
         # TO-DO: calculate the statistics on PubChem to be able to sample the limit dist!
         self.dataset_statistics = dataset_statistics
 
-        atom_types_distribution = dataset_statistics.atom_types.float()
+        if self.hparams.dataset == "pubchem":
+            pubchem_ids = [0, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13]
+
+        atom_types_distribution = dataset_statistics.atom_types.float()[pubchem_ids]
         bond_types_distribution = dataset_statistics.edge_types.float()
         charge_types_distribution = dataset_statistics.charges_marginals.float()
 
@@ -76,19 +68,15 @@ class Trainer(pl.LightningModule):
 
         self.dataset_info = dataset_info
 
-        empirical_num_nodes = get_empirical_num_nodes(dataset_info)
-        self.register_buffer(name="empirical_num_nodes", tensor=empirical_num_nodes)
-
         self.model = DenoisingEdgeNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
-            use_norm=not hparams["omit_norm"],
-            use_cross_product=not hparams["omit_cross_product"],
+            latent_dim=None,
+            use_cross_product=hparams["use_cross_product"],
             num_atom_features=self.num_atom_features,
             num_bond_types=self.num_bond_classes,
             edge_dim=hparams["edim"],
             cutoff_local=hparams["cutoff_local"],
-            rbf_dim=hparams["rbf_dim"],
             vector_aggr=hparams["vector_aggr"],
             fully_connected=hparams["fully_connected"],
             local_global_model=hparams["local_global_model"],

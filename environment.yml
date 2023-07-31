@@ -31,3 +31,4 @@ dependencies:
       - torch-scatter
       - torch-sparse
       - torch-cluster
+      - biopython

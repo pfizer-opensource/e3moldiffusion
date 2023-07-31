@@ -10,10 +10,10 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=27G
 #SBATCH --cpus-per-task=32
-#SBATCH --gres=gpu:5
+#SBATCH --gres=gpu:8
 ##SBATCH --nodelist=g002
-#SBATCH --output=/sharedhome/let55/projects/e3moldiffusion/experiments/geom/slurm_outs/discrete_newFeats_12L_%j.out
-#SBATCH --error=/sharedhome/let55/projects/e3moldiffusion/experiments/geom/slurm_outs/discrete_newFeats_12L_%j.err
+#SBATCH --output=/sharedhome/let55/projects/e3moldiffusion/experiments/geom/slurm_outs/discrete_8L_noAddFeats_WeightLoss%j.out
+#SBATCH --error=/sharedhome/let55/projects/e3moldiffusion/experiments/geom/slurm_outs/discrete_8L_noAddFeats_WeightLoss%j.err
 
 # delta
 # cd /gpfs/workspace/users/let55/projects/e3moldiffusion/experiments/geom

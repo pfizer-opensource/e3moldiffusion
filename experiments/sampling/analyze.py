@@ -40,11 +40,13 @@ bond_dict = [
 ATOM_VALENCY = {6: 4, 7: 3, 8: 2, 9: 1, 15: 3, 16: 2, 17: 1, 35: 1, 53: 1}
 
 
-def check_stability(molecule, dataset_info, debug=False, atom_decoder=None, smiles=None):
-    """ molecule: Molecule object. """
+def check_stability(
+    molecule, dataset_info, debug=False, atom_decoder=None, smiles=None
+):
+    """molecule: Molecule object."""
     device = molecule.atom_types.device
     if atom_decoder is None:
-        atom_decoder = dataset_info['atom_decoder']
+        atom_decoder = dataset_info["atom_decoder"]
 
     atom_types = molecule.atom_types
     edge_types = molecule.bond_types
@@ -56,7 +58,9 @@ def check_stability(molecule, dataset_info, debug=False, atom_decoder=None, smil
 
     n_stable_bonds = 0
     mol_stable = True
-    for i, (atom_type, valency, charge) in enumerate(zip(atom_types, valencies, molecule.charges)):
+    for i, (atom_type, valency, charge) in enumerate(
+        zip(atom_types, valencies, molecule.charges)
+    ):
         atom_type = atom_type.item()
         valency = valency.item()
         charge = charge.item()
@@ -64,8 +68,16 @@ def check_stability(molecule, dataset_info, debug=False, atom_decoder=None, smil
         if type(possible_bonds) == int:
             is_stable = possible_bonds == valency
         elif type(possible_bonds) == dict:
-            expected_bonds = possible_bonds[charge] if charge in possible_bonds.keys() else possible_bonds[0]
-            is_stable = expected_bonds == valency if type(expected_bonds) == int else valency in expected_bonds
+            expected_bonds = (
+                possible_bonds[charge]
+                if charge in possible_bonds.keys()
+                else possible_bonds[0]
+            )
+            is_stable = (
+                expected_bonds == valency
+                if type(expected_bonds) == int
+                else valency in expected_bonds
+            )
         else:
             is_stable = valency in possible_bonds
         if not is_stable:
@@ -73,14 +85,19 @@ def check_stability(molecule, dataset_info, debug=False, atom_decoder=None, smil
         if not is_stable and debug:
             if smiles is not None:
                 print(smiles)
-            print(f"Invalid atom {atom_decoder[atom_type]}: valency={valency}, charge={charge}")
+            print(
+                f"Invalid atom {atom_decoder[atom_type]}: valency={valency}, charge={charge}"
+            )
             print()
         n_stable_bonds += int(is_stable)
 
-    return torch.tensor([mol_stable], dtype=torch.float, device=device),\
-           torch.tensor([n_stable_bonds], dtype=torch.float, device=device),\
-           len(atom_types)
-           
+    return (
+        torch.tensor([mol_stable], dtype=torch.float, device=device),
+        torch.tensor([n_stable_bonds], dtype=torch.float, device=device),
+        len(atom_types),
+    )
+
+
 class BasicMolecularMetrics(object):
     def __init__(self, dataset_info, smiles_train=None, device="cpu"):
         self.atom_decoder = dataset_info["atom_decoder"]
@@ -92,7 +109,7 @@ class BasicMolecularMetrics(object):
         self.atom_stable = MeanMetric().to(device)
         self.mol_stable = MeanMetric().to(device)
 
-        # Retrieve dataset smiles only for qm9 currently.
+        # Retrieve dataset smiles.
         self.train_smiles = set(smiles_train)
         self.validity_metric = MeanMetric().to(device)
         self.uniqueness = MeanMetric().to(device)
@@ -206,7 +223,9 @@ class BasicMolecularMetrics(object):
 
         num_molecules = int(self.validity_metric.weight.item())
         if local_rank == 0:
-            print(f"Validity over {num_molecules} molecules:" f" {validity * 100 :.2f}%")
+            print(
+                f"Validity over {num_molecules} molecules:" f" {validity * 100 :.2f}%"
+            )
             print(
                 f"Number of connected components of {num_molecules} molecules: "
                 f"mean:{mean_components:.2f} max:{max_components:.2f}"
@@ -223,9 +242,7 @@ class BasicMolecularMetrics(object):
         if local_rank == 0:
             print(f"Analyzing molecule stability on ...")
         for i, mol in enumerate(molecules):
-            mol_stable, at_stable, num_bonds = check_stability(
-                mol, self.dataset_info
-            )
+            mol_stable, at_stable, num_bonds = check_stability(mol, self.dataset_info)
             self.mol_stable.update(value=mol_stable)
             self.atom_stable.update(value=at_stable / num_bonds, weight=num_bonds)
 
@@ -238,10 +255,14 @@ class BasicMolecularMetrics(object):
             molecules, local_rank=local_rank
         )
         # Save in any case in the graphs folder
+
+        novelty = novelty if isinstance(novelty, int) else novelty.item()
+        uniqueness = uniqueness if isinstance(uniqueness, int) else uniqueness.item()
+
         validity_dict = {
             "validity": validity.item(),
-            "novelty": novelty.item(),
-            "uniqueness": uniqueness.item(),
+            "novelty": novelty,
+            "uniqueness": uniqueness,
         }
         self.reset()
         return stability_dict, validity_dict, all_generated_smiles
@@ -250,7 +271,11 @@ class BasicMolecularMetrics(object):
 def analyze_stability_for_molecules(
     molecule_list, dataset_info, smiles_train, local_rank, device="cuda"
 ):
-    metrics = BasicMolecularMetrics(dataset_info, smiles_train=smiles_train, device=device)
-    stability_dict, validity_dict, sampled_smiles = metrics(molecule_list, local_rank=local_rank)
+    metrics = BasicMolecularMetrics(
+        dataset_info, smiles_train=smiles_train, device=device
+    )
+    stability_dict, validity_dict, sampled_smiles = metrics(
+        molecule_list, local_rank=local_rank
+    )
     # print("Unique molecules:", rdkit_metrics[1])
     return stability_dict, validity_dict, sampled_smiles

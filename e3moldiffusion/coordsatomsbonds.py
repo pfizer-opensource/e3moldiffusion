@@ -93,26 +93,28 @@ class DenoisingEdgeNetwork(nn.Module):
     Args:
         nn (_type_): _description_
     """
-    def __init__(self,
-                 num_atom_features: int,
-                 num_bond_types: int = 5,
-                 hn_dim: Tuple[int, int] = (256, 64),
-                 edge_dim: int = 32,
-                 cutoff_local: float = 7.5,
-                 num_layers: int = 5,
-                 latent_dim: Optional[int] = None,
-                 use_cross_product: bool = False,
-                 fully_connected: bool = True,
-                 local_global_model: bool = False,
-                 recompute_radius_graph: bool = True,
-                 recompute_edge_attributes: bool = True,
-                 vector_aggr: str = "mean",
-                 atom_mapping: bool = True,
-                 bond_mapping: bool = True,
-                 edge_mp: bool = False,
-                 p1: bool = True,
-                 use_pos_norm: bool = True
-                 ) -> None:
+
+    def __init__(
+        self,
+        num_atom_features: int,
+        num_bond_types: int = 5,
+        hn_dim: Tuple[int, int] = (256, 64),
+        edge_dim: int = 32,
+        cutoff_local: float = 7.5,
+        num_layers: int = 5,
+        latent_dim: Optional[int] = None,
+        use_cross_product: bool = False,
+        fully_connected: bool = True,
+        local_global_model: bool = False,
+        recompute_radius_graph: bool = True,
+        recompute_edge_attributes: bool = True,
+        vector_aggr: str = "mean",
+        atom_mapping: bool = True,
+        bond_mapping: bool = True,
+        edge_mp: bool = False,
+        p1: bool = True,
+        use_pos_norm: bool = True,
+    ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
         self.time_mapping_atom = DenseLayer(1, hn_dim[0])
@@ -154,7 +156,8 @@ class DenoisingEdgeNetwork(nn.Module):
             recompute_radius_graph=recompute_radius_graph,
             recompute_edge_attributes=recompute_edge_attributes,
             edge_mp=edge_mp,
-            p1=p1, use_pos_norm=use_pos_norm
+            p1=p1,
+            use_pos_norm=use_pos_norm,
         )
 
         self.prediction_head = PredictionHeadEdge(
@@ -220,18 +223,20 @@ class DenoisingEdgeNetwork(nn.Module):
         s = self.atom_time_mapping(s + tnode)
 
         edge_attr_global_transformed = self.bond_mapping(edge_attr_global)
-        edge_attr_global_transformed = self.bond_time_mapping(edge_attr_global_transformed + tedge_global)
-        
-        #edge_dense = torch.zeros(x.size(0), x.size(0), edge_attr_global_transformed.size(-1), device=s.device)
-        #edge_dense[edge_index_global[0], edge_index_global[1], :] = edge_attr_global_transformed
-        
-        #if not self.fully_connected:
+        edge_attr_global_transformed = self.bond_time_mapping(
+            edge_attr_global_transformed + tedge_global
+        )
+
+        # edge_dense = torch.zeros(x.size(0), x.size(0), edge_attr_global_transformed.size(-1), device=s.device)
+        # edge_dense[edge_index_global[0], edge_index_global[1], :] = edge_attr_global_transformed
+
+        # if not self.fully_connected:
         #    edge_attr_local_transformed = edge_dense[edge_index_local[0], edge_index_local[1], :]
         #    # local
-        #    edge_attr_local_transformed = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local_transformed, pos=pos)  
-        #else:
+        #    edge_attr_local_transformed = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local_transformed, pos=pos)
+        # else:
         #    edge_attr_local_transformed = (None, None, None)
-            
+
         # global
         edge_attr_global_transformed = self.calculate_edge_attrs(
             edge_index=edge_index_global,
@@ -425,22 +430,18 @@ class EdgePredictionHead(nn.Module):
         self.bond_mapping = DenseLayer(edge_dim, self.sdim, bias=True)
 
         self.bonds_lin_0 = DenseLayer(
-            in_features=2 * self.sdim + 1, out_features=self.sdim, bias=True
+            in_features=self.sdim + 1, out_features=self.sdim, bias=True
         )
         self.bonds_lin_1 = DenseLayer(
             in_features=self.sdim, out_features=num_bond_types, bias=True
         )
         self.coords_lin = DenseLayer(in_features=self.vdim, out_features=1, bias=False)
-        self.atoms_lin = DenseLayer(
-            in_features=self.sdim, out_features=num_atom_features, bias=True
-        )
 
         self.reset_parameters()
 
     def reset_parameters(self):
         self.shared_mapping.reset_parameters()
         self.coords_lin.reset_parameters()
-        self.atoms_lin.reset_parameters()
         self.bonds_lin_0.reset_parameters()
         self.bonds_lin_1.reset_parameters()
 
@@ -452,8 +453,6 @@ class EdgePredictionHead(nn.Module):
 
         coords_pred = self.coords_lin(v).squeeze()
 
-        atoms_pred = self.atoms_lin(s)
-
         coords_pred = p + coords_pred
         coords_pred = coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
 
@@ -464,7 +463,7 @@ class EdgePredictionHead(nn.Module):
 
         d = (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)  # .sqrt()
         f = s[i] + s[j] + self.bond_mapping(e)
-        edge = torch.cat([f, atoms_pred, d], dim=-1)
+        edge = torch.cat([f, d], dim=-1)
 
         bonds_pred = F.silu(self.bonds_lin_0(edge))
         bonds_pred = self.bonds_lin_1(bonds_pred)
@@ -499,6 +498,9 @@ class EdgePredictionNetwork(nn.Module):
         vector_aggr: str = "mean",
         atom_mapping: bool = True,
         bond_mapping: bool = True,
+        edge_mp: bool = False,
+        p1: bool = True,
+        use_pos_norm: bool = True,
     ) -> None:
         super(EdgePredictionNetwork, self).__init__()
 
@@ -511,7 +513,9 @@ class EdgePredictionNetwork(nn.Module):
             self.atom_mapping = nn.Identity()
 
         if bond_mapping:
-            self.bond_mapping = DenseLayer(num_bond_types, edge_dim)
+            self.bond_mapping = DenseLayer(
+                num_atom_features, edge_dim
+            )  # BOND PREDICTION
         else:
             self.bond_mapping = nn.Identity()
 
@@ -540,6 +544,9 @@ class EdgePredictionNetwork(nn.Module):
             local_global_model=local_global_model,
             recompute_radius_graph=recompute_radius_graph,
             recompute_edge_attributes=recompute_edge_attributes,
+            edge_mp=edge_mp,
+            p1=p1,
+            use_pos_norm=use_pos_norm,
         )
 
         self.prediction_head = EdgePredictionHead(
@@ -588,7 +595,7 @@ class EdgePredictionNetwork(nn.Module):
         batch: OptTensor = None,
         batch_edge_global: OptTensor = None,
         z: OptTensor = None,
-    ):
+    ) -> Dict:
         pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
         # t: (batch_size,)
         ta = self.time_mapping_atom(t)
@@ -604,32 +611,12 @@ class EdgePredictionNetwork(nn.Module):
         s = self.atom_mapping(x)
         s = self.atom_time_mapping(s + tnode)
 
-        edge_attr_global = torch.cat(
-            [x[edge_index_global[0]], x[edge_index_global[1]]], dim=-1
-        )
+        edge_attr_global = x[edge_index_global[0]]
+
         edge_attr_global_transformed = self.bond_mapping(edge_attr_global)
         edge_attr_global_transformed = self.bond_time_mapping(
             edge_attr_global_transformed + tedge_global
         )
-        edge_dense = torch.zeros(
-            x.size(0), x.size(0), edge_attr_global_transformed.size(-1), device=s.device
-        )
-        edge_dense[
-            edge_index_global[0], edge_index_global[1], :
-        ] = edge_attr_global_transformed
-
-        if not self.fully_connected:
-            edge_attr_local_transformed = edge_dense[
-                edge_index_local[0], edge_index_local[1], :
-            ]
-            # local
-            edge_attr_local_transformed = self.calculate_edge_attrs(
-                edge_index=edge_index_local,
-                edge_attr=edge_attr_local_transformed,
-                pos=pos,
-            )
-        else:
-            edge_attr_local_transformed = (None, None, None)
 
         # global
         edge_attr_global_transformed = self.calculate_edge_attrs(
@@ -646,8 +633,8 @@ class EdgePredictionNetwork(nn.Module):
             v=v,
             p=pos,
             z=z,
-            edge_index_local=edge_index_local,
-            edge_attr_local=edge_attr_local_transformed,
+            edge_index_local=None,
+            edge_attr_local=(None, None, None),
             edge_index_global=edge_index_global,
             edge_attr_global=edge_attr_global_transformed,
             batch=batch,

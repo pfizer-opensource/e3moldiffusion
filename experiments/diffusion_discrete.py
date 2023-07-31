@@ -893,17 +893,40 @@ class Trainer(pl.LightningModule):
             amsgrad=True,
             weight_decay=1.0e-12,
         )
-        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer=optimizer,
-            patience=self.hparams["lr_patience"],
-            cooldown=self.hparams["lr_cooldown"],
-            factor=self.hparams["lr_factor"],
-        )
+        if self.hparams["lr_scheduler"] == "reduce_on_plateau":
+            lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer=optimizer,
+                patience=self.hparams["lr_patience"],
+                cooldown=self.hparams["lr_cooldown"],
+                factor=self.hparams["lr_factor"],
+            )
+        elif self.hparams["lr_scheduler"] == "cyclic":
+            lr_scheduler = torch.optim.lr_scheduler.CyclicLR(
+                optimizer,
+                base_lr=self.hparams["lr_min"],
+                max_lr=self.hparams["lr"],
+                mode="exp_range",
+                step_size_up=self.hparams["lr_step_size"],
+                cycle_momentum=False,
+            )
+        elif self.hparams["lr_scheduler"] == "one_cyclic":
+            lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimizer,
+                max_lr=self.hparams["lr"],
+                steps_per_epoch=len(self.trainer.datamodule.train_dataset),
+                epochs=self.hparams["num_epochs"],
+            )
+        elif self.hparams["lr_scheduler"] == "cosine_annealing":
+            lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=self.hparams["lr_patience"],
+                eta_min=self.hparams["lr_min"],
+            )
         scheduler = {
             "scheduler": lr_scheduler,
             "interval": "epoch",
             "frequency": self.hparams["lr_frequency"],
-            "monitor": "val/coords_loss",
+            "monitor": "val/coords_loss_epoch",
             "strict": False,
         }
         return [optimizer], [scheduler]
