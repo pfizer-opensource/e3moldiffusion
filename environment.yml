@@ -13,9 +13,9 @@ dependencies:
   - matplotlib
   - pytorch::pytorch=2.0.1
   - pyg::pyg=2.3.0
-  - pyg::torch-scatter
-  - pyg::torch-sparse
-  - pyg::torch-cluster
+  #- pyg::pytorch-scatter
+  #- pyg::pytorch-sparse
+  #- pyg::pytorch-cluster
   - conda-forge::rdkit=2023.03.2
   - conda-forge::pytorch-lightning=2.0.4
   - conda-forge::jupyter
@@ -28,3 +28,6 @@ dependencies:
       - rmsd
       - torch_ema
       - tensorboard
+      - torch-scatter
+      - torch-sparse
+      - torch-cluster
