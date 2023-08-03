@@ -82,6 +82,7 @@ def compute_all_statistics(
 
     if additional_feats:
         feats = additional_feat_counts(data_list=data_list)
+        print(feats)
         return Statistics(
             num_nodes=num_nodes,
             atom_types=atom_types,
@@ -121,13 +122,13 @@ def additional_feat_counts(
     for i in range(len(counts_list)):
         counts_list[i] = counts_list[i] / counts_list[i].sum()
     print("Done")
-
+    
     results = dict()
     for key, count in zip(keys, counts_list):
         results[key] = count
 
     print(results)
-
+    
     return results
 
 

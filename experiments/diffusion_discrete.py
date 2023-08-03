@@ -17,11 +17,10 @@ from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
-
+from experiments.data.abstract_dataset import AbstractDatasetInfos
 from experiments.molecule_utils import Molecule
 from experiments.utils import (
     coalesce_edges,
-    get_empirical_num_nodes,
     get_list_of_edge_adjs,
     zero_mean,
     load_model,
@@ -44,46 +43,45 @@ class Trainer(pl.LightningModule):
     def __init__(
         self,
         hparams: dict,
-        dataset_info: dict,
+        dataset_info: AbstractDatasetInfos,
         smiles_list: list,
-        dataset_statistics=None,
     ):
         super().__init__()
         self.save_hyperparameters(hparams)
         self.i = 0
 
-        self.dataset_statistics = dataset_statistics
+        self.dataset_info = dataset_info
 
-        atom_types_distribution = dataset_statistics.atom_types.float()
-        bond_types_distribution = dataset_statistics.edge_types.float()
-        charge_types_distribution = dataset_statistics.charges_marginals.float()
+        atom_types_distribution = dataset_info.atom_types.float()
+        bond_types_distribution = dataset_info.edge_types.float()
+        charge_types_distribution = dataset_info.charges_marginals.float()
 
         self.register_buffer("atoms_prior", atom_types_distribution.clone())
         self.register_buffer("bonds_prior", bond_types_distribution.clone())
         self.register_buffer("charges_prior", charge_types_distribution.clone())
 
-        self.hparams.num_atom_types = dataset_statistics.input_dims.X
-        self.num_charge_classes = dataset_statistics.input_dims.C
+        self.hparams.num_atom_types = dataset_info.input_dims.X
+        self.num_charge_classes = dataset_info.input_dims.C
+        self.remove_hs = hparams.get("remove_hs")
+        if self.remove_hs:
+            print("Model without modelling explicit hydrogens")
+            
         self.num_atom_types = self.hparams.num_atom_types
         self.num_atom_features = self.num_atom_types + self.num_charge_classes
         self.num_bond_classes = 5
-
-        if hparams.get("no_h"):
-            print("Training without hydrogen")
-            self.hparams.num_atom_types -= 1
 
         self.smiles_list = smiles_list
 
         self.dataset_info = dataset_info
 
-        empirical_num_nodes = get_empirical_num_nodes(dataset_info)
+        empirical_num_nodes = dataset_info.n_nodes
         self.register_buffer(name="empirical_num_nodes", tensor=empirical_num_nodes)
 
         if self.hparams.load_ckpt_from_pretrained is not None:
             print("Loading from pre-trained model checkpoint...")
 
             self.model = load_model(
-                self.hparams.load_ckpt_from_pretrained, dataset_statistics
+                self.hparams.load_ckpt_from_pretrained, dataset_info
             )
             # num_params = len(self.model.state_dict())
             # for i, param in enumerate(self.model.parameters()):
@@ -147,7 +145,7 @@ class Trainer(pl.LightningModule):
             terminal_distribution=charge_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
         )
-
+    
         self.diffusion_loss = DiffusionLoss(
             modalities=["coords", "atoms", "charges", "bonds"]
         )
@@ -245,7 +243,7 @@ class Trainer(pl.LightningModule):
             bond_aggregation_index=out_dict["bond_aggregation_index"],
             weights=weights,
         )
-
+        
         final_loss = (
             3.0 * loss["coords"]
             + 0.4 * loss["atoms"]
@@ -279,7 +277,6 @@ class Trainer(pl.LightningModule):
         bond_edge_attr = batch.edge_attr
         n = batch.num_nodes
         bs = int(data_batch.max()) + 1
-
         bond_edge_index, bond_edge_attr = sort_edge_index(
             edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
         )
@@ -366,12 +363,6 @@ class Trainer(pl.LightningModule):
         )
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
-
-        # one-hot-encode
-        if self.hparams.no_h:
-            raise NotImplementedError
-            node_feat -= 1
-
         # one-hot-encode atom types
         atom_types = F.one_hot(
             atom_types.squeeze().long(), num_classes=self.num_atom_types
@@ -386,7 +377,7 @@ class Trainer(pl.LightningModule):
 
         # one-hot-encode charges
         # offset
-        charges = self.dataset_statistics.one_hot_charges(charges)
+        charges = self.dataset_info.one_hot_charges(charges)
         probs = self.cat_charges.marginal_prob(charges.float(), t[data_batch])
         charges_perturbed = probs.multinomial(
             1,
@@ -421,7 +412,7 @@ class Trainer(pl.LightningModule):
         out["atoms_true"] = atom_types.argmax(dim=-1)
         out["bonds_true"] = edge_attr_global
         out["charges_true"] = charges.argmax(dim=-1)
-
+        
         out["bond_aggregation_index"] = edge_index_global[1]
 
         return out
@@ -456,20 +447,15 @@ class Trainer(pl.LightningModule):
         charge_types_integer = torch.argmax(charge_types, dim=-1)
         # offset back
         charge_types_integer = (
-            charge_types_integer - self.dataset_statistics.charge_offset
+            charge_types_integer - self.dataset_info.charge_offset
         )
         charge_types_integer_split = charge_types_integer.detach().split(
             batch_num_nodes.cpu().tolist(), dim=0
         )
-        atom_types_integer = torch.argmax(atom_types, dim=-1)
-        if self.hparams.no_h:
-            raise NotImplementedError  # remove in future or implement
-            atom_types_integer += 1
-
+        atom_types_integer = torch.argmax(atom_types, dim=-1)    
         atom_types_integer_split = atom_types_integer.detach().split(
             batch_num_nodes.cpu().tolist(), dim=0
         )
-
         return (
             pos_splits,
             atom_types_integer_split,
@@ -588,7 +574,26 @@ class Trainer(pl.LightningModule):
             print(e)
             pass
         return total_res
-
+    
+    
+    def _reverse_sample_categorical(self, cat_kernel: CategoricalDiffusionKernel, xt: Tensor, x0: Tensor, t: Tensor, num_classes: int):
+        reverse = cat_kernel.reverse_posterior_for_every_x0(xt=xt, t=t)
+        # Eq. 4 in Austin et al. (2023) "Structured Denoising Diffusion Models in Discrete State-Spaces"
+        # (N, a_0, a_t-1)
+        unweighted_probs = (reverse * x0.unsqueeze(-1)).sum(1)
+        unweighted_probs[unweighted_probs.sum(dim=-1) == 0] = 1e-5
+        # (N, a_t-1)
+        probs = unweighted_probs / unweighted_probs.sum(
+            -1, keepdims=True
+        )
+        x_tm1 = F.one_hot(
+            probs.multinomial(
+                1,
+            ).squeeze(),
+            num_classes=num_classes,
+        ).float()
+        return x_tm1
+    
     def reverse_sampling(
         self,
         num_graphs: int,
@@ -624,7 +629,7 @@ class Trainer(pl.LightningModule):
             self.charges_prior, num_samples=n, replacement=True
         )
         charge_types = F.one_hot(charge_types, self.num_charge_classes).float()
-
+ 
         # edge_index_local = radius_graph(x=pos,
         #                                r=self.hparams.cutoff_local,
         #                                batch=batch,
@@ -688,8 +693,7 @@ class Trainer(pl.LightningModule):
             )
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
-
-            node_feats_in = torch.cat([atom_types, charge_types], dim=-1)
+            node_feats_in = torch.cat([atom_types, charge_types], dim=-1)  
             out = self.model(
                 x=node_feats_in,
                 t=temb,
@@ -724,7 +728,6 @@ class Trainer(pl.LightningModule):
             edges_pred = out["bonds_pred"].softmax(dim=-1)
             # E x b_0
             charges_pred = charges_pred.softmax(dim=-1)
-
             # update fnc
 
             # positions/coords
@@ -739,61 +742,27 @@ class Trainer(pl.LightningModule):
             pos = mean + std * noise
 
             # atoms
-            rev_atoms = self.cat_atoms.reverse_posterior_for_every_x0(
-                xt=atom_types, t=t[batch]
-            )
-            # Eq. 4 in Austin et al. (2023) "Structured Denoising Diffusion Models in Discrete State-Spaces"
-            # (N, a_0, a_t-1)
-            unweighted_probs_atoms = (rev_atoms * atoms_pred.unsqueeze(-1)).sum(1)
-            unweighted_probs_atoms[unweighted_probs_atoms.sum(dim=-1) == 0] = 1e-5
-            # (N, a_t-1)
-            probs_atoms = unweighted_probs_atoms / unweighted_probs_atoms.sum(
-                -1, keepdims=True
-            )
-            atom_types = F.one_hot(
-                probs_atoms.multinomial(
-                    1,
-                ).squeeze(),
-                num_classes=self.num_atom_types,
-            ).float()
+            atom_types = self._reverse_sample_categorical(cat_kernel=self.cat_atoms,
+                                                          xt=atom_types, x0=atoms_pred,
+                                                          t=t[batch],
+                                                          num_classes=self.num_atom_types)
 
             # charges
-            rev_charges = self.cat_charges.reverse_posterior_for_every_x0(
-                xt=charge_types, t=t[batch]
-            )
-            # Eq. 4 in Austin et al. (2023) "Structured Denoising Diffusion Models in Discrete State-Spaces"
-            # (N, a_0, a_t-1)
-            unweighted_probs_charges = (rev_charges * charges_pred.unsqueeze(-1)).sum(1)
-            unweighted_probs_charges[unweighted_probs_charges.sum(dim=-1) == 0] = 1e-5
-            # (N, a_t-1)
-            probs_charges = unweighted_probs_charges / unweighted_probs_charges.sum(
-                -1, keepdims=True
-            )
-            charge_types = F.one_hot(
-                probs_charges.multinomial(
-                    1,
-                ).squeeze(),
-                num_classes=self.num_charge_classes,
-            ).float()
-
+            charge_types = self._reverse_sample_categorical(cat_kernel=self.cat_charges,
+                                                            xt=charge_types, x0=charges_pred,
+                                                            t=t[batch],
+                                                            num_classes=self.num_charge_classes)
+            
             # edges
             edges_pred_triu = edges_pred[mask]
             # (E, b_0)
-            edges_xt_triu = edge_attr_global[mask]
-            # (E, b_t)
-            rev_edges = self.cat_bonds.reverse_posterior_for_every_x0(
-                xt=edges_xt_triu, t=t[batch[mask_i]]
-            )
-            # (E, b_0, b_t-1)
-            unweighted_probs_edges = (rev_edges * edges_pred_triu.unsqueeze(-1)).sum(1)
-            unweighted_probs_edges[unweighted_probs_edges.sum(dim=-1) == 0] = 1e-5
-            probs_edges = unweighted_probs_edges / unweighted_probs_edges.sum(
-                -1, keepdims=True
-            )
-            edges_triu = probs_edges.multinomial(
-                1,
-            ).squeeze()
-
+            edges_triu = edge_attr_global[mask]
+            
+            edges_triu = self._reverse_sample_categorical(cat_kernel=self.cat_bonds,
+                                                          xt=edges_triu, x0=edges_pred_triu,
+                                                          t=t[batch[mask_i]],
+                                                          num_classes=self.num_bond_classes)
+        
             j, i = edge_index_global
             mask = j < i
             mask_i = i[mask]
@@ -807,9 +776,6 @@ class Trainer(pl.LightningModule):
                 edge_attr=edge_attr_global,
                 sort_by_row=False,
             )
-            edge_attr_global = F.one_hot(
-                edge_attr_global, num_classes=self.num_bond_classes
-            ).float()
 
             if not self.hparams.fully_connected:
                 edge_index_local = radius_graph(
@@ -885,7 +851,7 @@ class Trainer(pl.LightningModule):
             prog_bar=(stage == "train"),
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
-
+        
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             self.model.parameters(),

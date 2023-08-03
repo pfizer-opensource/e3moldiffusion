@@ -173,3 +173,5 @@ class AbstractDatasetInfos:
             self.is_in_ring = statistics["train"].is_in_ring
         if hasattr(statistics["train"], "hybridization"):
             self.hybridization = statistics["train"].hybridization
+        if hasattr(statistics["train"], "numHs"):
+            self.numHs = statistics["train"].numHs

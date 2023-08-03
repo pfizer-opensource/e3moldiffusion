@@ -17,7 +17,6 @@ warnings.filterwarnings(
 )
 
 from experiments.hparams import add_arguments
-from experiments.data.config_file import get_dataset_info
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -87,8 +86,7 @@ if __name__ == "__main__":
         datamodule.prepare_data()
         datamodule.setup("fit")
 
-    dataset_statistics = DataInfos(datamodule, hparams)
-    dataset_info = get_dataset_info(dataset, remove_h=False)
+    dataset_info = DataInfos(datamodule, hparams)
 
     train_smiles = datamodule.train_dataset.smiles
 
@@ -113,16 +111,17 @@ if __name__ == "__main__":
     model = Trainer(
         hparams=hparams.__dict__,
         dataset_info=dataset_info,
-        dataset_statistics=dataset_statistics,
         smiles_list=list(train_smiles),
     )
 
-    strategy = "ddp" if hparams.gpus > 1 else "auto"
-
+    from pytorch_lightning.plugins.environments import LightningEnvironment
+    strategy = "ddp" if hparams.gpus > 1 else "auto"    
     trainer = pl.Trainer(
         accelerator="gpu" if hparams.gpus else "cpu",
         devices=hparams.gpus if hparams.gpus else None,
         strategy=strategy,
+        plugins=LightningEnvironment(),
+        num_nodes=1,
         logger=tb_logger,
         enable_checkpointing=True,
         accumulate_grad_batches=hparams.accum_batch,

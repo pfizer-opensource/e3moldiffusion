@@ -94,8 +94,16 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         
         self.edge_mp = edge_mp
         
+        emlp = False
+        
         if edge_mp:
-            self.edge_lin = DenseLayer(2 * edge_dim + 3, edge_dim)
+            if emlp:
+                self.edge_lin = nn.Sequential(DenseLayer(2 * edge_dim + 3, edge_dim, activation=nn.SiLU()),
+                                              DenseLayer(edge_dim, edge_dim)
+                                              )
+            else:
+                self.edge_lin = DenseLayer(2 * edge_dim + 3, edge_dim)
+        # previously, still keep in case old model checkpoints are loaded
         else:
             self.edge_lin = None
         

@@ -27,7 +27,11 @@ x_map = {
 }
 
 
-def mol_to_torch_geometric(mol, atom_encoder, smiles):
+def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = False):
+    
+    if remove_hydrogens:
+        mol = Chem.RemoveHs(mol)
+        
     adj = torch.from_numpy(Chem.rdmolops.GetAdjacencyMatrix(mol, useBO=True))
     edge_index = adj.nonzero().contiguous().T
     bond_types = adj[edge_index[0], edge_index[1]]
@@ -41,13 +45,12 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles):
     is_aromatic = []
     is_in_ring = []
     sp_hybridization = []
-
+    
     for atom in mol.GetAtoms():
         atom_types.append(atom_encoder[atom.GetSymbol()])
         all_charges.append(
             atom.GetFormalCharge()
         )  # TODO: check if implicit Hs should be kept
-
         is_aromatic.append(x_map["is_aromatic"].index(atom.GetIsAromatic()))
         is_in_ring.append(x_map["is_in_ring"].index(atom.IsInRing()))
         sp_hybridization.append(x_map["hybridization"].index(atom.GetHybridization()))
@@ -69,11 +72,13 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles):
         is_aromatic=is_aromatic,
         is_in_ring=is_in_ring,
         hybridization=hybridization,
+        mol=mol
     )
 
     return data
 
 
+# in case the rdkit.molecule has explicit hydrogens, the number of attached hydrogens to heavy atoms are not saved
 def remove_hydrogens(data: Data):
     to_keep = data.x > 0
     new_edge_index, new_edge_attr = subgraph(
@@ -84,13 +89,23 @@ def remove_hydrogens(data: Data):
         num_nodes=len(to_keep),
     )
     new_pos = data.pos[to_keep] - torch.mean(data.pos[to_keep], dim=0)
-    return Data(
+    
+    newdata = Data(
         x=data.x[to_keep] - 1,  # Shift onehot encoding to match atom decoder
         pos=new_pos,
         charges=data.charges[to_keep],
         edge_index=new_edge_index,
         edge_attr=new_edge_attr,
     )
+    
+    if hasattr(data, "is_aromatic"):
+        newdata["is_aromatic"] = data.get("is_aromatic")[to_keep]
+    if hasattr(data, "is_in_ring"):
+        newdata["is_in_ring"] = data.get("is_in_ring")[to_keep]
+    if hasattr(data, "hybridization"):
+        newdata["hybridization"] = data.get("hybridization")[to_keep]
+        
+    return newdata
 
 
 def save_pickle(array, path):

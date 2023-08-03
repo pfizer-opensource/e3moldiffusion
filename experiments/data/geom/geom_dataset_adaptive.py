@@ -42,6 +42,7 @@ class GeomDrugsDataset(InMemoryDataset):
         self.compute_bond_distance_angles = False
         
         self.atom_encoder = full_atom_encoder
+        
         if remove_h:
             self.atom_encoder = {
                 k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
@@ -60,7 +61,7 @@ class GeomDrugsDataset(InMemoryDataset):
             is_aromatic=torch.from_numpy(np.load(self.processed_paths[9])).float(),
             is_in_ring=torch.from_numpy(np.load(self.processed_paths[10])).float(),
             hybridization=torch.from_numpy(np.load(self.processed_paths[11])).float()
-        )
+            )
         self.smiles = load_pickle(self.processed_paths[8])
 
     @property
@@ -117,8 +118,8 @@ class GeomDrugsDataset(InMemoryDataset):
                 "test_smiles.pickle",
                 f"test_is_aromatic_{h}.npy",
                 f"test_is_in_ring_{h}.npy",
-                f"test_hybridization_{h}.npy",
-            ]
+                f"test_hybridization_{h}.npy"
+                ]
 
     def download(self):
         raise ValueError(
@@ -139,10 +140,12 @@ class GeomDrugsDataset(InMemoryDataset):
                 if j >= 5:
                     break
                 data = dataset_utils.mol_to_torch_geometric(
-                    conformer, full_atom_encoder, smiles
+                    conformer, full_atom_encoder, smiles,
+                    remove_hydrogens=self.remove_h  # need to give full atom encoder since hydrogens might still be available if Chem.RemoveHs is called
                 )
+                # even when calling Chem.RemoveHs, hydrogens might be present
                 if self.remove_h:
-                    data = dataset_utils.remove_hydrogens(data)
+                    data = dataset_utils.remove_hydrogens(data) # remove through masking
 
                 if self.pre_filter is not None and not self.pre_filter(data):
                     continue
@@ -174,7 +177,6 @@ class GeomDrugsDataset(InMemoryDataset):
         np.save(self.processed_paths[9], statistics.is_aromatic)
         np.save(self.processed_paths[10], statistics.is_in_ring)
         np.save(self.processed_paths[11], statistics.hybridization)
-    
     
 class GeomDataModule(AbstractAdaptiveDataModule):
     def __init__(self, cfg):
@@ -284,12 +286,16 @@ class GeomDataModule(AbstractAdaptiveDataModule):
 
 if __name__ == "__main__":
     # Creating the Pytorch Geometric InMemoryDatasets
-    DATAROOT = "/sharedhome/let55/projects/e3moldiffusion/experiments/geom/data"
-    dataset = GeomDrugsDataset(root=DATAROOT, split="val", remove_h=False)
+    
+    ff = "/hpfs/userws/"
+    # ff = "/sharedhome/"
+    
+    DATAROOT = f"{ff}let55/projects/e3moldiffusion/experiments/geom/data"
+    dataset = GeomDrugsDataset(root=DATAROOT, split="val", remove_h=True)
     print(dataset)
-    dataset = GeomDrugsDataset(root=DATAROOT, split="test", remove_h=False)
+    dataset = GeomDrugsDataset(root=DATAROOT, split="test", remove_h=True)
     print(dataset)
-    dataset = GeomDrugsDataset(root=DATAROOT, split="train", remove_h=False)
+    dataset = GeomDrugsDataset(root=DATAROOT, split="train", remove_h=True)
     print(dataset)
     print(dataset[0])
     print(dataset[0].edge_attr)

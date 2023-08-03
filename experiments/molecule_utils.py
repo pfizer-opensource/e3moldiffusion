@@ -35,8 +35,9 @@ class Molecule:
         assert len(atom_types.shape) == 1
         assert len(bond_types.shape) == 2
         assert len(positions.shape) == 2
-
-        atom_decoder = dataset_info["atom_decoder"]
+        
+        atom_decoder = dataset_info["atom_decoder"] if isinstance(dataset_info, dict) else dataset_info.atom_decoder
+        
         self.atom_types = atom_types.long()
         self.bond_types = bond_types.long()
         self.positions = positions
@@ -55,7 +56,7 @@ class Molecule:
             self.hybridization = hybridization
         else:
             self.hybridization = None
-            
+    
         self.additional_feats = isinstance(self.is_aromatic, torch.Tensor) and isinstance(self.hybridization, torch.Tensor)
         
         self.rdkit_mol = self.build_molecule(atom_decoder)
@@ -63,7 +64,6 @@ class Molecule:
         self.num_atom_types = len(atom_decoder)
         
         
-
     def build_molecule(self, atom_decoder, verbose=False):
         """If positions is None,"""
         if verbose:
@@ -93,7 +93,7 @@ class Molecule:
                 mol.AddAtom(a)
                 if verbose:
                     print("Atom added: ", atom.item(), atom_decoder[atom.item()])
-            
+                
 
         edge_types = torch.triu(self.bond_types, diagonal=1)
         edge_types[edge_types == -1] = 0

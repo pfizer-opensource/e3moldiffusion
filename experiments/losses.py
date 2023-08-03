@@ -83,7 +83,17 @@ class DiffusionLoss(nn.Module):
             bonds_loss = self.loss_non_nans(bonds_loss, "bonds")
             bonds_loss *= weights
             bonds_loss = bonds_loss.sum(dim=0)
-
+              
+            # now just numHs, somehow in branch update, other features have been deleted.
+            if "numHs" in self.modalities:
+                numHs_loss = F.cross_entropy(pred_data["numHs"], true_data["numHs"], reduction="none")
+                numHs_loss = scatter_mean(numHs_loss, index=batch, dim=0, dim_size=batch_size)
+                numHs_loss = self.loss_non_nans(numHs_loss, "numHs")
+                numHs_loss *= weights
+                numHs_loss = torch.sum(numHs_loss, dim=0)
+            else:
+                numHs_loss = 0.0
+                
         else:
             regr_loss = F.mse_loss(
                 pred_data[self.regression_key],
@@ -99,12 +109,18 @@ class DiffusionLoss(nn.Module):
             bonds_loss = F.cross_entropy(
                 pred_data["bonds"], true_data["bonds"], reduction="mean"
             )
+            # now just numHs, somehow in branch update, other features have been deleted.
+            if "numHs" in self.modalities:
+                numHs_loss = F.cross_entropy(pred_data["numHs"], true_data["numHs"], reduction="mean")
+            else:
+                numHs_loss = 0.0
 
         loss = {
             self.regression_key: regr_loss,
             "atoms": atoms_loss,
             "charges": charges_loss,
             "bonds": bonds_loss,
+            "numHs": numHs_loss
         }
 
         return loss

@@ -103,12 +103,16 @@ class GeomDataModule(LightningDataModule):
 
 if __name__ == "__main__":
     # Creating the Pytorch Geometric InMemoryDatasets
-    DATAROOT = "/sharedhome/let55/projects/e3moldiffusion/experiments/geom/data"
-    dataset = GeomDrugsDataset(root=DATAROOT, split="val", remove_h=False)
+    
+    ff = "/hpfs/userws/"
+    # ff = "/sharedhome/"
+    
+    DATAROOT = f"{ff}let55/projects/e3moldiffusion/experiments/geom/data"
+    dataset = GeomDrugsDataset(root=DATAROOT, split="val", remove_h=True)
     print(dataset)
-    dataset = GeomDrugsDataset(root=DATAROOT, split="test", remove_h=False)
+    dataset = GeomDrugsDataset(root=DATAROOT, split="test", remove_h=True)
     print(dataset)
-    dataset = GeomDrugsDataset(root=DATAROOT, split="train", remove_h=False)
+    dataset = GeomDrugsDataset(root=DATAROOT, split="train", remove_h=True)
     print(dataset)
     print(dataset[0])
     print(dataset[0].edge_attr)
