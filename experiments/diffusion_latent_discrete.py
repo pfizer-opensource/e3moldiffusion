@@ -465,16 +465,11 @@ class Trainer(pl.LightningModule):
         # center the true point cloud
         pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
         # get signal and noise coefficients for coords
-        mean_coords, std_coords = self.sde.marginal_prob(
+        mean_coords, std_coords = self.sde_pos.marginal_prob(
             x=pos_centered, t=t[data_batch]
         )
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
-
-        # one-hot-encode
-        if self.hparams.no_h:
-            raise NotImplementedError
-            node_feat -= 1
 
         # one-hot-encode atom types
         probs = self.cat_atoms.marginal_prob(atom_types.float(), t[data_batch])
@@ -826,19 +821,19 @@ class Trainer(pl.LightningModule):
                 batch_edge_global=batch_edge_global,
             )
 
-            rev_sigma = self.sde.reverse_posterior_sigma[t].unsqueeze(-1)
-            sigmast = self.sde.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
+            rev_sigma = self.sde_pos.reverse_posterior_sigma[t].unsqueeze(-1)
+            sigmast = self.sde_pos.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
             sigmas2t = sigmast.pow(2)
 
-            sqrt_alphas = self.sde.sqrt_alphas[t].unsqueeze(-1)
+            sqrt_alphas = self.sde_pos.sqrt_alphas[t].unsqueeze(-1)
             sqrt_1m_alphas_cumprod_prev = torch.sqrt(
-                1.0 - self.sde.alphas_cumprod_prev[t]
+                1.0 - self.sde_pos.alphas_cumprod_prev[t]
             ).unsqueeze(-1)
             one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
             sqrt_alphas_cumprod_prev = torch.sqrt(
-                self.sde.alphas_cumprod_prev[t].unsqueeze(-1)
+                self.sde_pos.alphas_cumprod_prev[t].unsqueeze(-1)
             )
-            one_m_alphas = self.sde.discrete_betas[t].unsqueeze(-1)
+            one_m_alphas = self.sde_pos.discrete_betas[t].unsqueeze(-1)
 
             coords_pred = out["coords_pred"].squeeze()
             atoms_pred, charges_pred = out["atoms_pred"].split(
