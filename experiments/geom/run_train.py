@@ -69,8 +69,8 @@ if __name__ == "__main__":
         from experiments.bond_prediction_discrete import Trainer
     elif hparams.latent_dim:
         print("Using latent diffusion")
-        # from experiments.diffusion_latent_discrete import Trainer
-        from experiments.diffusion_latent_discrete_new import Trainer
+        from experiments.diffusion_latent_discrete import Trainer
+        # from experiments.diffusion_latent_discrete_new import Trainer
     else:
         print("Using discrete diffusion")
         if hparams.additional_feats:
