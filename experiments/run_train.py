@@ -99,7 +99,7 @@ if __name__ == "__main__":
     elif hparams.latent_dim:
         print("Using latent diffusion")
         # from experiments.diffusion_latent_discrete import Trainer
-        from experiments.diffusion_latent_discrete_new import Trainer
+        from experiments.diffusion_latent_discrete_diff import Trainer
     else:
         print("Using discrete diffusion")
         if hparams.additional_feats:
