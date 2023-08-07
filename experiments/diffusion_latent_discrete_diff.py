@@ -403,12 +403,12 @@ class Trainer(pl.LightningModule):
         latent_out = self.graph_pooling(latent_out, data_batch, dim=0, dim_size=bs)
         mu, logvar = self.mu_logvar(latent_out).chunk(2, dim=-1)
         # get latent via good old reparamerization trick
-        eps = torch.randn_like(mu)
+        # eps = torch.randn_like(mu)
         # fix sd
         # sd = torch.exp(0.5 * logvar)
         sd = 0.1
-
-        z = mu + sd * eps
+        # z = mu + sd * eps
+        z = mu
         
         # latent diffusion as well
         znoise = torch.randn_like(z)
