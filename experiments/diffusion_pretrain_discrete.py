@@ -10,6 +10,7 @@ from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
+from experiments.data.abstract_dataset import AbstractDatasetInfos
 
 from experiments.utils import (
     coalesce_edges,
@@ -32,35 +33,33 @@ class Trainer(pl.LightningModule):
     def __init__(
         self,
         hparams: dict,
-        dataset_info: dict,
-        smiles_list: list = None,
-        dataset_statistics=None,
+        dataset_info: AbstractDatasetInfos,
+        smiles_list: list,
     ):
         super().__init__()
         self.save_hyperparameters(hparams)
         self.i = 0
 
-        # TO-DO: calculate the statistics on PubChem to be able to sample the limit dist!
-        self.dataset_statistics = dataset_statistics
+        self.dataset_info = dataset_info
 
         num_atom_features_geom = 22
         self.num_atom_types_geom = 16
-        atom_types_distribution = dataset_statistics.atom_types.float()
+        atom_types_distribution = dataset_info.atom_types.float()
         if self.hparams.dataset == "pubchem":
             pubchem_ids = [0, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13]
             geom_only = [
                 i for i in range(self.num_atom_types_geom) if i not in pubchem_ids
             ]
         atom_types_distribution[geom_only] = 0.0
-        bond_types_distribution = dataset_statistics.edge_types.float()
-        charge_types_distribution = dataset_statistics.charges_marginals.float()
+        bond_types_distribution = dataset_info.edge_types.float()
+        charge_types_distribution = dataset_info.charges_marginals.float()
 
         self.register_buffer("atoms_prior", atom_types_distribution.clone())
         self.register_buffer("bonds_prior", bond_types_distribution.clone())
         self.register_buffer("charges_prior", charge_types_distribution.clone())
 
-        self.hparams.num_atom_types = dataset_statistics.input_dims.X
-        self.num_charge_classes = dataset_statistics.input_dims.C
+        self.hparams.num_atom_types = dataset_info.input_dims.X
+        self.num_charge_classes = dataset_info.input_dims.C
         self.num_atom_types = self.hparams.num_atom_types
         self.num_atom_features = self.num_atom_types + self.num_charge_classes
         self.num_bond_classes = 5
@@ -71,14 +70,12 @@ class Trainer(pl.LightningModule):
 
         self.smiles_list = smiles_list
 
-        self.dataset_info = dataset_info
-
         self.model = DenoisingEdgeNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
             latent_dim=None,
             use_cross_product=hparams["use_cross_product"],
-            num_atom_features=num_atom_features_geom,
+            num_atom_features=self.num_atom_features,
             num_bond_types=self.num_bond_classes,
             edge_dim=hparams["edim"],
             cutoff_local=hparams["cutoff_local"],
@@ -302,7 +299,7 @@ class Trainer(pl.LightningModule):
 
         # one-hot-encode charges
         # offset
-        charges = self.dataset_statistics.one_hot_charges(charges)
+        charges = self.dataset_info.one_hot_charges(charges)
         probs = self.cat_charges.marginal_prob(charges.float(), t[data_batch])
         charges_perturbed = probs.multinomial(
             1,
@@ -312,7 +309,9 @@ class Trainer(pl.LightningModule):
         ).float()
 
         # MASKING PREDICTION
-        edge_index_global, edge_mask, node_mask = dropout_node(edge_index_global)
+        edge_index_global, edge_mask, node_mask = dropout_node(
+            edge_index_global, p=0.75
+        )
         edge_attr_global_perturbed = edge_attr_global_perturbed[edge_mask]
         pos_perturbed = pos_perturbed[node_mask]
         atom_types_perturbed = atom_types_perturbed[node_mask]
