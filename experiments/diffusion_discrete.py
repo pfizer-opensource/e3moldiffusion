@@ -1,7 +1,8 @@
 import logging
 import os
 from datetime import datetime
-from typing import List, Tuple
+from torch_scatter import scatter_mean
+from typing import Optional, List, Tuple
 
 import pandas as pd
 import pytorch_lightning as pl
@@ -907,12 +908,30 @@ class Trainer(pl.LightningModule):
                         uncertainty = torch.sigmoid(
                             -torch.logsumexp(bond_prediction, dim=-1)
                         )
-                        uncertainty = uncertainty.log().sum()
-                        dist_shift = (
-                            -torch.autograd.grad(uncertainty, pos)[0] * guidance_scale
+                        uncertainty = (
+                            0.5
+                            * scatter_mean(
+                                uncertainty,
+                                index=edge_index_global[1],
+                                dim=0,
+                                dim_size=pos.size(0),
+                            ).log()
                         )
+                        uncertainty = scatter_mean(
+                            uncertainty, index=batch, dim=0, dim_size=bs
+                        )
+                        grad_outputs: List[Optional[torch.Tensor]] = [
+                            torch.ones_like(uncertainty)
+                        ]
+                        dist_shift = -torch.autograd.grad(
+                            [uncertainty],
+                            [pos],
+                            grad_outputs=grad_outputs,
+                            create_graph=False,
+                            retain_graph=False,
+                        )[0]
 
-                pos = pos + dist_shift
+                pos = pos + guidance_scale * dist_shift
 
             if save_traj:
                 pos_traj.append(pos.detach())

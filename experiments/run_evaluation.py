@@ -1,46 +1,25 @@
-import os
-from callbacks.ema import ExponentialMovingAverage
-from argparse import ArgumentParser
-import pytorch_lightning as pl
-import torch.nn.functional as F
-from pytorch_lightning.callbacks import (
-    LearningRateMonitor,
-    ModelCheckpoint,
-    ModelSummary,
-    TQDMProgressBar,
-)
-from pytorch_lightning.loggers import TensorBoardLogger
 import warnings
+import argparse
+import torch
+
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
 )
 
-from experiments.hparams import add_arguments
 
-if __name__ == "__main__":
-    parser = ArgumentParser()
-    parser = add_arguments(parser)
-    hparams = parser.parse_args()
+class dotdict(dict):
+    """dot.notation access to dictionary attributes"""
 
-    if not os.path.exists(hparams.save_dir):
-        os.makedirs(hparams.save_dir)
+    __getattr__ = dict.get
+    __setattr__ = dict.__setitem__
+    __delattr__ = dict.__delitem__
 
-    if not os.path.isdir(hparams.save_dir + f"/run{hparams.id}/"):
-        print("Creating directory")
-        os.mkdir(hparams.save_dir + f"/run{hparams.id}/")
-    print(f"Starting Run {hparams.id}")
-    ema_callback = ExponentialMovingAverage(decay=hparams.ema_decay)
-    checkpoint_callback = ModelCheckpoint(
-        dirpath=hparams.save_dir + f"/run{hparams.id}/",
-        save_top_k=3,
-        monitor="val/loss",
-        save_last=True,
-    )
-    lr_logger = LearningRateMonitor()
-    tb_logger = TensorBoardLogger(
-        hparams.save_dir + f"/run{hparams.id}/", default_hp_metric=False
-    )
+
+def evaluate(model_path, save_dir, step=0):
+    # load hyperparameter
+    hparams = torch.load(model_path)["hyper_parameters"]
+    hparams = dotdict(hparams)
 
     print(f"Loading {hparams.dataset} Datamodule.")
     non_adaptive = True
@@ -107,43 +86,42 @@ if __name__ == "__main__":
         else:
             from experiments.diffusion_discrete import Trainer
 
-    model = Trainer(
-        hparams=hparams.__dict__,
+    device = "cuda"
+    model = Trainer.load_from_checkpoint(
+        model_path,
         dataset_info=dataset_info,
         smiles_list=list(train_smiles),
+        strict=False,
+    ).to(device)
+    model = model.eval()
+
+    model.run_evaluation(
+        step=step,
+        dataset_info=model.dataset_info,
+        ngraphs=10000,
+        bs=40,
+        verbose=True,
+        inner_verbose=True,
+        save_dir=save_dir,
     )
 
-    from pytorch_lightning.plugins.environments import LightningEnvironment
 
-    strategy = "ddp" if hparams.gpus > 1 else "auto"
-    trainer = pl.Trainer(
-        accelerator="gpu" if hparams.gpus else "cpu",
-        devices=hparams.gpus if hparams.gpus else None,
-        strategy=strategy,
-        plugins=LightningEnvironment(),
-        num_nodes=1,
-        logger=tb_logger,
-        enable_checkpointing=True,
-        accumulate_grad_batches=hparams.accum_batch,
-        val_check_interval=hparams.eval_freq,
-        gradient_clip_val=hparams.grad_clip_val,
-        callbacks=[
-            ema_callback,
-            lr_logger,
-            checkpoint_callback,
-            TQDMProgressBar(refresh_rate=5),
-            ModelSummary(max_depth=2),
-        ],
-        precision=hparams.precision,
-        num_sanity_val_steps=2,
-        max_epochs=hparams.num_epochs,
-        detect_anomaly=hparams.detect_anomaly,
-    )
+def get_args():
+    # fmt: off
+    parser = argparse.ArgumentParser(description='Data generation')
+    parser.add_argument('--model-path', default="/hpfs/userws/cremej01/projects/logs/geom/adaptive/run0/last.ckpt", type=str,
+                        help='Path to trained model')
+    parser.add_argument('--save-dir', default="/hpfs/userws/cremej01/projects/logs/geom/evaluation", type=str,
+                        help='Path to test output')
 
-    pl.seed_everything(seed=hparams.seed, workers=hparams.gpus > 1)
+    args = parser.parse_args()
+    return args
 
-    trainer.fit(
-        model=model,
-        datamodule=datamodule,
-        ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
+
+if __name__ == "__main__":
+    args = get_args()
+    # Evaluate negative log-likelihood for the test partitions
+    evaluate(
+        model_path=args.model_path,
+        save_dir=args.save_dir,
     )
