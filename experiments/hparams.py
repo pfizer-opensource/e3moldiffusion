@@ -99,7 +99,8 @@ def add_arguments(parser):
     parser.add_argument("--vdim-latent", default=64, type=int)
     parser.add_argument("--latent-dim", default=None, type=int)
     parser.add_argument("--edim-latent", default=32, type=int)
-    parser.add_argument("--num-layers-latent", default=7, type=int)
+    parser.add_argument("--num-layers-latent", default=7, type=int) # gnn
+    parser.add_argument("--latent-layers", default=7, type=int) # mlp 
 
     # GENERAL
     parser.add_argument("-i", "--id", type=int, default=0)

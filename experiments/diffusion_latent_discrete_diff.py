@@ -37,6 +37,27 @@ logging.getLogger("pytorch_lightning.accelerators.cuda").addHandler(
 BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 
 
+class LatentMLP(nn.Module):
+    def __init__(self, dim: int, num_layers: int) -> None:
+        super().__init__()
+        self.dim = dim
+        self.num_layers = num_layers
+        self.activation = nn.SiLU()
+        self.time_embedding = DenseLayer(1, dim)
+        self.norms = nn.ModuleList([nn.LayerNorm(dim) for _ in range(num_layers)])
+        self.lins = nn.ModuleList([DenseLayer(2 * dim, dim) for _ in range(num_layers)])
+        
+    def forward(self, z: Tensor, t: Tensor) -> Tensor:
+        temb = self.time_embedding(t)
+        for n, m in zip(self.norms, self.lins):
+            zin = torch.cat([z, temb], dim=-1)
+            zout = m(zin)
+            zout = n(zout)
+            zout = self.activation(zout)
+            z = zout + z
+        return z
+
+
 class Trainer(pl.LightningModule):
     def __init__(
         self,
@@ -107,18 +128,8 @@ class Trainer(pl.LightningModule):
         self.graph_pooling = SoftMaxAttentionAggregation(dim=hparams["latent_dim"])
         self.mu_logvar = DenseLayer(hparams["latent_dim"], 2 * hparams["latent_dim"])
 
-        self.latent_score_net = nn.Sequential(
-            DenseLayer(
-                hparams["latent_dim"] + 1, hparams["latent_dim"], activation=nn.SiLU()
-            ),
-            nn.LayerNorm(hparams["latent_dim"]),
-            DenseLayer(
-                hparams["latent_dim"], hparams["latent_dim"], activation=nn.SiLU()
-            ),
-            nn.LayerNorm(hparams["latent_dim"]),
-            DenseLayer(hparams["latent_dim"], hparams["latent_dim"]),
-        )
-
+        self.latent_score_net = LatentMLP(dim=hparams["latent_dim"], num_layers=hparams['latent_layers'])
+        
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
             beta_max=hparams["beta_max"],
@@ -328,7 +339,8 @@ class Trainer(pl.LightningModule):
 
         # latent
         z_true, z_pred = out_dict["latent"]["z_true"], out_dict["latent"]["z_pred"]
-        latent_loss = F.mse_loss(z_true, z_pred)
+        # latent_loss = F.mse_loss(z_true, z_pred)
+        latent_loss = F.l1_loss(z_true, z_pred)
         final_loss = final_loss + self.hparams.vae_beta * latent_loss
 
         # import pdb
@@ -406,7 +418,7 @@ class Trainer(pl.LightningModule):
         # eps = torch.randn_like(mu)
         # fix sd
         # sd = torch.exp(0.5 * logvar)
-        sd = 0.1
+        # sd = 0.1
         # z = mu + sd * eps
         z = mu
         
@@ -416,7 +428,7 @@ class Trainer(pl.LightningModule):
         # perturb latent
         z_perturbed = mean_z + std_z * znoise
         # denoising the latent
-        z_pred = self.latent_score_net(torch.cat([z_perturbed, temb], dim=-1))
+        z_pred = self.latent_score_net(z=z_perturbed, t=temb)
 
         # denoising model that parameterizes p(x_t-1 | x_t, z)
 
