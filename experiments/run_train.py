@@ -87,11 +87,17 @@ if __name__ == "__main__":
 
     dataset_info = DataInfos(datamodule, hparams)
 
-    train_smiles = datamodule.train_dataset.smiles
+    train_smiles = (
+        list(datamodule.train_dataset.smiles) if hparams.dataset != "pubchem" else None
+    )
 
     if hparams.continuous:
         print("Using continuous diffusion")
-        from experiments.diffusion_continuous import Trainer
+        if hparams.diffusion_pretraining:
+            print("Starting pre-training")
+            from experiments.diffusion_pretrain_continuous import Trainer
+        else:
+            from experiments.diffusion_continuous import Trainer
     elif hparams.bond_prediction:
         print("Starting bond prediction model via discrete diffusion")
         from experiments.bond_prediction_discrete import Trainer
@@ -101,7 +107,10 @@ if __name__ == "__main__":
         from experiments.diffusion_latent_discrete_diff import Trainer
     else:
         print("Using discrete diffusion")
-        if hparams.additional_feats:
+        if hparams.diffusion_pretraining:
+            print("Starting pre-training")
+            from experiments.diffusion_pretrain_discrete import Trainer
+        elif hparams.additional_feats:
             print("Using additional features")
             from experiments.diffusion_discrete_moreFeats import Trainer
         else:
@@ -110,7 +119,7 @@ if __name__ == "__main__":
     model = Trainer(
         hparams=hparams.__dict__,
         dataset_info=dataset_info,
-        smiles_list=list(train_smiles),
+        smiles_list=train_smiles,
     )
 
     from pytorch_lightning.plugins.environments import LightningEnvironment

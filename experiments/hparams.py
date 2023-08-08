@@ -89,6 +89,7 @@ def add_arguments(parser):
     parser.add_argument("--timesteps", default=500, type=int)
     parser.add_argument("--max-time", type=str, default=None)
     parser.add_argument("--use-loss-weighting", default=False, action="store_true")
+    parser.add_argument("--diffusion-pretraining", default=False, action="store_true")
 
     # BOND PREDICTION AND GUIDANCE:
     parser.add_argument("--bond-prediction", default=False, action="store_true")
@@ -101,8 +102,7 @@ def add_arguments(parser):
     parser.add_argument("--vdim-latent", default=64, type=int)
     parser.add_argument("--latent-dim", default=None, type=int)
     parser.add_argument("--edim-latent", default=32, type=int)
-    parser.add_argument("--num-layers-latent", default=7, type=int) # gnn
-    parser.add_argument("--latent-layers", default=7, type=int) # mlp 
+    parser.add_argument("--num-layers-latent", default=7, type=int)
 
     # GENERAL
     parser.add_argument("-i", "--id", type=int, default=0)
