@@ -27,6 +27,23 @@ from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from tqdm import tqdm
 
+from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
+from e3moldiffusion.molfeat import get_bond_feature_dims
+from experiments.diffusion.continuous import DiscreteDDPM
+from experiments.diffusion.categorical import CategoricalDiffusionKernel
+
+from experiments.molecule_utils import Molecule
+from experiments.utils import (
+    coalesce_edges,
+    get_empirical_num_nodes,
+    get_list_of_edge_adjs,
+    zero_mean,
+    load_model,
+    load_bond_model,
+)
+from experiments.sampling.analyze import analyze_stability_for_molecules
+from experiments.losses import DiffusionLoss
+
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(
     logging.NullHandler()
@@ -110,6 +127,7 @@ class Trainer(pl.LightningModule):
             schedule=self.hparams.noise_scheduler,
             nu=2.5,
             enforce_zero_terminal_snr=False,
+            T=self.hparams.timesteps,
         )
         self.sde_atom_charge = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -146,6 +164,15 @@ class Trainer(pl.LightningModule):
         self.diffusion_loss = DiffusionLoss(
             modalities=["coords", "atoms", "charges", "bonds"]
         )
+
+        if self.hparams.bond_model_guidance:
+            print("Using bond model guidance...")
+            self.bond_model = load_bond_model(
+                self.hparams.ckpt_bond_model, dataset_info
+            )
+            for param in self.bond_model.parameters():
+                param.requires_grad = False
+            self.bond_model.eval()
 
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
@@ -724,6 +751,7 @@ class Trainer(pl.LightningModule):
             t = torch.full(
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=pos.device
             )
+            s = t - 1
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
             node_feats_in = torch.cat([atom_types, charge_types], dim=-1)
@@ -738,21 +766,59 @@ class Trainer(pl.LightningModule):
                 batch_edge_global=batch_edge_global,
             )
 
-            rev_sigma = self.sde_pos.reverse_posterior_sigma[t].unsqueeze(-1)
-            sigmast = self.sde_pos.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
-            sigmas2t = sigmast.pow(2)
-
-            sqrt_alphas = self.sde_pos.sqrt_alphas[t].unsqueeze(-1)
-            sqrt_1m_alphas_cumprod_prev = torch.sqrt(
-                1.0 - self.sde_pos.alphas_cumprod_prev[t]
-            ).unsqueeze(-1)
-            one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
-            sqrt_alphas_cumprod_prev = torch.sqrt(
-                self.sde_pos.alphas_cumprod_prev[t].unsqueeze(-1)
-            )
-            one_m_alphas = self.sde_pos.discrete_betas[t].unsqueeze(-1)
-
             coords_pred = out["coords_pred"].squeeze()
+            if self.hparams.noise_scheduler == "adaptive":
+                # # Sample the positions
+                sigma_sq_ratio = self.sde_pos.get_sigma_pos_sq_ratio(s_int=s, t_int=t)
+                z_t_prefactor = (
+                    self.sde_pos.get_alpha_pos_ts(t_int=t, s_int=s) * sigma_sq_ratio
+                ).unsqueeze(-1)
+                x_prefactor = self.sde_pos.get_x_pos_prefactor(
+                    s_int=s, t_int=t
+                ).unsqueeze(-1)
+
+                prefactor1 = self.sde_pos.get_sigma2_bar(t_int=t)
+                prefactor2 = self.sde_pos.get_sigma2_bar(
+                    t_int=s
+                ) * self.sde_pos.get_alpha_pos_ts_sq(t_int=t, s_int=s)
+                sigma2_t_s = prefactor1 - prefactor2
+                noise_prefactor_sq = sigma2_t_s * sigma_sq_ratio
+                noise_prefactor = torch.sqrt(noise_prefactor_sq).unsqueeze(-1)
+
+                mu = z_t_prefactor[batch] * pos + x_prefactor[batch] * coords_pred
+
+                noise = torch.randn_like(pos)
+                noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
+
+                pos = mu + noise_prefactor[batch] * noise
+            else:
+                rev_sigma = self.sde_pos.reverse_posterior_sigma[t].unsqueeze(-1)
+                sigmast = self.sde_pos.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
+                sigmas2t = sigmast.pow(2)
+
+                sqrt_alphas = self.sde_pos.sqrt_alphas[t].unsqueeze(-1)
+                sqrt_1m_alphas_cumprod_prev = torch.sqrt(
+                    1.0 - self.sde_pos.alphas_cumprod_prev[t]
+                ).unsqueeze(-1)
+                one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
+                sqrt_alphas_cumprod_prev = torch.sqrt(
+                    self.sde_pos.alphas_cumprod_prev[t].unsqueeze(-1)
+                )
+                one_m_alphas = self.sde_pos.discrete_betas[t].unsqueeze(-1)
+
+                # positions/coords
+                mean = (
+                    sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * pos
+                    + sqrt_alphas_cumprod_prev[batch]
+                    * one_m_alphas[batch]
+                    * coords_pred
+                )
+                mean = (1.0 / sigmas2t[batch]) * mean
+                std = rev_sigma[batch]
+                noise = torch.randn_like(mean)
+                noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
+                pos = mean + std * noise
+
             atoms_pred, charges_pred = out["atoms_pred"].split(
                 [self.num_atom_types, self.num_charge_classes], dim=-1
             )
@@ -761,18 +827,6 @@ class Trainer(pl.LightningModule):
             edges_pred = out["bonds_pred"].softmax(dim=-1)
             # E x b_0
             charges_pred = charges_pred.softmax(dim=-1)
-            # update fnc
-
-            # positions/coords
-            mean = (
-                sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * pos
-                + sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * coords_pred
-            )
-            mean = (1.0 / sigmas2t[batch]) * mean
-            std = rev_sigma[batch]
-            noise = torch.randn_like(mean)
-            noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
-            pos = mean + std * noise
 
             # atoms
             atom_types = self._reverse_sample_categorical(
@@ -829,6 +883,36 @@ class Trainer(pl.LightningModule):
 
             # atom_integer = torch.argmax(atom_types, dim=-1)
             # bond_integer = torch.argmax(edge_attr_global, dim=-1)
+
+            if self.hparams.bond_model_guidance:
+                guidance_type = "logsum"
+                guidance_scale = 1.0e-4
+                with torch.enable_grad():
+                    node_feats_in = node_feats_in.detach()
+                    pos = pos.detach().requires_grad_(True)
+                    bond_prediction = self.bond_model(
+                        x=node_feats_in,
+                        t=temb,
+                        pos=pos,
+                        edge_index_local=edge_index_local,
+                        edge_index_global=edge_index_global,
+                        edge_attr_global=edge_attr_global,
+                        batch=batch,
+                        batch_edge_global=batch_edge_global,
+                    )
+                    if guidance_type == "ensemble":
+                        # TO-DO
+                        raise NotImplementedError
+                    elif guidance_type == "logsum":
+                        uncertainty = torch.sigmoid(
+                            -torch.logsumexp(bond_prediction, dim=-1)
+                        )
+                        uncertainty = uncertainty.log().sum()
+                        dist_shift = (
+                            -torch.autograd.grad(uncertainty, pos)[0] * guidance_scale
+                        )
+
+                pos = pos + dist_shift
 
             if save_traj:
                 pos_traj.append(pos.detach())

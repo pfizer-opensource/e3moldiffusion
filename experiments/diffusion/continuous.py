@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from torch import Tensor, nn
+import torch.nn.functional as F
 
 
 def sigmoid(x):
@@ -125,6 +126,7 @@ class DiscreteDDPM(nn.Module):
         schedule: str = "cosine",
         nu: float = 1.0,
         enforce_zero_terminal_snr: bool = False,
+        T: int = 500,
         **kwargs
     ):
         """Constructs discrete Diffusion schedule according to DDPM in Ho et al. (2020).
@@ -157,6 +159,9 @@ class DiscreteDDPM(nn.Module):
             plot=False,
         )
 
+        self.schedule = schedule
+        self.T = T
+
         if enforce_zero_terminal_snr:
             discrete_betas = self.enforce_zero_terminal_snr(betas=discrete_betas)
 
@@ -170,6 +175,16 @@ class DiscreteDDPM(nn.Module):
             log_alpha = torch.log(alphas)
             log_alpha_bar = torch.cumsum(log_alpha, dim=0)
             alphas_cumprod = torch.exp(log_alpha_bar)
+            log_alpha = torch.log(alphas)
+            log_alpha_bar = torch.cumsum(log_alpha, dim=0)
+            self._alphas = alphas
+            self._log_alpha_bar = log_alpha_bar
+            self._alphas_bar = torch.exp(log_alpha_bar)
+            self._sigma2_bar = -torch.expm1(2 * log_alpha_bar)
+            self._sigma_bar = torch.sqrt(self._sigma2_bar)
+            self._gamma = (
+                torch.log(-torch.special.expm1(2 * log_alpha_bar)) - 2 * log_alpha_bar
+            )
         else:
             alphas_cumprod = torch.cumprod(alphas, dim=0)
         alphas_cumprod_prev = torch.nn.functional.pad(
@@ -230,11 +245,16 @@ class DiscreteDDPM(nn.Module):
         Returns:
             _type_: _description_
         """
-        expand_axis = len(x.size()) - 1
 
         assert str(t.dtype) == "torch.int64"
-        signal = self.sqrt_alphas_cumprod[t]
-        std = self.sqrt_1m_alphas_cumprod[t]
+        expand_axis = len(x.size()) - 1
+
+        if self.schedule == "adaptive":
+            signal = self.get_alpha_bar(t_int=t)
+            std = self.get_sigma_bar(t_int=t)
+        else:
+            signal = self.sqrt_alphas_cumprod[t]
+            std = self.sqrt_1m_alphas_cumprod[t]
 
         for _ in range(expand_axis):
             signal = signal.unsqueeze(-1)
@@ -253,6 +273,66 @@ class DiscreteDDPM(nn.Module):
         plt.xlabel("timesteps")
         plt.legend()
         plt.show()
+
+    def get_alpha_bar(self, t_normalized=None, t_int=None, key=None):
+        assert int(t_normalized is None) + int(t_int is None) == 1
+        if t_int is None:
+            t_int = torch.round(t_normalized * self.T)
+        a = self._alphas_bar.to(t_int.device)[t_int.long()]
+        return a.float()
+
+    def get_sigma_bar(self, t_normalized=None, t_int=None, key=None):
+        assert int(t_normalized is None) + int(t_int is None) == 1
+        if t_int is None:
+            t_int = torch.round(t_normalized * self.T)
+        s = self._sigma_bar.to(t_int.device)[t_int]
+        return s.float()
+
+    def get_sigma2_bar(self, t_normalized=None, t_int=None, key=None):
+        assert int(t_normalized is None) + int(t_int is None) == 1
+        if t_int is None:
+            t_int = torch.round(t_normalized * self.T)
+        s = self._sigma2_bar.to(t_int.device)[t_int]
+        return s.float()
+
+    def get_gamma(self, t_normalized=None, t_int=None, key=None):
+        assert int(t_normalized is None) + int(t_int is None) == 1
+        if t_int is None:
+            t_int = torch.round(t_normalized * self.T)
+        g = self._gamma.to(t_int.device)[t_int]
+        return g.float()
+
+    def sigma_pos_ts_sq(self, t_int, s_int):
+        gamma_s = self.get_gamma(t_int=s_int)
+        gamma_t = self.get_gamma(t_int=t_int)
+        delta_soft = F.softplus(gamma_s) - F.softplus(gamma_t)
+        sigma_squared = -torch.expm1(delta_soft)
+        return sigma_squared
+
+    def get_alpha_pos_ts(self, t_int, s_int):
+        log_a_bar = self._log_alpha_bar.to(t_int.device)
+        ratio = torch.exp(log_a_bar[t_int] - log_a_bar[s_int])
+        return ratio.float()
+
+    def get_alpha_pos_ts_sq(self, t_int, s_int):
+        log_a_bar = self._log_alpha_bar.to(t_int.device)
+        ratio = torch.exp(2 * log_a_bar[t_int] - 2 * log_a_bar[s_int])
+        return ratio.float()
+
+    def get_sigma_pos_sq_ratio(self, s_int, t_int):
+        log_a_bar = self._log_alpha_bar.to(t_int.device)
+        s2_s = -torch.expm1(2 * log_a_bar[s_int])
+        s2_t = -torch.expm1(2 * log_a_bar[t_int])
+        ratio = torch.exp(torch.log(s2_s) - torch.log(s2_t))
+        return ratio.float()
+
+    def get_x_pos_prefactor(self, s_int, t_int):
+        """a_s (s_t^2 - a_t_s^2 s_s^2) / s_t^2"""
+        a_s = self.get_alpha_bar(t_int=s_int)
+        alpha_ratio_sq = self.get_alpha_pos_ts_sq(t_int=t_int, s_int=s_int)
+        sigma_ratio_sq = self.get_sigma_pos_sq_ratio(s_int=s_int, t_int=t_int)
+        prefactor = a_s * (1 - alpha_ratio_sq * sigma_ratio_sq)
+        return prefactor.float()
 
 
 if __name__ == "__main__":

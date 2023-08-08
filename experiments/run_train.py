@@ -50,18 +50,17 @@ if __name__ == "__main__":
 
         if hparams.use_adaptive_loader:
             print("Using adaptive dataloader")
+            non_adaptive = False
             from experiments.data.geom.geom_dataset_adaptive import (
                 GeomDataModule as DataModule,
             )
         else:
             print("Using non-adaptive dataloader")
-            non_adaptive = False
             from experiments.data.geom.geom_dataset_nonadaptive import (
                 GeomDataModule as DataModule,
             )
     elif hparams.dataset == "qm9":
         dataset = "qm9"
-        non_adaptive = False
         from experiments.data.data_info import QM9Infos as DataInfos
         from experiments.data.qm9.qm9_dataset import QM9DataModule as DataModule
 
@@ -71,12 +70,12 @@ if __name__ == "__main__":
 
         if hparams.use_adaptive_loader:
             print("Using adaptive dataloader")
+            non_adaptive = False
             from experiments.data.pubchem.pubchem_dataset_adaptive import (
                 PubChemDataModule as DataModule,
             )
         else:
             print("Using non-adaptive dataloader")
-            non_adaptive = True
             from experiments.data.pubchem.pubchem_dataset_nonadaptive import (
                 PubChemDataModule as DataModule,
             )

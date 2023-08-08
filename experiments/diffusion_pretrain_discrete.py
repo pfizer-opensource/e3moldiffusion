@@ -43,10 +43,15 @@ class Trainer(pl.LightningModule):
         # TO-DO: calculate the statistics on PubChem to be able to sample the limit dist!
         self.dataset_statistics = dataset_statistics
 
+        num_atom_features_geom = 22
+        self.num_atom_types_geom = 16
+        atom_types_distribution = dataset_statistics.atom_types.float()
         if self.hparams.dataset == "pubchem":
             pubchem_ids = [0, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13]
-
-        atom_types_distribution = dataset_statistics.atom_types.float()[pubchem_ids]
+            geom_only = [
+                i for i in range(self.num_atom_types_geom) if i not in pubchem_ids
+            ]
+        atom_types_distribution[geom_only] = 0.0
         bond_types_distribution = dataset_statistics.edge_types.float()
         charge_types_distribution = dataset_statistics.charges_marginals.float()
 
@@ -73,7 +78,7 @@ class Trainer(pl.LightningModule):
             num_layers=hparams["num_layers"],
             latent_dim=None,
             use_cross_product=hparams["use_cross_product"],
-            num_atom_features=self.num_atom_features,
+            num_atom_features=num_atom_features_geom,
             num_bond_types=self.num_bond_classes,
             edge_dim=hparams["edim"],
             cutoff_local=hparams["cutoff_local"],
@@ -82,6 +87,7 @@ class Trainer(pl.LightningModule):
             local_global_model=hparams["local_global_model"],
             recompute_edge_attributes=True,
             recompute_radius_graph=False,
+            edge_mp=hparams["edge_mp"],
         )
 
         self.sde = DiscreteDDPM(
@@ -137,7 +143,7 @@ class Trainer(pl.LightningModule):
         coords_pred = out_dict["coords_pred"]
         atoms_pred = out_dict["atoms_pred"]
         atoms_pred, charges_pred = atoms_pred.split(
-            [self.num_atom_types, self.num_charge_classes], dim=-1
+            [self.num_atom_types_geom, self.num_charge_classes], dim=-1
         )
         edges_pred = out_dict["bonds_pred"]
 
