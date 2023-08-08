@@ -52,8 +52,6 @@ def compute_all_statistics(
     data_list,
     atom_encoder,
     charges_dic,
-    bonds: bool = True,
-    angles: bool = True,
     additional_feats: bool = True,
 ):
     num_nodes = node_counts(data_list)
@@ -68,17 +66,9 @@ def compute_all_statistics(
     valency = valency_count(data_list, atom_encoder)
     print("Valency: ", valency)
 
-    if bonds:
-        bond_lengths = bond_lengths_counts(data_list)
-        print("Bond lengths: ", bond_lengths)
-    else:
-        bond_lengths = None
-        print("Skipping bond lengths computation")
-    if angles:
-        angles = bond_angles(data_list, atom_encoder)
-        print("Skipping bond angles computation")
-    else:
-        angles = None
+    bond_lengths = bond_lengths_counts(data_list)
+    print("Bond lengths: ", bond_lengths)
+    angles = bond_angles(data_list, atom_encoder)
 
     if additional_feats:
         feats = additional_feat_counts(data_list=data_list)

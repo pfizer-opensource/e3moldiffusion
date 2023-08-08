@@ -16,16 +16,21 @@ import experiments.data.utils as dataset_utils
 
 full_atom_encoder = {
     "H": 0,
-    "C": 1,
-    "N": 2,
-    "O": 3,
-    "F": 4,
-    "Si": 5,
-    "P": 6,
-    "S": 7,
-    "Cl": 8,
-    "Br": 9,
-    "I": 10,
+    "B": 1,
+    "C": 2,
+    "N": 3,
+    "O": 4,
+    "F": 5,
+    "Al": 6,
+    "Si": 7,
+    "P": 8,
+    "S": 9,
+    "Cl": 10,
+    "As": 11,
+    "Br": 12,
+    "I": 13,
+    "Hg": 14,
+    "Bi": 15,
 }
 GEOM_DATADIR = "/hpfs/userws/cremej01/projects/data/geom/processed"
 

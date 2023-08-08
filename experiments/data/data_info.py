@@ -60,16 +60,21 @@ class GEOMInfos(AbstractDatasetInfos):
 
 full_atom_encoder_pubchem = {
     "H": 0,
-    "C": 1,
-    "N": 2,
-    "O": 3,
-    "F": 4,
-    "Si": 5,
-    "P": 6,
-    "S": 7,
-    "Cl": 8,
-    "Br": 9,
-    "I": 10,
+    "B": 1,
+    "C": 2,
+    "N": 3,
+    "O": 4,
+    "F": 5,
+    "Al": 6,
+    "Si": 7,
+    "P": 8,
+    "S": 9,
+    "Cl": 10,
+    "As": 11,
+    "Br": 12,
+    "I": 13,
+    "Hg": 14,
+    "Bi": 15,
 }
 
 
@@ -135,3 +140,72 @@ class QM9Infos(AbstractDatasetInfos):
 
     def one_hot_charges(self, charges):
         return F.one_hot((charges + self.charge_offset).long(), num_classes=3).float()
+
+
+mol_properties = [
+    "DIP",
+    "HLgap",
+    "eAT",
+    "eC",
+    "eEE",
+    "eH",
+    "eKIN",
+    "eKSE",
+    "eL",
+    "eNE",
+    "eNN",
+    "eMBD",
+    "eTS",
+    "eX",
+    "eXC",
+    "eXX",
+    "mPOL",
+]
+
+atomic_energies_dict = {
+    1: -13.643321054,
+    6: -1027.610746263,
+    7: -1484.276217092,
+    8: -2039.751675679,
+    9: -3139.751675679,
+    15: -9283.015861995,
+    16: -10828.726222083,
+    17: -12516.462339357,
+}
+atomic_numbers = [1, 6, 7, 8, 9, 15, 16, 17]
+full_atom_encoder_aqm = {
+    "H": 0,
+    "C": 1,
+    "N": 2,
+    "O": 3,
+    "F": 4,
+    "P": 6,
+    "S": 7,
+    "Cl": 8,
+}
+
+
+class AQMInfos(AbstractDatasetInfos):
+    def __init__(self, datamodule):
+        self.name = "aqm"
+
+        self.statistics = datamodule.statistics
+        self.atom_encoder = full_atom_encoder_aqm
+        self.charge_offset = 1
+        self.collapse_charges = torch.Tensor([-1, 0, 1]).int()
+
+        super().complete_infos(datamodule.statistics, self.atom_encoder)
+
+        self.input_dims = PlaceHolder(X=self.num_atom_types, C=3, E=5, y=1, pos=3)
+        self.output_dims = PlaceHolder(X=self.num_atom_types, C=3, E=5, y=0, pos=3)
+
+    def to_one_hot(self, X, C, E, node_mask):
+        X = F.one_hot(X, num_classes=self.num_atom_types).float()
+        E = F.one_hot(E, num_classes=5).float()
+        C = F.one_hot(C + 1, num_classes=3).float()
+        placeholder = PlaceHolder(X=X, C=C, E=E, y=None, pos=None)
+        pl = placeholder.mask(node_mask)
+        return pl.X, pl.C, pl.E
+
+    def one_hot_charges(self, C):
+        return F.one_hot((C + self.charge_offset).long(), num_classes=3).float()
