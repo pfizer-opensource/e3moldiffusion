@@ -105,7 +105,7 @@ if __name__ == "__main__":
         list(datamodule.train_dataset.smiles) if hparams.dataset != "pubchem" else None
     )
     prop_norm, prop_dist = None, None
-    if len(hparams.properties_list) > 0 and hparams.context_mapping > 0:
+    if len(hparams.properties_list) > 0 and hparams.context_mapping:
         dataloader = datamodule.get_dataloader(datamodule.train_dataset, "val")
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
         prop_dist = DistributionProperty(dataloader, hparams.properties_list)
@@ -182,4 +182,3 @@ if __name__ == "__main__":
         datamodule=datamodule,
         ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
     )
-

@@ -216,9 +216,9 @@ class BasicMolecularMetrics(object):
     def compute_statistics(self, molecules, local_rank):
         # Compute statistics
         stat = (
-            self.dataset_infos.statistics["test"]
+            self.dataset_info.statistics["test"]
             if self.test
-            else self.dataset_infos.statistics["val"]
+            else self.dataset_info.statistics["val"]
         )
 
         self.num_nodes_w1(number_nodes_distance(molecules, stat.num_nodes))
@@ -235,11 +235,11 @@ class BasicMolecularMetrics(object):
         )
         self.edge_types_tv(edge_types_tv)
         charge_w1, charge_w1_per_class = charge_distance(
-            molecules, stat.charge_types, stat.atom_types, self.dataset_infos
+            molecules, stat.charge_types, stat.atom_types, self.dataset_info
         )
         self.charge_w1(charge_w1)
         valency_w1, valency_w1_per_class = valency_distance(
-            molecules, stat.valencies, stat.atom_types, self.dataset_infos.atom_encoder
+            molecules, stat.valencies, stat.atom_types, self.dataset_info.atom_encoder
         )
         self.valency_w1(valency_w1)
         bond_lengths_w1, bond_lengths_w1_per_type = bond_length_distance(
@@ -250,56 +250,58 @@ class BasicMolecularMetrics(object):
             if local_rank == 0:
                 print(f"Too many edges, skipping angle distance computation.")
             angles_w1 = 0
-            angles_w1_per_type = [-1] * len(self.dataset_infos.atom_decoder)
+            angles_w1_per_type = [-1] * len(self.dataset_info.atom_decoder)
         else:
             angles_w1, angles_w1_per_type = angle_distance(
                 molecules,
                 stat.bond_angles,
                 stat.atom_types,
                 stat.valencies,
-                atom_decoder=self.dataset_infos.atom_decoder,
+                atom_decoder=self.dataset_info.atom_decoder,
                 save_histogram=self.test,
             )
         self.angles_w1(angles_w1)
         statistics_log = {
-            "sampling/NumNodesW1": self.num_nodes_w1.compute(),
-            "sampling/AtomTypesTV": self.atom_types_tv.compute(),
-            "sampling/EdgeTypesTV": self.edge_types_tv.compute(),
-            "sampling/ChargeW1": self.charge_w1.compute(),
-            "sampling/ValencyW1": self.valency_w1.compute(),
-            "sampling/BondLengthsW1": self.bond_lengths_w1.compute(),
-            "sampling/AnglesW1": self.angles_w1.compute(),
+            "sampling/NumNodesW1": self.num_nodes_w1.compute().item(),
+            "sampling/AtomTypesTV": self.atom_types_tv.compute().item(),
+            "sampling/EdgeTypesTV": self.edge_types_tv.compute().item(),
+            "sampling/ChargeW1": self.charge_w1.compute().item(),
+            "sampling/ValencyW1": self.valency_w1.compute().item(),
+            "sampling/BondLengthsW1": self.bond_lengths_w1.compute().item(),
+            "sampling/AnglesW1": self.angles_w1.compute().item(),
         }
-        if local_rank == 0:
-            print(
-                f"Sampling metrics",
-                {key: round(val.item(), 3) for key, val in statistics_log.items()},
-            )
+        # if local_rank == 0:
+        #     print(
+        #         f"Sampling metrics",
+        #         {key: round(val.item(), 3) for key, val in statistics_log},
+        #     )
 
-        for i, atom_type in enumerate(self.dataset_infos.atom_decoder):
-            statistics_log[f"sampling_per_class/{atom_type}_TV"] = atom_tv_per_class[
-                i
-            ].item()
-            statistics_log[
-                f"sampling_per_class/{atom_type}_ValencyW1"
-            ] = valency_w1_per_class[i].item()
-            statistics_log[f"sampling_per_class/{atom_type}_BondAnglesW1"] = (
-                angles_w1_per_type[i].item() if angles_w1_per_type[i] != -1 else -1
-            )
-            statistics_log[
-                f"sampling_per_class/{atom_type}_ChargesW1"
-            ] = charge_w1_per_class[i].item()
-
-        for j, bond_type in enumerate(
-            ["No bond", "Single", "Double", "Triple", "Aromatic"]
-        ):
-            statistics_log[f"sampling_per_class/{bond_type}_TV"] = bond_tv_per_class[
-                j
-            ].item()
-            if j > 0:
+        sampling_per_class = False
+        if sampling_per_class:
+            for i, atom_type in enumerate(self.dataset_info.atom_decoder):
                 statistics_log[
-                    f"sampling_per_class/{bond_type}_BondLengthsW1"
-                ] = bond_lengths_w1_per_type[j - 1].item()
+                    f"sampling_per_class/{atom_type}_TV"
+                ] = atom_tv_per_class[i].item()
+                statistics_log[
+                    f"sampling_per_class/{atom_type}_ValencyW1"
+                ] = valency_w1_per_class[i].item()
+                statistics_log[f"sampling_per_class/{atom_type}_BondAnglesW1"] = (
+                    angles_w1_per_type[i].item() if angles_w1_per_type[i] != -1 else -1
+                )
+                statistics_log[
+                    f"sampling_per_class/{atom_type}_ChargesW1"
+                ] = charge_w1_per_class[i].item()
+
+            for j, bond_type in enumerate(
+                ["No bond", "Single", "Double", "Triple", "Aromatic"]
+            ):
+                statistics_log[
+                    f"sampling_per_class/{bond_type}_TV"
+                ] = bond_tv_per_class[j].item()
+                if j > 0:
+                    statistics_log[
+                        f"sampling_per_class/{bond_type}_BondLengthsW1"
+                    ] = bond_lengths_w1_per_type[j - 1].item()
 
         return statistics_log
 

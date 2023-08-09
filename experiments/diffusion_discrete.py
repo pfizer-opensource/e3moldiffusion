@@ -576,7 +576,7 @@ class Trainer(pl.LightningModule):
             ) = self.generate_graphs(
                 num_graphs=num_graphs,
                 verbose=inner_verbose,
-                device=self.empirical_num_nodes.device,
+                device=self.device,
                 empirical_distribution_num_nodes=self.empirical_num_nodes,
                 save_traj=False,
             )
@@ -759,6 +759,7 @@ class Trainer(pl.LightningModule):
         mask_j = j[mask]
 
         # some assert
+
         edge_attr_global_dense = torch.zeros(
             size=(n, n), device=device, dtype=torch.long
         )

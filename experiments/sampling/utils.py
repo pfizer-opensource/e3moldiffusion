@@ -50,8 +50,11 @@ def check_stability(
     """molecule: Molecule object."""
     device = molecule.atom_types.device
     if atom_decoder is None:
-        atom_decoder = dataset_info["atom_decoder"]
-
+        atom_decoder = (
+            dataset_info["atom_decoder"]
+            if isinstance(dataset_info, dict)
+            else dataset_info.atom_decoder
+        )
     atom_types = molecule.atom_types
     edge_types = molecule.bond_types
 
