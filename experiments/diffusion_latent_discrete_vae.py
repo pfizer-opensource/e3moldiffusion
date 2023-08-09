@@ -805,6 +805,7 @@ class Trainer(pl.LightningModule):
             t = torch.full(
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=pos.device
             )
+            s = t - 1
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
 
@@ -821,21 +822,60 @@ class Trainer(pl.LightningModule):
                 batch_edge_global=batch_edge_global,
             )
 
-            rev_sigma = self.sde_pos.reverse_posterior_sigma[t].unsqueeze(-1)
-            sigmast = self.sde_pos.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
-            sigmas2t = sigmast.pow(2)
-
-            sqrt_alphas = self.sde_pos.sqrt_alphas[t].unsqueeze(-1)
-            sqrt_1m_alphas_cumprod_prev = torch.sqrt(
-                1.0 - self.sde_pos.alphas_cumprod_prev[t]
-            ).unsqueeze(-1)
-            one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
-            sqrt_alphas_cumprod_prev = torch.sqrt(
-                self.sde_pos.alphas_cumprod_prev[t].unsqueeze(-1)
-            )
-            one_m_alphas = self.sde_pos.discrete_betas[t].unsqueeze(-1)
-
             coords_pred = out["coords_pred"].squeeze()
+            if self.hparams.noise_scheduler == "adaptive":
+                # # Sample the positions
+                sigma_sq_ratio = self.sde_pos.get_sigma_pos_sq_ratio(s_int=s, t_int=t)
+                z_t_prefactor = (
+                    self.sde_pos.get_alpha_pos_ts(t_int=t, s_int=s) * sigma_sq_ratio
+                ).unsqueeze(-1)
+                x_prefactor = self.sde_pos.get_x_pos_prefactor(
+                    s_int=s, t_int=t
+                ).unsqueeze(-1)
+
+                prefactor1 = self.sde_pos.get_sigma2_bar(t_int=t)
+                prefactor2 = self.sde_pos.get_sigma2_bar(
+                    t_int=s
+                ) * self.sde_pos.get_alpha_pos_ts_sq(t_int=t, s_int=s)
+                sigma2_t_s = prefactor1 - prefactor2
+                noise_prefactor_sq = sigma2_t_s * sigma_sq_ratio
+                noise_prefactor = torch.sqrt(noise_prefactor_sq).unsqueeze(-1)
+
+                mu = z_t_prefactor[batch] * pos + x_prefactor[batch] * coords_pred
+
+                noise = torch.randn_like(pos)
+                noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
+
+                pos = mu + noise_prefactor[batch] * noise
+            else:
+                rev_sigma = self.sde_pos.reverse_posterior_sigma[t].unsqueeze(-1)
+                sigmast = self.sde_pos.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
+                sigmas2t = sigmast.pow(2)
+
+                sqrt_alphas = self.sde_pos.sqrt_alphas[t].unsqueeze(-1)
+                sqrt_1m_alphas_cumprod_prev = torch.sqrt(
+                    1.0 - self.sde_pos.alphas_cumprod_prev[t]
+                ).unsqueeze(-1)
+                one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
+                sqrt_alphas_cumprod_prev = torch.sqrt(
+                    self.sde_pos.alphas_cumprod_prev[t].unsqueeze(-1)
+                )
+                one_m_alphas = self.sde_pos.discrete_betas[t].unsqueeze(-1)
+
+                # positions/coords
+                mean = (
+                    sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * pos
+                    + sqrt_alphas_cumprod_prev[batch]
+                    * one_m_alphas[batch]
+                    * coords_pred
+                )
+                mean = (1.0 / sigmas2t[batch]) * mean
+                std = rev_sigma[batch]
+                noise = torch.randn_like(mean)
+                noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
+                pos = mean + std * noise
+            
+            # rest
             atoms_pred, charges_pred = out["atoms_pred"].split(
                 [self.num_atom_types, self.num_charge_classes], dim=-1
             )
