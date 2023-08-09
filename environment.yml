@@ -13,11 +13,11 @@ dependencies:
   - matplotlib
   - pytorch::pytorch=2.0.1
   - pyg::pyg=2.3.0
-  #- pyg::pytorch-scatter
-  #- pyg::pytorch-sparse
-  #- pyg::pytorch-cluster
+  - pyg::pytorch-scatter
+  - pyg::pytorch-sparse
+  - pyg::pytorch-cluster
   - conda-forge::rdkit=2023.03.2
-  - conda-forge::pytorch-lightning=2.0.4
+  - conda-forge::pytorch-lightning=2.0.6
   - conda-forge::jupyter
   - conda-forge::openbabel
   - pip:
@@ -28,7 +28,7 @@ dependencies:
       - rmsd
       - torch_ema
       - tensorboard
-      - torch-scatter
-      - torch-sparse
-      - torch-cluster
+      #- torch-scatter # might only install cpu
+      #- torch-sparse # might only install cpu
+      #- torch-cluster # might only install cpu
       - biopython

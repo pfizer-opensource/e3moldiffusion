@@ -103,7 +103,8 @@ if __name__ == "__main__":
         from experiments.bond_prediction_discrete import Trainer
     elif hparams.latent_dim:
         print("Using latent diffusion")
-        # from experiments.diffusion_latent_discrete import Trainer
+        # from experiments.diffusion_latent_discrete_vae import Trainer
+        # from experiments.diffusion_latent_discrete_flow import Trainer
         from experiments.diffusion_latent_discrete_diff import Trainer
     else:
         print("Using discrete diffusion")
@@ -156,3 +157,4 @@ if __name__ == "__main__":
         datamodule=datamodule,
         ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
     )
+
