@@ -501,8 +501,9 @@ class Trainer(pl.LightningModule):
         # that follows a multivariate Gaussian with
         # mu = lin(z_pre_0), logvar = lin(z_pre_0)
         mu, _ = self.mu_logvar(latent_out).chunk(2, dim=-1)
+        logvar=None
         # get latent via good old reparamerization trick
-        eps = torch.randn_like(mu)
+        # eps = torch.randn_like(mu)
         # keep the logvar/std fixed
         # sd =  torch.exp(0.5 * logvar) 
         # sd = 0.1

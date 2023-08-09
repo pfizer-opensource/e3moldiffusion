@@ -427,6 +427,7 @@ class Trainer(pl.LightningModule):
         latent_out, _ = self.latent_lin(x=(latent_out["s"], latent_out["v"]))
         z = self.graph_pooling(latent_out, data_batch, dim=0, dim_size=bs)
         mu, _ = self.mu_logvar(z).chunk(2, dim=-1)
+        logvar=None
         # eps = torch.randn_like(z)
         # fix sd
         # sd = 0.1
