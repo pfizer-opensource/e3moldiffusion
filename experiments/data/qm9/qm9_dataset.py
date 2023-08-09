@@ -17,6 +17,7 @@ from experiments.data.utils import (
 from rdkit import Chem, RDLogger
 from torch_geometric.data import InMemoryDataset, download_url, extract_zip
 from tqdm import tqdm
+from torch_geometric.data import DataLoader
 
 
 def files_exist(files) -> bool:
@@ -268,6 +269,24 @@ class QM9DataModule(AbstractDataModule):
             val_dataset=val_dataset,
             test_dataset=test_dataset,
         )
+
+    def get_dataloader(self, dataset, stage):
+        if stage == "train":
+            batch_size = self.cfg.batch_size
+            shuffle = True
+        elif stage in ["val", "test"]:
+            batch_size = self.cfg.inference_batch_size
+            shuffle = False
+
+        dl = DataLoader(
+            dataset=dataset,
+            batch_size=batch_size,
+            num_workers=self.cfg.num_workers,
+            pin_memory=True,
+            shuffle=shuffle,
+        )
+
+        return dl
 
 
 if __name__ == "__main__":

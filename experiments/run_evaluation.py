@@ -95,15 +95,17 @@ def evaluate(model_path, save_dir, step=0):
     ).to(device)
     model = model.eval()
 
-    model.run_evaluation(
+    results_dict, generated_smiles = model.run_evaluation(
         step=step,
         dataset_info=model.dataset_info,
         ngraphs=10000,
-        bs=40,
+        bs=70,
+        return_smiles=True,
         verbose=True,
         inner_verbose=True,
         save_dir=save_dir,
     )
+    return results_dict, generated_smiles
 
 
 def get_args():
@@ -121,7 +123,7 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     # Evaluate negative log-likelihood for the test partitions
-    evaluate(
+    results_dict, generated_smiles = evaluate(
         model_path=args.model_path,
         save_dir=args.save_dir,
     )

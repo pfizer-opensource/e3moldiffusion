@@ -266,3 +266,70 @@ class SE3Norm(nn.Module):
 
     def extra_repr(self) -> str:
         return "{normalized_shape}, eps={eps}".format(**self.__dict__)
+
+
+act_class_mapping = {
+    "silu": nn.SiLU,
+    "tanh": nn.Tanh,
+    "sigmoid": nn.Sigmoid,
+}
+
+
+class GatedEquivariantBlock(nn.Module):
+    """Gated Equivariant Block as defined in Schütt et al. (2021):
+    Equivariant message passing for the prediction of tensorial properties and molecular spectra
+    """
+
+    def __init__(
+        self,
+        hidden_channels,
+        out_channels,
+        intermediate_channels=None,
+        activation="silu",
+        scalar_activation=False,
+    ):
+        super(GatedEquivariantBlock, self).__init__()
+        self.out_channels = out_channels
+
+        if intermediate_channels is None:
+            intermediate_channels = hidden_channels
+
+        self.vec1_proj = nn.Linear(hidden_channels, hidden_channels, bias=False)
+        self.vec2_proj = nn.Linear(hidden_channels, out_channels, bias=False)
+
+        act_class = act_class_mapping[activation]
+        self.update_net = nn.Sequential(
+            nn.Linear(hidden_channels * 2, intermediate_channels),
+            act_class(),
+            nn.Linear(intermediate_channels, out_channels * 2),
+        )
+
+        self.act = act_class() if scalar_activation else None
+
+    def reset_parameters(self):
+        nn.init.xavier_uniform_(self.vec1_proj.weight)
+        nn.init.xavier_uniform_(self.vec2_proj.weight)
+        nn.init.xavier_uniform_(self.update_net[0].weight)
+        self.update_net[0].bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.update_net[2].weight)
+        self.update_net[2].bias.data.fill_(0)
+
+    def forward(self, x, v):
+        vec1_buffer = self.vec1_proj(v)
+
+        # detach zero-entries to avoid NaN gradients during force loss backpropagation
+        vec1 = torch.zeros(
+            vec1_buffer.size(0), vec1_buffer.size(2), device=vec1_buffer.device
+        )
+        mask = (vec1_buffer != 0).view(vec1_buffer.size(0), -1).any(dim=1)
+        vec1[mask] = torch.norm(vec1_buffer[mask], dim=-2)
+
+        vec2 = self.vec2_proj(v)
+
+        x = torch.cat([x, vec1], dim=-1)
+        x, v = torch.split(self.update_net(x), self.out_channels, dim=-1)
+        v = v.unsqueeze(1) * vec2
+
+        if self.act is not None:
+            x = self.act(x)
+        return x, v

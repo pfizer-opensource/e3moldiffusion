@@ -100,13 +100,31 @@ class GeomDataModule(LightningDataModule):
         )
         return dataloader
 
+    def get_dataloader(self, dataset, stage):
+        if stage == "train":
+            batch_size = self.cfg.batch_size
+            shuffle = True
+        elif stage in ["val", "test"]:
+            batch_size = self.cfg.inference_batch_size
+            shuffle = False
+
+        dl = DataLoader(
+            dataset=dataset,
+            batch_size=batch_size,
+            num_workers=self.cfg.num_workers,
+            pin_memory=True,
+            shuffle=shuffle,
+        )
+
+        return dl
+
 
 if __name__ == "__main__":
     # Creating the Pytorch Geometric InMemoryDatasets
-    
+
     ff = "/hpfs/userws/"
     # ff = "/sharedhome/"
-    
+
     DATAROOT = f"{ff}let55/projects/e3moldiffusion/experiments/geom/data"
     dataset = GeomDrugsDataset(root=DATAROOT, split="val", remove_h=True)
     print(dataset)

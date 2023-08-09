@@ -16,6 +16,8 @@ from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.diffusion.continuous import DiscreteDDPM
+from experiments.data.abstract_dataset import AbstractDatasetInfos
+from experiments.data.distributions import prepare_context
 
 from experiments.molecule_utils import Molecule
 from experiments.utils import (
@@ -37,18 +39,23 @@ class Trainer(pl.LightningModule):
     def __init__(
         self,
         hparams: dict,
-        dataset_info: dict,
+        dataset_info: AbstractDatasetInfos,
         smiles_list: list,
-        dataset_statistics=None,
+        prop_dist=None,
+        prop_norm=None,
     ):
         super().__init__()
         self.save_hyperparameters(hparams)
         self.i = 0
 
-        self.dataset_statistics = dataset_statistics
-        atom_types_distribution = dataset_statistics.atom_types.float()
-        bond_types_distribution = dataset_statistics.edge_types.float()
-        charge_types_distribution = dataset_statistics.charges_marginals.float()
+        self.dataset_info = dataset_info
+
+        self.prop_norm = prop_norm
+        self.prop_dist = prop_dist
+
+        atom_types_distribution = dataset_info.atom_types.float()
+        bond_types_distribution = dataset_info.edge_types.float()
+        charge_types_distribution = dataset_info.charges_marginals.float()
 
         self.register_buffer("atoms_prior", atom_types_distribution.clone())
         self.register_buffer("bonds_prior", bond_types_distribution.clone())
@@ -85,6 +92,9 @@ class Trainer(pl.LightningModule):
             local_global_model=hparams["local_global_model"],
             recompute_edge_attributes=True,
             recompute_radius_graph=False,
+            edge_mp=hparams["edge_mp"],
+            context_mapping=hparams["context_mapping"],
+            num_context_features=hparams["num_context_features"],
         )
 
         self.sde = DiscreteDDPM(
@@ -139,6 +149,20 @@ class Trainer(pl.LightningModule):
             dtype=torch.long,
             device=batch.x.device,
         )
+        if self.hparams.context_mapping:
+            context = prepare_context(
+                self.hparams["properties_list"],
+                self.prop_norm,
+                batch,
+                self.hparams.dataset,
+            )
+            batch.context = context
+
+        if self.hparams.use_loss_weighting:
+            weights = torch.clip(torch.exp(-t / 200), min=0.1).to(self.device)
+        else:
+            weights = None
+
         out_dict = self(batch=batch, t=t)
 
         true_data = {
@@ -167,7 +191,7 @@ class Trainer(pl.LightningModule):
             pred_data=pred_data,
             batch=batch.batch,
             bond_aggregation_index=out_dict["bond_aggregation_index"],
-            weights=None,
+            weights=weights,
         )
 
         final_loss = (
@@ -201,6 +225,7 @@ class Trainer(pl.LightningModule):
         data_batch: Tensor = batch.batch
         bond_edge_index = batch.edge_index
         bond_edge_attr = batch.edge_attr
+        context = batch.context if self.hparams.context_mapping else None
         n = batch.num_nodes
         bs = int(data_batch.max()) + 1
 
@@ -326,6 +351,7 @@ class Trainer(pl.LightningModule):
             edge_attr_global=edge_attr_global_perturbed,
             batch=data_batch,
             batch_edge_global=batch_edge_global,
+            context=context,
         )
 
         out["coords_perturbed"] = pos_perturbed
@@ -404,6 +430,7 @@ class Trainer(pl.LightningModule):
         ngraphs: int = 4000,
         bs: int = 500,
         save_dir: str = None,
+        return_smiles: bool = False,
         verbose: bool = False,
         inner_verbose=False,
     ):
@@ -463,12 +490,14 @@ class Trainer(pl.LightningModule):
         (
             stability_dict,
             validity_dict,
+            statistics_dict,
             all_generated_smiles,
         ) = analyze_stability_for_molecules(
             molecule_list=molecule_list,
             dataset_info=dataset_info,
             smiles_train=self.smiles_list,
             local_rank=self.local_rank,
+            return_smiles=return_smiles,
             device=self.device,
         )
 
@@ -478,11 +507,13 @@ class Trainer(pl.LightningModule):
                 print(f"Run time={run_time}")
         total_res = dict(stability_dict)
         total_res.update(validity_dict)
+        total_res.update(statistics_dict)
         if self.local_rank == 0:
             print(total_res)
         total_res = pd.DataFrame.from_dict([total_res])
         if self.local_rank == 0:
             print(total_res)
+
         total_res["step"] = str(step)
         total_res["epoch"] = str(self.current_epoch)
         total_res["run_time"] = str(run_time)
@@ -502,7 +533,11 @@ class Trainer(pl.LightningModule):
         except Exception as e:
             print(e)
             pass
-        return total_res
+
+        if return_smiles:
+            return total_res, all_generated_smiles
+        else:
+            return total_res
 
     def reverse_sampling(
         self,
@@ -522,6 +557,13 @@ class Trainer(pl.LightningModule):
             batch_num_nodes, dim=0
         )
         bs = int(batch.max()) + 1
+
+        # sample context condition
+        context = None
+        if self.prop_dist is not None:
+            context = self.prop_dist.sample_batch(batch_num_nodes).to(self.device)[
+                batch
+            ]
 
         # initialiaze the 0-mean point cloud from N(0, I)
         pos = torch.randn(len(batch), 3, device=device, dtype=torch.get_default_dtype())
@@ -591,6 +633,7 @@ class Trainer(pl.LightningModule):
                 edge_attr_global=edge_attr_global,
                 batch=batch,
                 batch_edge_global=batch_edge_global,
+                context=context,
             )
 
             rev_sigma = self.sde.reverse_posterior_sigma[t].unsqueeze(-1)

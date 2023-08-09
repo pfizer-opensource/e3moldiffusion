@@ -17,6 +17,7 @@ warnings.filterwarnings(
 )
 
 from experiments.hparams import add_arguments
+from experiments.data.distributions import DistributionProperty
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -64,6 +65,19 @@ if __name__ == "__main__":
         from experiments.data.data_info import QM9Infos as DataInfos
         from experiments.data.qm9.qm9_dataset import QM9DataModule as DataModule
 
+    elif hparams.dataset == "aqm":
+        dataset = "aqm"
+        from experiments.data.data_info import AQMInfos as DataInfos
+        from experiments.data.aqm.aqm_dataset_nonadaptive import (
+            AQMDataModule as DataModule,
+        )
+
+    elif hparams.dataset == "aqm_qm7x":
+        dataset = "aqm_qm7x"
+        from experiments.data.data_info import AQMQM7XInfos as DataInfos
+        from experiments.data.aqm_qm7x.aqm_qm7x_dataset_nonadaptive import (
+            AQMQM7XDataModule as DataModule,
+        )
     elif hparams.dataset == "pubchem":
         dataset = "drugs"  # take dataset infos from GEOM for simplicity
         from experiments.data.data_info import PubChemInfos as DataInfos
@@ -90,6 +104,12 @@ if __name__ == "__main__":
     train_smiles = (
         list(datamodule.train_dataset.smiles) if hparams.dataset != "pubchem" else None
     )
+    prop_norm, prop_dist = None, None
+    if len(hparams.properties_list) > 0 and hparams.context_mapping > 0:
+        dataloader = datamodule.get_dataloader(datamodule.train_dataset, "val")
+        prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
+        prop_dist = DistributionProperty(dataloader, hparams.properties_list)
+        prop_dist.set_normalizer(prop_norm)
 
     if hparams.continuous:
         print("Using continuous diffusion")
@@ -101,6 +121,9 @@ if __name__ == "__main__":
     elif hparams.bond_prediction:
         print("Starting bond prediction model via discrete diffusion")
         from experiments.bond_prediction_discrete import Trainer
+    elif hparams.property_prediction:
+        print("Starting property prediction model via discrete diffusion")
+        from experiments.property_prediction_discrete import Trainer
     elif hparams.latent_dim:
         print("Using latent diffusion")
         # from experiments.diffusion_latent_discrete_vae import Trainer
@@ -121,6 +144,8 @@ if __name__ == "__main__":
         hparams=hparams.__dict__,
         dataset_info=dataset_info,
         smiles_list=train_smiles,
+        prop_dist=prop_dist,
+        prop_norm=prop_norm,
     )
 
     from pytorch_lightning.plugins.environments import LightningEnvironment
