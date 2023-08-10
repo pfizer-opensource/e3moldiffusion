@@ -46,43 +46,46 @@ def gaussian_entropy(logvar):
 
 
 def standard_normal_logprob(z):
-    dim = z.size(-1)
-    log_z = -0.5 * dim * np.log(2 * np.pi)
-    return log_z - z.pow(2) / 2
-
+    log_z = -0.5 * np.log(2 * np.pi)
+    out = log_z - z.pow(2) / 2
+    return out
 
 class CouplingLayer(nn.Module):
     def __init__(self, d, intermediate_dim, swap=False):
         nn.Module.__init__(self)
         self.d = d - (d // 2)
         self.swap = swap
+        self.scaling_factor = nn.Parameter(torch.zeros(self.d))
+        
         self.net_s_t = nn.Sequential(
-            DenseLayer(self.d, intermediate_dim, activation=nn.SiLU(inplace=True)),
-            DenseLayer(intermediate_dim, intermediate_dim, activation=nn.SiLU(inplace=True)),
-            DenseLayer(intermediate_dim, (d - self.d) * 2),
+            DenseLayer(self.d, intermediate_dim),
+            nn.LayerNorm(intermediate_dim),
+            nn.SiLU(),
+            DenseLayer(intermediate_dim, intermediate_dim),
+            nn.LayerNorm(intermediate_dim),
+            nn.SiLU(),
+            DenseLayer(intermediate_dim, 2 * (d - self.d)),
         )
-
+     
     def forward(self, x, logpx=None, reverse=False):
         if self.swap:
             x = torch.cat([x[:, self.d :], x[:, : self.d]], 1)
 
-        in_dim = self.d
-        out_dim = x.shape[1] - self.d
-
-        s_t = self.net_s_t(x[:, :in_dim])
-        scale = torch.sigmoid(s_t[:, :out_dim] + 2.0)
-        shift = s_t[:, out_dim:]
-
+        scale, shift = self.net_s_t(x[:, :self.d]).chunk(2, dim=-1)
+        # Stabilize scaling output
+        s_fac = self.scaling_factor.exp().view(1, -1)
+        scale = torch.tanh(scale / s_fac) * s_fac
+    
         logdetjac = torch.sum(
-            torch.log(scale).view(scale.shape[0], -1), 1, keepdim=True
+            scale.view(scale.shape[0], -1), 1, keepdim=True
         )
 
-        if not reverse:
-            y1 = x[:, self.d :] * scale + shift
-            delta_logp = -logdetjac
-        else:
-            y1 = (x[:, self.d :] - shift) / scale
+        if not reverse: # data/latent to prior noise
+            y1 = x[:, self.d :] * torch.exp(scale) + shift
             delta_logp = logdetjac
+        else:
+            y1 = (x[:, self.d :] - shift) * torch.exp(-scale)
+            delta_logp = -logdetjac
 
         y = (
             torch.cat([x[:, : self.d], y1], 1)
@@ -309,7 +312,8 @@ class Trainer(pl.LightningModule):
         atoms_loss,
         charges_loss,
         bonds_loss,
-        flow_loss,
+        log_pw,
+        delta_log_pw,
         batch_size,
         stage,
     ):
@@ -359,14 +363,23 @@ class Trainer(pl.LightningModule):
         )
 
         self.log(
-            f"{stage}/flow_loss",
-            flow_loss,
+            f"{stage}/log_pw",
+            log_pw,
             on_step=True,
             batch_size=batch_size,
             prog_bar=(stage == "train"),
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
-
+        
+        self.log(
+            f"{stage}/delta_log_pw",
+            delta_log_pw,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage == "train"),
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+        )
+        
     def step_fnc(self, batch, batch_idx, stage: str):
         batch_size = int(batch.batch.max()) + 1
         t = torch.randint(
@@ -420,16 +433,18 @@ class Trainer(pl.LightningModule):
         # H[Q(z|X)]
         # entropy = gaussian_entropy(logvar=logvar)      # (B, )
         # loss_entropy = -entropy.mean()
-        loss_entropy = 0.0
+        loss_entropy = 0.0 # since we fix the variance of the (gaussian) variational distribution q(z|x) , the entropy is constant
         
         # P(z), Prior probability, parameterized by the flow: z -> w.
         w, delta_log_pw = self.latent_flow(z, torch.zeros([batch_size, 1]).to(z), reverse=False)
+        # compute probability if the flow was able to map the latent to a gaussian prior
         log_pw = standard_normal_logprob(w).view(batch_size, -1).sum(dim=1, keepdim=True)   # (B, 1)
-        log_pz = log_pw - delta_log_pw.view(batch_size, 1)  # (B, 1)
+        # subtract sum of log det Jacobians
+        log_pz = log_pw + delta_log_pw.view(batch_size, 1)  # (B, 1)
 
         loss_prior = -log_pz.mean()
-        flow_loss = loss_entropy + loss_prior
-        final_loss = final_loss + self.hparams.vae_beta * flow_loss
+        prior_loss = loss_entropy + loss_prior
+        final_loss = final_loss + self.hparams.vae_beta * prior_loss
 
         # import pdb
         # pdb.set_trace()
@@ -445,7 +460,8 @@ class Trainer(pl.LightningModule):
             loss["atoms"],
             loss["charges"],
             loss["bonds"],
-            flow_loss,
+            log_pw.mean(),
+            delta_log_pw.mean(),
             batch_size,
             stage,
         )
@@ -501,13 +517,12 @@ class Trainer(pl.LightningModule):
         # that follows a multivariate Gaussian with
         # mu = lin(z_pre_0), logvar = lin(z_pre_0)
         mu, _ = self.mu_logvar(latent_out).chunk(2, dim=-1)
-        logvar=None
-        # get latent via good old reparamerization trick
-        # eps = torch.randn_like(mu)
+        logvar = None
+        eps = torch.randn_like(mu)
         # keep the logvar/std fixed
         # sd =  torch.exp(0.5 * logvar) 
-        # sd = 0.1
-        z = mu # + sd * eps
+        sd = 0.05
+        z = mu + sd * eps
 
         # denoising model that parameterizes p(x_t-1 | x_t, z)
 
@@ -1090,7 +1105,7 @@ class Trainer(pl.LightningModule):
         )
 
         optimizer = torch.optim.AdamW(
-            all_params, lr=self.hparams["lr"], amsgrad=True, weight_decay=1e-12
+            all_params, lr=self.hparams["lr"], amsgrad=False, weight_decay=1e-12
         )
         if self.hparams["lr_scheduler"] == "reduce_on_plateau":
             lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
