@@ -61,8 +61,8 @@ class Trainer(pl.LightningModule):
         self.register_buffer("bonds_prior", bond_types_distribution.clone())
         self.register_buffer("charges_prior", charge_types_distribution.clone())
 
-        self.hparams.num_atom_types = dataset_statistics.input_dims.X
-        self.num_charge_classes = dataset_statistics.input_dims.C
+        self.hparams.num_atom_types = dataset_info.input_dims.X
+        self.num_charge_classes = dataset_info.input_dims.C
         self.num_atom_types = self.hparams.num_atom_types
         self.num_atom_features = self.num_atom_types + self.num_charge_classes
         self.num_bond_classes = 5
@@ -73,9 +73,7 @@ class Trainer(pl.LightningModule):
 
         self.smiles_list = smiles_list
 
-        self.dataset_info = dataset_info
-
-        empirical_num_nodes = get_empirical_num_nodes(dataset_info)
+        empirical_num_nodes = dataset_info.n_nodes
         self.register_buffer(name="empirical_num_nodes", tensor=empirical_num_nodes)
 
         self.model = DenoisingEdgeNetwork(
@@ -97,12 +95,32 @@ class Trainer(pl.LightningModule):
             num_context_features=hparams["num_context_features"],
         )
 
-        self.sde = DiscreteDDPM(
+        self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
             beta_max=hparams["beta_max"],
             N=hparams["timesteps"],
             scaled_reverse_posterior_sigma=True,
-            schedule="cosine",
+            schedule=self.hparams.noise_scheduler,
+            nu=2.5,
+            enforce_zero_terminal_snr=False,
+            T=self.hparams.timesteps,
+        )
+        self.sde_atom_charge = DiscreteDDPM(
+            beta_min=hparams["beta_min"],
+            beta_max=hparams["beta_max"],
+            N=hparams["timesteps"],
+            scaled_reverse_posterior_sigma=True,
+            schedule=self.hparams.noise_scheduler,
+            nu=1,
+            enforce_zero_terminal_snr=False,
+        )
+        self.sde_bonds = DiscreteDDPM(
+            beta_min=hparams["beta_min"],
+            beta_max=hparams["beta_max"],
+            N=hparams["timesteps"],
+            scaled_reverse_posterior_sigma=True,
+            schedule=self.hparams.noise_scheduler,
+            nu=1.5,
             enforce_zero_terminal_snr=False,
         )
 
@@ -274,8 +292,8 @@ class Trainer(pl.LightningModule):
         noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
         assert torch.norm(noise_edges - noise_edges.permute(1, 0, 2)).item() == 0.0
 
-        signal = self.sde.sqrt_alphas_cumprod[t]
-        std = self.sde.sqrt_1m_alphas_cumprod[t]
+        signal = self.sde_bonds.sqrt_alphas_cumprod[t]
+        std = self.sde_bonds.sqrt_1m_alphas_cumprod[t]
 
         signal_b = signal[data_batch].unsqueeze(-1).unsqueeze(-1)
         std_b = std[data_batch].unsqueeze(-1).unsqueeze(-1)
@@ -300,7 +318,7 @@ class Trainer(pl.LightningModule):
         # center the true point cloud
         pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
         # get signal and noise coefficients for coords
-        mean_coords, std_coords = self.sde.marginal_prob(
+        mean_coords, std_coords = self.sde_pos.marginal_prob(
             x=pos_centered, t=t[data_batch]
         )
         # perturb coords
@@ -313,15 +331,19 @@ class Trainer(pl.LightningModule):
         atom_types = F.one_hot(atom_types, num_classes=self.num_atom_types).float()
         # sample noise for OHEs in {0, 1}^NUM_CLASSES
         noise_atom_types = torch.randn_like(atom_types)
-        mean_ohes, std_ohes = self.sde.marginal_prob(x=atom_types, t=t[data_batch])
+        mean_ohes, std_ohes = self.sde_atom_charge.marginal_prob(
+            x=atom_types, t=t[data_batch]
+        )
         # perturb OHEs
         atom_types_perturbed = mean_ohes + std_ohes * noise_atom_types
 
         # Charges
-        charges = self.dataset_statistics.one_hot_charges(charges).float()
+        charges = self.dataset_info.one_hot_charges(charges).float()
         # sample noise for OHEs in {0, 1}^NUM_CLASSES
         noise_charges = torch.randn_like(charges)
-        mean_ohes, std_ohes = self.sde.marginal_prob(x=charges, t=t[data_batch])
+        mean_ohes, std_ohes = self.sde_atom_charge.marginal_prob(
+            x=charges, t=t[data_batch]
+        )
         # perturb OHEs
         charges_perturbed = mean_ohes + std_ohes * noise_charges
 
@@ -397,9 +419,7 @@ class Trainer(pl.LightningModule):
 
         charge_types_integer = torch.argmax(charge_types, dim=-1)
         # offset back
-        charge_types_integer = (
-            charge_types_integer - self.dataset_statistics.charge_offset
-        )
+        charge_types_integer = charge_types_integer - self.dataset_info.charge_offset
         charge_types_integer_split = charge_types_integer.detach().split(
             batch_num_nodes.cpu().tolist(), dim=0
         )
@@ -636,19 +656,55 @@ class Trainer(pl.LightningModule):
                 context=context,
             )
 
-            rev_sigma = self.sde.reverse_posterior_sigma[t].unsqueeze(-1)
-            sigmast = self.sde.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
-            sigmas2t = sigmast.pow(2)
+            rev_sigma_pos = self.sde_pos.reverse_posterior_sigma[t].unsqueeze(-1)
+            sigmast_pos = self.sde_pos.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
+            sigmas2t_pos = sigmast_pos.pow(2)
 
-            sqrt_alphas = self.sde.sqrt_alphas[t].unsqueeze(-1)
-            sqrt_1m_alphas_cumprod_prev = torch.sqrt(
-                1.0 - self.sde.alphas_cumprod_prev[t]
+            sqrt_alphas_pos = self.sde_pos.sqrt_alphas[t].unsqueeze(-1)
+            sqrt_1m_alphas_cumprod_prev_pos = torch.sqrt(
+                1.0 - self.sde_pos.alphas_cumprod_prev[t]
             ).unsqueeze(-1)
-            one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
-            sqrt_alphas_cumprod_prev = torch.sqrt(
-                self.sde.alphas_cumprod_prev[t].unsqueeze(-1)
+            one_m_alphas_cumprod_prev_pos = sqrt_1m_alphas_cumprod_prev_pos.pow(2)
+            sqrt_alphas_cumprod_prev_pos = torch.sqrt(
+                self.sde_pos.alphas_cumprod_prev[t].unsqueeze(-1)
             )
-            one_m_alphas = self.sde.discrete_betas[t].unsqueeze(-1)
+            one_m_alphas_pos = self.sde_pos.discrete_betas[t].unsqueeze(-1)
+
+            rev_sigma_bonds = self.sde_bonds.reverse_posterior_sigma[t].unsqueeze(-1)
+            sigmast_bonds = self.sde_bonds.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
+            sigmas2t_bonds = sigmast_bonds.pow(2)
+
+            sqrt_alphas_bonds = self.sde_bonds.sqrt_alphas[t].unsqueeze(-1)
+            sqrt_1m_alphas_cumprod_prev_bonds = torch.sqrt(
+                1.0 - self.sde_bonds.alphas_cumprod_prev[t]
+            ).unsqueeze(-1)
+            one_m_alphas_cumprod_prev_bonds = sqrt_1m_alphas_cumprod_prev_bonds.pow(2)
+            sqrt_alphas_cumprod_prev_bonds = torch.sqrt(
+                self.sde_bonds.alphas_cumprod_prev[t].unsqueeze(-1)
+            )
+            one_m_alphas_bonds = self.sde_bonds.discrete_betas[t].unsqueeze(-1)
+
+            rev_sigma_atom_charge = self.sde_atom_charge.reverse_posterior_sigma[
+                t
+            ].unsqueeze(-1)
+            sigmast_atom_charge = self.sde_atom_charge.sqrt_1m_alphas_cumprod[
+                t
+            ].unsqueeze(-1)
+            sigmas2t_atom_charge = sigmast_atom_charge.pow(2)
+
+            sqrt_alphas_atom_charge = self.sde_atom_charge.sqrt_alphas[t].unsqueeze(-1)
+            sqrt_1m_alphas_cumprod_prev_atom_charge = torch.sqrt(
+                1.0 - self.sde_atom_charge.alphas_cumprod_prev[t]
+            ).unsqueeze(-1)
+            one_m_alphas_cumprod_prev_atom_charge = (
+                sqrt_1m_alphas_cumprod_prev_atom_charge.pow(2)
+            )
+            sqrt_alphas_cumprod_prev_atom_charge = torch.sqrt(
+                self.sde_atom_charge.alphas_cumprod_prev[t].unsqueeze(-1)
+            )
+            one_m_alphas_atom_charge = self.sde_atom_charge.discrete_betas[t].unsqueeze(
+                -1
+            )
 
             coords_pred = out["coords_pred"].squeeze()
             atoms_pred, charges_pred = out["atoms_pred"].split(
@@ -664,46 +720,56 @@ class Trainer(pl.LightningModule):
 
             # positions/coords
             mean = (
-                sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * pos
-                + sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * coords_pred
+                sqrt_alphas_pos[batch] * one_m_alphas_cumprod_prev_pos[batch] * pos
+                + sqrt_alphas_cumprod_prev_pos[batch]
+                * one_m_alphas_pos[batch]
+                * coords_pred
             )
-            mean = (1.0 / sigmas2t[batch]) * mean
-            std = rev_sigma[batch]
+            mean = (1.0 / sigmas2t_pos[batch]) * mean
+            std = rev_sigma_pos[batch]
             noise = torch.randn_like(mean)
             noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
             pos = mean + std * noise
 
             # atoms
             mean = (
-                sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * atom_types
-                + sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * atoms_pred
+                sqrt_alphas_atom_charge[batch]
+                * one_m_alphas_cumprod_prev_atom_charge[batch]
+                * atom_types
+                + sqrt_alphas_cumprod_prev_atom_charge[batch]
+                * one_m_alphas_atom_charge[batch]
+                * atoms_pred
             )
-            mean = (1.0 / sigmas2t[batch]) * mean
-            std = rev_sigma[batch]
+            mean = (1.0 / sigmas2t_atom_charge[batch]) * mean
+            std = rev_sigma_atom_charge[batch]
             noise = torch.randn_like(mean)
             atom_types = mean + std * noise
 
             # charges
             mean = (
-                sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * charge_types
-                + sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * charges_pred
+                sqrt_alphas_atom_charge[batch]
+                * one_m_alphas_cumprod_prev_atom_charge[batch]
+                * charge_types
+                + sqrt_alphas_cumprod_prev_atom_charge[batch]
+                * one_m_alphas_atom_charge[batch]
+                * charges_pred
             )
-            mean = (1.0 / sigmas2t[batch]) * mean
-            std = rev_sigma[batch]
+            mean = (1.0 / sigmas2t_atom_charge[batch]) * mean
+            std = rev_sigma_atom_charge[batch]
             noise = torch.randn_like(mean)
             charge_types = mean + std * noise
 
             # edges
             mean = (
-                sqrt_alphas[batch_edge_global]
-                * one_m_alphas_cumprod_prev[batch_edge_global]
+                sqrt_alphas_bonds[batch_edge_global]
+                * one_m_alphas_cumprod_prev_bonds[batch_edge_global]
                 * edge_attr_global
-                + sqrt_alphas_cumprod_prev[batch_edge_global]
-                * one_m_alphas[batch_edge_global]
+                + sqrt_alphas_cumprod_prev_bonds[batch_edge_global]
+                * one_m_alphas_bonds[batch_edge_global]
                 * edges_pred
             )
-            mean = (1.0 / sigmas2t[batch_edge_global]) * mean
-            std = rev_sigma[batch_edge_global]
+            mean = (1.0 / sigmas2t_bonds[batch_edge_global]) * mean
+            std = rev_sigma_bonds[batch_edge_global]
             noise_edges = torch.randn_like(edge_attrs)
             noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
             noise_edges = noise_edges[

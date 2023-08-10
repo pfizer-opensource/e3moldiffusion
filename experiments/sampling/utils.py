@@ -6,9 +6,20 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from rdkit import Chem, RDLogger
+from rdkit.DataStructs import TanimotoSimilarity
+from typing import Optional, List, Iterable, Collection, Tuple, Any
+from rdkit.ML.Descriptors import MoleculeDescriptors
+from rdkit.Chem import AllChem
+from rdkit import RDLogger, DataStructs
+from scipy import histogram
+from scipy.stats import entropy, gaussian_kde
+import logging
 
-lg = RDLogger.logger()
-lg.setLevel(RDLogger.CRITICAL)
+# Mute RDKit logger
+RDLogger.logger().setLevel(RDLogger.CRITICAL)
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 
 allowed_bonds = {
@@ -220,6 +231,10 @@ def valency_distance(
 
     total_w1 = torch.sum(w1_per_class * atom_types_probabilities).item()
     return total_w1, w1_per_class
+
+
+def get_similarity(fg_pair):
+    return TanimotoSimilarity(fg_pair[0], fg_pair[1])
 
 
 def bond_length_distance(molecules, target, bond_types_probabilities):
@@ -536,3 +551,183 @@ def normalize(tensor):
     s = tensor.sum()
     assert s > 0
     return tensor / s
+
+
+def canonicalize(smiles: str, include_stereocenters=True, remove_hs=False):
+    mol = Chem.MolFromSmiles(smiles)
+    if remove_hs:
+        mol = Chem.RemoveHs(mol)
+
+    if mol is not None:
+        return Chem.MolToSmiles(mol, isomericSmiles=include_stereocenters)
+    else:
+        return None
+
+
+def canonicalize_list(
+    smiles_list,
+    include_stereocenters=True,
+    remove_hs=False,
+):
+    canonicalized_smiles = [
+        canonicalize(smiles, include_stereocenters, remove_hs=remove_hs)
+        for smiles in smiles_list
+    ]
+    # Remove None elements
+    canonicalized_smiles = [s for s in canonicalized_smiles if s is not None]
+
+    return remove_duplicates(canonicalized_smiles)
+
+
+def remove_duplicates(list_with_duplicates):
+    unique_set = set()
+    unique_list = []
+    for element in list_with_duplicates:
+        if element not in unique_set:
+            unique_set.add(element)
+            unique_list.append(element)
+
+    return unique_list
+
+
+def continuous_kldiv(X_baseline: np.ndarray, X_sampled: np.ndarray) -> float:
+    kde_P = gaussian_kde(X_baseline)
+    kde_Q = gaussian_kde(X_sampled)
+    x_eval = np.linspace(
+        np.hstack([X_baseline, X_sampled]).min(),
+        np.hstack([X_baseline, X_sampled]).max(),
+        num=1000,
+    )
+    P = kde_P(x_eval) + 1e-10
+    Q = kde_Q(x_eval) + 1e-10
+
+    return entropy(P, Q)
+
+
+def discrete_kldiv(X_baseline: np.ndarray, X_sampled: np.ndarray) -> float:
+    P, bins = histogram(X_baseline, bins=10, density=True)
+    P += 1e-10
+    Q, _ = histogram(X_sampled, bins=bins, density=True)
+    Q += 1e-10
+
+    return entropy(P, Q)
+
+
+def calculate_pc_descriptors(
+    smiles: Iterable[str], pc_descriptors: List[str]
+) -> np.ndarray:
+    output = []
+
+    for i in smiles:
+        d = _calculate_pc_descriptors(i, pc_descriptors)
+        if d is not None:
+            output.append(d)
+
+    return np.array(output)
+
+
+def _calculate_pc_descriptors(smiles: str, pc_descriptors: List[str]):
+    calc = MoleculeDescriptors.MolecularDescriptorCalculator(pc_descriptors)
+
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+    _fp = calc.CalcDescriptors(mol)
+    _fp = np.array(_fp)
+    mask = np.isfinite(_fp)
+    if (mask == 0).sum() > 0:
+        logger.warning(f"{smiles} contains an NaN physchem descriptor")
+        _fp[~mask] = 0
+
+    return _fp
+
+
+def calculate_internal_pairwise_similarities(
+    smiles_list: Collection[str],
+) -> np.ndarray:
+    """
+    Computes the pairwise similarities of the provided list of smiles against itself.
+
+    Returns:
+        Symmetric matrix of pairwise similarities. Diagonal is set to zero.
+    """
+    if len(smiles_list) > 10000:
+        logger.warning(
+            f"Calculating internal similarity on large set of "
+            f"SMILES strings ({len(smiles_list)})"
+        )
+
+    mols = get_mols(smiles_list)
+    fps = get_fingerprints(mols)
+    nfps = len(fps)
+
+    similarities = np.zeros((nfps, nfps))
+
+    for i in range(1, nfps):
+        sims = DataStructs.BulkTanimotoSimilarity(fps[i], fps[:i])
+        similarities[i, :i] = sims
+        similarities[:i, i] = sims
+
+    return similarities
+
+
+def get_fingerprints_from_smileslist(smiles_list):
+    """
+    Converts the provided smiles into ECFP4 bitvectors of length 4096.
+
+    Args:
+        smiles_list: list of SMILES strings
+
+    Returns: ECFP4 bitvectors of length 4096.
+
+    """
+    return get_fingerprints(get_mols(smiles_list))
+
+
+def get_fingerprints(mols: Iterable[Chem.Mol], radius=2, length=4096):
+    """
+    Converts molecules to ECFP bitvectors.
+
+    Args:
+        mols: RDKit molecules
+        radius: ECFP fingerprint radius
+        length: number of bits
+
+    Returns: a list of fingerprints
+    """
+    return [AllChem.GetMorganFingerprintAsBitVect(m, radius, length) for m in mols]
+
+
+def get_mols(smiles_list: Iterable[str]) -> Iterable[Chem.Mol]:
+    for i in smiles_list:
+        try:
+            mol = Chem.MolFromSmiles(i)
+            if mol is not None:
+                yield mol
+        except Exception as e:
+            logger.warning(e)
+
+
+def get_random_subset(
+    dataset: List[Any], subset_size: int, seed: Optional[int] = None
+) -> List[Any]:
+    if len(dataset) < subset_size:
+        raise Exception(
+            f"The dataset to extract a subset from is too small: "
+            f"{len(dataset)} < {subset_size}"
+        )
+
+    # save random number generator state
+    rng_state = np.random.get_state()
+
+    if seed is not None:
+        # extract a subset (for a given training set, the subset will always be identical).
+        np.random.seed(seed)
+
+    subset = np.random.choice(dataset, subset_size, replace=False)
+
+    if seed is not None:
+        # reset random number generator state, only if needed
+        np.random.set_state(rng_state)
+
+    return list(subset)

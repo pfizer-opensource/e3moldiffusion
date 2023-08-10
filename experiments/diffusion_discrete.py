@@ -782,11 +782,12 @@ class Trainer(pl.LightningModule):
         iterator = (
             tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         )
+
         for timestep in iterator:
-            t = torch.full(
+            s = torch.full(
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=pos.device
             )
-            s = t - 1
+            t = s + 1
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
             node_feats_in = torch.cat([atom_types, charge_types], dim=-1)
@@ -827,6 +828,7 @@ class Trainer(pl.LightningModule):
                 noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
 
                 pos = mu + noise_prefactor[batch] * noise
+
             else:
                 rev_sigma = self.sde_pos.reverse_posterior_sigma[t].unsqueeze(-1)
                 sigmast = self.sde_pos.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
