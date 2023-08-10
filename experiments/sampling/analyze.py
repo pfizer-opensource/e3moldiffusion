@@ -3,107 +3,24 @@ import torch
 from rdkit import Chem, RDLogger
 from rdkit.Geometry import Point3D
 from torchmetrics import MaxMetric, MeanMetric
+from experiments.sampling.utils import *
 
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
 
-allowed_bonds = {
-    "H": {0: 1, 1: 0, -1: 0},
-    "C": {0: [3, 4], 1: 3, -1: 3},
-    "N": {
-        0: [2, 3],
-        1: [2, 3, 4],
-        -1: 2,
-    },  # In QM9, N+ seems to be present in the form NH+ and NH2+
-    "O": {0: 2, 1: 3, -1: 1},
-    "F": {0: 1, -1: 0},
-    "B": 3,
-    "Al": 3,
-    "Si": 4,
-    "P": {0: [3, 5], 1: 4},
-    "S": {0: [2, 6], 1: [2, 3], 2: 4, 3: 5, -1: 3},
-    "Cl": 1,
-    "As": 3,
-    "Br": {0: 1, 1: 2},
-    "I": 1,
-    "Hg": [1, 2],
-    "Bi": [3, 5],
-    "Se": [2, 4, 6],
-}
-bond_dict = [
-    None,
-    Chem.rdchem.BondType.SINGLE,
-    Chem.rdchem.BondType.DOUBLE,
-    Chem.rdchem.BondType.TRIPLE,
-    Chem.rdchem.BondType.AROMATIC,
-]
-ATOM_VALENCY = {6: 4, 7: 3, 8: 2, 9: 1, 15: 3, 16: 2, 17: 1, 35: 1, 53: 1}
-
-
-def check_stability(
-    molecule, dataset_info, debug=False, atom_decoder=None, smiles=None
-):
-    """molecule: Molecule object."""
-    device = molecule.atom_types.device
-    if atom_decoder is None:
-        atom_decoder = dataset_info["atom_decoder"] if isinstance(dataset_info, dict) else dataset_info.atom_decoder
-
-    atom_types = molecule.atom_types
-    edge_types = molecule.bond_types
-
-    edge_types[edge_types == 4] = 1.5
-    edge_types[edge_types < 0] = 0
-
-    valencies = torch.sum(edge_types, dim=-1).long()
-
-    n_stable_bonds = 0
-    mol_stable = True
-    for i, (atom_type, valency, charge) in enumerate(
-        zip(atom_types, valencies, molecule.charges)
-    ):
-        atom_type = atom_type.item()
-        valency = valency.item()
-        charge = charge.item()
-        possible_bonds = allowed_bonds[atom_decoder[atom_type]]
-        if type(possible_bonds) == int:
-            is_stable = possible_bonds == valency
-        elif type(possible_bonds) == dict:
-            expected_bonds = (
-                possible_bonds[charge]
-                if charge in possible_bonds.keys()
-                else possible_bonds[0]
-            )
-            is_stable = (
-                expected_bonds == valency
-                if type(expected_bonds) == int
-                else valency in expected_bonds
-            )
-        else:
-            is_stable = valency in possible_bonds
-        if not is_stable:
-            mol_stable = False
-        if not is_stable and debug:
-            if smiles is not None:
-                print(smiles)
-            print(
-                f"Invalid atom {atom_decoder[atom_type]}: valency={valency}, charge={charge}"
-            )
-            print()
-        n_stable_bonds += int(is_stable)
-
-    return (
-        torch.tensor([mol_stable], dtype=torch.float, device=device),
-        torch.tensor([n_stable_bonds], dtype=torch.float, device=device),
-        len(atom_types),
-    )
-
 
 class BasicMolecularMetrics(object):
-    def __init__(self, dataset_info, smiles_train=None, device="cpu"):
-        self.atom_decoder = dataset_info["atom_decoder"] if isinstance(dataset_info, dict) else dataset_info.atom_decoder
+    def __init__(self, dataset_info, smiles_train=None, test=False, device="cpu"):
+        self.atom_decoder = (
+            dataset_info["atom_decoder"]
+            if isinstance(dataset_info, dict)
+            else dataset_info.atom_decoder
+        )
         self.dataset_info = dataset_info
 
-        # Retrieve dataset smiles only for qm9 currently.
+        self.train_smiles = smiles_train
+        self.test = test
+
         self.dataset_smiles_list = set(smiles_train)
 
         self.atom_stable = MeanMetric().to(device)
@@ -116,6 +33,13 @@ class BasicMolecularMetrics(object):
         self.novelty = MeanMetric().to(device)
         self.mean_components = MeanMetric().to(device)
         self.max_components = MaxMetric().to(device)
+        self.num_nodes_w1 = MeanMetric().to(device)
+        self.atom_types_tv = MeanMetric().to(device)
+        self.edge_types_tv = MeanMetric().to(device)
+        self.charge_w1 = MeanMetric().to(device)
+        self.valency_w1 = MeanMetric().to(device)
+        self.bond_lengths_w1 = MeanMetric().to(device)
+        self.angles_w1 = MeanMetric().to(device)
 
     def reset(self):
         for metric in [
@@ -126,6 +50,13 @@ class BasicMolecularMetrics(object):
             self.novelty,
             self.mean_components,
             self.max_components,
+            self.num_nodes_w1,
+            self.atom_types_tv,
+            self.edge_types_tv,
+            self.charge_w1,
+            self.valency_w1,
+            self.bond_lengths_w1,
+            self.angles_w1,
         ]:
             metric.reset()
 
@@ -235,9 +166,9 @@ class BasicMolecularMetrics(object):
                 f"{connected_components:.2f}"
             )
 
-        return all_smiles, validity, novelty, uniqueness
+        return all_smiles, validity, novelty, uniqueness, connected_components
 
-    def __call__(self, molecules: list, local_rank=0):
+    def __call__(self, molecules: list, local_rank=0, return_smiles=False):
         # Atom and molecule stability
         if local_rank == 0:
             print(f"Analyzing molecule stability on ...")
@@ -251,9 +182,13 @@ class BasicMolecularMetrics(object):
             "atm_stable": self.atom_stable.compute().item(),
         }
         # Validity, uniqueness, novelty
-        all_generated_smiles, validity, novelty, uniqueness = self.evaluate(
-            molecules, local_rank=local_rank
-        )
+        (
+            all_generated_smiles,
+            validity,
+            novelty,
+            uniqueness,
+            connected_components,
+        ) = self.evaluate(molecules, local_rank=local_rank)
         # Save in any case in the graphs folder
 
         novelty = novelty if isinstance(novelty, int) else novelty.item()
@@ -264,18 +199,133 @@ class BasicMolecularMetrics(object):
             "novelty": novelty,
             "uniqueness": uniqueness,
         }
+
+        statistics_dict = self.compute_statistics(molecules, local_rank)
+        statistics_dict["connected_components"] = connected_components
         self.reset()
-        return stability_dict, validity_dict, all_generated_smiles
+
+        if not return_smiles:
+            all_generated_smiles = None
+        return (
+            stability_dict,
+            validity_dict,
+            statistics_dict,
+            all_generated_smiles,
+        )
+
+    def compute_statistics(self, molecules, local_rank):
+        # Compute statistics
+        stat = (
+            self.dataset_info.statistics["test"]
+            if self.test
+            else self.dataset_info.statistics["val"]
+        )
+
+        self.num_nodes_w1(number_nodes_distance(molecules, stat.num_nodes))
+
+        atom_types_tv, atom_tv_per_class = atom_types_distance(
+            molecules, stat.atom_types, save_histogram=self.test
+        )
+        self.atom_types_tv(atom_types_tv)
+        edge_types_tv, bond_tv_per_class, sparsity_level = bond_types_distance(
+            molecules, stat.bond_types, save_histogram=self.test
+        )
+        print(
+            f"Sparsity level on local rank {local_rank}: {int(100 * sparsity_level)} %"
+        )
+        self.edge_types_tv(edge_types_tv)
+        charge_w1, charge_w1_per_class = charge_distance(
+            molecules, stat.charge_types, stat.atom_types, self.dataset_info
+        )
+        self.charge_w1(charge_w1)
+        valency_w1, valency_w1_per_class = valency_distance(
+            molecules, stat.valencies, stat.atom_types, self.dataset_info.atom_encoder
+        )
+        self.valency_w1(valency_w1)
+        bond_lengths_w1, bond_lengths_w1_per_type = bond_length_distance(
+            molecules, stat.bond_lengths, stat.bond_types
+        )
+        self.bond_lengths_w1(bond_lengths_w1)
+        if sparsity_level < 0.7:
+            if local_rank == 0:
+                print(f"Too many edges, skipping angle distance computation.")
+            angles_w1 = 0
+            angles_w1_per_type = [-1] * len(self.dataset_info.atom_decoder)
+        else:
+            angles_w1, angles_w1_per_type = angle_distance(
+                molecules,
+                stat.bond_angles,
+                stat.atom_types,
+                stat.valencies,
+                atom_decoder=self.dataset_info.atom_decoder,
+                save_histogram=self.test,
+            )
+        self.angles_w1(angles_w1)
+        statistics_log = {
+            "sampling/NumNodesW1": self.num_nodes_w1.compute().item(),
+            "sampling/AtomTypesTV": self.atom_types_tv.compute().item(),
+            "sampling/EdgeTypesTV": self.edge_types_tv.compute().item(),
+            "sampling/ChargeW1": self.charge_w1.compute().item(),
+            "sampling/ValencyW1": self.valency_w1.compute().item(),
+            "sampling/BondLengthsW1": self.bond_lengths_w1.compute().item(),
+            "sampling/AnglesW1": self.angles_w1.compute().item(),
+        }
+        # if local_rank == 0:
+        #     print(
+        #         f"Sampling metrics",
+        #         {key: round(val.item(), 3) for key, val in statistics_log},
+        #     )
+
+        sampling_per_class = False
+        if sampling_per_class:
+            for i, atom_type in enumerate(self.dataset_info.atom_decoder):
+                statistics_log[
+                    f"sampling_per_class/{atom_type}_TV"
+                ] = atom_tv_per_class[i].item()
+                statistics_log[
+                    f"sampling_per_class/{atom_type}_ValencyW1"
+                ] = valency_w1_per_class[i].item()
+                statistics_log[f"sampling_per_class/{atom_type}_BondAnglesW1"] = (
+                    angles_w1_per_type[i].item() if angles_w1_per_type[i] != -1 else -1
+                )
+                statistics_log[
+                    f"sampling_per_class/{atom_type}_ChargesW1"
+                ] = charge_w1_per_class[i].item()
+
+            for j, bond_type in enumerate(
+                ["No bond", "Single", "Double", "Triple", "Aromatic"]
+            ):
+                statistics_log[
+                    f"sampling_per_class/{bond_type}_TV"
+                ] = bond_tv_per_class[j].item()
+                if j > 0:
+                    statistics_log[
+                        f"sampling_per_class/{bond_type}_BondLengthsW1"
+                    ] = bond_lengths_w1_per_type[j - 1].item()
+
+        return statistics_log
 
 
 def analyze_stability_for_molecules(
-    molecule_list, dataset_info, smiles_train, local_rank, device="cuda"
+    molecule_list,
+    dataset_info,
+    smiles_train,
+    local_rank,
+    return_smiles=False,
+    device="cuda",
 ):
     metrics = BasicMolecularMetrics(
         dataset_info, smiles_train=smiles_train, device=device
     )
-    stability_dict, validity_dict, sampled_smiles = metrics(
-        molecule_list, local_rank=local_rank
+    (
+        stability_dict,
+        validity_dict,
+        statistics_dict,
+        sampled_smiles,
+    ) = metrics(molecule_list, local_rank=local_rank, return_smiles=return_smiles)
+    return (
+        stability_dict,
+        validity_dict,
+        statistics_dict,
+        sampled_smiles,
     )
-    # print("Unique molecules:", rdkit_metrics[1])
-    return stability_dict, validity_dict, sampled_smiles

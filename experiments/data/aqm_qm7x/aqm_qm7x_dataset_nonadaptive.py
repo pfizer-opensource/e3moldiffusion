@@ -9,15 +9,9 @@ from experiments.data.utils import (
     load_pickle,
     save_pickle,
 )
-import os
 from experiments.data.metrics import compute_all_statistics
 from pytorch_lightning import LightningDataModule
 
-import tempfile
-from rdkit import Chem
-from torch_geometric.data.collate import collate
-from torch_geometric.data.separate import separate
-from torch_geometric.data import Data, Dataset
 from tqdm import tqdm
 
 full_atom_encoder = {
@@ -38,7 +32,7 @@ mol_properties = [
     "eEE",
     "eH",
     "eKIN",
-    "eKSE",
+    # "eKSE",
     "eL",
     "eNE",
     "eNN",
@@ -64,7 +58,7 @@ atomic_numbers = [1, 6, 7, 8, 9, 15, 16, 17]
 convert_z_to_x = {k: i for i, k in enumerate(atomic_numbers)}
 
 
-class AQMDataset(InMemoryDataset):
+class AQMQM7XDataset(InMemoryDataset):
     def __init__(
         self, split, root, remove_h, transform=None, pre_transform=None, pre_filter=None
     ):
@@ -193,7 +187,7 @@ class AQMDataset(InMemoryDataset):
         np.save(self.processed_paths[11], statistics.hybridization)
 
 
-class AQMDataModule(LightningDataModule):
+class AQMQM7XDataModule(LightningDataModule):
     def __init__(self, cfg):
         super().__init__()
 
@@ -205,11 +199,15 @@ class AQMDataModule(LightningDataModule):
 
         self.label2idx = {k: i for i, k in enumerate(mol_properties)}
 
-        train_dataset = AQMDataset(
+        train_dataset = AQMQM7XDataset(
             split="train", root=root_path, remove_h=cfg.remove_hs
         )
-        val_dataset = AQMDataset(split="val", root=root_path, remove_h=cfg.remove_hs)
-        test_dataset = AQMDataset(split="test", root=root_path, remove_h=cfg.remove_hs)
+        val_dataset = AQMQM7XDataset(
+            split="val", root=root_path, remove_h=cfg.remove_hs
+        )
+        test_dataset = AQMQM7XDataset(
+            split="test", root=root_path, remove_h=cfg.remove_hs
+        )
         self.remove_h = cfg.remove_hs
         self.statistics = {
             "train": train_dataset.statistics,
@@ -218,13 +216,13 @@ class AQMDataModule(LightningDataModule):
         }
 
     def setup(self, stage: Optional[str] = None) -> None:
-        train_dataset = AQMDataset(
+        train_dataset = AQMQM7XDataset(
             root=self.cfg.dataset_root, split="train", remove_h=self.cfg.remove_hs
         )
-        val_dataset = AQMDataset(
+        val_dataset = AQMQM7XDataset(
             root=self.cfg.dataset_root, split="val", remove_h=self.cfg.remove_hs
         )
-        test_dataset = AQMDataset(
+        test_dataset = AQMQM7XDataset(
             root=self.cfg.dataset_root, split="test", remove_h=self.cfg.remove_hs
         )
 

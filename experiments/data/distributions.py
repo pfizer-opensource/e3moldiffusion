@@ -2,6 +2,47 @@ from torch.distributions.categorical import Categorical
 import numpy as np
 import torch
 
+
+def get_distributions(args, dataset_info, datamodule):
+    histogram = dataset_info["n_nodes"]
+    in_node_nf = len(dataset_info["atom_decoder"]) + int(args.include_charges)
+    nodes_dist = DistributionNodes(histogram)
+
+    prop_dist = None
+    if len(args.properties_list) > 0:
+        prop_dist = DistributionProperty(datamodule, args.properties_list)
+
+    return nodes_dist, prop_dist
+
+
+class DistributionNodes:
+    def __init__(self, histogram):
+        """Compute the distribution of the number of nodes in the dataset, and sample from this distribution.
+        historgram: dict. The keys are num_nodes, the values are counts
+        """
+
+        if type(histogram) == dict:
+            max_n_nodes = max(histogram.keys())
+            prob = torch.zeros(max_n_nodes + 1)
+            for num_nodes, count in histogram.items():
+                prob[num_nodes] = count
+        else:
+            prob = histogram
+
+        self.prob = prob / prob.sum()
+        self.m = torch.distributions.Categorical(prob)
+
+    def sample_n(self, n_samples, device):
+        idx = self.m.sample((n_samples,))
+        return idx.to(device)
+
+    def log_prob(self, batch_n_nodes):
+        assert len(batch_n_nodes.size()) == 1
+        probas = self.prob[batch_n_nodes.to(self.prob.device)]
+        log_p = torch.log(probas + 1e-10)
+        return log_p.to(batch_n_nodes.device)
+
+
 PROP_TO_IDX_AQM = {
     "DIP": 0,
     "HLgap": 1,
@@ -41,44 +82,6 @@ PROP_TO_IDX_QM9 = {
 
 IDX_TO_PROP_QM9 = {v: k for k, v in PROP_TO_IDX_QM9.items()}
 
-def get_distributions(args, dataset_info, datamodule):
-    histogram = dataset_info["n_nodes"]
-    in_node_nf = len(dataset_info["atom_decoder"]) + int(args.include_charges)
-    nodes_dist = DistributionNodes(histogram)
-
-    prop_dist = None
-    if len(args.properties_list) > 0:
-        prop_dist = DistributionProperty(datamodule, args.properties_list)
-
-    return nodes_dist, prop_dist
-
-class DistributionNodes:
-    def __init__(self, histogram):
-        """ Compute the distribution of the number of nodes in the dataset, and sample from this distribution.
-            historgram: dict. The keys are num_nodes, the values are counts
-        """
-
-        if type(histogram) == dict:
-            max_n_nodes = max(histogram.keys())
-            prob = torch.zeros(max_n_nodes + 1)
-            for num_nodes, count in histogram.items():
-                prob[num_nodes] = count
-        else:
-            prob = histogram
-
-        self.prob = prob / prob.sum()
-        self.m = torch.distributions.Categorical(prob)
-
-    def sample_n(self, n_samples, device):
-        idx = self.m.sample((n_samples,))
-        return idx.to(device)
-
-    def log_prob(self, batch_n_nodes):
-        assert len(batch_n_nodes.size()) == 1
-        probas = self.prob[batch_n_nodes.to(self.prob.device)]
-        log_p = torch.log(probas + 1e-10)
-        return log_p.to(batch_n_nodes.device)
-
 
 class DistributionProperty:
     def __init__(self, dataloader, properties, num_bins=1000, normalizer=None):
@@ -91,7 +94,7 @@ class DistributionProperty:
         # num_atoms = torch.tensor(
         #     [a.GetNumAtoms() for i, a in enumerate(mols) if i in train_idx]
         # )
-        num_atoms = torch.tensor([len(data.z) for data in dataloader.dataset[:]])
+        num_atoms = torch.tensor([len(data.x) for data in dataloader.dataset[:]])
         for prop in properties:
             self.distributions[prop] = {}
 
@@ -100,7 +103,7 @@ class DistributionProperty:
             # property = torch.tensor(
             #     [a for i, a in enumerate(property) if i in train_idx]
             # )
-            idx = dataloader.dataset[:].label2idx[prop]
+            idx = dataloader.dataset.label2idx[prop]
             property = torch.tensor([data.y[:, idx] for data in dataloader.dataset[:]])
             self._create_prob_dist(num_atoms, property, self.distributions[prop])
 
@@ -177,16 +180,20 @@ class DistributionProperty:
         return val
 
 
-def prepare_context(properties_list, batch, properties_norm):
+def prepare_context(properties_list, properties_norm, batch, dataset="aqm"):
     batch_size = len(batch.batch.unique())
-    device = batch.z.device
+    device = batch.x.device
     n_nodes = batch.pos.size(0)
     context_node_nf = 0
     context_list = []
+    if dataset == "aqm":
+        prop_to_idx = PROP_TO_IDX_AQM
+    elif dataset == "qm9":
+        prop_to_idx = PROP_TO_IDX_QM9
     for key in properties_list:
         mean = properties_norm[key]["mean"].to(device)
         std = properties_norm[key]["mad"].to(device)
-        properties = batch.y[:, PROP_TO_IDX[key]]
+        properties = batch.y[:, prop_to_idx[key]]
         properties = (properties - mean) / std
         if len(properties) == batch_size:
             # Global feature.

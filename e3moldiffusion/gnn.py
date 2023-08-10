@@ -4,7 +4,11 @@ import torch
 from torch import Tensor, nn
 from torch_geometric.typing import OptTensor
 
-from e3moldiffusion.convs import EQGATGlobalEdgeConvFinal, EQGATLocalConvFinal, TopoEdgeConvLayer
+from e3moldiffusion.convs import (
+    EQGATGlobalEdgeConvFinal,
+    EQGATLocalConvFinal,
+    TopoEdgeConvLayer,
+)
 from e3moldiffusion.modules import LayerNorm, AdaptiveLayerNorm
 
 
@@ -30,7 +34,7 @@ class EQGATEdgeGNN(nn.Module):
         recompute_edge_attributes: bool = True,
         edge_mp: bool = False,
         p1: bool = True,
-        use_pos_norm: bool = True
+        use_pos_norm: bool = True,
     ):
         super(EQGATEdgeGNN, self).__init__()
 
@@ -44,32 +48,31 @@ class EQGATEdgeGNN(nn.Module):
         self.recompute_radius_graph = recompute_radius_graph
         self.recompute_edge_attributes = recompute_edge_attributes
         self.p1 = p1
-        
+
         self.sdim, self.vdim = hn_dim
         self.edge_dim = edge_dim
 
         convs = []
 
         for i in range(num_layers):
-            
             ## second or second last layer
             # lb = (i == 1 or i == num_layers - 2)
             lb = (i % 2 == 0) and (i != 0)
             # new: every second layer
             edge_mp_select = lb & edge_mp
             convs.append(
-                    EQGATGlobalEdgeConvFinal(in_dims=hn_dim,
-                                             out_dims=hn_dim,
-                                             edge_dim=edge_dim,
-                                             has_v_in=i>0,
-                                             use_mlp_update= i < (num_layers - 1),
-                                             vector_aggr=vector_aggr,
-                                             use_cross_product=use_cross_product,
-                                             edge_mp=edge_mp_select,
-                                             use_pos_norm=use_pos_norm
-                                             )
+                EQGATGlobalEdgeConvFinal(
+                    in_dims=hn_dim,
+                    out_dims=hn_dim,
+                    edge_dim=edge_dim,
+                    has_v_in=i > 0,
+                    use_mlp_update=i < (num_layers - 1),
+                    vector_aggr=vector_aggr,
+                    use_cross_product=use_cross_product,
+                    edge_mp=edge_mp_select,
+                    use_pos_norm=use_pos_norm,
                 )
-            
+            )
 
         self.convs = nn.ModuleList(convs)
 
@@ -128,6 +131,7 @@ class EQGATEdgeGNN(nn.Module):
         edge_attr_global: Tuple[Tensor, Tensor, Tensor, Tensor],
         z: OptTensor = None,
         batch: Tensor = None,
+        context: OptTensor = None,
     ) -> Dict:
         # edge_attr_xyz (distances, cosines, relative_positions, edge_features)
         # (E, E, E x 3, E x F)
@@ -136,6 +140,8 @@ class EQGATEdgeGNN(nn.Module):
             edge_index_in = edge_index_global
             edge_attr_in = edge_attr_global
 
+            if context is not None and i > 0:
+                s = s + context
             s, v = self.norms[i](x={"s": s, "v": v, "z": z}, batch=batch)
             out = self.convs[i](
                 x=(s, v, p),
@@ -143,6 +149,7 @@ class EQGATEdgeGNN(nn.Module):
                 edge_index=edge_index_in,
                 edge_attr=edge_attr_in,
             )
+
             s, v, p, e = out["s"], out["v"], out["p"], out["e"]
             # p = p - scatter_mean(p, batch, dim=0)[batch]
             if self.recompute_edge_attributes:
@@ -235,53 +242,53 @@ class EQGATLocalGNN(nn.Module):
             s, v = out["s"], out["v"]
 
         out = {"s": s, "v": v}
-        
+
         return out
-    
-    
+
+
 class TopoEdgeGNN(nn.Module):
-    def __init__(self,
-                 in_dim,
-                 edge_dim: Optional[int] = 16,
-                 num_layers: int = 5,
-                 ):
+    def __init__(
+        self,
+        in_dim,
+        edge_dim: Optional[int] = 16,
+        num_layers: int = 5,
+    ):
         super(TopoEdgeGNN, self).__init__()
 
         self.num_layers = num_layers
         self.in_dim = in_dim
         self.edge_dim = edge_dim
-        
+
         convs = []
-        
+
         for i in range(num_layers):
             convs.append(
-                    TopoEdgeConvLayer(in_dim=in_dim, out_dim=in_dim, edge_dim=edge_dim, aggr='mean')
+                TopoEdgeConvLayer(
+                    in_dim=in_dim, out_dim=in_dim, edge_dim=edge_dim, aggr="mean"
                 )
-           
+            )
+
         self.convs = nn.ModuleList(convs)
-        
-        self.norms = nn.ModuleList([
-            LayerNorm(dims=(in_dim, None))
-            for _ in range(num_layers)
-        ])
-        
+
+        self.norms = nn.ModuleList(
+            [LayerNorm(dims=(in_dim, None)) for _ in range(num_layers)]
+        )
+
         self.reset_parameters()
 
     def reset_parameters(self):
         for conv, norm in zip(self.convs, self.norms):
             conv.reset_parameters()
             norm.reset_parameters()
-    
-    def forward(self,
-                s: Tensor,
-                edge_index: Tensor,
-                edge_attr: Tensor,
-                batch: Tensor
-                ) -> Dict:
-        
-        for i in range(len(self.convs)):              
+
+    def forward(
+        self, s: Tensor, edge_index: Tensor, edge_attr: Tensor, batch: Tensor
+    ) -> Dict:
+        for i in range(len(self.convs)):
             s, _ = self.norms[i](x={"s": s, "v": None}, batch=batch)
-            out, edge_attr = self.convs[i](x=s, edge_index=edge_index, edge_attr=edge_attr)
+            out, edge_attr = self.convs[i](
+                x=s, edge_index=edge_index, edge_attr=edge_attr
+            )
         out = {"s": s, "e": edge_attr}
-        
+
         return out

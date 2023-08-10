@@ -9,7 +9,7 @@ from torch_geometric.utils import softmax
 from torch_scatter import scatter_mean, scatter_add
 
 from e3moldiffusion.gnn import EQGATEdgeGNN, EQGATLocalGNN
-from e3moldiffusion.modules import DenseLayer
+from e3moldiffusion.modules import DenseLayer, GatedEquivariantBlock
 
 
 class PredictionHeadEdge(nn.Module):
@@ -84,6 +84,56 @@ class PredictionHeadEdge(nn.Module):
         return out
 
 
+class PropertyPredictionHead(nn.Module):
+    def __init__(
+        self,
+        hn_dim: Tuple[int, int],
+        num_context_features: int,
+    ) -> None:
+        super(PropertyPredictionHead, self).__init__()
+        self.sdim, self.vdim = hn_dim
+        self.num_context_features = num_context_features
+
+        self.scalar_mapping = DenseLayer(
+            self.sdim, self.sdim, bias=True, activation=nn.SiLU()
+        )
+        self.vector_mapping = DenseLayer(
+            in_features=self.vdim, out_features=self.sdim, bias=False
+        )
+
+        self.output_network = nn.ModuleList(
+            [
+                GatedEquivariantBlock(
+                    self.sdim,
+                    self.sdim // 2,
+                    activation="silu",
+                    scalar_activation=True,
+                ),
+                GatedEquivariantBlock(
+                    self.sdim // 2, num_context_features, activation="silu"
+                ),
+            ]
+        )
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.scalar_mapping.reset_parameters()
+        self.vector_mapping.reset_parameters()
+
+    def forward(self, x: Dict, batch: Tensor, edge_index_global: Tensor) -> Dict:
+        s, v, p, e = x["s"], x["v"], x["p"], x["e"]
+
+        s = self.scalar_mapping(s)
+        v = self.vector_mapping(v) + p.sum() * 0 + e.sum() * 0
+        for layer in self.output_network:
+            s, v = layer(s, v)
+        # include v in output to make sure all parameters have a gradient
+        out = s + v.sum() * 0
+
+        return out
+
+
 class DenoisingEdgeNetwork(nn.Module):
     """_summary_
     Denoising network that inputs:
@@ -114,8 +164,13 @@ class DenoisingEdgeNetwork(nn.Module):
         edge_mp: bool = False,
         p1: bool = True,
         use_pos_norm: bool = True,
+        context_mapping: bool = False,
+        num_context_features: int = 0,
+        property_prediction: bool = False,
     ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
+
+        self.property_prediction = property_prediction
 
         self.time_mapping_atom = DenseLayer(1, hn_dim[0])
         self.time_mapping_bond = DenseLayer(1, edge_dim)
@@ -132,6 +187,11 @@ class DenoisingEdgeNetwork(nn.Module):
 
         self.atom_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
         self.bond_time_mapping = DenseLayer(edge_dim, edge_dim)
+
+        self.context_mapping = context_mapping
+        if self.context_mapping:
+            self.context_mapping = DenseLayer(num_context_features, hn_dim[0])
+            self.atom_context_mapping = DenseLayer(hn_dim[0], hn_dim[0])
 
         assert fully_connected or local_global_model
 
@@ -160,12 +220,18 @@ class DenoisingEdgeNetwork(nn.Module):
             use_pos_norm=use_pos_norm,
         )
 
-        self.prediction_head = PredictionHeadEdge(
-            hn_dim=hn_dim,
-            edge_dim=edge_dim,
-            num_atom_features=num_atom_features,
-            num_bond_types=num_bond_types,
-        )
+        if self.property_prediction:
+            self.prediction_head = PropertyPredictionHead(
+                hn_dim=hn_dim,
+                num_context_features=num_context_features,
+            )
+        else:
+            self.prediction_head = PredictionHeadEdge(
+                hn_dim=hn_dim,
+                edge_dim=edge_dim,
+                num_atom_features=num_atom_features,
+                num_bond_types=num_bond_types,
+            )
 
         self.reset_parameters()
 
@@ -176,10 +242,17 @@ class DenoisingEdgeNetwork(nn.Module):
             self.bond_mapping.reset_parameters()
         self.time_mapping_atom.reset_parameters()
         self.atom_time_mapping.reset_parameters()
+        if self.context_mapping and hasattr(
+            self.atom_context_mapping, "reset_parameters"
+        ):
+            self.atom_context_mapping.reset_parameters()
+        if self.context_mapping and hasattr(self.context_mapping, "reset_parameters"):
+            self.context_mapping.reset_parameters()
         self.time_mapping_bond.reset_parameters()
         self.bond_time_mapping.reset_parameters()
         self.gnn.reset_parameters()
-        self.prediction_head.reset_parameters()
+        if not self.property_prediction:
+            self.prediction_head.reset_parameters()
 
     def calculate_edge_attrs(
         self, edge_index: Tensor, edge_attr: OptTensor, pos: Tensor, sqrt: bool = True
@@ -206,6 +279,7 @@ class DenoisingEdgeNetwork(nn.Module):
         batch: OptTensor = None,
         batch_edge_global: OptTensor = None,
         z: OptTensor = None,
+        context: OptTensor = None,
     ) -> Dict:
         pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
         # t: (batch_size,)
@@ -220,6 +294,10 @@ class DenoisingEdgeNetwork(nn.Module):
             batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)
 
         s = self.atom_mapping(x)
+        cemb = None
+        if context is not None and self.context_mapping:
+            cemb = self.context_mapping(context)
+            s = self.atom_context_mapping(s + cemb)
         s = self.atom_time_mapping(s + tnode)
 
         edge_attr_global_transformed = self.bond_mapping(edge_attr_global)
@@ -257,6 +335,7 @@ class DenoisingEdgeNetwork(nn.Module):
             edge_index_global=edge_index_global,
             edge_attr_global=edge_attr_global_transformed,
             batch=batch,
+            context=cemb,
         )
 
         out = self.prediction_head(

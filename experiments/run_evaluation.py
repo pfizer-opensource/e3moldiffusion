@@ -1,6 +1,7 @@
 import warnings
 import argparse
 import torch
+from experiments.data.distributions import DistributionProperty
 
 
 warnings.filterwarnings(
@@ -66,7 +67,23 @@ def evaluate(model_path, save_dir, step=0):
 
     dataset_info = DataInfos(datamodule, hparams)
 
+    # temporary
+    from experiments.data.config_file import get_dataset_info
+    from experiments.utils import get_empirical_num_nodes
+
+    dataset_i = get_dataset_info(hparams.dataset, hparams.remove_hs)
+    empirical_num_nodes = get_empirical_num_nodes(dataset_i)
+
     train_smiles = datamodule.train_dataset.smiles
+
+    prop_norm, prop_dist = None, None
+    properties_list = []
+    context_mapping = False
+    if len(properties_list) > 0 and context_mapping:
+        dataloader = datamodule.get_dataloader(datamodule.train_dataset, "val")
+        prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
+        prop_dist = DistributionProperty(dataloader, hparams.properties_list)
+        prop_dist.set_normalizer(prop_norm)
 
     if hparams.continuous:
         print("Using continuous diffusion")
@@ -86,24 +103,33 @@ def evaluate(model_path, save_dir, step=0):
         else:
             from experiments.diffusion_discrete import Trainer
 
+    # if you want bond_model_guidance, flag this here in the Trainer
     device = "cuda"
     model = Trainer.load_from_checkpoint(
         model_path,
         dataset_info=dataset_info,
         smiles_list=list(train_smiles),
+        prop_norm=prop_norm,
+        prop_dist=prop_dist,
+        context_mapping=False,
+        num_context_features=0,
+        empirical_num_nodes=empirical_num_nodes,
+        bond_model_guidance=False,
         strict=False,
     ).to(device)
     model = model.eval()
 
-    model.run_evaluation(
+    results_dict, generated_smiles = model.run_evaluation(
         step=step,
         dataset_info=model.dataset_info,
         ngraphs=10000,
-        bs=40,
+        bs=80,
+        return_smiles=True,
         verbose=True,
         inner_verbose=True,
         save_dir=save_dir,
     )
+    return results_dict, generated_smiles
 
 
 def get_args():
@@ -121,7 +147,7 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     # Evaluate negative log-likelihood for the test partitions
-    evaluate(
+    results_dict, generated_smiles = evaluate(
         model_path=args.model_path,
         save_dir=args.save_dir,
     )
