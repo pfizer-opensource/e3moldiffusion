@@ -29,15 +29,10 @@ class BasicMolecularMetrics(object):
         self.dataset_info = dataset_info
 
         self.number_samples = 0  # update based on unique generated smiles
-        self.train_smiles = smiles_train
+        self.train_smiles = canonicalize_list(smiles_train)
 
-        self.train_fps = [
-            AllChem.GetMorganFingerprint(Chem.MolFromSmiles(smiles), 2)
-            for smiles in smiles_train
-        ]
+        self.train_fps = get_fingerprints_from_smileslist(self.train_smiles)
         self.test = test
-
-        self.dataset_smiles_list = set(smiles_train)
 
         self.atom_stable = MeanMetric().to(device)
         self.mol_stable = MeanMetric().to(device)
@@ -143,11 +138,11 @@ class BasicMolecularMetrics(object):
     def compute_novelty(self, unique):
         num_novel = 0
         novel = []
-        if self.dataset_smiles_list is None:
+        if self.train_smiles is None:
             print("Dataset smiles is None, novelty computation skipped")
             return 1, 1
         for smiles in unique:
-            if smiles not in self.dataset_smiles_list:
+            if smiles not in self.train_smiles:
                 novel.append(smiles)
                 num_novel += 1
         return novel, num_novel / len(unique)
@@ -231,16 +226,25 @@ class BasicMolecularMetrics(object):
         statistics_dict["connected_components"] = connected_components
 
         self.number_samples = len(all_generated_smiles)
-        self.train_subset = canonicalize_list(
-            get_random_subset(self.train_smiles, self.number_samples, seed=42),
-            include_stereocenters=False,
+        self.train_subset = get_random_subset(
+            self.train_smiles, self.number_samples, seed=42
         )
-        similarity = self.get_bulk_similarity_with_train(molecules)
-        diversity = self.get_bulk_diversity(molecules)
-        kl_score = self.kl_divergence(all_generated_smiles)
+        all_generated_smiles = canonicalize_list(all_generated_smiles)
+        similarity = self.get_bulk_similarity_with_train(all_generated_smiles)
+        diversity = self.get_bulk_diversity(all_generated_smiles)
+        kl_score = self.get_kl_divergence(all_generated_smiles)
+
+        mols = get_mols_list(all_generated_smiles)
+        rings = np.mean([num_rings(mol) for mol in mols])
+        aromatic_rings = np.mean([num_aromatic_rings(mol) for mol in mols])
+        qeds = np.mean([qed(mol) for mol in mols])
+
         statistics_dict["similarity"] = similarity
         statistics_dict["diversity"] = diversity
         statistics_dict["kl_score"] = kl_score
+        statistics_dict["num_rings"] = rings
+        statistics_dict["num_aromatic_rings"] = aromatic_rings
+        statistics_dict["QED"] = qeds
 
         self.reset()
 
@@ -345,9 +349,9 @@ class BasicMolecularMetrics(object):
 
         return statistics_log
 
-    def get_similarity_with_train(self, molecules, parallel=False):
-        mol_fps = [AllChem.GetMorganFingerprint(mol.rdkit_mol, 2) for mol in molecules]
-        fp_pair = list(itertools.product(mol_fps, self.train_fps))
+    def get_similarity_with_train(self, generated_smiles, parallel=False):
+        fps = get_fingerprints_from_smileslist(generated_smiles)
+        fp_pair = list(itertools.product(fps, self.train_fps))
         if not parallel:
             similarity_list = []
             for fg1, fg2 in tqdm(fp_pair, desc="Calculate similarity with train"):
@@ -357,15 +361,17 @@ class BasicMolecularMetrics(object):
                 similarity_list = list(
                     tqdm(
                         pool.imap(get_similarity, fp_pair),
-                        total=len(mol_fps) * len(self.train_fps),
+                        total=len(fps) * len(self.train_fps),
                     )
                 )
         # calculate the max similarity of each mol with train data
-        similarity_max = np.reshape(similarity_list, (len(molecules), -1)).max(axis=1)
+        similarity_max = np.reshape(similarity_list, (len(generated_smiles), -1)).max(
+            axis=1
+        )
         return np.mean(similarity_max)
 
-    def get_diversity(self, molecules, parallel=False):
-        fps = [AllChem.GetMorganFingerprint(mol.rdkit_mol, 2) for mol in molecules]
+    def get_diversity(self, generated_smiles, parallel=False):
+        fps = get_fingerprints_from_smileslist(generated_smiles)
         all_fp_pairs = list(itertools.combinations(fps, 2))
         if not parallel:
             similarity_list = []
@@ -376,15 +382,16 @@ class BasicMolecularMetrics(object):
                 similarity_list = pool.imap_unordered(TanimotoSimilarity, all_fp_pairs)
         return 1 - np.mean(similarity_list)
 
-    def get_bulk_similarity_with_train(self, molecules):
-        fps = [AllChem.GetMorganFingerprint(mol.rdkit_mol, 2) for mol in molecules]
+    def get_bulk_similarity_with_train(self, generated_smiles):
+        fps = get_fingerprints_from_smileslist(generated_smiles)
         scores = []
+
         for fp in fps:
             scores.append(BulkTanimotoSimilarity(fp, self.train_fps))
         return np.mean(scores)
 
-    def get_bulk_diversity(self, molecules):
-        fps = [AllChem.GetMorganFingerprint(mol.rdkit_mol, 2) for mol in molecules]
+    def get_bulk_diversity(self, generated_smiles):
+        fps = get_fingerprints_from_smileslist(generated_smiles)
         scores = []
         for i, fp in enumerate(fps):
             fps_tmp = fps.copy()
@@ -392,7 +399,7 @@ class BasicMolecularMetrics(object):
             scores.append(BulkTanimotoSimilarity(fp, fps_tmp))
         return 1 - np.mean(scores)
 
-    def kl_divergence(self, generated_smiles):
+    def get_kl_divergence(self, generated_smiles):
         # canonicalize_list in order to remove stereo information (also removes duplicates and invalid molecules, but there shouldn't be any)
         unique_molecules = set(
             canonicalize_list(generated_smiles, include_stereocenters=False)

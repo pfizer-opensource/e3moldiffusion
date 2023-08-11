@@ -7,6 +7,8 @@ import torch
 import torch.nn.functional as F
 from rdkit import Chem, RDLogger
 from rdkit.DataStructs import TanimotoSimilarity
+from rdkit import Chem
+from rdkit.Chem import Descriptors, Mol, rdMolDescriptors
 from typing import Optional, List, Iterable, Collection, Tuple, Any
 from rdkit.ML.Descriptors import MoleculeDescriptors
 from rdkit.Chem import AllChem
@@ -708,6 +710,18 @@ def get_mols(smiles_list: Iterable[str]) -> Iterable[Chem.Mol]:
             logger.warning(e)
 
 
+def get_mols_list(smiles_list: Iterable[str]) -> Iterable[Chem.Mol]:
+    mols = []
+    for i in smiles_list:
+        try:
+            mol = Chem.MolFromSmiles(i)
+            if mol is not None:
+                mols.append(mol)
+        except Exception as e:
+            logger.warning(e)
+    return mols
+
+
 def get_random_subset(
     dataset: List[Any], subset_size: int, seed: Optional[int] = None
 ) -> List[Any]:
@@ -731,3 +745,19 @@ def get_random_subset(
         np.random.set_state(rng_state)
 
     return list(subset)
+
+
+def logP(mol: Mol) -> float:
+    return Descriptors.MolLogP(mol)
+
+
+def qed(mol: Mol) -> float:
+    return Descriptors.qed(mol)
+
+
+def num_rings(mol: Mol) -> int:
+    return rdMolDescriptors.CalcNumRings(mol)
+
+
+def num_aromatic_rings(mol: Mol) -> int:
+    return rdMolDescriptors.CalcNumAromaticRings(mol)
