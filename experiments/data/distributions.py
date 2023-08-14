@@ -65,6 +65,27 @@ PROP_TO_IDX_AQM = {
 
 IDX_TO_PROP_AQM = {v: k for k, v in PROP_TO_IDX_AQM.items()}
 
+PROP_TO_IDX_AQM_QM7X = {
+    "DIP": 0,
+    "HLgap": 1,
+    "eAT": 2,
+    "eC": 3,
+    "eEE": 4,
+    "eH": 5,
+    "eKIN": 6,
+    "eL": 7,
+    "eNE": 8,
+    "eNN": 9,
+    "eMBD": 10,
+    "eTS": 11,
+    "eX": 12,
+    "eXC": 13,
+    "eXX": 14,
+    "mPOL": 15,
+}
+
+IDX_TO_PROP_AQM_QM7X = {v: k for k, v in PROP_TO_IDX_AQM_QM7X.items()}
+
 PROP_TO_IDX_QM9 = {
     "dipole_moment": 0,
     "isotropic_polarizability": 1,
@@ -84,7 +105,13 @@ IDX_TO_PROP_QM9 = {v: k for k, v in PROP_TO_IDX_QM9.items()}
 
 
 class DistributionProperty:
-    def __init__(self, dataloader, properties, num_bins=1000, normalizer=None):
+    def __init__(
+        self,
+        dataset,
+        properties,
+        num_bins=1000,
+        normalizer=None,
+    ):
         self.num_bins = num_bins
         self.distributions = {}
         self.properties = properties
@@ -94,7 +121,12 @@ class DistributionProperty:
         # num_atoms = torch.tensor(
         #     [a.GetNumAtoms() for i, a in enumerate(mols) if i in train_idx]
         # )
-        num_atoms = torch.tensor([len(data.x) for data in dataloader.dataset[:]])
+
+        n_nodes_train = self.calculate_n_nodes(dataset.train_dataset)
+        n_nodes_val = self.calculate_n_nodes(dataset.val_dataset)
+        n_nodes_test = self.calculate_n_nodes(dataset.test_dataset)
+        n_nodes = torch.cat([n_nodes_train, n_nodes_val, n_nodes_test])
+
         for prop in properties:
             self.distributions[prop] = {}
 
@@ -103,9 +135,12 @@ class DistributionProperty:
             # property = torch.tensor(
             #     [a for i, a in enumerate(property) if i in train_idx]
             # )
-            idx = dataloader.dataset.label2idx[prop]
-            property = torch.tensor([data.y[:, idx] for data in dataloader.dataset[:]])
-            self._create_prob_dist(num_atoms, property, self.distributions[prop])
+            idx = dataset.label2idx[prop]
+            prop_train = dataset.train_dataset.data.y[:, idx]
+            prop_val = dataset.val_dataset.data.y[:, idx]
+            prop_test = dataset.test_dataset.data.y[:, idx]
+            properties = torch.cat([prop_train, prop_val, prop_test], dim=0)
+            self._create_prob_dist(n_nodes, properties, self.distributions[prop])
 
         self.normalizer = normalizer
 
@@ -179,6 +214,18 @@ class DistributionProperty:
         val = torch.rand(1) * (right - left) + left
         return val
 
+    def calculate_n_nodes(self, dataset):
+        n_nodes = torch.tensor(
+            [
+                int(j - i)
+                for i, j in zip(
+                    dataset.slices["x"],
+                    dataset.slices["x"][1:],
+                )
+            ]
+        ).long()
+        return n_nodes
+
 
 def prepare_context(properties_list, properties_norm, batch, dataset="aqm"):
     batch_size = len(batch.batch.unique())
@@ -188,6 +235,8 @@ def prepare_context(properties_list, properties_norm, batch, dataset="aqm"):
     context_list = []
     if dataset == "aqm":
         prop_to_idx = PROP_TO_IDX_AQM
+    elif dataset == "aqm_qm7x":
+        prop_to_idx = PROP_TO_IDX_AQM_QM7X
     elif dataset == "qm9":
         prop_to_idx = PROP_TO_IDX_QM9
     for key in properties_list:

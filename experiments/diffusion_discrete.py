@@ -68,6 +68,7 @@ class Trainer(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(hparams)
         self.i = 0
+        self.mol_stab = 0.5
 
         self.dataset_info = dataset_info
 
@@ -440,6 +441,7 @@ class Trainer(pl.LightningModule):
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
         # one-hot-encode atom types
+
         atom_types = F.one_hot(
             atom_types.squeeze().long(), num_classes=self.num_atom_types
         ).float()
@@ -619,6 +621,9 @@ class Trainer(pl.LightningModule):
             return_smiles=return_smiles,
             device=self.device,
         )
+
+        if self.mol_stab < stability_dict["mol_stable"]:
+            self.trainer.save_checkpoint("best_mol_stab.ckpt")
 
         run_time = datetime.now() - start
         if verbose:

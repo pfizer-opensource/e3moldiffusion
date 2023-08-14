@@ -1,18 +1,15 @@
 from collections import Counter
 import torch
 from rdkit import Chem, RDLogger
-from rdkit.Geometry import Point3D
 from torchmetrics import MaxMetric, MeanMetric
 from experiments.sampling.utils import *
 import numpy as np
 import itertools
 import torch
-import pickle
 from tqdm import tqdm
 from multiprocessing import Pool
-from rdkit import Chem, DataStructs
+from rdkit import Chem
 from rdkit.DataStructs import TanimotoSimilarity, BulkTanimotoSimilarity
-from rdkit.Chem import AllChem
 from rdkit.Chem.QED import qed
 
 lg = RDLogger.logger()
@@ -234,16 +231,17 @@ class BasicMolecularMetrics(object):
         diversity = self.get_bulk_diversity(all_generated_smiles)
         kl_score = self.get_kl_divergence(all_generated_smiles)
 
-        mols = get_mols_list(all_generated_smiles)
-        rings = np.mean([num_rings(mol) for mol in mols])
-        aromatic_rings = np.mean([num_aromatic_rings(mol) for mol in mols])
-        qeds = np.mean([qed(mol) for mol in mols])
-
         statistics_dict["similarity"] = similarity
         statistics_dict["diversity"] = diversity
         statistics_dict["kl_score"] = kl_score
-        statistics_dict["num_rings"] = rings
-        statistics_dict["num_aromatic_rings"] = aromatic_rings
+
+        mols = get_mols_list(all_generated_smiles)
+        # rings = np.mean([num_rings(mol) for mol in mols])
+        # aromatic_rings = np.mean([num_aromatic_rings(mol) for mol in mols])
+        qeds = np.mean([qed(mol) for mol in mols])
+
+        # statistics_dict["num_rings"] = rings
+        # statistics_dict["num_aromatic_rings"] = aromatic_rings
         statistics_dict["QED"] = qeds
 
         self.reset()

@@ -47,6 +47,7 @@ class Trainer(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(hparams)
         self.i = 0
+        self.mol_stab = 0.5
 
         self.dataset_info = dataset_info
 
@@ -520,6 +521,8 @@ class Trainer(pl.LightningModule):
             return_smiles=return_smiles,
             device=self.device,
         )
+        if self.mol_stab < stability_dict["mol_stable"]:
+            self.trainer.save_checkpoint("best_mol_stab.ckpt")
 
         run_time = datetime.now() - start
         if verbose:
@@ -637,9 +640,10 @@ class Trainer(pl.LightningModule):
             tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         )
         for timestep in iterator:
-            t = torch.full(
+            s = torch.full(
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=pos.device
             )
+            t = s + 1
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
 
@@ -656,55 +660,32 @@ class Trainer(pl.LightningModule):
                 context=context,
             )
 
-            rev_sigma_pos = self.sde_pos.reverse_posterior_sigma[t].unsqueeze(-1)
-            sigmast_pos = self.sde_pos.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
-            sigmas2t_pos = sigmast_pos.pow(2)
+            (
+                rev_sigma_pos,
+                sigmas2t_pos,
+                sqrt_alphas_pos,
+                one_m_alphas_cumprod_prev_pos,
+                sqrt_alphas_cumprod_prev_pos,
+                one_m_alphas_pos,
+            ) = self.get_noise_reverse(t, self.sde_pos)
 
-            sqrt_alphas_pos = self.sde_pos.sqrt_alphas[t].unsqueeze(-1)
-            sqrt_1m_alphas_cumprod_prev_pos = torch.sqrt(
-                1.0 - self.sde_pos.alphas_cumprod_prev[t]
-            ).unsqueeze(-1)
-            one_m_alphas_cumprod_prev_pos = sqrt_1m_alphas_cumprod_prev_pos.pow(2)
-            sqrt_alphas_cumprod_prev_pos = torch.sqrt(
-                self.sde_pos.alphas_cumprod_prev[t].unsqueeze(-1)
-            )
-            one_m_alphas_pos = self.sde_pos.discrete_betas[t].unsqueeze(-1)
+            (
+                rev_sigma_atom_charge,
+                sigmas2t_atom_charge,
+                sqrt_alphas_atom_charge,
+                one_m_alphas_cumprod_prev_atom_charge,
+                sqrt_alphas_cumprod_prev_atom_charge,
+                one_m_alphas_atom_charge,
+            ) = self.get_noise_reverse(t, self.sde_atom_charge)
 
-            rev_sigma_bonds = self.sde_bonds.reverse_posterior_sigma[t].unsqueeze(-1)
-            sigmast_bonds = self.sde_bonds.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
-            sigmas2t_bonds = sigmast_bonds.pow(2)
-
-            sqrt_alphas_bonds = self.sde_bonds.sqrt_alphas[t].unsqueeze(-1)
-            sqrt_1m_alphas_cumprod_prev_bonds = torch.sqrt(
-                1.0 - self.sde_bonds.alphas_cumprod_prev[t]
-            ).unsqueeze(-1)
-            one_m_alphas_cumprod_prev_bonds = sqrt_1m_alphas_cumprod_prev_bonds.pow(2)
-            sqrt_alphas_cumprod_prev_bonds = torch.sqrt(
-                self.sde_bonds.alphas_cumprod_prev[t].unsqueeze(-1)
-            )
-            one_m_alphas_bonds = self.sde_bonds.discrete_betas[t].unsqueeze(-1)
-
-            rev_sigma_atom_charge = self.sde_atom_charge.reverse_posterior_sigma[
-                t
-            ].unsqueeze(-1)
-            sigmast_atom_charge = self.sde_atom_charge.sqrt_1m_alphas_cumprod[
-                t
-            ].unsqueeze(-1)
-            sigmas2t_atom_charge = sigmast_atom_charge.pow(2)
-
-            sqrt_alphas_atom_charge = self.sde_atom_charge.sqrt_alphas[t].unsqueeze(-1)
-            sqrt_1m_alphas_cumprod_prev_atom_charge = torch.sqrt(
-                1.0 - self.sde_atom_charge.alphas_cumprod_prev[t]
-            ).unsqueeze(-1)
-            one_m_alphas_cumprod_prev_atom_charge = (
-                sqrt_1m_alphas_cumprod_prev_atom_charge.pow(2)
-            )
-            sqrt_alphas_cumprod_prev_atom_charge = torch.sqrt(
-                self.sde_atom_charge.alphas_cumprod_prev[t].unsqueeze(-1)
-            )
-            one_m_alphas_atom_charge = self.sde_atom_charge.discrete_betas[t].unsqueeze(
-                -1
-            )
+            (
+                rev_sigma_bonds,
+                sigmas2t_bonds,
+                sqrt_alphas_bonds,
+                one_m_alphas_cumprod_prev_bonds,
+                sqrt_alphas_cumprod_prev_bonds,
+                one_m_alphas_bonds,
+            ) = self.get_noise_reverse(t, self.sde_bonds)
 
             coords_pred = out["coords_pred"].squeeze()
             atoms_pred, charges_pred = out["atoms_pred"].split(
@@ -856,6 +837,30 @@ class Trainer(pl.LightningModule):
             batch_size=batch_size,
             prog_bar=(stage == "train"),
             sync_dist=self.hparams.gpus > 1 and stage == "val",
+        )
+
+    def get_noise_reverse(self, t, noise_kernel):
+        rev_sigma = noise_kernel.reverse_posterior_sigma[t].unsqueeze(-1)
+        sigmast = noise_kernel.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
+        sigmas2t = sigmast.pow(2)
+
+        sqrt_alphas = noise_kernel.sqrt_alphas[t].unsqueeze(-1)
+        sqrt_1m_alphas_cumprod_prev = torch.sqrt(
+            1.0 - noise_kernel.alphas_cumprod_prev[t]
+        ).unsqueeze(-1)
+        one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
+        sqrt_alphas_cumprod_prev = torch.sqrt(
+            noise_kernel.alphas_cumprod_prev[t].unsqueeze(-1)
+        )
+        one_m_alphas = noise_kernel.discrete_betas[t].unsqueeze(-1)
+
+        return (
+            rev_sigma,
+            sigmas2t,
+            sqrt_alphas,
+            one_m_alphas_cumprod_prev,
+            sqrt_alphas_cumprod_prev,
+            one_m_alphas,
         )
 
     def configure_optimizers(self):
