@@ -2,6 +2,8 @@
 # load_ckpt: /hpfs/userws/cremej01/projects/logs/geom/adaptive/run0/last-v1.ckpt
 # load_ckpt_from_pretrained: /hpfs/userws/cremej01/projects/logs/geom/pretrain_x0/run0/epoch=254-step=373830.ckpt
 
+diffusion_pretraining: true
+
 batch_size: 200
 inference_batch_size: 70
 ema_decay: 0.999
@@ -33,7 +35,7 @@ dataset_root: /hpfs/userws/cremej01/projects/data/pubchem/database
 
 # DIFFUSION
 continuous: false
-noise_scheduler: cosine
+noise_scheduler: adaptive
 eps_min: 1.e-3
 beta_min: 1.e-4
 beta_max: 2.e-2
@@ -42,7 +44,7 @@ max_time: 06:00:00:00
 use_loss_weighting: true
 
 #LOGGING
-save_dir: /hpfs/userws/cremej01/projects/logs/pubchem/pretrain_x0
+save_dir: /hpfs/userws/cremej01/projects/logs/pubchem/pretrain_x0_3_adaptive
 
 #LEARNING
 lr_scheduler: reduce_on_plateau

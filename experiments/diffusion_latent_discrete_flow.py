@@ -57,58 +57,57 @@ class LatentNormalizingFlow(nn.Module):
     Args:
         nn (_type_): _description_
     """
-    def __init__(self, 
-                 flows: List[nn.Module]):
-      super(LatentNormalizingFlow, self).__init__()
-      
-      self.flows = nn.ModuleList(flows)
+
+    def __init__(self, flows: List[nn.Module]):
+        super(LatentNormalizingFlow, self).__init__()
+
+        self.flows = nn.ModuleList(flows)
 
     def f(self, z: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-      '''Maps observation z to noise variable w.
-      Additionally, computes the log determinant
-      of the Jacobian for this transformation.
-      Invers of g.'''
-      w, sum_log_abs_det = z, torch.zeros((z.size(0), 1), device=z.device)
-      for flow in self.flows:
-        w, log_abs_det = flow.f(w)
-        sum_log_abs_det += log_abs_det
-      return w, sum_log_abs_det
+        """Maps observation z to noise variable w.
+        Additionally, computes the log determinant
+        of the Jacobian for this transformation.
+        Invers of g."""
+        w, sum_log_abs_det = z, torch.zeros((z.size(0), 1), device=z.device)
+        for flow in self.flows:
+            w, log_abs_det = flow.f(w)
+            sum_log_abs_det += log_abs_det
+        return w, sum_log_abs_det
 
     def g(self, w: torch.Tensor) -> torch.Tensor:
-      '''Maps latent variable w to encoded observation z=enc(x).
-      Inverse of f.'''
-      with torch.no_grad():
-        z = w
-        for flow in reversed(self.flows):
-               z = flow.g(z)
-        return z
+        """Maps latent variable w to encoded observation z=enc(x).
+        Inverse of f."""
+        with torch.no_grad():
+            z = w
+            for flow in reversed(self.flows):
+                z = flow.g(z)
+            return z
 
     def g_steps(self, w: torch.Tensor) -> List[torch.Tensor]:
-      '''Maps noise variable w to observation z
-         and stores intermediate results.'''
-      zs = [w]
-      for flow in reversed(self.flows):
-        zs.append(flow.g(zs[-1]))
-      return zs
-  
+        """Maps noise variable w to observation z
+        and stores intermediate results."""
+        zs = [w]
+        for flow in reversed(self.flows):
+            zs.append(flow.g(zs[-1]))
+        return zs
+
     def __len__(self) -> int:
-      return len(self.flows)
+        return len(self.flows)
 
 
 class AffineCouplingLayer(nn.Module):
-  def __init__(
-     self,
-     d,
-     intermediate_dim,
-     swap,
-     
-  ):
-    super(AffineCouplingLayer, self).__init__()
-    self.d = d - (d // 2)
-    self.intermediate_dim = intermediate_dim
-    self.swap = swap
-    
-    self.net_s_t = nn.Sequential(
+    def __init__(
+        self,
+        d,
+        intermediate_dim,
+        swap,
+    ):
+        super(AffineCouplingLayer, self).__init__()
+        self.d = d - (d // 2)
+        self.intermediate_dim = intermediate_dim
+        self.swap = swap
+
+        self.net_s_t = nn.Sequential(
             DenseLayer(self.d, intermediate_dim),
             nn.LayerNorm(intermediate_dim),
             nn.SiLU(),
@@ -118,27 +117,27 @@ class AffineCouplingLayer(nn.Module):
             DenseLayer(intermediate_dim, (d - self.d) * 2),
         )
 
-  def swap_dims(self, input: torch.Tensor):
-    if self.swap:
-        input = torch.cat([input[:, self.d :], input[:, : self.d]], 1)
-    return input
+    def swap_dims(self, input: torch.Tensor):
+        if self.swap:
+            input = torch.cat([input[:, self.d :], input[:, : self.d]], 1)
+        return input
 
-  def f(self, z: torch.Tensor) -> torch.Tensor:
-    '''f : z -> w. The inverse of g.'''
-    z = self.swap_dims(z)    
-    z2, z1 = z.chunk(2, dim=-1)
-    s, t = self.net_s_t(z1).chunk(2, dim=-1)
-    w1, w2 = z1, z2 * torch.exp(s) + t
-    log_det = s.sum(-1, keepdim=True)
-    return torch.cat((w1, w2), dim=-1), log_det
+    def f(self, z: torch.Tensor) -> torch.Tensor:
+        """f : z -> w. The inverse of g."""
+        z = self.swap_dims(z)
+        z2, z1 = z.chunk(2, dim=-1)
+        s, t = self.net_s_t(z1).chunk(2, dim=-1)
+        w1, w2 = z1, z2 * torch.exp(s) + t
+        log_det = s.sum(-1, keepdim=True)
+        return torch.cat((w1, w2), dim=-1), log_det
 
-  def g(self, w: torch.Tensor) -> torch.Tensor:
-    '''g : w -> z. The inverse of f.'''
-    w = self.swap_dims(w)
-    w1, w2 = w.chunk(2, dim=-1)
-    s, t = self.net_s_t(w1).chunk(2, dim=-1)
-    z1, z2 = w1, (w2 - t) * torch.exp(-s)
-    return torch.cat((z2, z1), dim=-1)
+    def g(self, w: torch.Tensor) -> torch.Tensor:
+        """g : w -> z. The inverse of f."""
+        w = self.swap_dims(w)
+        w1, w2 = w.chunk(2, dim=-1)
+        s, t = self.net_s_t(w1).chunk(2, dim=-1)
+        z1, z2 = w1, (w2 - t) * torch.exp(-s)
+        return torch.cat((z2, z1), dim=-1)
 
 
 def build_latent_flow(
@@ -147,9 +146,9 @@ def build_latent_flow(
     flows = []
     for i in range(latent_flow_depth):
         flows.append(
-            AffineCouplingLayer(d=latent_dim, 
-                                intermediate_dim=latent_flow_hidden_dim,
-                                swap=(i % 2 == 0))
+            AffineCouplingLayer(
+                d=latent_dim, intermediate_dim=latent_flow_hidden_dim, swap=(i % 2 == 0)
+            )
         )
     return LatentNormalizingFlow(flows=flows)
 
@@ -394,7 +393,7 @@ class Trainer(pl.LightningModule):
             prog_bar=(stage == "train"),
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
-        
+
         self.log(
             f"{stage}/delta_log_pw",
             delta_log_pw,
@@ -403,7 +402,7 @@ class Trainer(pl.LightningModule):
             prog_bar=(stage == "train"),
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
-        
+
         self.log(
             f"{stage}/prior_loss",
             prior_loss,
@@ -412,7 +411,7 @@ class Trainer(pl.LightningModule):
             prog_bar=(stage == "train"),
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
-                
+
     def step_fnc(self, batch, batch_idx, stage: str):
         batch_size = int(batch.batch.max()) + 1
         t = torch.randint(
@@ -469,13 +468,15 @@ class Trainer(pl.LightningModule):
         # H[Q(z|X)]
         # entropy = gaussian_entropy(logvar=logvar)      # (B, )
         # loss_entropy = -entropy.mean()
-        loss_entropy = 0.0 # since we fix the variance of the (gaussian) variational distribution q(z|x) , the entropy is constant
-        
+        loss_entropy = 0.0  # since we fix the variance of the (gaussian) variational distribution q(z|x) , the entropy is constant
+
         # P(z), Prior probability, parameterized by the flow: z -> w.
         w, delta_log_pw = self.latent_flow.f(z)
         # compute probability if the flow was able to map the latent to a gaussian prior
-        log_pw = standard_normal_logprob(w).view(batch_size, -1).sum(dim=1, keepdim=True)   # (B, 1)
-        # compute log p(z) by applying change of variable 
+        log_pw = (
+            standard_normal_logprob(w).view(batch_size, -1).sum(dim=1, keepdim=True)
+        )  # (B, 1)
+        # compute log p(z) by applying change of variable
         log_pz = log_pw + delta_log_pw.view(batch_size, 1)  # (B, 1)
 
         loss_prior = -log_pz.mean()
@@ -980,7 +981,7 @@ class Trainer(pl.LightningModule):
                 batch=batch,
                 batch_edge_global=batch_edge_global,
             )
-            
+
             coords_pred = out["coords_pred"].squeeze()
             if self.hparams.noise_scheduler == "adaptive":
                 # # Sample the positions
@@ -1033,8 +1034,8 @@ class Trainer(pl.LightningModule):
                 noise = torch.randn_like(mean)
                 noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
                 pos = mean + std * noise
-            
-            # rest            
+
+            # rest
             atoms_pred, charges_pred = out["atoms_pred"].split(
                 [self.num_atom_types, self.num_charge_classes], dim=-1
             )

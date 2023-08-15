@@ -68,6 +68,7 @@ class Trainer(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(hparams)
         self.i = 0
+        self.mol_stab = 0.5
 
         self.dataset_info = dataset_info
 
@@ -440,6 +441,7 @@ class Trainer(pl.LightningModule):
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
         # one-hot-encode atom types
+
         atom_types = F.one_hot(
             atom_types.squeeze().long(), num_classes=self.num_atom_types
         ).float()
@@ -623,6 +625,9 @@ class Trainer(pl.LightningModule):
             device=self.device,
         )
 
+        if self.mol_stab < stability_dict["mol_stable"]:
+            self.trainer.save_checkpoint("best_mol_stab.ckpt")
+
         run_time = datetime.now() - start
         if verbose:
             if self.local_rank == 0:
@@ -785,11 +790,12 @@ class Trainer(pl.LightningModule):
         iterator = (
             tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         )
+
         for timestep in iterator:
-            t = torch.full(
+            s = torch.full(
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=pos.device
             )
-            s = t - 1
+            t = s + 1
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
             node_feats_in = torch.cat([atom_types, charge_types], dim=-1)
@@ -830,6 +836,7 @@ class Trainer(pl.LightningModule):
                 noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
 
                 pos = mu + noise_prefactor[batch] * noise
+
             else:
                 rev_sigma = self.sde_pos.reverse_posterior_sigma[t].unsqueeze(-1)
                 sigmast = self.sde_pos.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)

@@ -35,6 +35,7 @@ class Trainer(pl.LightningModule):
         hparams: dict,
         dataset_info: AbstractDatasetInfos,
         smiles_list: list,
+        **kwargs,
     ):
         super().__init__()
         self.save_hyperparameters(hparams)
@@ -42,7 +43,6 @@ class Trainer(pl.LightningModule):
 
         self.dataset_info = dataset_info
 
-        num_atom_features_geom = 22
         self.num_atom_types_geom = 16
         atom_types_distribution = dataset_info.atom_types.float()
         if self.hparams.dataset == "pubchem":
@@ -87,26 +87,46 @@ class Trainer(pl.LightningModule):
             edge_mp=hparams["edge_mp"],
         )
 
-        self.sde = DiscreteDDPM(
+        self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
             beta_max=hparams["beta_max"],
             N=hparams["timesteps"],
             scaled_reverse_posterior_sigma=True,
-            schedule="cosine",
+            schedule=self.hparams.noise_scheduler,
+            nu=2.5,
+            enforce_zero_terminal_snr=False,
+            T=self.hparams.timesteps,
+        )
+        self.sde_atom_charge = DiscreteDDPM(
+            beta_min=hparams["beta_min"],
+            beta_max=hparams["beta_max"],
+            N=hparams["timesteps"],
+            scaled_reverse_posterior_sigma=True,
+            schedule=self.hparams.noise_scheduler,
+            nu=1,
+            enforce_zero_terminal_snr=False,
+        )
+        self.sde_bonds = DiscreteDDPM(
+            beta_min=hparams["beta_min"],
+            beta_max=hparams["beta_max"],
+            N=hparams["timesteps"],
+            scaled_reverse_posterior_sigma=True,
+            schedule=self.hparams.noise_scheduler,
+            nu=1.5,
             enforce_zero_terminal_snr=False,
         )
 
         self.cat_atoms = CategoricalDiffusionKernel(
             terminal_distribution=atom_types_distribution,
-            alphas=self.sde.alphas.clone(),
+            alphas=self.sde_atom_charge.alphas.clone(),
         )
         self.cat_bonds = CategoricalDiffusionKernel(
             terminal_distribution=bond_types_distribution,
-            alphas=self.sde.alphas.clone(),
+            alphas=self.sde_bonds.alphas.clone(),
         )
         self.cat_charges = CategoricalDiffusionKernel(
             terminal_distribution=charge_types_distribution,
-            alphas=self.sde.alphas.clone(),
+            alphas=self.sde_atom_charge.alphas.clone(),
         )
 
         self.diffusion_loss = DiffusionLoss(
@@ -274,7 +294,7 @@ class Trainer(pl.LightningModule):
         # center the true point cloud
         pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
         # get signal and noise coefficients for coords
-        mean_coords, std_coords = self.sde.marginal_prob(
+        mean_coords, std_coords = self.sde_pos.marginal_prob(
             x=pos_centered, t=t[data_batch]
         )
         # perturb coords
@@ -286,6 +306,10 @@ class Trainer(pl.LightningModule):
             node_feat -= 1
 
         # one-hot-encode atom types
+        atom_types = torch.tensor(
+            [self.dataset_info.atom_idx_mapping[int(atom)] for atom in atom_types],
+            device="cuda",
+        ).long()
         atom_types = F.one_hot(
             atom_types.squeeze().long(), num_classes=self.num_atom_types
         ).float()
@@ -310,7 +334,7 @@ class Trainer(pl.LightningModule):
 
         # MASKING PREDICTION
         edge_index_global, edge_mask, node_mask = dropout_node(
-            edge_index_global, p=0.75
+            edge_index_global, p=0.50
         )
         edge_attr_global_perturbed = edge_attr_global_perturbed[edge_mask]
         pos_perturbed = pos_perturbed[node_mask]

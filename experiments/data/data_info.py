@@ -87,6 +87,19 @@ class PubChemInfos(AbstractDatasetInfos):
         self.statistics = datamodule.statistics
         self.name = "pubchem"
         self.atom_encoder = full_atom_encoder_pubchem
+        self.atom_idx_mapping = {
+            0: 0,
+            1: 2,
+            2: 3,
+            3: 4,
+            4: 5,
+            5: 7,
+            6: 8,
+            7: 9,
+            8: 10,
+            9: 12,
+            10: 13,
+        }
         self.charge_offset = 2
         self.collapse_charges = torch.Tensor([-2, -1, 0, 1, 2, 3]).int()
         if self.remove_h:
@@ -179,20 +192,54 @@ full_atom_encoder_aqm = {
     "N": 2,
     "O": 3,
     "F": 4,
-    "P": 6,
-    "S": 7,
-    "Cl": 8,
+    "P": 5,
+    "S": 6,
+    "Cl": 7,
 }
 
 
 class AQMInfos(AbstractDatasetInfos):
-    def __init__(self, datamodule):
-        self.name = "aqm"
-
+    def __init__(self, datamodule, cfg):
+        self.remove_h = cfg.remove_hs
         self.statistics = datamodule.statistics
+        self.name = "aqm"
         self.atom_encoder = full_atom_encoder_aqm
         self.charge_offset = 1
         self.collapse_charges = torch.Tensor([-1, 0, 1]).int()
+        if self.remove_h:
+            self.atom_encoder = {
+                k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
+            }
+
+        super().complete_infos(datamodule.statistics, self.atom_encoder)
+
+        self.input_dims = PlaceHolder(X=self.num_atom_types, C=3, E=5, y=1, pos=3)
+        self.output_dims = PlaceHolder(X=self.num_atom_types, C=3, E=5, y=0, pos=3)
+
+    def to_one_hot(self, X, C, E, node_mask):
+        X = F.one_hot(X, num_classes=self.num_atom_types).float()
+        E = F.one_hot(E, num_classes=5).float()
+        C = F.one_hot(C + 1, num_classes=3).float()
+        placeholder = PlaceHolder(X=X, C=C, E=E, y=None, pos=None)
+        pl = placeholder.mask(node_mask)
+        return pl.X, pl.C, pl.E
+
+    def one_hot_charges(self, C):
+        return F.one_hot((C + self.charge_offset).long(), num_classes=3).float()
+
+
+class AQMQM7XInfos(AbstractDatasetInfos):
+    def __init__(self, datamodule, cfg):
+        self.remove_h = cfg.remove_hs
+        self.statistics = datamodule.statistics
+        self.name = "aqm_qm7x"
+        self.atom_encoder = full_atom_encoder_aqm
+        self.charge_offset = 1
+        self.collapse_charges = torch.Tensor([-1, 0, 1]).int()
+        if self.remove_h:
+            self.atom_encoder = {
+                k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
+            }
 
         super().complete_infos(datamodule.statistics, self.atom_encoder)
 
