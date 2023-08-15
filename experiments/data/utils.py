@@ -30,8 +30,11 @@ x_map = {
 def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = False):
     
     if remove_hydrogens:
-        mol = Chem.RemoveHs(mol)
-        
+        mol = Chem.RemoveAllHs(mol)
+    
+    # added:
+    Chem.SanitizeMol(mol)
+    
     adj = torch.from_numpy(Chem.rdmolops.GetAdjacencyMatrix(mol, useBO=True))
     edge_index = adj.nonzero().contiguous().T
     bond_types = adj[edge_index[0], edge_index[1]]
@@ -96,8 +99,9 @@ def remove_hydrogens(data: Data):
         charges=data.charges[to_keep],
         edge_index=new_edge_index,
         edge_attr=new_edge_attr,
+        mol=data.mol
     )
-    
+
     if hasattr(data, "is_aromatic"):
         newdata["is_aromatic"] = data.get("is_aromatic")[to_keep]
     if hasattr(data, "is_in_ring"):

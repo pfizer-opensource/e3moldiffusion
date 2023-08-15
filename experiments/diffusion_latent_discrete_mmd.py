@@ -29,6 +29,8 @@ from torch_geometric.data import Batch
 from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from tqdm import tqdm
+from experiments.diffusion_latent_discrete_diff import LatentCache
+
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(
@@ -40,6 +42,24 @@ logging.getLogger("pytorch_lightning.accelerators.cuda").addHandler(
 
 BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 
+def compute_kernel(x, y):
+    x_size = x.size(0)
+    y_size = y.size(0)
+    dim = x.size(1)
+    x_ = x.unsqueeze(1) # (x_size, 1, dim)
+    y_ = y.unsqueeze(0) # (1, y_size, dim)
+    tiled_x = x_.expand(x_size, y_size, dim)
+    tiled_y = y_.expand(x_size, y_size, dim)
+    kernel_input = (tiled_x - tiled_y).pow(2).mean(2)/float(dim)
+    kernel = torch.exp(-kernel_input) # (x_size, y_size)
+    return kernel
+
+def compute_mmd(x, y):
+    x_kernel = compute_kernel(x, x)
+    y_kernel = compute_kernel(y, y)
+    xy_kernel = compute_kernel(x, y)
+    mmd = x_kernel.mean() + y_kernel.mean() - 2*xy_kernel.mean()
+    return mmd
 
 class Trainer(pl.LightningModule):
     def __init__(
@@ -47,6 +67,8 @@ class Trainer(pl.LightningModule):
         hparams: dict,
         dataset_info: dict,
         smiles_list: list,
+        prop_dist=None,
+        prop_norm=None,
     ):
         super().__init__()
         self.save_hyperparameters(hparams)
@@ -109,8 +131,11 @@ class Trainer(pl.LightningModule):
             out_dims=(hparams["latent_dim"], None),
         )
         self.graph_pooling = SoftMaxAttentionAggregation(dim=hparams["latent_dim"])
-        self.mu_logvar = DenseLayer(hparams["latent_dim"], 2 * hparams["latent_dim"])
-
+        self.max_nodes = dataset_info.max_n_nodes
+        self.mu_z = DenseLayer(hparams["latent_dim"], hparams["latent_dim"])
+        self.node_z = DenseLayer(hparams["latent_dim"], self.max_nodes)
+        self.latentcache = LatentCache()
+        
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
             beta_max=hparams["beta_max"],
@@ -205,7 +230,9 @@ class Trainer(pl.LightningModule):
                 on_epoch=True,
                 sync_dist=True,
             )
-
+            
+            self.latentcache.empty_cache()
+            
     def _log(
         self,
         loss,
@@ -214,6 +241,7 @@ class Trainer(pl.LightningModule):
         charges_loss,
         bonds_loss,
         prior_loss,
+        num_nodes_loss,
         batch_size,
         stage,
     ):
@@ -270,6 +298,16 @@ class Trainer(pl.LightningModule):
             prog_bar=(stage == "train"),
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
+        
+        self.log(
+            f"{stage}/num_nodes_loss",
+            num_nodes_loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage == "train"),
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+        )
+                
 
     def step_fnc(self, batch, batch_idx, stage: str):
         batch_size = int(batch.batch.max()) + 1
@@ -319,11 +357,12 @@ class Trainer(pl.LightningModule):
         )
 
         # latent
-        mu, logvar = out_dict["latent"]["mu"], out_dict["latent"]["logvar"]
-        prior_loss = torch.mean(
-            -0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0
-        )
-        final_loss = final_loss + self.hparams.vae_beta * prior_loss
+        z_true = out_dict["latent"]["z_true"]
+        z_prior = torch.randn_like(z_true)
+        prior_loss = compute_mmd(z_true, z_prior)
+        num_nodes_loss = F.cross_entropy(out_dict["nodes"]["num_nodes_pred"], out_dict["nodes"]["num_nodes_true"])
+                
+        final_loss = final_loss + self.hparams.vae_beta * prior_loss + num_nodes_loss
 
         # import pdb
         # pdb.set_trace()
@@ -340,9 +379,17 @@ class Trainer(pl.LightningModule):
             loss["charges"],
             loss["bonds"],
             prior_loss,
+            num_nodes_loss,
             batch_size,
             stage,
         )
+        
+        # save latents in case validation step for generation
+        if stage == "val":
+            zs = z_true.detach().cpu()
+            num_nodes = batch.batch.bincount().cpu()
+            for z, n in zip(zs.split(1, dim=0), num_nodes.split(1, dim=0), ):
+                self.latentcache.update_cache(z, n.item())
 
         return final_loss
 
@@ -391,14 +438,10 @@ class Trainer(pl.LightningModule):
         )
         latent_out, _ = self.latent_lin(x=(latent_out["s"], latent_out["v"]))
         latent_out = self.graph_pooling(latent_out, data_batch, dim=0, dim_size=bs)
-        # predict mean and variance of the variational posterior q(z | x0) 
-        # that follows a multivariate Gaussian with
-        # mu = lin(z_pre_0), logvar = lin(z_pre_0)
-        mu, logvar = self.mu_logvar(latent_out).chunk(2, dim=-1)
-        # get latent via good old reparamerization trick
-        eps = torch.randn_like(mu)
-        z = mu + torch.exp(0.5 * logvar) * eps
-
+        z = self.mu_z(latent_out)
+        pred_num_nodes = self.node_z(z)
+        true_num_nodes = batch.batch.bincount()
+        
         # denoising model that parameterizes p(x_t-1 | x_t, z)
 
         if not hasattr(batch, "fc_edge_index"):
@@ -521,7 +564,8 @@ class Trainer(pl.LightningModule):
 
         out["bond_aggregation_index"] = edge_index_global[1]
 
-        out["latent"] = {"z": z, "mu": mu, "logvar": logvar}
+        out["latent"] = {"z_true": z}
+        out["nodes"] = {"num_nodes_pred": pred_num_nodes, "num_nodes_true": true_num_nodes - 1}
 
         return out
 
@@ -543,6 +587,7 @@ class Trainer(pl.LightningModule):
             batch_num_nodes,
             trajs,
         ) = self.reverse_sampling(
+            z=None, batch_num_nodes=None,
             num_graphs=num_graphs,
             device=device,
             empirical_distribution_num_nodes=empirical_distribution_num_nodes,
@@ -585,7 +630,9 @@ class Trainer(pl.LightningModule):
         save_dir: str = None,
         verbose: bool = False,
         inner_verbose=False,
+        return_smiles=False
     ):
+        
         b = ngraphs // bs
         l = [bs] * b
         if sum(l) != ngraphs:
@@ -642,12 +689,14 @@ class Trainer(pl.LightningModule):
         (
             stability_dict,
             validity_dict,
+            statistics_dict,
             all_generated_smiles,
         ) = analyze_stability_for_molecules(
             molecule_list=molecule_list,
             dataset_info=dataset_info,
             smiles_train=self.smiles_list,
             local_rank=self.local_rank,
+            return_smiles=return_smiles,
             device=self.device,
         )
 
@@ -657,11 +706,13 @@ class Trainer(pl.LightningModule):
                 print(f"Run time={run_time}")
         total_res = dict(stability_dict)
         total_res.update(validity_dict)
+        total_res.update(statistics_dict)
         if self.local_rank == 0:
             print(total_res)
         total_res = pd.DataFrame.from_dict([total_res])
         if self.local_rank == 0:
             print(total_res)
+
         total_res["step"] = str(step)
         total_res["epoch"] = str(self.current_epoch)
         total_res["run_time"] = str(run_time)
@@ -680,7 +731,13 @@ class Trainer(pl.LightningModule):
                 total_res.to_csv(f, header=True)
         except Exception as e:
             print(e)
-        return total_res
+            pass
+
+        if return_smiles:
+            return total_res, all_generated_smiles
+        else:
+            return total_res
+
 
     def _reverse_sample_categorical(
         self,
@@ -707,26 +764,34 @@ class Trainer(pl.LightningModule):
     
     def reverse_sampling(
         self,
+        z: Tensor,
         num_graphs: int,
         empirical_distribution_num_nodes: Tensor,
         device: torch.device,
         verbose: bool = False,
         save_traj: bool = False,
+        batch_num_nodes=None # for reconstruction
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
-        batch_num_nodes = torch.multinomial(
-            input=empirical_distribution_num_nodes,
-            num_samples=num_graphs,
-            replacement=True,
-        ).to(device)
-        batch_num_nodes = batch_num_nodes.clamp(min=1)
+        
+        #batch_num_nodes = torch.multinomial(
+        #    input=empirical_distribution_num_nodes,
+        #    num_samples=num_graphs,
+        #    replacement=True,
+        #).to(device)
+        # batch_num_nodes = batch_num_nodes.clamp(min=1)
+
+        bs = num_graphs        
+        # sample prior
+        if z is None:
+            z = torch.randn(bs, self.hparams.latent_dim, device=device)
+            batch_num_nodes = self.node_z(z).argmax(-1).long() + 1
+        else:
+            assert batch_num_nodes is not None
+        
         batch = torch.arange(num_graphs, device=device).repeat_interleave(
             batch_num_nodes, dim=0
         )
-        bs = int(batch.max()) + 1
-
-        # sample prior
-        z = torch.randn(bs, self.hparams.latent_dim, device=device)
-
+        
         # initialiaze the 0-mean point cloud from N(0, I)
         pos = torch.randn(len(batch), 3, device=device, dtype=torch.get_default_dtype())
         pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
@@ -802,10 +867,10 @@ class Trainer(pl.LightningModule):
             tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         )
         for timestep in iterator:
-            t = torch.full(
-                size=(bs,), fill_value=timestep, dtype=torch.long, device=pos.device
+            s = torch.full(
+                size=(num_graphs,), fill_value=timestep, dtype=torch.long, device=device
             )
-            s = t - 1
+            t = s + 1 
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
 
@@ -976,7 +1041,8 @@ class Trainer(pl.LightningModule):
             + list(self.encoder.parameters())
             + list(self.latent_lin.parameters())
             + list(self.graph_pooling.parameters())
-            + list(self.mu_logvar.parameters())
+            + list(self.mu_z.parameters())
+            + list(self.node_z.parameters())
         )
 
         optimizer = torch.optim.AdamW(

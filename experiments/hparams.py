@@ -113,6 +113,7 @@ def add_arguments(parser):
     parser.add_argument("--num-layers-latent", default=7, type=int)
     parser.add_argument("--latent-layers", default=7, type=int)
     parser.add_argument("--latent-detach", default=False, action="store_true")
+    parser.add_argument("--latent-single-stage", default=False, action="store_true")
 
     # GENERAL
     parser.add_argument("-i", "--id", type=int, default=0)

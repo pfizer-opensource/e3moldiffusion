@@ -222,7 +222,10 @@ class Trainer(pl.LightningModule):
             out_dims=(hparams["latent_dim"], None),
         )
         self.graph_pooling = SoftMaxAttentionAggregation(dim=hparams["latent_dim"])
-        self.mu_logvar = DenseLayer(hparams["latent_dim"], 2 * hparams["latent_dim"])
+        self.max_nodes = dataset_info.max_n_nodes
+        
+        self.mu_z = DenseLayer(hparams["latent_dim"], hparams["latent_dim"])
+        self.node_z = DenseLayer(hparams["latent_dim"], self.max_nodes)
         
         self.latent_flow = build_latent_flow(
             latent_dim=hparams["latent_dim"],
@@ -459,6 +462,9 @@ class Trainer(pl.LightningModule):
 
         # flow loss
         z = out_dict["latent"]['z']
+        if self.hparams.latent_detach:
+            z = z.detach()
+            
         # logvar = out_dict["latent"]["logvar"]
         # H[Q(z|X)]
         # entropy = gaussian_entropy(logvar=logvar)      # (B, )
@@ -547,14 +553,11 @@ class Trainer(pl.LightningModule):
         # predict mean and variance of the variational posterior q(z | x0)
         # that follows a multivariate Gaussian with
         # mu = lin(z_pre_0), logvar = lin(z_pre_0)
-        mu, _ = self.mu_logvar(latent_out).chunk(2, dim=-1)
-        logvar = None
-        eps = torch.randn_like(mu)
-        # keep the logvar/std fixed
-        # sd =  torch.exp(0.5 * logvar) 
-        sd = 0.05
-        z = mu + sd * eps
-
+        mu = self.mu_z(latent_out)
+        z = mu 
+        pred_num_nodes = self.node_z(z)
+        true_num_nodes = batch.batch.bincount()
+        
         # denoising model that parameterizes p(x_t-1 | x_t, z)
 
         if not hasattr(batch, "fc_edge_index"):
@@ -677,7 +680,8 @@ class Trainer(pl.LightningModule):
 
         out["bond_aggregation_index"] = edge_index_global[1]
 
-        out["latent"] = {"z": z, "mu": mu, "logvar": logvar}
+        out["latent"] = {"z_true": z}
+        out["nodes"] = {"num_nodes_pred": pred_num_nodes, "num_nodes_true": true_num_nodes - 1}
 
         return out
 
@@ -1131,12 +1135,13 @@ class Trainer(pl.LightningModule):
             + list(self.encoder.parameters())
             + list(self.latent_lin.parameters())
             + list(self.graph_pooling.parameters())
-            + list(self.mu_logvar.parameters())
+            + list(self.mu_z.parameters())
+            + list(self.node_z.parameters())
             + list(self.latent_flow.parameters())
         )
 
         optimizer = torch.optim.AdamW(
-            all_params, lr=self.hparams["lr"], amsgrad=False, weight_decay=1e-12
+            all_params, lr=self.hparams["lr"], amsgrad=True, weight_decay=1e-12
         )
         if self.hparams["lr_scheduler"] == "reduce_on_plateau":
             lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(

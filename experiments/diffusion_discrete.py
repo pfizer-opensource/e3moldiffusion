@@ -518,6 +518,9 @@ class Trainer(pl.LightningModule):
             verbose=verbose,
             save_traj=save_traj,
         )
+        
+        if torch.any(pos.isnan()):
+            print(pos.numel(), pos.isnan().sum())
 
         pos_splits = pos.detach().split(batch_num_nodes.cpu().tolist(), dim=0)
 

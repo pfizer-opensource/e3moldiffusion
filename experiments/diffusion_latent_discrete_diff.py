@@ -1,7 +1,7 @@
 import logging
 import os
 from datetime import datetime
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import pandas as pd
 import pytorch_lightning as pl
@@ -42,23 +42,28 @@ BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 class LatentCache:
     def __init__(self) -> None:
         self.latent_list = []
+        self.num_nodes_list = []
         
     def empty_cache(self):
-        self.smiles_list = []
+        self.latent_list = []
+        self.num_nodes_list = []
         
-    def update_cache(self, latent):
+    def update_cache(self, latent, num_nodes):
         self.latent_list.append(latent)
+        self.num_nodes_list.append(num_nodes)
            
     def get_cached_latents(self, n: int):
         ids = np.arange(len(self.latent_list))
         np.random.shuffle(ids)
         select_ids = ids[:n]
         selected_latents = [self.latent_list[i] for i in select_ids]
+        selected_num_nodes = torch.tensor([self.num_nodes_list[i] for i in select_ids])
         selected_latents = torch.concat(selected_latents, dim=0)
         assert selected_latents.shape[0] == n
-        return selected_latents
+        assert selected_num_nodes.shape[0] == n
+        return selected_latents, selected_num_nodes
     
-    
+
 class LatentMLP(nn.Module):
     def __init__(self, dim: int, num_layers: int) -> None:
         super().__init__()
@@ -86,6 +91,8 @@ class Trainer(pl.LightningModule):
         hparams: dict,
         dataset_info: dict,
         smiles_list: list,
+        prop_dist=None,
+        prop_norm=None,
     ):
         super().__init__()
         self.save_hyperparameters(hparams)
@@ -148,8 +155,17 @@ class Trainer(pl.LightningModule):
             out_dims=(hparams["latent_dim"], None),
         )
         self.graph_pooling = SoftMaxAttentionAggregation(dim=hparams["latent_dim"])
-        self.mu_logvar = DenseLayer(hparams["latent_dim"], 2 * hparams["latent_dim"])
+
+        self.max_nodes = dataset_info.max_n_nodes
         
+        self.mu_z = DenseLayer(hparams["latent_dim"], hparams["latent_dim"])
+        self.node_z = DenseLayer(hparams["latent_dim"], self.max_nodes)
+        
+        if hparams.get("latent_single_stage"):
+            self.latent_score_net = LatentMLP(dim=hparams["latent_dim"], num_layers=hparams["latent_layers"])
+        else:
+            self.latent_score_net = None
+            
         self.latentcache = LatentCache()
         
         self.sde_pos = DiscreteDDPM(
@@ -256,6 +272,8 @@ class Trainer(pl.LightningModule):
         atoms_loss,
         charges_loss,
         bonds_loss,
+        prior_loss,
+        num_node_loss,
         batch_size,
         stage,
     ):
@@ -303,7 +321,25 @@ class Trainer(pl.LightningModule):
             prog_bar=(stage == "train"),
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
-
+        
+        self.log(
+            f"{stage}/prior_loss",
+            prior_loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage == "train"),
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+        )
+        
+        self.log(
+            f"{stage}/num_nodes_loss",
+            num_node_loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage == "train"),
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+        )
+        
     def step_fnc(self, batch, batch_idx, stage: str):
         batch_size = int(batch.batch.max()) + 1
         t = torch.randint(
@@ -350,9 +386,16 @@ class Trainer(pl.LightningModule):
             + 2.0 * loss["bonds"]
             + 1.0 * loss["charges"]
         )
-
-        # import pdb
-        # pdb.set_trace()
+        
+        z = out_dict["latent"]["z_true"]
+        latent_reg = z.pow(2).sum(-1).mean()
+        if self.latent_score_net:
+            prior_loss = F.l1_loss(z, out_dict["latent"]["z_pred"])
+        else:
+            prior_loss = 0.0
+            
+        num_nodes_loss = F.cross_entropy(out_dict["nodes"]["num_nodes_pred"], out_dict["nodes"]["num_nodes_true"])
+        final_loss = final_loss + self.hparams.vae_beta * (1e-4 * latent_reg + prior_loss) + num_nodes_loss
 
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
@@ -365,16 +408,18 @@ class Trainer(pl.LightningModule):
             loss["atoms"],
             loss["charges"],
             loss["bonds"],
+            prior_loss,
+            num_nodes_loss,
             batch_size,
             stage,
         )
         
         # save latents in case validation step for generation
         if stage == "val":
-            zs = out_dict["latent"]["z_true"].detach().cpu()
-            for z in zs.split(1, dim=0):
-                self.latentcache.update_cache(z)
-                
+            zs = z.detach().cpu()
+            num_nodes = batch.batch.bincount().cpu()
+            for z, n in zip(zs.split(1, dim=0), num_nodes.split(1, dim=0), ):
+                self.latentcache.update_cache(z, n.item())
         return final_loss
 
     def forward(self, batch: Batch, t: Tensor):
@@ -426,17 +471,24 @@ class Trainer(pl.LightningModule):
         )
         latent_out, _ = self.latent_lin(x=(latent_out["s"], latent_out["v"]))
         z = self.graph_pooling(latent_out, data_batch, dim=0, dim_size=bs)
-        mu, _ = self.mu_logvar(z).chunk(2, dim=-1)
-        logvar=None
-        # eps = torch.randn_like(z)
-        # fix sd
-        # sd = 0.1
-        # sd = torch.exp(0.5 * logvar)
-        # potentially smooth latent distribution
-        z = mu # + sd * eps
-    
+        z = self.mu_z(z)
+            
         # denoising model that parameterizes p(x_t-1 | x_t, z)
-
+        
+        if self.latent_score_net:
+            # train the latent score network
+            zmean, zstd = self.sde_pos.marginal_prob(z, t)
+            znoise = torch.randn_like(z)
+            z_perturbed = zmean + zstd * znoise
+            if self.hparams.latent_detach:
+                z_perturbed = z_perturbed.detach()
+            zpred = self.latent_score_net(z_perturbed, temb)
+        else:
+            zpred = None
+            
+        pred_num_nodes = self.node_z(z)
+        true_num_nodes = batch.batch.bincount()
+        
         if not hasattr(batch, "fc_edge_index"):
             edge_index_global = (
                 torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1))
@@ -553,19 +605,21 @@ class Trainer(pl.LightningModule):
 
         out["bond_aggregation_index"] = edge_index_global[1]
 
-        out["latent"] = {"z_true": z, "mu": mu, "logvar": logvar}
-
+        out["latent"] = {"z_true": z, "z_pred": zpred}  
+        out["nodes"] = {"num_nodes_pred": pred_num_nodes, "num_nodes_true": true_num_nodes - 1}
+        
         return out
 
     @torch.no_grad()
     def generate_graphs(
         self,
-        z: Tensor,
+        z: Optional[Tensor],
+        batch_num_nodes: Optional[Tensor], 
         num_graphs: int,
-        empirical_distribution_num_nodes: torch.Tensor,
+        empirical_distribution_num_nodes: torch.Tensor, #remove in future
         device: torch.device,
         verbose=False,
-        save_traj=False,
+        save_traj=False
     ):
         (
             pos,
@@ -577,6 +631,7 @@ class Trainer(pl.LightningModule):
             trajs,
         ) = self.reverse_sampling(
             z=z,
+            batch_num_nodes=batch_num_nodes,
             num_graphs=num_graphs,
             device=device,
             empirical_distribution_num_nodes=empirical_distribution_num_nodes,
@@ -617,6 +672,7 @@ class Trainer(pl.LightningModule):
         ngraphs: int = 4000,
         bs: int = 500,
         save_dir: str = None,
+        return_smiles: bool = False,
         verbose: bool = False,
         inner_verbose=False,
     ):
@@ -633,8 +689,13 @@ class Trainer(pl.LightningModule):
                 print(f"Creating {ngraphs} graphs in {l} batches")
         for _, num_graphs in enumerate(l):
             
-            z = self.latentcache.get_cached_latents(n=num_graphs).to(self.empirical_num_nodes.device)
-            
+            if not self.latent_score_net:
+                z, batch_num_nodes = self.latentcache.get_cached_latents(n=num_graphs)
+                z = z.to(self.empirical_num_nodes.device)
+                batch_num_nodes = batch_num_nodes.to(self.empirical_num_nodes.device)
+            else:
+                z = batch_num_nodes = None
+                
             (
                 pos_splits,
                 atom_types_integer_split,
@@ -644,7 +705,7 @@ class Trainer(pl.LightningModule):
                 batch_num_nodes,
                 _,
             ) = self.generate_graphs(
-                z=z,
+                z=z, batch_num_nodes=batch_num_nodes,
                 num_graphs=num_graphs,
                 verbose=inner_verbose,
                 device=self.empirical_num_nodes.device,
@@ -680,12 +741,14 @@ class Trainer(pl.LightningModule):
         (
             stability_dict,
             validity_dict,
+            statistics_dict,
             all_generated_smiles,
         ) = analyze_stability_for_molecules(
             molecule_list=molecule_list,
             dataset_info=dataset_info,
             smiles_train=self.smiles_list,
             local_rank=self.local_rank,
+            return_smiles=return_smiles,
             device=self.device,
         )
 
@@ -695,11 +758,13 @@ class Trainer(pl.LightningModule):
                 print(f"Run time={run_time}")
         total_res = dict(stability_dict)
         total_res.update(validity_dict)
+        total_res.update(statistics_dict)
         if self.local_rank == 0:
             print(total_res)
         total_res = pd.DataFrame.from_dict([total_res])
         if self.local_rank == 0:
             print(total_res)
+
         total_res["step"] = str(step)
         total_res["epoch"] = str(self.current_epoch)
         total_res["run_time"] = str(run_time)
@@ -718,7 +783,12 @@ class Trainer(pl.LightningModule):
                 total_res.to_csv(f, header=True)
         except Exception as e:
             print(e)
-        return total_res
+            pass
+
+        if return_smiles:
+            return total_res, all_generated_smiles
+        else:
+            return total_res
 
     def _reverse_sample_categorical(
         self,
@@ -751,61 +821,90 @@ class Trainer(pl.LightningModule):
         device: torch.device,
         verbose: bool = False,
         save_traj: bool = False,
+        batch_num_nodes=None # for reconstruction
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
-        batch_num_nodes = torch.multinomial(
-            input=empirical_distribution_num_nodes,
-            num_samples=num_graphs,
-            replacement=True,
-        ).to(device)
-        batch_num_nodes = batch_num_nodes.clamp(min=1)
-        batch = torch.arange(num_graphs, device=device).repeat_interleave(
-            batch_num_nodes, dim=0
-        )
-        bs = int(batch.max()) + 1
-
-        old = False
         
-        if old: # to be removed. keep it now to migrate later into different function
-            # sample prior and run diffusion in latent
+        bs = num_graphs
+        
+        if z is None:
+            assert batch_num_nodes is None
             z = torch.randn(bs, self.hparams.latent_dim, device=device)
             chain = range(self.hparams.timesteps)
-            iterator = (
-                tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
-            )
+            iterator = reversed(chain)
             for timestep in iterator:
-                t = torch.full(
-                    size=(bs,), fill_value=timestep, dtype=torch.long, device=z.device
+                s = torch.full(
+                    size=(num_graphs,), fill_value=timestep, dtype=torch.long, device=device
                 )
+                t = s + 1 
                 temb = t / self.hparams.timesteps
                 temb = temb.unsqueeze(dim=1)
-                z_pred = self.latent_score_net(z=z, t=temb)
+                z_pred = self.latent_score_net(z, temb)
+                
+                if self.hparams.noise_scheduler == "adaptive":
+                    sigma_sq_ratio = self.sde_pos.get_sigma_pos_sq_ratio(s_int=s, t_int=t)
+                    z_t_prefactor = (
+                        self.sde_pos.get_alpha_pos_ts(t_int=t, s_int=s) * sigma_sq_ratio
+                    ).unsqueeze(-1)
+                    x_prefactor = self.sde_pos.get_x_pos_prefactor(
+                        s_int=s, t_int=t
+                    ).unsqueeze(-1)
 
-                rev_sigma = self.sde_atom_charge.reverse_posterior_sigma[t].unsqueeze(-1)
-                sigmast = self.sde_atom_charge.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
-                sigmas2t = sigmast.pow(2)
+                    prefactor1 = self.sde_pos.get_sigma2_bar(t_int=t)
+                    prefactor2 = self.sde_pos.get_sigma2_bar(
+                        t_int=s
+                    ) * self.sde_pos.get_alpha_pos_ts_sq(t_int=t, s_int=s)
+                    sigma2_t_s = prefactor1 - prefactor2
+                    noise_prefactor_sq = sigma2_t_s * sigma_sq_ratio
+                    noise_prefactor = torch.sqrt(noise_prefactor_sq).unsqueeze(-1)
 
-                sqrt_alphas = self.sde_atom_charge.sqrt_alphas[t].unsqueeze(-1)
-                sqrt_1m_alphas_cumprod_prev = torch.sqrt(
-                    1.0 - self.sde_atom_charge.alphas_cumprod_prev[t]
-                ).unsqueeze(-1)
-                one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
-                sqrt_alphas_cumprod_prev = torch.sqrt(
-                    self.sde_atom_charge.alphas_cumprod_prev[t].unsqueeze(-1)
-                )
-                one_m_alphas = self.sde_atom_charge.discrete_betas[t].unsqueeze(-1)
-                # update fnc
-                # latents
-                mean = (
-                    sqrt_alphas * one_m_alphas_cumprod_prev * z
-                    + sqrt_alphas_cumprod_prev * one_m_alphas * z_pred
-                )
-                mean = (1.0 / sigmas2t) * mean
-                std = rev_sigma
-                noise = torch.randn_like(mean)
-                z = mean + std * noise
+                    mu = z_t_prefactor * z + x_prefactor * z_pred
+                    noise = torch.randn_like(z)
+                    z = mu + noise_prefactor * noise
+                else:
+                    rev_sigma = self.sde_pos.reverse_posterior_sigma[t].unsqueeze(-1)
+                    sigmast = self.sde_pos.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
+                    sigmas2t = sigmast.pow(2)
 
+                    sqrt_alphas = self.sde_pos.sqrt_alphas[t].unsqueeze(-1)
+                    sqrt_1m_alphas_cumprod_prev = torch.sqrt(
+                        1.0 - self.sde_pos.alphas_cumprod_prev[t]
+                    ).unsqueeze(-1)
+                    one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
+                    sqrt_alphas_cumprod_prev = torch.sqrt(
+                        self.sde_pos.alphas_cumprod_prev[t].unsqueeze(-1)
+                    )
+                    one_m_alphas = self.sde_pos.discrete_betas[t].unsqueeze(-1)
+
+                    mean = (
+                        sqrt_alphas * one_m_alphas_cumprod_prev * z
+                        + sqrt_alphas_cumprod_prev
+                        * one_m_alphas
+                        * z_pred
+                    )
+                    mean = (1.0 / sigmas2t) * mean
+                    std = rev_sigma
+                    noise = torch.randn_like(mean)
+                    z = mean + std * noise
+                    
+        if batch_num_nodes is None:
+            #batch_num_nodes = torch.multinomial(
+            #    input=empirical_distribution_num_nodes,
+            #    num_samples=num_graphs,
+            #    replacement=True,
+            #).to(device)
+            #batch_num_nodes = batch_num_nodes.clamp(min=1)
+            batch_num_nodes = self.node_z(z).argmax(-1) + 1
+            batch_num_nodes = batch_num_nodes.detach().long()
+        else:
+            num_graphs = len(batch_num_nodes)
+            
+        batch = torch.arange(num_graphs,
+                             device=device).repeat_interleave(batch_num_nodes,
+                                                              dim=0)
+        N = len(batch)
+        
         # initialiaze the 0-mean point cloud from N(0, I)
-        pos = torch.randn(len(batch), 3, device=device, dtype=torch.get_default_dtype())
+        pos = torch.randn(N, 3, device=device, dtype=torch.get_default_dtype())
         pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
 
         n = len(pos)
@@ -878,10 +977,10 @@ class Trainer(pl.LightningModule):
             tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         )
         for timestep in iterator:
-            t = torch.full(
+            s = torch.full(
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=pos.device
             )
-            s = t - 1 
+            t = s + 1 
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
             node_feats_in = torch.cat([atom_types, charge_types], dim=-1)
@@ -1038,8 +1137,11 @@ class Trainer(pl.LightningModule):
             + list(self.encoder.parameters())
             + list(self.latent_lin.parameters())
             + list(self.graph_pooling.parameters())
-            + list(self.mu_logvar.parameters())
+            + list(self.mu_z.parameters())
+            + list(self.node_z.parameters())
         )
+        if self.latent_score_net:
+            all_params += list(self.latent_score_net.parameters())
 
         optimizer = torch.optim.AdamW(
             all_params, lr=self.hparams["lr"], amsgrad=True, weight_decay=1e-12

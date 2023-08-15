@@ -129,6 +129,7 @@ if __name__ == "__main__":
         # from experiments.diffusion_latent_discrete_vae import Trainer
         # from experiments.diffusion_latent_discrete_flow import Trainer
         from experiments.diffusion_latent_discrete_diff import Trainer
+        # from experiments.diffusion_latent_discrete_mmd import Trainer
     else:
         print("Using discrete diffusion")
         if hparams.diffusion_pretraining:
