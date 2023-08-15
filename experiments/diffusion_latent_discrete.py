@@ -224,15 +224,14 @@ class Trainer(pl.LightningModule):
     def on_validation_epoch_end(self):
         if (self.current_epoch + 1) % self.hparams.test_interval == 0:
             if self.local_rank == 0:
-                self.i += 1
-                # Reconstruction
                 print(f"Running reconstruction in epoch {self.current_epoch + 1}")
-                self.my_on_validation_epoch_end(conditional=True)
-                self.latentcache.empty_cache()
                 print(f"Running generation in epoch {self.current_epoch + 1}")
-                # Generation
-                self.my_on_validation_epoch_end(conditional=False)
-                
+    
+            self.my_on_validation_epoch_end(conditional=True)
+            self.latentcache.empty_cache()
+            self.my_on_validation_epoch_end(conditional=False)
+            self.i += 1
+
     def _log(
         self,
         loss,
