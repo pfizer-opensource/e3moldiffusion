@@ -140,7 +140,7 @@ class EQGATEdgeGNN(nn.Module):
             edge_index_in = edge_index_global
             edge_attr_in = edge_attr_global
 
-            if context is not None and i > 0:
+            if context is not None and (i == 1 or i == len(self.convs) - 1):
                 s = s + context
             s, v = self.norms[i](x={"s": s, "v": v, "z": z}, batch=batch)
             out = self.convs[i](

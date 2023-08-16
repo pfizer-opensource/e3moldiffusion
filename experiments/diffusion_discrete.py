@@ -520,7 +520,7 @@ class Trainer(pl.LightningModule):
             verbose=verbose,
             save_traj=save_traj,
         )
-        
+
         if torch.any(pos.isnan()):
             print(pos.numel(), pos.isnan().sum())
 
@@ -626,6 +626,7 @@ class Trainer(pl.LightningModule):
         )
 
         if self.mol_stab < stability_dict["mol_stable"]:
+            self.mol_stab = stability_dict["mol_stable"]
             self.trainer.save_checkpoint("best_mol_stab.ckpt")
 
         run_time = datetime.now() - start

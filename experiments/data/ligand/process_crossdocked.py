@@ -76,6 +76,7 @@ def process_ligand_and_pocket(pdbfile, sdffile, atom_dict, dist_cutoff, ca_only)
     ligand_data = {
         "lig_coords": lig_coords,
         "lig_one_hot": lig_one_hot,
+        "lig_atoms": lig_atoms,
     }
     if ca_only:
         try:
@@ -135,6 +136,7 @@ def process_ligand_and_pocket(pdbfile, sdffile, atom_dict, dist_cutoff, ca_only)
             "pocket_ca": full_coords,
             "pocket_one_hot": pocket_one_hot,
             "pocket_ids": pocket_ids,
+            "pocket_atoms": full_atoms,
         }
     return ligand_data, pocket_data
 

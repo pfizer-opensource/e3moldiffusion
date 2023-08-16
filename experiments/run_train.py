@@ -93,6 +93,10 @@ if __name__ == "__main__":
             from experiments.data.pubchem.pubchem_dataset_nonadaptive import (
                 PubChemDataModule as DataModule,
             )
+    elif hparams.dataset == "cross_docked":
+        from experiments.data.ligand.ligand_dataset_nonadaptive import (
+            LigandPocketDataModule as DataModule,
+        )
 
     datamodule = DataModule(hparams)
     if non_adaptive:

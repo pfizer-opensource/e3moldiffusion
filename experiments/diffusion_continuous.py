@@ -522,6 +522,7 @@ class Trainer(pl.LightningModule):
             device=self.device,
         )
         if self.mol_stab < stability_dict["mol_stable"]:
+            self.mol_stab = stability_dict["mol_stable"]
             self.trainer.save_checkpoint("best_mol_stab.ckpt")
 
         run_time = datetime.now() - start
