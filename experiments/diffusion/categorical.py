@@ -268,9 +268,6 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         assert type in ["atoms", "charges"]
         num_classes = self.num_atom_types if type == "atoms" else self.num_charge_types
 
-        import pdb
-
-        pdb.set_trace()
         if type == "charges":
             x0 = dataset_info.one_hot_charges(x0)
         else:
@@ -281,7 +278,7 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         ).squeeze()
         x0_perturbed = F.one_hot(x0_perturbed, num_classes=num_classes).float()
 
-        return x0_perturbed
+        return x0, x0_perturbed
 
 
 def _some_debugging():

@@ -418,13 +418,13 @@ class DiscreteDDPM(nn.Module):
 
         mu = z_t_prefactor[batch] * x0 + x_prefactor[batch] * x0_pred
 
-        noise = torch.randn_like(edge_attrs)
-
         if edge_index_global is not None:
+            noise = torch.randn_like(edge_attrs)
             noise = 0.5 * (noise + noise.permute(1, 0, 2))
             noise = noise[edge_index_global[0, :], edge_index_global[1, :], :]
         else:
             bs = int(batch.max()) + 1
+            noise = torch.randn_like(x0)
             if cog_proj:
                 noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
 

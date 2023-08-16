@@ -409,15 +409,15 @@ class Trainer(pl.LightningModule):
         batch_edge_global = data_batch[edge_index_global[0]]
 
         # SAMPLING
-        edge_attr_global_perturbed = self.cat_bonds.sample_edges_categorical(
-            t, edge_index_global, edge_attr_global, data_batch
-        )
         pos_perturbed = self.sde_pos.sample_pos(t, pos_centered, data_batch)
-        atom_types_perturbed = self.cat_atoms.sample_categorical(
+        atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
             t, atom_types, data_batch, self.dataset_info, type="atoms"
         )
-        charges_perturbed = self.cat_charges.sample_categorical(
-            t, atom_types, data_batch, self.dataset_info, type="charges"
+        charges, charges_perturbed = self.cat_charges.sample_categorical(
+            t, charges, data_batch, self.dataset_info, type="charges"
+        )
+        edge_attr_global_perturbed = self.cat_bonds.sample_edges_categorical(
+            t, edge_index_global, edge_attr_global, data_batch
         )
         atom_feats_in_perturbed = torch.cat(
             [atom_types_perturbed, charges_perturbed], dim=-1
@@ -755,6 +755,7 @@ class Trainer(pl.LightningModule):
                 mask,
                 mask_i,
                 batch=batch,
+                edge_index_global=edge_index_global,
                 num_classes=self.num_bond_classes,
             )
 
