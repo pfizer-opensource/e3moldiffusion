@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
+from experiments.utils import zero_mean
 
 
 def sigmoid(x):
@@ -333,6 +334,103 @@ class DiscreteDDPM(nn.Module):
         sigma_ratio_sq = self.get_sigma_pos_sq_ratio(s_int=s_int, t_int=t_int)
         prefactor = a_s * (1 - alpha_ratio_sq * sigma_ratio_sq)
         return prefactor.float()
+
+    def sample_reverse(
+        self,
+        t,
+        x0,
+        x0_pred,
+        batch,
+        cog_proj=False,
+        edge_index_global=None,
+    ):
+        rev_sigma = self.reverse_posterior_sigma[t].unsqueeze(-1)
+        sigmast = self.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
+        sigmas2t = sigmast.pow(2)
+
+        sqrt_alphas = self.sqrt_alphas[t].unsqueeze(-1)
+        sqrt_1m_alphas_cumprod_prev = torch.sqrt(
+            1.0 - self.alphas_cumprod_prev[t]
+        ).unsqueeze(-1)
+        one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
+        sqrt_alphas_cumprod_prev = torch.sqrt(self.alphas_cumprod_prev[t].unsqueeze(-1))
+        one_m_alphas = self.discrete_betas[t].unsqueeze(-1)
+
+        mean = (
+            sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * x0
+            + sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * x0_pred
+        )
+        mean = (1.0 / sigmas2t[batch]) * mean
+        std = rev_sigma[batch]
+        noise = torch.randn_like(x0)
+        if edge_index_global is not None:
+            noise = 0.5 * (noise + noise.permute(1, 0, 2))
+            noise = noise[edge_index_global[0, :], edge_index_global[1, :], :]
+        else:
+            bs = int(batch.max()) + 1
+            if cog_proj:
+                noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
+        x0_pred = mean + std * noise
+
+        return x0_pred
+
+    def sample_pos(self, t, pos, data_batch):
+        # Coords: point cloud in R^3
+        # sample noise for coords and recenter
+        bs = int(data_batch.max()) + 1
+
+        noise_coords_true = torch.randn_like(pos)
+        noise_coords_true = zero_mean(
+            noise_coords_true, batch=data_batch, dim_size=bs, dim=0
+        )
+        # get signal and noise coefficients for coords
+        mean_coords, std_coords = self.marginal_prob(x=pos, t=t[data_batch])
+        # perturb coords
+        pos_perturbed = mean_coords + std_coords * noise_coords_true
+        # one-hot-encode atom types
+
+        return pos_perturbed
+
+    def sample_reverse_adaptive(
+        self,
+        s,
+        t,
+        x0,
+        x0_pred,
+        batch,
+        cog_proj=False,
+        edge_attrs=None,
+        edge_index_global=None,
+    ):
+        sigma_sq_ratio = self.get_sigma_pos_sq_ratio(s_int=s, t_int=t)
+        z_t_prefactor = (
+            self.get_alpha_pos_ts(t_int=t, s_int=s) * sigma_sq_ratio
+        ).unsqueeze(-1)
+        x_prefactor = self.get_x_pos_prefactor(s_int=s, t_int=t).unsqueeze(-1)
+
+        prefactor1 = self.get_sigma2_bar(t_int=t)
+        prefactor2 = self.get_sigma2_bar(t_int=s) * self.get_alpha_pos_ts_sq(
+            t_int=t, s_int=s
+        )
+        sigma2_t_s = prefactor1 - prefactor2
+        noise_prefactor_sq = sigma2_t_s * sigma_sq_ratio
+        noise_prefactor = torch.sqrt(noise_prefactor_sq).unsqueeze(-1)
+
+        mu = z_t_prefactor[batch] * x0 + x_prefactor[batch] * x0_pred
+
+        noise = torch.randn_like(edge_attrs)
+
+        if edge_index_global is not None:
+            noise = 0.5 * (noise + noise.permute(1, 0, 2))
+            noise = noise[edge_index_global[0, :], edge_index_global[1, :], :]
+        else:
+            bs = int(batch.max()) + 1
+            if cog_proj:
+                noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
+
+        x0_pred = mu + noise_prefactor[batch] * noise
+
+        return x0_pred
 
 
 if __name__ == "__main__":

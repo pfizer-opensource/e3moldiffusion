@@ -660,34 +660,6 @@ class Trainer(pl.LightningModule):
                 batch_edge_global=batch_edge_global,
                 context=context,
             )
-
-            (
-                rev_sigma_pos,
-                sigmas2t_pos,
-                sqrt_alphas_pos,
-                one_m_alphas_cumprod_prev_pos,
-                sqrt_alphas_cumprod_prev_pos,
-                one_m_alphas_pos,
-            ) = self.get_noise_reverse(t, self.sde_pos)
-
-            (
-                rev_sigma_atom_charge,
-                sigmas2t_atom_charge,
-                sqrt_alphas_atom_charge,
-                one_m_alphas_cumprod_prev_atom_charge,
-                sqrt_alphas_cumprod_prev_atom_charge,
-                one_m_alphas_atom_charge,
-            ) = self.get_noise_reverse(t, self.sde_atom_charge)
-
-            (
-                rev_sigma_bonds,
-                sigmas2t_bonds,
-                sqrt_alphas_bonds,
-                one_m_alphas_cumprod_prev_bonds,
-                sqrt_alphas_cumprod_prev_bonds,
-                one_m_alphas_bonds,
-            ) = self.get_noise_reverse(t, self.sde_bonds)
-
             coords_pred = out["coords_pred"].squeeze()
             atoms_pred, charges_pred = out["atoms_pred"].split(
                 [self.num_atom_types, self.num_charge_classes], dim=-1
@@ -698,66 +670,66 @@ class Trainer(pl.LightningModule):
             # E x b_0
             charges_pred = charges_pred.softmax(dim=-1)
 
-            # update fnc
+            if self.hparams.noise_scheduler == "adaptive":
+                pos = self.sde_pos.sample_reverse_adaptive(
+                    s,
+                    t,
+                    pos,
+                    coords_pred,
+                    batch,
+                    cog_proj=True,
+                )
+                atom_types = self.sde_atom_charge.sample_reverse_adaptive(
+                    s,
+                    t,
+                    atom_types,
+                    atoms_pred,
+                    batch,
+                )
+                charge_types = self.sde_atom_charge.sample_reverse_adaptive(
+                    s,
+                    t,
+                    charge_types,
+                    charges_pred,
+                    batch,
+                )
+                edge_attr_global = self.sde_bonds.sample_reverse_adaptive(
+                    s,
+                    t,
+                    edge_attr_global,
+                    edges_pred,
+                    batch_edge_global,
+                    edge_attrs=edge_attrs,
+                    edge_index_global=edge_index_global,
+                )
 
-            # positions/coords
-            mean = (
-                sqrt_alphas_pos[batch] * one_m_alphas_cumprod_prev_pos[batch] * pos
-                + sqrt_alphas_cumprod_prev_pos[batch]
-                * one_m_alphas_pos[batch]
-                * coords_pred
-            )
-            mean = (1.0 / sigmas2t_pos[batch]) * mean
-            std = rev_sigma_pos[batch]
-            noise = torch.randn_like(mean)
-            noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
-            pos = mean + std * noise
-
-            # atoms
-            mean = (
-                sqrt_alphas_atom_charge[batch]
-                * one_m_alphas_cumprod_prev_atom_charge[batch]
-                * atom_types
-                + sqrt_alphas_cumprod_prev_atom_charge[batch]
-                * one_m_alphas_atom_charge[batch]
-                * atoms_pred
-            )
-            mean = (1.0 / sigmas2t_atom_charge[batch]) * mean
-            std = rev_sigma_atom_charge[batch]
-            noise = torch.randn_like(mean)
-            atom_types = mean + std * noise
-
-            # charges
-            mean = (
-                sqrt_alphas_atom_charge[batch]
-                * one_m_alphas_cumprod_prev_atom_charge[batch]
-                * charge_types
-                + sqrt_alphas_cumprod_prev_atom_charge[batch]
-                * one_m_alphas_atom_charge[batch]
-                * charges_pred
-            )
-            mean = (1.0 / sigmas2t_atom_charge[batch]) * mean
-            std = rev_sigma_atom_charge[batch]
-            noise = torch.randn_like(mean)
-            charge_types = mean + std * noise
-
-            # edges
-            mean = (
-                sqrt_alphas_bonds[batch_edge_global]
-                * one_m_alphas_cumprod_prev_bonds[batch_edge_global]
-                * edge_attr_global
-                + sqrt_alphas_cumprod_prev_bonds[batch_edge_global]
-                * one_m_alphas_bonds[batch_edge_global]
-                * edges_pred
-            )
-            mean = (1.0 / sigmas2t_bonds[batch_edge_global]) * mean
-            std = rev_sigma_bonds[batch_edge_global]
-            noise_edges = torch.randn_like(edge_attrs)
-            noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
-            noise_edges = noise_edges[
-                edge_index_global[0, :], edge_index_global[1, :], :
-            ]
-            edge_attr_global = mean + std * noise_edges
+            else:
+                pos = self.sde_pos.sample_reverse(
+                    t,
+                    pos,
+                    coords_pred,
+                    batch,
+                    cog_proj=True,
+                )
+                atom_types = self.sde_atom_charge.sample_reverse(
+                    t,
+                    atom_types,
+                    atoms_pred,
+                    batch,
+                )
+                charge_types = self.sde_atom_charge.sample_reverse(
+                    t,
+                    charge_types,
+                    charges_pred,
+                    batch,
+                )
+                edge_attr_global = self.sde_bonds.sample_reverse(
+                    t,
+                    edge_attr_global,
+                    edges_pred,
+                    batch_edge_global,
+                    edge_index_global=edge_index_global,
+                )
 
             if not self.hparams.fully_connected:
                 edge_index_local = radius_graph(
@@ -838,30 +810,6 @@ class Trainer(pl.LightningModule):
             batch_size=batch_size,
             prog_bar=(stage == "train"),
             sync_dist=self.hparams.gpus > 1 and stage == "val",
-        )
-
-    def get_noise_reverse(self, t, noise_kernel):
-        rev_sigma = noise_kernel.reverse_posterior_sigma[t].unsqueeze(-1)
-        sigmast = noise_kernel.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
-        sigmas2t = sigmast.pow(2)
-
-        sqrt_alphas = noise_kernel.sqrt_alphas[t].unsqueeze(-1)
-        sqrt_1m_alphas_cumprod_prev = torch.sqrt(
-            1.0 - noise_kernel.alphas_cumprod_prev[t]
-        ).unsqueeze(-1)
-        one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
-        sqrt_alphas_cumprod_prev = torch.sqrt(
-            noise_kernel.alphas_cumprod_prev[t].unsqueeze(-1)
-        )
-        one_m_alphas = noise_kernel.discrete_betas[t].unsqueeze(-1)
-
-        return (
-            rev_sigma,
-            sigmas2t,
-            sqrt_alphas,
-            one_m_alphas_cumprod_prev,
-            sqrt_alphas_cumprod_prev,
-            one_m_alphas,
         )
 
     def configure_optimizers(self):

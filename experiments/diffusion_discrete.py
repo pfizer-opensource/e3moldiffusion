@@ -1,7 +1,6 @@
 import logging
 import os
 from datetime import datetime
-from torch_scatter import scatter_mean
 from typing import Optional, List, Tuple
 
 import pandas as pd
@@ -33,7 +32,7 @@ from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.data.distributions import prepare_context
-
+from experiments.diffusion.utils import initialize_edge_attrs_reverse, bond_guidance
 from experiments.molecule_utils import Molecule
 from experiments.utils import (
     coalesce_edges,
@@ -160,14 +159,23 @@ class Trainer(pl.LightningModule):
         self.cat_atoms = CategoricalDiffusionKernel(
             terminal_distribution=atom_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
         )
         self.cat_bonds = CategoricalDiffusionKernel(
             terminal_distribution=bond_types_distribution,
             alphas=self.sde_bonds.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
         )
         self.cat_charges = CategoricalDiffusionKernel(
             terminal_distribution=charge_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
         )
 
         self.diffusion_loss = DiffusionLoss(
@@ -371,6 +379,13 @@ class Trainer(pl.LightningModule):
             edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
         )
 
+        # TIME EMBEDDING
+        temb = t.float() / self.hparams.timesteps
+        temb = temb.clamp(min=self.hparams.eps_min)
+        temb = temb.unsqueeze(dim=1)
+
+        pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
+
         if not hasattr(batch, "fc_edge_index"):
             edge_index_global = (
                 torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1))
@@ -388,84 +403,22 @@ class Trainer(pl.LightningModule):
             bond_edge_attr=bond_edge_attr,
             n=pos.size(0),
         )
-
         edge_index_global, edge_attr_global = sort_edge_index(
             edge_index=edge_index_global, edge_attr=edge_attr_global, sort_by_row=False
         )
-
-        j, i = edge_index_global
-        mask = j < i
-        mask_i = i[mask]
-        mask_j = j[mask]
-        edge_attr_triu = edge_attr_global[mask]
-        edge_attr_triu_ohe = F.one_hot(
-            edge_attr_triu, num_classes=self.num_bond_classes
-        ).float()
-        t_edge = t[data_batch[mask_i]]
-        probs = self.cat_bonds.marginal_prob(edge_attr_triu_ohe, t=t_edge)
-        edges_t_given_0 = probs.multinomial(
-            1,
-        ).squeeze()
-        j = torch.concat([mask_j, mask_i])
-        i = torch.concat([mask_i, mask_j])
-        edge_index_global_perturbed = torch.stack([j, i], dim=0)
-        edge_attr_global_perturbed = torch.concat(
-            [edges_t_given_0, edges_t_given_0], dim=0
-        )
-        edge_index_global_perturbed, edge_attr_global_perturbed = sort_edge_index(
-            edge_index=edge_index_global_perturbed,
-            edge_attr=edge_attr_global_perturbed,
-            sort_by_row=False,
-        )
-
-        edge_attr_global_perturbed = F.one_hot(
-            edge_attr_global_perturbed, num_classes=self.num_bond_classes
-        ).float()
-
-        temb = t.float() / self.hparams.timesteps
-        temb = temb.clamp(min=self.hparams.eps_min)
-        temb = temb.unsqueeze(dim=1)
-
-        # Coords: point cloud in R^3
-        # sample noise for coords and recenter
-        noise_coords_true = torch.randn_like(pos)
-        noise_coords_true = zero_mean(
-            noise_coords_true, batch=data_batch, dim_size=bs, dim=0
-        )
-        # center the true point cloud
-        pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
-        # get signal and noise coefficients for coords
-        mean_coords, std_coords = self.sde_pos.marginal_prob(
-            x=pos_centered, t=t[data_batch]
-        )
-        # perturb coords
-        pos_perturbed = mean_coords + std_coords * noise_coords_true
-        # one-hot-encode atom types
-
-        atom_types = F.one_hot(
-            atom_types.squeeze().long(), num_classes=self.num_atom_types
-        ).float()
-        probs = self.cat_atoms.marginal_prob(atom_types.float(), t[data_batch])
-        atom_types_perturbed = probs.multinomial(
-            1,
-        ).squeeze()
-        atom_types_perturbed = F.one_hot(
-            atom_types_perturbed, num_classes=self.num_atom_types
-        ).float()
-
-        # one-hot-encode charges
-        # offset
-        charges = self.dataset_info.one_hot_charges(charges)
-        probs = self.cat_charges.marginal_prob(charges.float(), t[data_batch])
-        charges_perturbed = probs.multinomial(
-            1,
-        ).squeeze()
-        charges_perturbed = F.one_hot(
-            charges_perturbed, num_classes=self.num_charge_classes
-        ).float()
-
         batch_edge_global = data_batch[edge_index_global[0]]
 
+        # SAMPLING
+        edge_attr_global_perturbed = self.cat_bonds.sample_edges_categorical(
+            t, edge_index_global, edge_attr_global, data_batch
+        )
+        pos_perturbed = self.sde_pos.sample_pos(t, pos_centered, data_batch)
+        atom_types_perturbed = self.cat_atoms.sample_categorical(
+            t, atom_types, data_batch, self.dataset_info, type="atoms"
+        )
+        charges_perturbed = self.cat_charges.sample_categorical(
+            t, atom_types, data_batch, self.dataset_info, type="charges"
+        )
         atom_feats_in_perturbed = torch.cat(
             [atom_types_perturbed, charges_perturbed], dim=-1
         )
@@ -667,29 +620,6 @@ class Trainer(pl.LightningModule):
         else:
             return total_res
 
-    def _reverse_sample_categorical(
-        self,
-        cat_kernel: CategoricalDiffusionKernel,
-        xt: Tensor,
-        x0: Tensor,
-        t: Tensor,
-        num_classes: int,
-    ):
-        reverse = cat_kernel.reverse_posterior_for_every_x0(xt=xt, t=t)
-        # Eq. 4 in Austin et al. (2023) "Structured Denoising Diffusion Models in Discrete State-Spaces"
-        # (N, a_0, a_t-1)
-        unweighted_probs = (reverse * x0.unsqueeze(-1)).sum(1)
-        unweighted_probs[unweighted_probs.sum(dim=-1) == 0] = 1e-5
-        # (N, a_t-1)
-        probs = unweighted_probs / unweighted_probs.sum(-1, keepdims=True)
-        x_tm1 = F.one_hot(
-            probs.multinomial(
-                1,
-            ).squeeze(),
-            num_classes=num_classes,
-        ).float()
-        return x_tm1
-
     def reverse_sampling(
         self,
         num_graphs: int,
@@ -737,48 +667,15 @@ class Trainer(pl.LightningModule):
         #                                r=self.hparams.cutoff_local,
         #                                batch=batch,
         #                                max_num_neighbors=self.hparams.max_num_neighbors)
-
         edge_index_local = None
-
-        # edge types for FC graph
-        edge_index_global = (
-            torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
+        (
+            edge_attr_global,
+            edge_index_global,
+            mask,
+            mask_i,
+        ) = initialize_edge_attrs_reverse(
+            batch, n, self.bonds_prior, self.num_bond_classes, device
         )
-        edge_index_global, _ = dense_to_sparse(edge_index_global)
-        edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
-        j, i = edge_index_global
-        mask = j < i
-        mask_i = i[mask]
-        mask_j = j[mask]
-        nE = len(mask_i)
-        edge_attr_triu = torch.multinomial(
-            self.bonds_prior, num_samples=nE, replacement=True
-        )
-
-        j = torch.concat([mask_j, mask_i])
-        i = torch.concat([mask_i, mask_j])
-        edge_index_global = torch.stack([j, i], dim=0)
-        edge_attr_global = torch.concat([edge_attr_triu, edge_attr_triu], dim=0)
-        edge_index_global, edge_attr_global = sort_edge_index(
-            edge_index=edge_index_global, edge_attr=edge_attr_global, sort_by_row=False
-        )
-        j, i = edge_index_global
-        mask = j < i
-        mask_i = i[mask]
-        mask_j = j[mask]
-
-        # some assert
-
-        edge_attr_global_dense = torch.zeros(
-            size=(n, n), device=device, dtype=torch.long
-        )
-        edge_attr_global_dense[
-            edge_index_global[0], edge_index_global[1]
-        ] = edge_attr_global
-        assert (edge_attr_global_dense - edge_attr_global_dense.T).sum().float() == 0.0
-
-        edge_attr_global = F.one_hot(edge_attr_global, self.num_bond_classes).float()
-
         batch_edge_global = batch[edge_index_global[0]]
 
         pos_traj = []
@@ -813,59 +710,6 @@ class Trainer(pl.LightningModule):
             )
 
             coords_pred = out["coords_pred"].squeeze()
-            if self.hparams.noise_scheduler == "adaptive":
-                # # Sample the positions
-                sigma_sq_ratio = self.sde_pos.get_sigma_pos_sq_ratio(s_int=s, t_int=t)
-                z_t_prefactor = (
-                    self.sde_pos.get_alpha_pos_ts(t_int=t, s_int=s) * sigma_sq_ratio
-                ).unsqueeze(-1)
-                x_prefactor = self.sde_pos.get_x_pos_prefactor(
-                    s_int=s, t_int=t
-                ).unsqueeze(-1)
-
-                prefactor1 = self.sde_pos.get_sigma2_bar(t_int=t)
-                prefactor2 = self.sde_pos.get_sigma2_bar(
-                    t_int=s
-                ) * self.sde_pos.get_alpha_pos_ts_sq(t_int=t, s_int=s)
-                sigma2_t_s = prefactor1 - prefactor2
-                noise_prefactor_sq = sigma2_t_s * sigma_sq_ratio
-                noise_prefactor = torch.sqrt(noise_prefactor_sq).unsqueeze(-1)
-
-                mu = z_t_prefactor[batch] * pos + x_prefactor[batch] * coords_pred
-
-                noise = torch.randn_like(pos)
-                noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
-
-                pos = mu + noise_prefactor[batch] * noise
-
-            else:
-                rev_sigma = self.sde_pos.reverse_posterior_sigma[t].unsqueeze(-1)
-                sigmast = self.sde_pos.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
-                sigmas2t = sigmast.pow(2)
-
-                sqrt_alphas = self.sde_pos.sqrt_alphas[t].unsqueeze(-1)
-                sqrt_1m_alphas_cumprod_prev = torch.sqrt(
-                    1.0 - self.sde_pos.alphas_cumprod_prev[t]
-                ).unsqueeze(-1)
-                one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
-                sqrt_alphas_cumprod_prev = torch.sqrt(
-                    self.sde_pos.alphas_cumprod_prev[t].unsqueeze(-1)
-                )
-                one_m_alphas = self.sde_pos.discrete_betas[t].unsqueeze(-1)
-
-                # positions/coords
-                mean = (
-                    sqrt_alphas[batch] * one_m_alphas_cumprod_prev[batch] * pos
-                    + sqrt_alphas_cumprod_prev[batch]
-                    * one_m_alphas[batch]
-                    * coords_pred
-                )
-                mean = (1.0 / sigmas2t[batch]) * mean
-                std = rev_sigma[batch]
-                noise = torch.randn_like(mean)
-                noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
-                pos = mean + std * noise
-
             atoms_pred, charges_pred = out["atoms_pred"].split(
                 [self.num_atom_types, self.num_charge_classes], dim=-1
             )
@@ -875,109 +719,57 @@ class Trainer(pl.LightningModule):
             # E x b_0
             charges_pred = charges_pred.softmax(dim=-1)
 
+            if self.hparams.noise_scheduler == "adaptive":
+                # positions
+                pos = self.sde_pos.sample_reverse_adaptive(
+                    s, t, pos, coords_pred, batch
+                )
+            else:
+                # positions
+                pos = self.sde_pos.sample_reverse(t, pos, coords_pred, batch)
+
             # atoms
-            atom_types = self._reverse_sample_categorical(
-                cat_kernel=self.cat_atoms,
+            atom_types = self.cat_atoms.sample_reverse_categorical(
                 xt=atom_types,
                 x0=atoms_pred,
                 t=t[batch],
                 num_classes=self.num_atom_types,
             )
-
             # charges
-            charge_types = self._reverse_sample_categorical(
-                cat_kernel=self.cat_charges,
+            charge_types = self.cat_charges.sample_reverse_categorical(
                 xt=charge_types,
                 x0=charges_pred,
                 t=t[batch],
                 num_classes=self.num_charge_classes,
             )
-
             # edges
-            edges_pred_triu = edges_pred[mask]
-            # (E, b_0)
-            edges_triu = edge_attr_global[mask]
-
-            edges_triu = self._reverse_sample_categorical(
-                cat_kernel=self.cat_bonds,
-                xt=edges_triu,
-                x0=edges_pred_triu,
-                t=t[batch[mask_i]],
+            (
+                edge_attr_global,
+                edge_index_global,
+                mask,
+                mask_i,
+            ) = self.cat_bonds.sample_reverse_edges_categorical(
+                edge_attr_global,
+                edges_pred,
+                t,
+                mask,
+                mask_i,
+                batch=batch,
                 num_classes=self.num_bond_classes,
             )
 
-            j, i = edge_index_global
-            mask = j < i
-            mask_i = i[mask]
-            mask_j = j[mask]
-            j = torch.concat([mask_j, mask_i])
-            i = torch.concat([mask_i, mask_j])
-            edge_index_global = torch.stack([j, i], dim=0)
-            edge_attr_global = torch.concat([edges_triu, edges_triu], dim=0)
-            edge_index_global, edge_attr_global = sort_edge_index(
-                edge_index=edge_index_global,
-                edge_attr=edge_attr_global,
-                sort_by_row=False,
-            )
-
-            if not self.hparams.fully_connected:
-                edge_index_local = radius_graph(
-                    x=pos.detach(),
-                    r=self.hparams.cutoff_local,
-                    batch=batch,
-                    max_num_neighbors=self.hparams.max_num_neighbors,
-                )
-
-            # atom_integer = torch.argmax(atom_types, dim=-1)
-            # bond_integer = torch.argmax(edge_attr_global, dim=-1)
-
             if self.hparams.bond_model_guidance:
-                guidance_type = "logsum"
-                guidance_scale = 1.0e-4
-                with torch.enable_grad():
-                    node_feats_in = node_feats_in.detach()
-                    pos = pos.detach().requires_grad_(True)
-                    bond_prediction = self.bond_model(
-                        x=node_feats_in,
-                        t=temb,
-                        pos=pos,
-                        edge_index_local=edge_index_local,
-                        edge_index_global=edge_index_global,
-                        edge_attr_global=edge_attr_global,
-                        batch=batch,
-                        batch_edge_global=batch_edge_global,
-                    )
-                    if guidance_type == "ensemble":
-                        # TO-DO
-                        raise NotImplementedError
-                    elif guidance_type == "logsum":
-                        uncertainty = torch.sigmoid(
-                            -torch.logsumexp(bond_prediction, dim=-1)
-                        )
-                        uncertainty = (
-                            0.5
-                            * scatter_mean(
-                                uncertainty,
-                                index=edge_index_global[1],
-                                dim=0,
-                                dim_size=pos.size(0),
-                            ).log()
-                        )
-                        uncertainty = scatter_mean(
-                            uncertainty, index=batch, dim=0, dim_size=bs
-                        )
-                        grad_outputs: List[Optional[torch.Tensor]] = [
-                            torch.ones_like(uncertainty)
-                        ]
-                        dist_shift = -torch.autograd.grad(
-                            [uncertainty],
-                            [pos],
-                            grad_outputs=grad_outputs,
-                            create_graph=False,
-                            retain_graph=False,
-                        )[0]
-
-                pos = pos + guidance_scale * dist_shift
+                pos = bond_guidance(
+                    pos,
+                    node_feats_in,
+                    temb,
+                    self.bond_model,
+                    batch,
+                    batch_edge_global,
+                    edge_attr_global,
+                    edge_index_local,
+                    edge_index_global,
+                )
 
             if save_traj:
                 pos_traj.append(pos.detach())

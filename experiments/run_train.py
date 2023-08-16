@@ -155,7 +155,7 @@ if __name__ == "__main__":
     strategy = "ddp" if hparams.gpus > 1 else "auto"
     trainer = pl.Trainer(
         accelerator="gpu" if hparams.gpus else "cpu",
-        devices=hparams.gpus if hparams.gpus else None,
+        devices=hparams.gpus if hparams.gpus else 1,
         strategy=strategy,
         plugins=LightningEnvironment(),
         num_nodes=1,

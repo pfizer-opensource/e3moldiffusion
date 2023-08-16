@@ -1,7 +1,9 @@
 import torch
 from experiments.diffusion.continuous import get_beta_schedule
 import matplotlib.pyplot as plt
-
+from torch import Tensor
+import torch.nn.functional as F
+from torch_geometric.utils import sort_edge_index
 
 DEFAULT_BETAS = get_beta_schedule(kind="cosine", num_diffusion_timesteps=500)
 DEFAULT_ALPHAS = 1.0 - DEFAULT_BETAS
@@ -22,8 +24,15 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         self,
         terminal_distribution: torch.Tensor,
         alphas: torch.Tensor = DEFAULT_ALPHAS,
+        num_bond_types: int = 5,
+        num_atom_types: int = 16,
+        num_charge_types: int = 6,
     ):
         super().__init__()
+
+        self.num_bond_types = num_bond_types
+        self.num_atom_types = num_atom_types
+        self.num_charge_types = num_charge_types
 
         self.num_classes = len(terminal_distribution)
         assert (terminal_distribution.sum() - 1.0).abs() < 1e-4
@@ -153,6 +162,126 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         assert check
 
         return probs
+
+    def sample_reverse_categorical(
+        self,
+        xt: Tensor,
+        x0: Tensor,
+        t: Tensor,
+        num_classes: int,
+    ):
+        reverse = self.reverse_posterior_for_every_x0(xt=xt, t=t)
+        # Eq. 4 in Austin et al. (2023) "Structured Denoising Diffusion Models in Discrete State-Spaces"
+        # (N, a_0, a_t-1)
+        unweighted_probs = (reverse * x0.unsqueeze(-1)).sum(1)
+        unweighted_probs[unweighted_probs.sum(dim=-1) == 0] = 1e-5
+        # (N, a_t-1)
+        probs = unweighted_probs / unweighted_probs.sum(-1, keepdims=True)
+        x_tm1 = F.one_hot(
+            probs.multinomial(
+                1,
+            ).squeeze(),
+            num_classes=num_classes,
+        ).float()
+        return x_tm1
+
+    def sample_reverse_edges_categorical(
+        self,
+        edge_attr_global: Tensor,
+        edges_pred: Tensor,
+        t: Tensor,
+        mask: Tensor,
+        mask_i: Tensor,
+        batch: Tensor,
+        edge_index_global: Tensor,
+        num_classes: int,
+    ):
+        x0 = edges_pred[mask]
+        xt = edge_attr_global[mask]
+        t = t[batch[mask_i]]
+
+        reverse = self.reverse_posterior_for_every_x0(xt=xt, t=t)
+        # Eq. 4 in Austin et al. (2023) "Structured Denoising Diffusion Models in Discrete State-Spaces"
+        # (N, a_0, a_t-1)
+        unweighted_probs = (reverse * x0.unsqueeze(-1)).sum(1)
+        unweighted_probs[unweighted_probs.sum(dim=-1) == 0] = 1e-5
+        # (N, a_t-1)
+        probs = unweighted_probs / unweighted_probs.sum(-1, keepdims=True)
+        edges_triu = F.one_hot(
+            probs.multinomial(
+                1,
+            ).squeeze(),
+            num_classes=num_classes,
+        ).float()
+
+        j, i = edge_index_global
+        mask = j < i
+        mask_i = i[mask]
+        mask_j = j[mask]
+        j = torch.concat([mask_j, mask_i])
+        i = torch.concat([mask_i, mask_j])
+        edge_index_global = torch.stack([j, i], dim=0)
+        edge_attr_global = torch.concat([edges_triu, edges_triu], dim=0)
+        edge_index_global, edge_attr_global = sort_edge_index(
+            edge_index=edge_index_global,
+            edge_attr=edge_attr_global,
+            sort_by_row=False,
+        )
+
+        return edge_attr_global, edge_index_global, mask, mask_i
+
+    def sample_edges_categorical(
+        self, t, edge_index_global, edge_attr_global, data_batch
+    ):
+        j, i = edge_index_global
+        mask = j < i
+        mask_i = i[mask]
+        mask_j = j[mask]
+        edge_attr_triu = edge_attr_global[mask]
+        edge_attr_triu_ohe = F.one_hot(
+            edge_attr_triu, num_classes=self.num_bond_types
+        ).float()
+        t_edge = t[data_batch[mask_i]]
+        probs = self.marginal_prob(edge_attr_triu_ohe, t=t_edge)
+        edges_t_given_0 = probs.multinomial(
+            1,
+        ).squeeze()
+        j = torch.concat([mask_j, mask_i])
+        i = torch.concat([mask_i, mask_j])
+        edge_index_global_perturbed = torch.stack([j, i], dim=0)
+        edge_attr_global_perturbed = torch.concat(
+            [edges_t_given_0, edges_t_given_0], dim=0
+        )
+        edge_index_global_perturbed, edge_attr_global_perturbed = sort_edge_index(
+            edge_index=edge_index_global_perturbed,
+            edge_attr=edge_attr_global_perturbed,
+            sort_by_row=False,
+        )
+
+        edge_attr_global_perturbed = F.one_hot(
+            edge_attr_global_perturbed, num_classes=self.num_bond_types
+        ).float()
+
+        return edge_attr_global_perturbed
+
+    def sample_categorical(self, t, x0, data_batch, dataset_info, type="atoms"):
+        assert type in ["atoms", "charges"]
+        num_classes = self.num_atom_types if type == "atoms" else self.num_charge_types
+
+        import pdb
+
+        pdb.set_trace()
+        if type == "charges":
+            x0 = dataset_info.one_hot_charges(x0)
+        else:
+            x0 = F.one_hot(x0.squeeze().long(), num_classes=num_classes).float()
+        probs = self.marginal_prob(x0.float(), t[data_batch])
+        x0_perturbed = probs.multinomial(
+            1,
+        ).squeeze()
+        x0_perturbed = F.one_hot(x0_perturbed, num_classes=num_classes).float()
+
+        return x0_perturbed
 
 
 def _some_debugging():
