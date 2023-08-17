@@ -306,10 +306,10 @@ class Trainer(pl.LightningModule):
             node_feat -= 1
 
         # one-hot-encode atom types
-        atom_types = torch.tensor(
-            [self.dataset_info.atom_idx_mapping[int(atom)] for atom in atom_types],
-            device="cuda",
-        ).long()
+        # atom_types = torch.tensor(
+        #     [self.dataset_info.atom_idx_mapping[int(atom)] for atom in atom_types],
+        #     device="cuda",
+        # ).long()
         atom_types = F.one_hot(
             atom_types.squeeze().long(), num_classes=self.num_atom_types
         ).float()

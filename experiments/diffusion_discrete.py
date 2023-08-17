@@ -580,7 +580,8 @@ class Trainer(pl.LightningModule):
 
         if self.mol_stab < stability_dict["mol_stable"]:
             self.mol_stab = stability_dict["mol_stable"]
-            self.trainer.save_checkpoint("best_mol_stab.ckpt")
+            save_path = os.path.join(self.hparams.save_dir, "best_mol_stab.ckpt")
+            self.trainer.save_checkpoint(save_path)
 
         run_time = datetime.now() - start
         if verbose:
