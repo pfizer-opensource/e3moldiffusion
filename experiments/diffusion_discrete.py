@@ -136,6 +136,7 @@ class Trainer(pl.LightningModule):
             nu=2.5,
             enforce_zero_terminal_snr=False,
             T=self.hparams.timesteps,
+            eta_ddim=1.0
         )
         self.sde_atom_charge = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -208,6 +209,9 @@ class Trainer(pl.LightningModule):
                 bs=self.hparams.inference_batch_size,
                 verbose=True,
                 inner_verbose=False,
+                eta_ddim=1.0,
+                ddpm=True,
+                every_k_step=1
             )
             self.i += 1
             self.log(
@@ -457,6 +461,9 @@ class Trainer(pl.LightningModule):
         device: torch.device,
         verbose=False,
         save_traj=False,
+        ddpm: bool = True,
+        eta_ddim: float = 1.0,
+        every_k_step: int = 1
     ):
         (
             pos,
@@ -472,6 +479,9 @@ class Trainer(pl.LightningModule):
             empirical_distribution_num_nodes=empirical_distribution_num_nodes,
             verbose=verbose,
             save_traj=save_traj,
+            ddpm=ddpm,
+            eta_ddim=eta_ddim,
+            every_k_step=every_k_step
         )
 
         if torch.any(pos.isnan()):
@@ -510,6 +520,9 @@ class Trainer(pl.LightningModule):
         return_smiles: bool = False,
         verbose: bool = False,
         inner_verbose=False,
+        ddpm: bool = True,
+        eta_ddim: float = 1.0,
+        every_k_step: int = 1
     ):
         b = ngraphs // bs
         l = [bs] * b
@@ -537,6 +550,7 @@ class Trainer(pl.LightningModule):
                 device=self.device,
                 empirical_distribution_num_nodes=self.empirical_num_nodes,
                 save_traj=False,
+                ddpm=ddpm, eta_ddim=eta_ddim, every_k_step=every_k_step
             )
 
             n = batch_num_nodes.sum().item()
@@ -628,6 +642,9 @@ class Trainer(pl.LightningModule):
         device: torch.device,
         verbose: bool = False,
         save_traj: bool = False,
+        ddpm: bool = True,
+        eta_ddim: float = 1.0,
+        every_k_step: int = 1
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         batch_num_nodes = torch.multinomial(
             input=empirical_distribution_num_nodes,
@@ -685,7 +702,8 @@ class Trainer(pl.LightningModule):
         edge_type_traj = []
 
         chain = range(self.hparams.timesteps)
-
+        chain = chain[::every_k_step]
+        
         iterator = (
             tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         )
@@ -719,15 +737,18 @@ class Trainer(pl.LightningModule):
             edges_pred = out["bonds_pred"].softmax(dim=-1)
             # E x b_0
             charges_pred = charges_pred.softmax(dim=-1)
-
-            if self.hparams.noise_scheduler == "adaptive":
-                # positions
-                pos = self.sde_pos.sample_reverse_adaptive(
-                    s, t, pos, coords_pred, batch
-                )
+            
+            if ddpm:
+                if self.hparams.noise_scheduler == "adaptive":
+                    # positions
+                    pos = self.sde_pos.sample_reverse_adaptive(
+                        s, t, pos, coords_pred, batch, eta_ddim=eta_ddim
+                    )
+                else:
+                    # positions
+                    pos = self.sde_pos.sample_reverse(t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim)
             else:
-                # positions
-                pos = self.sde_pos.sample_reverse(t, pos, coords_pred, batch)
+                pos = self.sde_pos.sample_reverse_ddim(t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim)
 
             # atoms
             atom_types = self.cat_atoms.sample_reverse_categorical(

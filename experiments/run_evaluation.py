@@ -17,7 +17,7 @@ class dotdict(dict):
     __delattr__ = dict.__delitem__
 
 
-def evaluate(model_path, save_dir, step=0):
+def evaluate(model_path, save_dir, ngraphs=5000, batch_size=80, step=0, ddpm=True, eta_ddim=1.0):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
     hparams = dotdict(hparams)
@@ -93,8 +93,8 @@ def evaluate(model_path, save_dir, step=0):
         from experiments.bond_prediction_discrete import Trainer
     elif hparams.latent_dim:
         print("Using latent diffusion")
-        # from experiments.diffusion_latent_discrete import Trainer
-        from experiments.diffusion_latent_discrete_diff import Trainer
+        # from experiments.diffusion_latent_discrete import Trainer #need refactor
+        raise NotImplementedError
     else:
         print("Using discrete diffusion")
         if hparams.additional_feats:
@@ -122,12 +122,14 @@ def evaluate(model_path, save_dir, step=0):
     results_dict, generated_smiles = model.run_evaluation(
         step=step,
         dataset_info=model.dataset_info,
-        ngraphs=5000,
-        bs=80,
+        ngraphs=ngraphs,
+        bs=batch_size,
         return_smiles=True,
         verbose=True,
         inner_verbose=True,
         save_dir=save_dir,
+        ddpm=ddpm,
+        eta_ddim=eta_ddim
     )
     return results_dict, generated_smiles
 
@@ -139,7 +141,16 @@ def get_args():
                         help='Path to trained model')
     parser.add_argument('--save-dir', default="/hpfs/userws/cremej01/projects/logs/geom/evaluation", type=str,
                         help='Path to test output')
-
+    parser.add_argument('--ngraphs', default=5000, type=int,
+                            help='How many graphs to sample. Defaults to 5000')
+    parser.add_argument('--batch_size', default=80, type=int,
+                            help='Batch-size to generate the selected ngraphs. Defaults to 80.')
+    parser.add_argument('--ddim', default=False, action="store_true",
+                        help='If DDIM sampling should be used. Defaults to False')
+    parser.add_argument('--eta_ddim', default=1.0, type=float,
+                        help='How to scale the std of noise in the reverse posterior. \
+                            Can also be used for DDPM to track a deterministic trajectory. \
+                            Defaults to 1.0')
     args = parser.parse_args()
     return args
 
@@ -150,4 +161,8 @@ if __name__ == "__main__":
     results_dict, generated_smiles = evaluate(
         model_path=args.model_path,
         save_dir=args.save_dir,
-    )
+        ngraphs=args.ngraphs,
+        batch_size=args.batch_size,
+        ddpm=not args.ddim,
+        eta_ddim=args.eta_ddim
+        )
