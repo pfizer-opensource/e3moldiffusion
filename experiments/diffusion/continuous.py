@@ -386,7 +386,7 @@ class DiscreteDDPM(nn.Module):
             noise_predictor_prefactor = noise_predictor_prefactor.unsqueeze(-1)
             factor = 1.0 / self.sqrt_alphas[t].unsqueeze(-1)
             
-            xt_m1 = factor * (xt - noise_predictor_prefactor[batch] * model_out) + std * noise
+            xt_m1 = factor[batch] * (xt - noise_predictor_prefactor[batch] * model_out) + std * noise
             
         return xt_m1
 
