@@ -136,7 +136,7 @@ class Trainer(pl.LightningModule):
             nu=2.5,
             enforce_zero_terminal_snr=False,
             T=self.hparams.timesteps,
-            eta_ddim=1.0
+            param=self.hparams.continuous_param
         )
         self.sde_atom_charge = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -317,7 +317,7 @@ class Trainer(pl.LightningModule):
         out_dict = self(batch=batch, t=t)
 
         true_data = {
-            "coords": out_dict["coords_true"],
+            "coords": out_dict["coords_true"] if self.hparams.continuous_param == "data" else out_dict["coords_noise_true"],
             "atoms": out_dict["atoms_true"],
             "charges": out_dict["charges_true"],
             "bonds": out_dict["bonds_true"],
@@ -413,7 +413,7 @@ class Trainer(pl.LightningModule):
         batch_edge_global = data_batch[edge_index_global[0]]
 
         # SAMPLING
-        pos_perturbed = self.sde_pos.sample_pos(t, pos_centered, data_batch)
+        pos_perturbed, noise_coords_true = self.sde_pos.sample_pos(t, pos_centered, data_batch)
         atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
             t, atom_types, data_batch, self.dataset_info, type="atoms"
         )
@@ -445,6 +445,7 @@ class Trainer(pl.LightningModule):
         out["bonds_perturbed"] = edge_attr_global_perturbed
 
         out["coords_true"] = pos_centered
+        out["coords_noise_true"] = noise_coords_true
         out["atoms_true"] = atom_types.argmax(dim=-1)
         out["bonds_true"] = edge_attr_global
         out["charges_true"] = charges.argmax(dim=-1)
