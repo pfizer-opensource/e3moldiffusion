@@ -742,7 +742,7 @@ class Trainer(pl.LightningModule):
                 if self.hparams.noise_scheduler == "adaptive":
                     # positions
                     pos = self.sde_pos.sample_reverse_adaptive(
-                        s, t, pos, coords_pred, batch, eta_ddim=eta_ddim
+                        s, t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
                     )
                 else:
                     # positions
