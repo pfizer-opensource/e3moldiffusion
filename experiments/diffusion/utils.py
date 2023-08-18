@@ -5,13 +5,10 @@ from typing import Optional, List
 from torch_scatter import scatter_mean
 
 
-def initialize_edge_attrs_reverse(batch, n, bonds_prior, num_bond_classes, device):
+def initialize_edge_attrs_reverse(
+    edge_index_global, n, bonds_prior, num_bond_classes, device
+):
     # edge types for FC graph
-    edge_index_global = (
-        torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
-    )
-    edge_index_global, _ = dense_to_sparse(edge_index_global)
-    edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
     j, i = edge_index_global
     mask = j < i
     mask_i = i[mask]

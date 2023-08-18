@@ -90,9 +90,12 @@ def add_arguments(parser):
     parser.add_argument("--max-time", type=str, default=None)
     parser.add_argument("--use-loss-weighting", default=False, action="store_true")
     parser.add_argument("--diffusion-pretraining", default=False, action="store_true")
-    parser.add_argument("--continuous-param", default="data", type=str, choices=["data", "noise"])
+    parser.add_argument(
+        "--continuous-param", default="data", type=str, choices=["data", "noise"]
+    )
 
     # BOND PREDICTION AND GUIDANCE:
+    parser.add_argument("--bond-guidance-model", default=False, action="store_true")
     parser.add_argument("--bond-prediction", default=False, action="store_true")
     parser.add_argument("--bond-model-guidance", default=False, action="store_true")
     parser.add_argument("--ckpt-bond-model", default=None, type=str)

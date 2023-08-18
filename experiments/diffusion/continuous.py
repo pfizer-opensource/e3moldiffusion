@@ -144,7 +144,7 @@ class DiscreteDDPM(nn.Module):
         self.scaled_reverse_posterior_sigma = scaled_reverse_posterior_sigma
         assert param in ["noise", "data"]
         self.param = param
-        
+
         assert schedule in [
             "linear",
             "quad",
@@ -346,13 +346,12 @@ class DiscreteDDPM(nn.Module):
         batch,
         cog_proj=False,
         edge_index_global=None,
-        eta_ddim: float = 1.0
-    ):  
-        
+        eta_ddim: float = 1.0,
+    ):
         rev_sigma = self.reverse_posterior_sigma[t].unsqueeze(-1)
         noise = torch.randn_like(xt)
         std = rev_sigma[batch]
-        
+
         if edge_index_global is not None:
             noise = 0.5 * (noise + noise.permute(1, 0, 2))
             noise = noise[edge_index_global[0, :], edge_index_global[1, :], :]
@@ -360,8 +359,8 @@ class DiscreteDDPM(nn.Module):
             bs = int(batch.max()) + 1
             if cog_proj:
                 noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
-                                
-        if self.param =="data":
+
+        if self.param == "data":
             sigmast = self.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
             sigmas2t = sigmast.pow(2)
 
@@ -370,7 +369,9 @@ class DiscreteDDPM(nn.Module):
                 (1.0 - self.alphas_cumprod_prev[t]).clamp_min(0.0)
             ).unsqueeze(-1)
             one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
-            sqrt_alphas_cumprod_prev = torch.sqrt(self.alphas_cumprod_prev[t].unsqueeze(-1))
+            sqrt_alphas_cumprod_prev = torch.sqrt(
+                self.alphas_cumprod_prev[t].unsqueeze(-1)
+            )
             one_m_alphas = self.discrete_betas[t].unsqueeze(-1)
 
             mean = (
@@ -378,16 +379,21 @@ class DiscreteDDPM(nn.Module):
                 + sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * model_out
             )
             mean = (1.0 / sigmas2t[batch]) * mean
-        
+
             xt_m1 = mean + eta_ddim * std * noise
-            
+
         elif self.param == "noise":
-            noise_predictor_prefactor = self.discrete_betas[t] / self.sqrt_1m_alphas_cumprod[t]
+            noise_predictor_prefactor = (
+                self.discrete_betas[t] / self.sqrt_1m_alphas_cumprod[t]
+            )
             noise_predictor_prefactor = noise_predictor_prefactor.unsqueeze(-1)
             factor = 1.0 / self.sqrt_alphas[t].unsqueeze(-1)
-            
-            xt_m1 = factor[batch] * (xt - noise_predictor_prefactor[batch] * model_out) + std * noise
-            
+
+            xt_m1 = (
+                factor[batch] * (xt - noise_predictor_prefactor[batch] * model_out)
+                + std * noise
+            )
+
         return xt_m1
 
     def sample_pos(self, t, pos, data_batch):
@@ -403,7 +409,7 @@ class DiscreteDDPM(nn.Module):
         mean_coords, std_coords = self.marginal_prob(x=pos, t=t[data_batch])
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
-        
+
         return pos_perturbed, noise_coords_true
 
     def sample_reverse_adaptive(
@@ -416,9 +422,8 @@ class DiscreteDDPM(nn.Module):
         cog_proj=False,
         edge_attrs=None,
         edge_index_global=None,
-        eta_ddim: float = 1.0
-    ):  
-        
+        eta_ddim: float = 1.0,
+    ):
         if edge_index_global is not None:
             noise = torch.randn_like(edge_attrs)
             noise = 0.5 * (noise + noise.permute(1, 0, 2))
@@ -428,9 +433,9 @@ class DiscreteDDPM(nn.Module):
             noise = torch.randn_like(xt)
             if cog_proj:
                 noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
-                
+
         sigma_sq_ratio = self.get_sigma_pos_sq_ratio(s_int=s, t_int=t)
-       
+
         prefactor1 = self.get_sigma2_bar(t_int=t)
         prefactor2 = self.get_sigma2_bar(t_int=s) * self.get_alpha_pos_ts_sq(
             t_int=t, s_int=s
@@ -440,7 +445,9 @@ class DiscreteDDPM(nn.Module):
         noise_prefactor = torch.sqrt(noise_prefactor_sq).unsqueeze(-1)
 
         if self.param == "data":
-            z_t_prefactor = (self.get_alpha_pos_ts(t_int=t, s_int=s) * sigma_sq_ratio).unsqueeze(-1)
+            z_t_prefactor = (
+                self.get_alpha_pos_ts(t_int=t, s_int=s) * sigma_sq_ratio
+            ).unsqueeze(-1)
             x_prefactor = self.get_x_pos_prefactor(s_int=s, t_int=t).unsqueeze(-1)
             mu = z_t_prefactor[batch] * xt + x_prefactor[batch] * model_out
             xt_m1 = mu + eta_ddim * noise_prefactor[batch] * noise
@@ -451,10 +458,13 @@ class DiscreteDDPM(nn.Module):
             sigma2_s = self.get_sigma2_bar(t_int=s).unsqueeze(-1)
             sigma2_ts = sigma2_t - alpha_ts.pow(2) * sigma2_s
             noise_predictor_prefactor = sigma2_ts / (alpha_ts * sigma2_t.sqrt())
-            xt_m1 = z_t_prefactor[batch] * xt - noise_predictor_prefactor[batch] * model_out \
+            xt_m1 = (
+                z_t_prefactor[batch] * xt
+                - noise_predictor_prefactor[batch] * model_out
                 + noise_prefactor[batch] * noise
+            )
         return xt_m1
-    
+
     def sample_reverse_ddim(
         self,
         t,
@@ -463,43 +473,46 @@ class DiscreteDDPM(nn.Module):
         batch,
         cog_proj=False,
         edge_index_global=None,
-        eta_ddim: float = 1.0
+        eta_ddim: float = 1.0,
     ):
         assert 0.0 <= eta_ddim <= 1.0
-        
-        if self.schedule == 'cosine':
+
+        if self.schedule == "cosine":
             rev_sigma = self.reverse_posterior_sigma[t].unsqueeze(-1)
             rev_sigma_ddim = eta_ddim * rev_sigma
-            
+
             alphas_cumprod_prev = self.alphas_cumprod_prev[t].unsqueeze(-1)
             sqrt_alphas_cumprod_prev = alphas_cumprod_prev.sqrt()
-            
+
             sqrt_alphas_cumprod = self.sqrt_alphas_cumprod[t].unsqueeze(-1)
             sqrt_one_m_alphas_cumprod = self.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
-        elif self.schedule == 'adaptive':
-            sigma_sq_ratio = self.get_sigma_pos_sq_ratio(s_int=t-1, t_int=t)
+        elif self.schedule == "adaptive":
+            sigma_sq_ratio = self.get_sigma_pos_sq_ratio(s_int=t - 1, t_int=t)
             prefactor1 = self.get_sigma2_bar(t_int=t)
-            prefactor2 = self.get_sigma2_bar(t_int=t-1) * self.get_alpha_pos_ts_sq(
-                t_int=t, s_int=t-1
+            prefactor2 = self.get_sigma2_bar(t_int=t - 1) * self.get_alpha_pos_ts_sq(
+                t_int=t, s_int=t - 1
             )
             sigma2_t_s = prefactor1 - prefactor2
             noise_prefactor_sq = sigma2_t_s * sigma_sq_ratio
             rev_sigma = torch.sqrt(noise_prefactor_sq).unsqueeze(-1)
             rev_sigma_ddim = eta_ddim * rev_sigma
-            
-            alphas_cumprod_prev = self.get_alpha_bar(t_int=t-1).unsqueeze(-1)
+
+            alphas_cumprod_prev = self.get_alpha_bar(t_int=t - 1).unsqueeze(-1)
             sqrt_alphas_cumprod_prev = alphas_cumprod_prev.sqrt()
             sqrt_alphas_cumprod = self.get_alpha_bar(t_int=t).sqrt().unsqueeze(-1)
-            sqrt_one_m_alphas_cumprod = (1.0 - self.get_alpha_bar(t_int=t).unsqueeze(-1)).clamp_min(0.0).sqrt()
-            
+            sqrt_one_m_alphas_cumprod = (
+                (1.0 - self.get_alpha_bar(t_int=t).unsqueeze(-1)).clamp_min(0.0).sqrt()
+            )
+
         noise = torch.randn_like(xt)
-             
-        mean = (
-            sqrt_alphas_cumprod_prev[batch] * model_out + \
-                (1.0 - alphas_cumprod_prev - rev_sigma_ddim.pow(2)).clamp_min(0.0).sqrt()[batch] * \
-                ( (xt - sqrt_alphas_cumprod[batch] * model_out) / sqrt_one_m_alphas_cumprod[batch] )
+
+        mean = sqrt_alphas_cumprod_prev[batch] * model_out + (
+            1.0 - alphas_cumprod_prev - rev_sigma_ddim.pow(2)
+        ).clamp_min(0.0).sqrt()[batch] * (
+            (xt - sqrt_alphas_cumprod[batch] * model_out)
+            / sqrt_one_m_alphas_cumprod[batch]
         )
-        
+
         if edge_index_global is not None:
             noise = 0.5 * (noise + noise.permute(1, 0, 2))
             noise = noise[edge_index_global[0, :], edge_index_global[1, :], :]
@@ -507,10 +520,11 @@ class DiscreteDDPM(nn.Module):
             bs = int(batch.max()) + 1
             if cog_proj:
                 noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
- 
+
         xt_m1 = mean + rev_sigma_ddim[batch] * noise
 
         return xt_m1
+
 
 if __name__ == "__main__":
     T = 500

@@ -167,10 +167,13 @@ class DenoisingEdgeNetwork(nn.Module):
         context_mapping: bool = False,
         num_context_features: int = 0,
         property_prediction: bool = False,
+        bond_prediction: bool = False,
     ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
         self.property_prediction = property_prediction
+        self.bond_prediction = bond_prediction
+        self.num_bond_types = num_bond_types
 
         self.time_mapping_atom = DenseLayer(1, hn_dim[0])
         self.time_mapping_bond = DenseLayer(1, edge_dim)
@@ -180,7 +183,9 @@ class DenoisingEdgeNetwork(nn.Module):
         else:
             self.atom_mapping = nn.Identity()
 
-        if bond_mapping:
+        if bond_mapping or bond_prediction:
+            if bond_prediction:
+                num_bond_types = num_atom_features
             self.bond_mapping = DenseLayer(num_bond_types, edge_dim)
         else:
             self.bond_mapping = nn.Identity()
@@ -230,7 +235,7 @@ class DenoisingEdgeNetwork(nn.Module):
                 hn_dim=hn_dim,
                 edge_dim=edge_dim,
                 num_atom_features=num_atom_features,
-                num_bond_types=num_bond_types,
+                num_bond_types=self.num_bond_types,
             )
 
         self.reset_parameters()
@@ -300,6 +305,8 @@ class DenoisingEdgeNetwork(nn.Module):
             s = self.atom_context_mapping(s + cemb)
         s = self.atom_time_mapping(s + tnode)
 
+        if self.bond_prediction:
+            edge_attr_global = x[edge_index_global[1]]
         edge_attr_global_transformed = self.bond_mapping(edge_attr_global)
         edge_attr_global_transformed = self.bond_time_mapping(
             edge_attr_global_transformed + tedge_global
@@ -690,7 +697,7 @@ class EdgePredictionNetwork(nn.Module):
         s = self.atom_mapping(x)
         s = self.atom_time_mapping(s + tnode)
 
-        edge_attr_global = x[edge_index_global[0]]
+        edge_attr_global = x[edge_index_global[1]]
 
         edge_attr_global_transformed = self.bond_mapping(edge_attr_global)
         edge_attr_global_transformed = self.bond_time_mapping(

@@ -18,7 +18,7 @@ def chunks(lst, n):
         yield lst[i : i + n]
 
 
-DATA_PATH = "/hpfs/userws/cremej01/projects/data/pubchem"
+DATA_PATH = "/sharedhome/cremej01/workspace/data/pubchem"
 FULL_ATOM_ENCODER = {
     "H": 0,
     "B": 1,

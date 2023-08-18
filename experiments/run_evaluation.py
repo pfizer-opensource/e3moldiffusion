@@ -17,7 +17,9 @@ class dotdict(dict):
     __delattr__ = dict.__delitem__
 
 
-def evaluate(model_path, save_dir, ngraphs=5000, batch_size=80, step=0, ddpm=True, eta_ddim=1.0):
+def evaluate(
+    model_path, save_dir, ngraphs=5000, batch_size=80, step=0, ddpm=True, eta_ddim=1.0
+):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
     hparams = dotdict(hparams)
@@ -129,7 +131,7 @@ def evaluate(model_path, save_dir, ngraphs=5000, batch_size=80, step=0, ddpm=Tru
         inner_verbose=True,
         save_dir=save_dir,
         ddpm=ddpm,
-        eta_ddim=eta_ddim
+        eta_ddim=eta_ddim,
     )
     return results_dict, generated_smiles
 
@@ -164,5 +166,5 @@ if __name__ == "__main__":
         ngraphs=args.ngraphs,
         batch_size=args.batch_size,
         ddpm=not args.ddim,
-        eta_ddim=args.eta_ddim
-        )
+        eta_ddim=args.eta_ddim,
+    )

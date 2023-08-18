@@ -125,6 +125,8 @@ class Trainer(pl.LightningModule):
                 edge_mp=hparams["edge_mp"],
                 context_mapping=hparams["context_mapping"],
                 num_context_features=hparams["num_context_features"],
+                bond_prediction=hparams["bond_prediction"],
+                property_prediction=hparams["property_prediction"],
             )
 
         self.sde_pos = DiscreteDDPM(
@@ -136,7 +138,7 @@ class Trainer(pl.LightningModule):
             nu=2.5,
             enforce_zero_terminal_snr=False,
             T=self.hparams.timesteps,
-            param=self.hparams.continuous_param
+            param=self.hparams.continuous_param,
         )
         self.sde_atom_charge = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -211,7 +213,7 @@ class Trainer(pl.LightningModule):
                 inner_verbose=False,
                 eta_ddim=1.0,
                 ddpm=True,
-                every_k_step=1
+                every_k_step=1,
             )
             self.i += 1
             self.log(
@@ -317,7 +319,9 @@ class Trainer(pl.LightningModule):
         out_dict = self(batch=batch, t=t)
 
         true_data = {
-            "coords": out_dict["coords_true"] if self.hparams.continuous_param == "data" else out_dict["coords_noise_true"],
+            "coords": out_dict["coords_true"]
+            if self.hparams.continuous_param == "data"
+            else out_dict["coords_noise_true"],
             "atoms": out_dict["atoms_true"],
             "charges": out_dict["charges_true"],
             "bonds": out_dict["bonds_true"],
@@ -413,15 +417,21 @@ class Trainer(pl.LightningModule):
         batch_edge_global = data_batch[edge_index_global[0]]
 
         # SAMPLING
-        pos_perturbed, noise_coords_true = self.sde_pos.sample_pos(t, pos_centered, data_batch)
+        pos_perturbed, noise_coords_true = self.sde_pos.sample_pos(
+            t, pos_centered, data_batch
+        )
         atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
             t, atom_types, data_batch, self.dataset_info, type="atoms"
         )
         charges, charges_perturbed = self.cat_charges.sample_categorical(
             t, charges, data_batch, self.dataset_info, type="charges"
         )
-        edge_attr_global_perturbed = self.cat_bonds.sample_edges_categorical(
-            t, edge_index_global, edge_attr_global, data_batch
+        edge_attr_global_perturbed = (
+            self.cat_bonds.sample_edges_categorical(
+                t, edge_index_global, edge_attr_global, data_batch
+            )
+            if not self.hparams.bond_prediction
+            else None
         )
         atom_feats_in_perturbed = torch.cat(
             [atom_types_perturbed, charges_perturbed], dim=-1
@@ -464,7 +474,7 @@ class Trainer(pl.LightningModule):
         save_traj=False,
         ddpm: bool = True,
         eta_ddim: float = 1.0,
-        every_k_step: int = 1
+        every_k_step: int = 1,
     ):
         (
             pos,
@@ -482,7 +492,7 @@ class Trainer(pl.LightningModule):
             save_traj=save_traj,
             ddpm=ddpm,
             eta_ddim=eta_ddim,
-            every_k_step=every_k_step
+            every_k_step=every_k_step,
         )
 
         if torch.any(pos.isnan()):
@@ -523,7 +533,7 @@ class Trainer(pl.LightningModule):
         inner_verbose=False,
         ddpm: bool = True,
         eta_ddim: float = 1.0,
-        every_k_step: int = 1
+        every_k_step: int = 1,
     ):
         b = ngraphs // bs
         l = [bs] * b
@@ -551,7 +561,9 @@ class Trainer(pl.LightningModule):
                 device=self.device,
                 empirical_distribution_num_nodes=self.empirical_num_nodes,
                 save_traj=False,
-                ddpm=ddpm, eta_ddim=eta_ddim, every_k_step=every_k_step
+                ddpm=ddpm,
+                eta_ddim=eta_ddim,
+                every_k_step=every_k_step,
             )
 
             n = batch_num_nodes.sum().item()
@@ -645,7 +657,7 @@ class Trainer(pl.LightningModule):
         save_traj: bool = False,
         ddpm: bool = True,
         eta_ddim: float = 1.0,
-        every_k_step: int = 1
+        every_k_step: int = 1,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         batch_num_nodes = torch.multinomial(
             input=empirical_distribution_num_nodes,
@@ -687,14 +699,22 @@ class Trainer(pl.LightningModule):
         #                                batch=batch,
         #                                max_num_neighbors=self.hparams.max_num_neighbors)
         edge_index_local = None
-        (
-            edge_attr_global,
-            edge_index_global,
-            mask,
-            mask_i,
-        ) = initialize_edge_attrs_reverse(
-            batch, n, self.bonds_prior, self.num_bond_classes, device
+        edge_index_global = (
+            torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
         )
+        edge_index_global, _ = dense_to_sparse(edge_index_global)
+        edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
+        if not self.hparams.bond_prediction:
+            (
+                edge_attr_global,
+                edge_index_global,
+                mask,
+                mask_i,
+            ) = initialize_edge_attrs_reverse(
+                edge_index_global, n, self.bonds_prior, self.num_bond_classes, device
+            )
+        else:
+            edge_attr_global = None
         batch_edge_global = batch[edge_index_global[0]]
 
         pos_traj = []
@@ -704,7 +724,7 @@ class Trainer(pl.LightningModule):
 
         chain = range(self.hparams.timesteps)
         chain = chain[::every_k_step]
-        
+
         iterator = (
             tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         )
@@ -738,7 +758,7 @@ class Trainer(pl.LightningModule):
             edges_pred = out["bonds_pred"].softmax(dim=-1)
             # E x b_0
             charges_pred = charges_pred.softmax(dim=-1)
-            
+
             if ddpm:
                 if self.hparams.noise_scheduler == "adaptive":
                     # positions
@@ -747,9 +767,13 @@ class Trainer(pl.LightningModule):
                     )
                 else:
                     # positions
-                    pos = self.sde_pos.sample_reverse(t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim)
+                    pos = self.sde_pos.sample_reverse(
+                        t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
+                    )
             else:
-                pos = self.sde_pos.sample_reverse_ddim(t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim)
+                pos = self.sde_pos.sample_reverse_ddim(
+                    t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
+                )
 
             # atoms
             atom_types = self.cat_atoms.sample_reverse_categorical(
@@ -766,21 +790,24 @@ class Trainer(pl.LightningModule):
                 num_classes=self.num_charge_classes,
             )
             # edges
-            (
-                edge_attr_global,
-                edge_index_global,
-                mask,
-                mask_i,
-            ) = self.cat_bonds.sample_reverse_edges_categorical(
-                edge_attr_global,
-                edges_pred,
-                t,
-                mask,
-                mask_i,
-                batch=batch,
-                edge_index_global=edge_index_global,
-                num_classes=self.num_bond_classes,
-            )
+            if not self.hparams.bond_prediction:
+                (
+                    edge_attr_global,
+                    edge_index_global,
+                    mask,
+                    mask_i,
+                ) = self.cat_bonds.sample_reverse_edges_categorical(
+                    edge_attr_global,
+                    edges_pred,
+                    t,
+                    mask,
+                    mask_i,
+                    batch=batch,
+                    edge_index_global=edge_index_global,
+                    num_classes=self.num_bond_classes,
+                )
+            else:
+                edge_attr_global = edges_pred
 
             if self.hparams.bond_model_guidance:
                 pos = bond_guidance(

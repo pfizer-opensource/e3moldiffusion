@@ -33,7 +33,24 @@ def to_list(value: Any) -> Sequence:
         return [value]
 
 
-full_atom_encoder = {"H": 0, "C": 1, "N": 2, "O": 3, "F": 4}
+full_atom_encoder = {
+    "H": 0,
+    "B": 1,
+    "C": 2,
+    "N": 3,
+    "O": 4,
+    "F": 5,
+    "Al": 6,
+    "Si": 7,
+    "P": 8,
+    "S": 9,
+    "Cl": 10,
+    "As": 11,
+    "Br": 12,
+    "I": 13,
+    "Hg": 14,
+    "Bi": 15,
+}
 
 
 class QM9Dataset(InMemoryDataset):
@@ -226,7 +243,7 @@ class QM9Dataset(InMemoryDataset):
         statistics = compute_all_statistics(
             data_list,
             self.atom_encoder,
-            charges_dic={-1: 0, 0: 1, 1: 2},
+            charges_dic={-2: 0, -1: 1, 0: 2, 1: 3, 2: 4, 3: 5},
             additional_feats=True,
         )
 

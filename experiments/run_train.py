@@ -47,8 +47,6 @@ if __name__ == "__main__":
     non_adaptive = True
     if hparams.dataset == "drugs":
         dataset = "drugs"
-        from experiments.data.data_info import GEOMInfos as DataInfos
-
         if hparams.use_adaptive_loader:
             print("Using adaptive dataloader")
             non_adaptive = False
@@ -62,26 +60,21 @@ if __name__ == "__main__":
             )
     elif hparams.dataset == "qm9":
         dataset = "qm9"
-        from experiments.data.data_info import QM9Infos as DataInfos
         from experiments.data.qm9.qm9_dataset import QM9DataModule as DataModule
 
     elif hparams.dataset == "aqm":
         dataset = "aqm"
-        from experiments.data.data_info import AQMInfos as DataInfos
         from experiments.data.aqm.aqm_dataset_nonadaptive import (
             AQMDataModule as DataModule,
         )
 
     elif hparams.dataset == "aqm_qm7x":
         dataset = "aqm_qm7x"
-        from experiments.data.data_info import AQMQM7XInfos as DataInfos
         from experiments.data.aqm_qm7x.aqm_qm7x_dataset_nonadaptive import (
             AQMQM7XDataModule as DataModule,
         )
     elif hparams.dataset == "pubchem":
-        dataset = "drugs"  # take dataset infos from GEOM for simplicity
-        from experiments.data.data_info import PubChemInfos as DataInfos
-
+        dataset = "pubchem"  # take dataset infos from GEOM for simplicity
         if hparams.use_adaptive_loader:
             print("Using adaptive dataloader")
             non_adaptive = False
@@ -103,6 +96,8 @@ if __name__ == "__main__":
         datamodule.prepare_data()
         datamodule.setup("fit")
 
+    from experiments.data.data_info import GeneralInfos as DataInfos
+
     dataset_info = DataInfos(datamodule, hparams)
 
     train_smiles = (
@@ -122,7 +117,7 @@ if __name__ == "__main__":
             from experiments.diffusion_pretrain_continuous import Trainer
         else:
             from experiments.diffusion_continuous import Trainer
-    elif hparams.bond_prediction:
+    elif hparams.bond_guidance_model:
         print("Starting bond prediction model via discrete diffusion")
         from experiments.bond_prediction_discrete import Trainer
     elif hparams.property_prediction:
