@@ -126,6 +126,9 @@ class BasicMolecularMetrics(object):
         self.max_components.update(num_components)
         not_connected = 100.0 * error_message[4] / len(generated)
         connected_components = 100.0 - not_connected
+
+        all_smiles = canonicalize_list(all_smiles)
+
         return valid, connected_components, all_smiles, error_message
 
     def compute_uniqueness(self, valid):
@@ -226,7 +229,6 @@ class BasicMolecularMetrics(object):
         self.train_subset = get_random_subset(
             self.train_smiles, self.number_samples, seed=42
         )
-        all_generated_smiles = canonicalize_list(all_generated_smiles)
         similarity = self.get_bulk_similarity_with_train(all_generated_smiles)
         diversity = self.get_bulk_diversity(all_generated_smiles)
         kl_score = self.get_kl_divergence(all_generated_smiles)
