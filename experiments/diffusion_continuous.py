@@ -72,33 +72,47 @@ class Trainer(pl.LightningModule):
         self.num_atom_features = self.num_atom_types + self.num_charge_classes
         self.num_bond_classes = 5
 
-        if hparams.get("no_h"):
-            print("Training without hydrogen")
-            self.hparams.num_atom_types -= 1
+        self.remove_hs = hparams.get("remove_hs")
+        if self.remove_hs:
+            print("Model without modelling explicit hydrogens") 
 
         self.smiles_list = smiles_list
 
         empirical_num_nodes = dataset_info.n_nodes
         self.register_buffer(name="empirical_num_nodes", tensor=empirical_num_nodes)
 
-        self.model = DenoisingEdgeNetwork(
-            hn_dim=(hparams["sdim"], hparams["vdim"]),
-            num_layers=hparams["num_layers"],
-            latent_dim=None,
-            use_cross_product=hparams["use_cross_product"],
-            num_atom_features=self.num_atom_features,
-            num_bond_types=self.num_bond_classes,
-            edge_dim=hparams["edim"],
-            cutoff_local=hparams["cutoff_local"],
-            vector_aggr=hparams["vector_aggr"],
-            fully_connected=hparams["fully_connected"],
-            local_global_model=hparams["local_global_model"],
-            recompute_edge_attributes=True,
-            recompute_radius_graph=False,
-            edge_mp=hparams["edge_mp"],
-            context_mapping=hparams["context_mapping"],
-            num_context_features=hparams["num_context_features"],
-        )
+        if self.hparams.load_ckpt_from_pretrained is not None:
+            print("Loading from pre-trained model checkpoint...")
+
+            self.model = load_model(
+                self.hparams.load_ckpt_from_pretrained, dataset_info
+            )
+            # num_params = len(self.model.state_dict())
+            # for i, param in enumerate(self.model.parameters()):
+            #     if i < num_params // 2:
+            #         param.requires_grad = False
+        else:
+            self.model = DenoisingEdgeNetwork(
+                hn_dim=(hparams["sdim"], hparams["vdim"]),
+                num_layers=hparams["num_layers"],
+                latent_dim=None,
+                use_cross_product=hparams["use_cross_product"],
+                num_atom_features=self.num_atom_features,
+                num_bond_types=self.num_bond_classes,
+                edge_dim=hparams["edim"],
+                cutoff_local=hparams["cutoff_local"],
+                vector_aggr=hparams["vector_aggr"],
+                fully_connected=hparams["fully_connected"],
+                local_global_model=hparams["local_global_model"],
+                recompute_edge_attributes=True,
+                recompute_radius_graph=False,
+                edge_mp=hparams["edge_mp"],
+                context_mapping=hparams["context_mapping"],
+                num_context_features=hparams["num_context_features"],
+                bond_prediction=hparams["bond_prediction"],
+                property_prediction=hparams["property_prediction"],
+                coords_param=hparams["continuous_param"]
+            )
 
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -106,10 +120,11 @@ class Trainer(pl.LightningModule):
             N=hparams["timesteps"],
             scaled_reverse_posterior_sigma=True,
             schedule=self.hparams.noise_scheduler,
-            nu=1.0,
+            nu=1,
             enforce_zero_terminal_snr=False,
             T=self.hparams.timesteps,
-            clamp_alpha_min=0.05
+            clamp_alpha_min=0.05,
+            param=self.hparams.continuous_param,
         )
         self.sde_atom_charge = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -119,6 +134,7 @@ class Trainer(pl.LightningModule):
             schedule=self.hparams.noise_scheduler,
             nu=1,
             enforce_zero_terminal_snr=False,
+            param=self.hparams.continuous_param,
         )
         self.sde_bonds = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -126,12 +142,17 @@ class Trainer(pl.LightningModule):
             N=hparams["timesteps"],
             scaled_reverse_posterior_sigma=True,
             schedule=self.hparams.noise_scheduler,
-            nu=1.5,
+            nu=1,
             enforce_zero_terminal_snr=False,
+            param=self.hparams.continuous_param,
         )
-
         self.diffusion_loss = DiffusionLoss(
-            modalities=["coords", "atoms", "charges", "bonds"]
+            modalities=["coords", "atoms", "charges", "bonds"],
+            param=[self.hparams.continuous_param,
+                   self.hparams.continuous_param,
+                   self.hparams.continuous_param,
+                   self.hparams.continuous_param
+                   ]
         )
 
     def training_step(self, batch, batch_idx):
@@ -150,6 +171,9 @@ class Trainer(pl.LightningModule):
                 bs=self.hparams.inference_batch_size,
                 verbose=True,
                 inner_verbose=False,
+                eta_ddim=1.0,
+                ddpm=True,
+                every_k_step=1,
             )
             self.i += 1
             self.log(name="val/validity", value=final_res.validity[0], on_epoch=True)
@@ -165,6 +189,7 @@ class Trainer(pl.LightningModule):
             )
 
     def step_fnc(self, batch, batch_idx, stage: str):
+        
         batch_size = int(batch.batch.max()) + 1
         t = torch.randint(
             low=1,
@@ -173,6 +198,18 @@ class Trainer(pl.LightningModule):
             dtype=torch.long,
             device=batch.x.device,
         )
+    
+        if self.hparams.loss_weighting == "snr_s_t":
+            weights = self.sde_atom_charge.snr_s_t_weighting(s=t-1, t=t).to(batch.x.device)
+        elif self.hparams.loss_weighting == "snr_t":
+            weights = self.sde_atom_charge.snr_t_weighting(t=t, device=batch.x.device)
+        elif self.hparams.loss_weighting == "exp_t":
+            weights = self.sde_atom_charge.exp_t_weighting(t=t, device=batch.x.device)
+        elif self.hparams.loss_weighting == "exp_t_half":
+            weights = self.sde_atom_charge.exp_t_half_weighting(t=t, device=batch.x.device)
+        elif self.hparams.loss_weighting == "uniform":
+            weights = None
+            
         if self.hparams.context_mapping:
             context = prepare_context(
                 self.hparams["properties_list"],
@@ -181,19 +218,25 @@ class Trainer(pl.LightningModule):
                 self.hparams.dataset,
             )
             batch.context = context
-
-        if self.hparams.use_loss_weighting:
-            weights = torch.clip(torch.exp(-t / 200), min=0.1).to(self.device)
-        else:
-            weights = None
-
+            
         out_dict = self(batch=batch, t=t)
 
         true_data = {
-            "coords": out_dict["coords_true"],
-            "atoms": out_dict["atoms_true"],
-            "charges": out_dict["charges_true"],
-            "bonds": out_dict["bonds_true"],
+            "coords": out_dict["coords_true"]
+            if self.hparams.continuous_param == "data"
+            else out_dict["coords_noise_true"],
+            
+            "atoms": out_dict["atoms_true"] 
+            if self.hparams.continuous_param == "data"
+            else out_dict["atoms_noise_true"],
+            
+            "charges": out_dict["charges_true"]
+            if self.hparams.continuous_param == "data"
+            else out_dict["charges_noise_true"],
+            
+            "bonds": out_dict["bonds_true"]
+            if self.hparams.continuous_param == "data"
+            else out_dict["bonds_noise_true"],
         }
 
         coords_pred = out_dict["coords_pred"]
@@ -219,10 +262,10 @@ class Trainer(pl.LightningModule):
         )
 
         final_loss = (
-            3.0 * loss["coords"]
-            + 0.4 * loss["atoms"]
-            + 2.0 * loss["bonds"]
-            + 1.0 * loss["charges"]
+            self.hparams.lc_coords * loss["coords"]
+            + self.hparams.lc_atoms * loss["atoms"]
+            + self.hparams.lc_bonds * loss["bonds"]
+            + self.hparams.lc_charges * loss["charges"]
         )
 
         if torch.any(final_loss.isnan()):
@@ -253,6 +296,11 @@ class Trainer(pl.LightningModule):
         n = batch.num_nodes
         bs = int(data_batch.max()) + 1
 
+        # TIME EMBEDDING
+        temb = t.float() / self.hparams.timesteps
+        temb = temb.clamp(min=self.hparams.eps_min)
+        temb = temb.unsqueeze(dim=1)
+        
         bond_edge_index, bond_edge_attr = sort_edge_index(
             edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
         )
@@ -309,11 +357,7 @@ class Trainer(pl.LightningModule):
         edge_attr_global_perturbed = dense_edge_ohe_perturbed[
             edge_index_global[0, :], edge_index_global[1, :], :
         ]
-        # edge_attr_global_noise = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
-
-        temb = t.float() / self.hparams.timesteps
-        temb = temb.clamp(min=self.hparams.eps_min)
-        temb = temb.unsqueeze(dim=1)
+        edge_attr_global_noise = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
 
         # Coords: point cloud in R^3
         # sample noise for coords and recenter
@@ -331,10 +375,10 @@ class Trainer(pl.LightningModule):
         pos_perturbed = mean_coords + std_coords * noise_coords_true
 
         # Atom-types
-        if self.hparams.no_h:
-            node_feat -= 1
-
         atom_types = F.one_hot(atom_types, num_classes=self.num_atom_types).float()
+        if self.hparams.continuous_param == "noise":
+            atom_types = 0.25 * atom_types
+            
         # sample noise for OHEs in {0, 1}^NUM_CLASSES
         noise_atom_types = torch.randn_like(atom_types)
         mean_ohes, std_ohes = self.sde_atom_charge.marginal_prob(
@@ -386,6 +430,11 @@ class Trainer(pl.LightningModule):
         out["atoms_perturbed"] = atom_types_perturbed
         out["charges_perturbed"] = charges_perturbed
         out["bonds_perturbed"] = edge_attr_global_perturbed
+        
+        out["coords_noise_true"] = noise_coords_true
+        out["atoms_noise_true"] = noise_atom_types
+        out["charges_noise_true"] = noise_charges
+        out["bonds_noise_true"] = edge_attr_global_noise
 
         out["coords_true"] = pos_centered
         out["atoms_true"] = atom_types.argmax(dim=-1)
@@ -404,6 +453,9 @@ class Trainer(pl.LightningModule):
         device: torch.device,
         verbose=False,
         save_traj=False,
+        ddpm: bool = True,
+        eta_ddim: float = 1.0,
+        every_k_step: int = 1,
     ):
         (
             pos,
@@ -419,6 +471,9 @@ class Trainer(pl.LightningModule):
             empirical_distribution_num_nodes=empirical_distribution_num_nodes,
             verbose=verbose,
             save_traj=save_traj,
+            ddpm=ddpm,
+            eta_ddim=eta_ddim,
+            every_k_step=every_k_step,
         )
 
         pos_splits = pos.detach().split(batch_num_nodes.cpu().tolist(), dim=0)
@@ -430,10 +485,6 @@ class Trainer(pl.LightningModule):
             batch_num_nodes.cpu().tolist(), dim=0
         )
         atom_types_integer = torch.argmax(atom_types, dim=-1)
-        if self.hparams.no_h:
-            raise NotImplementedError  # remove in future or implement
-            atom_types_integer += 1
-
         atom_types_integer_split = atom_types_integer.detach().split(
             batch_num_nodes.cpu().tolist(), dim=0
         )
@@ -459,6 +510,9 @@ class Trainer(pl.LightningModule):
         return_smiles: bool = False,
         verbose: bool = False,
         inner_verbose=False,
+        ddpm: bool = True,
+        eta_ddim: float = 1.0,
+        every_k_step: int = 1,
     ):
         b = ngraphs // bs
         l = [bs] * b
@@ -486,6 +540,9 @@ class Trainer(pl.LightningModule):
                 device=self.empirical_num_nodes.device,
                 empirical_distribution_num_nodes=self.empirical_num_nodes,
                 save_traj=False,
+                ddpm=ddpm,
+                eta_ddim=eta_ddim,
+                every_k_step=every_k_step,
             )
 
             n = batch_num_nodes.sum().item()
@@ -576,6 +633,9 @@ class Trainer(pl.LightningModule):
         device: torch.device,
         verbose: bool = False,
         save_traj: bool = False,
+        ddpm: bool = True,
+        eta_ddim: float = 1.0,
+        every_k_step: int = 1,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         batch_num_nodes = torch.multinomial(
             input=empirical_distribution_num_nodes,
@@ -641,7 +701,12 @@ class Trainer(pl.LightningModule):
         charge_type_traj = []
         edge_type_traj = []
 
-        chain = range(self.hparams.timesteps)
+        if self.hparams.continuous_param == "data":
+            chain = range(0, self.hparams.timesteps)
+        elif self.hparams.continuous_param == "noise":
+            chain = range(0, self.hparams.timesteps - 1)
+            
+        chain = chain[::every_k_step]
 
         iterator = (
             tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
@@ -670,71 +735,105 @@ class Trainer(pl.LightningModule):
             atoms_pred, charges_pred = out["atoms_pred"].split(
                 [self.num_atom_types, self.num_charge_classes], dim=-1
             )
-            atoms_pred = atoms_pred.softmax(dim=-1)
-            # N x a_0
-            edges_pred = out["bonds_pred"].softmax(dim=-1)
-            # E x b_0
-            charges_pred = charges_pred.softmax(dim=-1)
+            edges_pred = out["bonds_pred"]
+            
+            if self.hparams.continuous_param == "data":
+                atoms_pred = atoms_pred.softmax(dim=-1)
+                # N x a_0
+                edges_pred = edges_pred.softmax(dim=-1)
+                # E x b_0
+                charges_pred = charges_pred.softmax(dim=-1)
 
-            if self.hparams.noise_scheduler == "adaptive":
-                pos = self.sde_pos.sample_reverse_adaptive(
-                    s,
-                    t,
-                    pos,
-                    coords_pred,
-                    batch,
-                    cog_proj=True,
-                )
-                atom_types = self.sde_atom_charge.sample_reverse_adaptive(
-                    s,
-                    t,
-                    atom_types,
-                    atoms_pred,
-                    batch,
-                )
-                charge_types = self.sde_atom_charge.sample_reverse_adaptive(
-                    s,
-                    t,
-                    charge_types,
-                    charges_pred,
-                    batch,
-                )
-                edge_attr_global = self.sde_bonds.sample_reverse_adaptive(
-                    s,
-                    t,
-                    edge_attr_global,
-                    edges_pred,
-                    batch_edge_global,
-                    edge_attrs=edge_attrs,
-                    edge_index_global=edge_index_global,
-                )
-
+            if ddpm:
+                if self.hparams.noise_scheduler == "adaptive":
+                    pos = self.sde_pos.sample_reverse_adaptive(
+                        s,
+                        t,
+                        pos,
+                        coords_pred,
+                        batch,
+                        cog_proj=True,
+                    )
+                    atom_types = self.sde_atom_charge.sample_reverse_adaptive(
+                        s,
+                        t,
+                        atom_types,
+                        atoms_pred,
+                        batch,
+                    )
+                    charge_types = self.sde_atom_charge.sample_reverse_adaptive(
+                        s,
+                        t,
+                        charge_types,
+                        charges_pred,
+                        batch,
+                    )
+                    edge_attr_global = self.sde_bonds.sample_reverse_adaptive(
+                        s,
+                        t,
+                        edge_attr_global,
+                        edges_pred,
+                        batch_edge_global,
+                        edge_attrs=edge_attrs,
+                        edge_index_global=edge_index_global,
+                    )
+                else:
+                    pos = self.sde_pos.sample_reverse(
+                        t,
+                        pos,
+                        coords_pred,
+                        batch,
+                        cog_proj=True,
+                    )
+                    atom_types = self.sde_atom_charge.sample_reverse(
+                        t,
+                        atom_types,
+                        atoms_pred,
+                        batch,
+                    )
+                    charge_types = self.sde_atom_charge.sample_reverse(
+                        t,
+                        charge_types,
+                        charges_pred,
+                        batch,
+                    )
+                    edge_attr_global = self.sde_bonds.sample_reverse(
+                        t,
+                        edge_attr_global,
+                        edges_pred,
+                        batch_edge_global,
+                        edge_index_global=edge_index_global,
+                    )
             else:
-                pos = self.sde_pos.sample_reverse(
-                    t,
-                    pos,
-                    coords_pred,
-                    batch,
-                    cog_proj=True,
-                )
-                atom_types = self.sde_atom_charge.sample_reverse(
+                pos = self.sde_pos.sample_reverse_ddim(
+                        t,
+                        pos,
+                        coords_pred,
+                        batch,
+                        cog_proj=True,
+                        eta_ddim=eta_ddim
+                    )
+                atom_types = self.sde_atom_charge.sample_reverse_ddim(
                     t,
                     atom_types,
                     atoms_pred,
                     batch,
+                    eta_ddim=eta_ddim
                 )
-                charge_types = self.sde_atom_charge.sample_reverse(
+                charge_types = self.sde_atom_charge.sample_reverse_ddim(
                     t,
                     charge_types,
                     charges_pred,
                     batch,
+                    eta_ddim=eta_ddim
                 )
-                edge_attr_global = self.sde_bonds.sample_reverse(
+                edge_attr_global = self.sde_bonds.sample_reverse_ddim(
                     t,
                     edge_attr_global,
                     edges_pred,
                     batch_edge_global,
                     edge_index_global=edge_index_global,
+                    eta_ddim=eta_ddim
                 )
 
             if not self.hparams.fully_connected:
@@ -823,24 +922,42 @@ class Trainer(pl.LightningModule):
             self.model.parameters(),
             lr=self.hparams["lr"],
             amsgrad=True,
-            weight_decay=1e-12,
+            weight_decay=1.0e-12,
         )
-        # lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        #    optimizer=optimizer,
-        #    patience=self.hparams["lr_patience"],
-        #    cooldown=self.hparams["lr_cooldown"],
-        #    factor=self.hparams["lr_factor"],
-        # )
-        # lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-        #    optimizer=optimizer,
-        #    gamma=self.hparams.gamma,
-        #    last_epoch=-1
-        # )
-        # scheduler = {
-        #    "scheduler": lr_scheduler,
-        #    "interval": "epoch",
-        #    "frequency": self.hparams["lr_frequency"],
-        #    "monitor": "val/loss",
-        #    "strict": False,
-        # }
-        return [optimizer]  # , [scheduler]
+        if self.hparams["lr_scheduler"] == "reduce_on_plateau":
+            lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer=optimizer,
+                patience=self.hparams["lr_patience"],
+                cooldown=self.hparams["lr_cooldown"],
+                factor=self.hparams["lr_factor"],
+            )
+        elif self.hparams["lr_scheduler"] == "cyclic":
+            lr_scheduler = torch.optim.lr_scheduler.CyclicLR(
+                optimizer,
+                base_lr=self.hparams["lr_min"],
+                max_lr=self.hparams["lr"],
+                mode="exp_range",
+                step_size_up=self.hparams["lr_step_size"],
+                cycle_momentum=False,
+            )
+        elif self.hparams["lr_scheduler"] == "one_cyclic":
+            lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimizer,
+                max_lr=self.hparams["lr"],
+                steps_per_epoch=len(self.trainer.datamodule.train_dataset),
+                epochs=self.hparams["num_epochs"],
+            )
+        elif self.hparams["lr_scheduler"] == "cosine_annealing":
+            lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=self.hparams["lr_patience"],
+                eta_min=self.hparams["lr_min"],
+            )
+        scheduler = {
+            "scheduler": lr_scheduler,
+            "interval": "epoch",
+            "frequency": self.hparams["lr_frequency"],
+            "monitor": "val/coords_loss_epoch",
+            "strict": False,
+        }
+        return [optimizer], [scheduler]

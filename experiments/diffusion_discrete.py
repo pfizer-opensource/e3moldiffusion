@@ -187,7 +187,8 @@ class Trainer(pl.LightningModule):
         )
 
         self.diffusion_loss = DiffusionLoss(
-            modalities=["coords", "atoms", "charges", "bonds"]
+            modalities=["coords", "atoms", "charges", "bonds"],
+            param=["data", "data", "data", "data"]
         )
 
         if self.hparams.bond_model_guidance:
@@ -303,34 +304,25 @@ class Trainer(pl.LightningModule):
     def step_fnc(self, batch, batch_idx, stage: str):
         batch_size = int(batch.batch.max()) + 1
         
-        if self.hparams.loss_weighting in ["weighted", "uniform"]:
-            t = torch.randint(
-                low=1,
-                high=self.hparams.timesteps + 1,
-                size=(batch_size,),
-                dtype=torch.long,
-                device=batch.x.device,
-            )
-            if self.hparams.loss_weighting == "weighted":   
-                # method 1 with exponential function
-                # ts = t_int_to_frac(t, 1, self.hparams.timesteps + 1)
-                # weights = truncated_exp_distribution(theta=2.0, x=ts)
-                # method 2 with old weighting
-                # weights = torch.clip(torch.exp(-t / 200), min=0.1).to(self.device)
-                # methdd 3, using SNR ratio but clipping
-                # because nu=1 for bonds, equals cosine scheduler
-                snr = self.sde_bonds.alphas_cumprod[t] / (1.0 - self.sde_bonds.alphas_cumprod[t])
-                weights = snr.clamp(min=0.05, max=5.0)
-            else:
-                weights = None
-        else:
-            # relates to method 2
-            t = sample_from_truncated_exp(theta=2.0, num_samples=batch_size, device=batch.x.device)
-            # is in (0, 1), convert into integers (1, tmax)
-            t = t_frac_to_int(t, tmin=1, tmax=self.hparams.timesteps + 1)
-            t = t.clamp(min=1, max=self.hparams.timesteps).to(batch.x.device)
+    
+        t = torch.randint(
+            low=1,
+            high=self.hparams.timesteps + 1,
+            size=(batch_size,),
+            dtype=torch.long,
+            device=batch.x.device,
+        )
+        if self.hparams.loss_weighting == "snr_s_t":
+            weights = self.sde_atom_charge.snr_s_t_weighting(s=t-1, t=t, device=batch.x.device, clamp_min=0.05, clamp_max=1.5)
+        elif self.hparams.loss_weighting == "snr_t":
+            weights = self.sde_atom_charge.snr_t_weighting(t=t, device=batch.x.device, device=batch.x.device, clamp_min=0.05, clamp_max=1.5)
+        elif self.hparams.loss_weighting == "exp_t":
+            weights = self.sde_atom_charge.exp_t_weighting(t=t, device=batch.x.device)
+        elif self.hparams.loss_weighting == "exp_t_half":
+            weights = self.sde_atom_charge.exp_t_half_weighting(t=t, device=batch.x.device)
+        elif self.hparams.loss_weighting == "uniform":
             weights = None
-                        
+                          
         if self.hparams.context_mapping:
             context = prepare_context(
                 self.hparams["properties_list"],

@@ -544,7 +544,8 @@ class DiscreteDDPM(nn.Module):
         if self.schedule == "cosine":
             if self.param == "noise":
                 # convert noise prediction back to data prediction
-                alpha_bar, sigma_bar = self.alphas_cum_prod[t].unsqueeze(-1), \
+                # TODO: Use direct sampling instead going back
+                alpha_bar, sigma_bar = self.alphas_cum_prod[t].unsqueeze(-1).sqrt(), \
                     self.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
                 model_out = (1.0 / alpha_bar[batch]) * xt - (sigma_bar[batch] / alpha_bar[batch]) * model_out
             rev_sigma = self.reverse_posterior_sigma[t].unsqueeze(-1)
@@ -558,6 +559,7 @@ class DiscreteDDPM(nn.Module):
         elif self.schedule == "adaptive":
             if self.param == "noise":
                 # convert noise prediction back to data prediction
+                # TODO: Use direct sampling instead going back
                 alpha_bar, sigma_bar = self.get_alpha_bar(t_int=t).unsqueeze(-1), \
                     self.get_sigma_bar(t_int=t).unsqueeze(-1)
                 model_out = (1.0 / alpha_bar[batch]) * xt - (sigma_bar[batch] / alpha_bar[batch]) * model_out
@@ -600,7 +602,7 @@ class DiscreteDDPM(nn.Module):
 
         return xt_m1
 
-    def snr_s_t_weighting(self, s, t):
+    def snr_s_t_weighting(self, s, t, device, clamp_min: float = 0.05, clamp_max: float = 1.5):
         signal_s = self.alphas_cumprod[s]
         noise_s = 1.0 - signal_s
         snr_s = signal_s / noise_s
@@ -609,15 +611,16 @@ class DiscreteDDPM(nn.Module):
         noise_t = 1.0 - signal_t
         snr_t = signal_t / noise_t
         weights = snr_s - snr_t
+        weights = weights.clamp(min=clamp_min, max=clamp_max).to(device)
         return weights
 
-    def snr_t_weighting(self, t, device):
-        signal = (
+    def snr_t_weighting(self, t, device, clamp_min: float = 0.05, clamp_max: float = 1.5):
+        weights = (
             (self.alphas_cumprod[t] / (1.0 - self.alphas_cumprod[t]))
-            .clamp(min=0.05, max=5.0)
+            .clamp(min=clamp_min, max=clamp_max)
             .to(device)
         )
-        return signal
+        return weights
 
     def exp_t_half_weighting(self, t, device):
         weights = torch.clip(torch.exp(-t / 100 + 1 / 2), min=0.1).to(device)

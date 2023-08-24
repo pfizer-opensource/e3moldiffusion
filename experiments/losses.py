@@ -7,10 +7,14 @@ from torch_scatter import scatter_mean
 
 class DiffusionLoss(nn.Module):
     def __init__(
-        self, modalities: List = ["coords", "atoms", "charges", "bonds"]
+        self, 
+        modalities: List = ["coords", "atoms", "charges", "bonds"],
+        param: List = ["data", "data", "data", "data"]
     ) -> None:
         super().__init__()
+        assert len(modalities) == len(param)
         self.modalities = modalities
+        self.param = param
 
         if "coords" in modalities:
             self.regression_key = "coords"
@@ -48,7 +52,12 @@ class DiffusionLoss(nn.Module):
             regr_loss *= weights
             regr_loss = torch.sum(regr_loss, dim=0)
 
-            atoms_loss = F.cross_entropy(
+            if self.param[self.modalities.index("atoms")] == "data":
+                fnc = F.cross_entropy
+            else:
+                fnc = F.mse_loss
+                
+            atoms_loss = fnc(
                 pred_data["atoms"], true_data["atoms"], reduction="none"
             )
             atoms_loss = scatter_mean(
@@ -58,7 +67,12 @@ class DiffusionLoss(nn.Module):
             atoms_loss *= weights
             atoms_loss = torch.sum(atoms_loss, dim=0)
 
-            charges_loss = F.cross_entropy(
+            if self.param[self.modalities.index("charges")] == "data":
+                fnc = F.cross_entropy
+            else:
+                fnc = F.mse_loss
+                
+            charges_loss = fnc(
                 pred_data["charges"], true_data["charges"], reduction="none"
             )
             charges_loss = scatter_mean(
@@ -68,7 +82,12 @@ class DiffusionLoss(nn.Module):
             charges_loss *= weights
             charges_loss = torch.sum(charges_loss, dim=0)
 
-            bonds_loss = F.cross_entropy(
+            if self.param[self.modalities.index("bonds")] == "data":
+                fnc = F.cross_entropy
+            else:
+                fnc = F.mse_loss
+                
+            bonds_loss = fnc(
                 pred_data["bonds"], true_data["bonds"], reduction="none"
             )
             bonds_loss = 0.5 * scatter_mean(
@@ -129,13 +148,25 @@ class DiffusionLoss(nn.Module):
                 true_data[self.regression_key],
                 reduction="mean",
             ).mean(-1)
-            atoms_loss = F.cross_entropy(
+            if self.param[self.modalities.index("atoms")] == "data":
+                fnc = F.cross_entropy
+            else:
+                fnc = F.mse_loss
+            atoms_loss = fnc(
                 pred_data["atoms"], true_data["atoms"], reduction="mean"
             )
-            charges_loss = F.cross_entropy(
+            if self.param[self.modalities.index("charges")] == "data":
+                fnc = F.cross_entropy
+            else:
+                fnc = F.mse_loss
+            charges_loss = fnc(
                 pred_data["charges"], true_data["charges"], reduction="mean"
             )
-            bonds_loss = F.cross_entropy(
+            if self.param[self.modalities.index("bonds")] == "data":
+                fnc = F.cross_entropy
+            else:
+                fnc = F.mse_loss
+            bonds_loss = fnc(
                 pred_data["bonds"], true_data["bonds"], reduction="mean"
             )
             

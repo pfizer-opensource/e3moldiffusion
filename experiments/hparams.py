@@ -97,7 +97,7 @@ def add_arguments(parser):
     parser.add_argument("--lc-bonds", default=2.0, type=float)
     parser.add_argument("--lc-charges", default=1.0, type=float)
 
-    parser.add_argument("--loss-weighting", default="uniform", choices=["weighted", "sampled", "uniform"])
+    parser.add_argument("--loss-weighting", default="uniform", choices=["snr_s_t", "snr_t", "exp_t", "expt_t_half", "uniform"])
     parser.add_argument("--diffusion-pretraining", default=False, action="store_true")
     parser.add_argument(
         "--continuous-param", default="data", type=str, choices=["data", "noise"]
