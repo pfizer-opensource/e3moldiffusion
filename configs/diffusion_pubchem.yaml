@@ -4,7 +4,7 @@
 
 diffusion_pretraining: true
 
-batch_size: 200
+batch_size: 150
 inference_batch_size: 70
 ema_decay: 0.999
 grad_clip_val: 10

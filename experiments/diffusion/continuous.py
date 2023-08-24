@@ -525,6 +525,33 @@ class DiscreteDDPM(nn.Module):
 
         return xt_m1
 
+    def snr_s_t_weighting(self, s, t):
+        signal_s = self.alphas_cumprod[s]
+        noise_s = 1.0 - signal_s
+        snr_s = signal_s / noise_s
+
+        signal_t = self.alphas_cumprod[t]
+        noise_t = 1.0 - signal_t
+        snr_t = signal_t / noise_t
+        weights = snr_s - snr_t
+        return weights
+
+    def snr_t_weighting(self, t, device):
+        signal = (
+            (self.alphas_cumprod[t] / (1.0 - self.alphas_cumprod[t]))
+            .clamp(min=0.05, max=5.0)
+            .to(device)
+        )
+        return signal
+
+    def exp_t_half_weighting(self, t, device):
+        weights = torch.clip(torch.exp(-t / 100 + 1 / 2), min=0.1).to(device)
+        return weights
+
+    def exp_t_weighting(self, t, device):
+        weights = torch.clip(torch.exp(-t / 200), min=0.1).to(device)
+        return weights
+
 
 if __name__ == "__main__":
     T = 500

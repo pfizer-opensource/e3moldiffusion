@@ -334,7 +334,7 @@ class Trainer(pl.LightningModule):
 
         # MASKING PREDICTION
         edge_index_global, edge_mask, node_mask = dropout_node(
-            edge_index_global, p=0.50
+            edge_index_global, p=0.20
         )
         edge_attr_global_perturbed = edge_attr_global_perturbed[edge_mask]
         pos_perturbed = pos_perturbed[node_mask]
