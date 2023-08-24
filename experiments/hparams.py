@@ -83,19 +83,23 @@ def add_arguments(parser):
     parser.add_argument(
         "--noise-scheduler",
         default="cosine",
-        choices=["linear", "cosine", "quad", "sigmoid", "adaptive"],
+        choices=["linear", "cosine", "quad", "sigmoid", "adaptive", "linear-time"],
     )
     parser.add_argument("--eps-min", default=1e-3, type=float)
     parser.add_argument("--beta-min", default=1e-4, type=float)
     parser.add_argument("--beta-max", default=2e-2, type=float)
     parser.add_argument("--timesteps", default=500, type=int)
     parser.add_argument("--max-time", type=str, default=None)
-    parser.add_argument("--use-loss-weighting", default=False, action="store_true")
+    parser.add_argument("--lc-coords", default=3.0, type=float)
+    parser.add_argument("--lc-atoms", default=0.4, type=float)
+    parser.add_argument("--lc-bonds", default=2.0, type=float)
+    parser.add_argument("--lc-charges", default=1.0, type=float)
+
+    parser.add_argument("--loss-weighting", default="uniform", choices=["weighted", "sampled", "uniform"])
     parser.add_argument("--diffusion-pretraining", default=False, action="store_true")
     parser.add_argument(
         "--continuous-param", default="data", type=str, choices=["data", "noise"]
     )
-
     # BOND PREDICTION AND GUIDANCE:
     parser.add_argument("--bond-guidance-model", default=False, action="store_true")
     parser.add_argument("--bond-prediction", default=False, action="store_true")
