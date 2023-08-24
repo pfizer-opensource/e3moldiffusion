@@ -40,6 +40,9 @@ from experiments.utils import (
     zero_mean,
     load_model,
     load_bond_model,
+    truncated_exp_distribution,
+    sample_from_truncated_exp,
+    t_frac_to_int, t_int_to_frac
 )
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.losses import DiffusionLoss
@@ -127,6 +130,7 @@ class Trainer(pl.LightningModule):
                 num_context_features=hparams["num_context_features"],
                 bond_prediction=hparams["bond_prediction"],
                 property_prediction=hparams["property_prediction"],
+                coords_param=hparams["continuous_param"]
             )
 
         self.sde_pos = DiscreteDDPM(
@@ -139,6 +143,7 @@ class Trainer(pl.LightningModule):
             enforce_zero_terminal_snr=False,
             T=self.hparams.timesteps,
             param=self.hparams.continuous_param,
+            clamp_alpha_min=0.05
         )
         self.sde_atom_charge = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -297,13 +302,35 @@ class Trainer(pl.LightningModule):
 
     def step_fnc(self, batch, batch_idx, stage: str):
         batch_size = int(batch.batch.max()) + 1
-        t = torch.randint(
-            low=1,
-            high=self.hparams.timesteps + 1,
-            size=(batch_size,),
-            dtype=torch.long,
-            device=batch.x.device,
-        )
+        
+        if self.hparams.loss_weighting in ["weighted", "uniform"]:
+            t = torch.randint(
+                low=1,
+                high=self.hparams.timesteps + 1,
+                size=(batch_size,),
+                dtype=torch.long,
+                device=batch.x.device,
+            )
+            if self.hparams.loss_weighting == "weighted":   
+                # method 1 with exponential function
+                # ts = t_int_to_frac(t, 1, self.hparams.timesteps + 1)
+                # weights = truncated_exp_distribution(theta=2.0, x=ts)
+                # method 2 with old weighting
+                # weights = torch.clip(torch.exp(-t / 200), min=0.1).to(self.device)
+                # methdd 3, using SNR ratio but clipping
+                # because nu=1 for bonds, equals cosine scheduler
+                snr = self.sde_bonds.alphas_cumprod[t] / (1.0 - self.sde_bonds.alphas_cumprod[t])
+                weights = snr.clamp(min=0.05, max=5.0)
+            else:
+                weights = None
+        else:
+            # relates to method 2
+            t = sample_from_truncated_exp(theta=2.0, num_samples=batch_size, device=batch.x.device)
+            # is in (0, 1), convert into integers (1, tmax)
+            t = t_frac_to_int(t, tmin=1, tmax=self.hparams.timesteps + 1)
+            t = t.clamp(min=1, max=self.hparams.timesteps).to(batch.x.device)
+            weights = None
+                        
         if self.hparams.context_mapping:
             context = prepare_context(
                 self.hparams["properties_list"],
@@ -312,10 +339,7 @@ class Trainer(pl.LightningModule):
                 self.hparams.dataset,
             )
             batch.context = context
-        if self.hparams.use_loss_weighting:
-            weights = torch.clip(torch.exp(-t / 200), min=0.1).to(self.device)
-        else:
-            weights = None
+       
         out_dict = self(batch=batch, t=t)
 
         true_data = {
@@ -350,12 +374,13 @@ class Trainer(pl.LightningModule):
         )
 
         final_loss = (
-            3.0 * loss["coords"]
-            + 0.4 * loss["atoms"]
-            + 2.0 * loss["bonds"]
-            + 1.0 * loss["charges"]
+            self.hparams.lc_coords * loss["coords"]
+            + self.hparams.lc_atoms * loss["atoms"]
+            + self.hparams.lc_bonds * loss["bonds"]
+            + self.hparams.lc_charges * loss["charges"]
         )
-
+    
+    
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
             print(f"Detected NaNs. Terminating training at epoch {self.current_epoch}")
@@ -722,7 +747,11 @@ class Trainer(pl.LightningModule):
         charge_type_traj = []
         edge_type_traj = []
 
-        chain = range(self.hparams.timesteps)
+        if self.hparams.continuous_param == "data":
+            chain = range(0, self.hparams.timesteps)
+        elif self.hparams.continuous_param == "noise":
+            chain = range(0, self.hparams.timesteps - 1)
+            
         chain = chain[::every_k_step]
 
         iterator = (
@@ -734,6 +763,7 @@ class Trainer(pl.LightningModule):
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=pos.device
             )
             t = s + 1
+            
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
             node_feats_in = torch.cat([atom_types, charge_types], dim=-1)
@@ -758,7 +788,7 @@ class Trainer(pl.LightningModule):
             edges_pred = out["bonds_pred"].softmax(dim=-1)
             # E x b_0
             charges_pred = charges_pred.softmax(dim=-1)
-
+                
             if ddpm:
                 if self.hparams.noise_scheduler == "adaptive":
                     # positions
@@ -788,7 +818,7 @@ class Trainer(pl.LightningModule):
                 x0=charges_pred,
                 t=t[batch],
                 num_classes=self.num_charge_classes,
-            )
+            )                     
             # edges
             if not self.hparams.bond_prediction:
                 (

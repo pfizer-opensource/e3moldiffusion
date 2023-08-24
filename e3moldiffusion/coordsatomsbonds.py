@@ -19,6 +19,7 @@ class PredictionHeadEdge(nn.Module):
         edge_dim: int,
         num_atom_features: int,
         num_bond_types: int = 5,
+        coords_param: str = "data"
     ) -> None:
         super(PredictionHeadEdge, self).__init__()
         self.sdim, self.vdim = hn_dim
@@ -41,6 +42,8 @@ class PredictionHeadEdge(nn.Module):
             in_features=self.sdim, out_features=num_atom_features, bias=True
         )
 
+        self.coords_param = coords_param
+        
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -59,16 +62,20 @@ class PredictionHeadEdge(nn.Module):
         coords_pred = self.coords_lin(v).squeeze()
 
         atoms_pred = self.atoms_lin(s)
-
-        coords_pred = p + coords_pred
-        coords_pred = coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
+        
+        if self.coords_param == "data":
+            coords_pred = p + coords_pred
+            coords_pred = coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
+            d = (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)  # .sqrt()
+        else:
+            d = (p[i] - p[j]).pow(2).sum(-1, keepdim=True)  # .sqrt()
+            coords_pred = coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
 
         e_dense = torch.zeros(n, n, e.size(-1), device=e.device)
         e_dense[edge_index_global[0], edge_index_global[1], :] = e
         e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
         e = e_dense[edge_index_global[0], edge_index_global[1], :]
 
-        d = (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)  # .sqrt()
         f = s[i] + s[j] + self.bond_mapping(e)
         edge = torch.cat([f, d], dim=-1)
 
@@ -168,6 +175,7 @@ class DenoisingEdgeNetwork(nn.Module):
         num_context_features: int = 0,
         property_prediction: bool = False,
         bond_prediction: bool = False,
+        coords_param: str = "data"
     ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
@@ -236,6 +244,7 @@ class DenoisingEdgeNetwork(nn.Module):
                 edge_dim=edge_dim,
                 num_atom_features=num_atom_features,
                 num_bond_types=self.num_bond_types,
+                coords_param=coords_param
             )
 
         self.reset_parameters()

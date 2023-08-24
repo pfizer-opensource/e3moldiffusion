@@ -33,7 +33,10 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = F
         mol = Chem.RemoveAllHs(mol)
     
     # added:
-    Chem.SanitizeMol(mol)
+    try:
+        Chem.SanitizeMol(mol)
+    except:
+        pass
     
     adj = torch.from_numpy(Chem.rdmolops.GetAdjacencyMatrix(mol, useBO=True))
     edge_index = adj.nonzero().contiguous().T

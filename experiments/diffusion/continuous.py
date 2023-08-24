@@ -32,7 +32,8 @@ def get_beta_schedule(
     kind: str = "cosine",
     nu: float = 1.0,
     plot: bool = False,
-    **kwargs
+    clamp_alpha_min = 0.05,
+    **kwargs,
 ):
     if kind == "quad":
         betas = (
@@ -60,8 +61,12 @@ def get_beta_schedule(
             ** 2
         )
         alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
-        betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
-        betas = torch.clip(betas, 0.0, 0.999)
+        ### new included
+        alphas_cumprod = torch.from_numpy(clip_noise_schedule(alphas_cumprod, clip_value=clamp_alpha_min))
+        alphas = alphas_cumprod[1:] / alphas_cumprod[:-1]
+        alphas = alphas.clip(min=0.001)
+        betas = 1 - alphas
+        betas = torch.clip(betas, 0.0, 0.999).float()
     elif kind == "polynomial":
         s = kwargs.get("s")
         p = kwargs.get("p")
@@ -72,7 +77,7 @@ def get_beta_schedule(
         steps = num_diffusion_timesteps + 1
         x = np.linspace(0, steps, steps)
         alphas2 = (1 - np.power(x / steps, p)) ** 2
-        alphas2 = clip_noise_schedule(alphas2, clip_value=0.001)
+        alphas2 = clip_noise_schedule(alphas2, clip_value=clamp_alpha_min)
         precision = 1 - 2 * s
         alphas2 = precision * alphas2 + s
         alphas = np.sqrt(alphas2)
@@ -87,30 +92,43 @@ def get_beta_schedule(
         x = np.expand_dims(x, 0)  # ((1, steps))
 
         nu_arr = np.array(nu)  # (components, )  # X, charges, E, y, pos
-
+        _steps = steps
+        # _steps = num_diffusion_timesteps
         alphas_cumprod = (
-            np.cos(0.5 * np.pi * (((x / steps) ** nu_arr) + s) / (1 + s)) ** 2
+            np.cos(0.5 * np.pi * (((x / _steps) ** nu_arr) + s) / (1 + s)) ** 2
         )  # ((components, steps))
         # divide every element of alphas_cumprod by the first element of alphas_cumprod
         alphas_cumprod_new = alphas_cumprod / alphas_cumprod[:, 0]
+        ### new included
+        alphas_cumprod_new = clip_noise_schedule(alphas_cumprod_new.squeeze(), clip_value=clamp_alpha_min)[None, ...]
         # remove the first element of alphas_cumprod and then multiply every element by the one before it
         alphas = alphas_cumprod_new[:, 1:] / alphas_cumprod_new[:, :-1]
-
+        # alphas[:, alphas.shape[1]-1] = 0.001
+        alphas = alphas.clip(min=0.001)
         betas = 1 - alphas  # ((components, steps)) # X, charges, E, y, pos
         betas = np.swapaxes(betas, 0, 1)
         betas = torch.clip(torch.from_numpy(betas), 0.0, 0.999).squeeze().float()
-
+    elif kind == "linear-time":
+        t = np.linspace(1e-6, 1.0, num_diffusion_timesteps + 1)
+        alphas_cumprod = 1.0 - t
+        alphas_cumprod = clip_noise_schedule(alphas_cumprod, clip_value=0.001)
+        alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
+        alphas = alphas_cumprod[1:] / alphas_cumprod[:-1]
+        alphas = alphas.clip(min=clamp_alpha_min)
+        betas = 1 - alphas
+        betas = np.clip(betas, 0.0, 0.999)
+        betas = torch.from_numpy(betas).float().squeeze()
+        
     if plot:
         plt.plot(range(len(betas)), betas)
         plt.xlabel("t")
         plt.ylabel("beta")
         plt.show()
-
         alphas = 1.0 - betas
         signal_coeff = alphas.cumprod(0)
         noise_coeff = torch.sqrt(1.0 - signal_coeff)
-        plt.plot(np.arange(num_diffusion_timesteps), signal_coeff, label="signal")
-        plt.plot(np.arange(num_diffusion_timesteps), noise_coeff, label="noise")
+        plt.plot(np.arange(len(signal_coeff)), signal_coeff, label="signal")
+        plt.plot(np.arange(len(noise_coeff)), noise_coeff, label="noise")
         plt.legend()
         plt.show()
 
@@ -129,6 +147,7 @@ class DiscreteDDPM(nn.Module):
         enforce_zero_terminal_snr: bool = False,
         T: int = 500,
         param: str = "data",
+        clamp_alpha_min=0.05,
         **kwargs
     ):
         """Constructs discrete Diffusion schedule according to DDPM in Ho et al. (2020).
@@ -152,6 +171,7 @@ class DiscreteDDPM(nn.Module):
             "sigmoid",
             "polynomial",
             "adaptive",
+            "linear-time"
         ]
 
         discrete_betas = get_beta_schedule(
@@ -161,6 +181,7 @@ class DiscreteDDPM(nn.Module):
             kind=schedule,
             nu=nu,
             plot=False,
+            alpha_clamp=clamp_alpha_min
         )
 
         self.schedule = schedule
@@ -173,8 +194,10 @@ class DiscreteDDPM(nn.Module):
 
         sqrt_betas = torch.sqrt(discrete_betas)
         alphas = 1.0 - discrete_betas
-
+        
+        # is used when using noise parameterization. last entry can be rather small and hence 1/sqrt_alphas approx 31.6230
         sqrt_alphas = torch.sqrt(alphas)
+        
         if schedule == "adaptive":
             log_alpha = torch.log(alphas)
             log_alpha_bar = torch.cumsum(log_alpha, dim=0)
@@ -191,11 +214,13 @@ class DiscreteDDPM(nn.Module):
             )
         else:
             alphas_cumprod = torch.cumprod(alphas, dim=0)
+            
         alphas_cumprod_prev = torch.nn.functional.pad(
             alphas_cumprod[:-1], (1, 0), value=1.0
         )
         sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
         sqrt_1m_alphas_cumprod = torch.sqrt(1.0 - alphas_cumprod)
+        sqrt_1m_alphas_cumprod = sqrt_1m_alphas_cumprod.clamp(min=1e-4)
 
         if scaled_reverse_posterior_sigma:
             rev_variance = (
@@ -337,7 +362,33 @@ class DiscreteDDPM(nn.Module):
         sigma_ratio_sq = self.get_sigma_pos_sq_ratio(s_int=s_int, t_int=t_int)
         prefactor = a_s * (1 - alpha_ratio_sq * sigma_ratio_sq)
         return prefactor.float()
+    
+    # from EDM
+    def sigma_and_alpha_t_given_s(self, gamma_t: torch.Tensor, gamma_s: torch.Tensor):
+        """
+        Computes sigma t given s, using gamma_t and gamma_s. Used during sampling.
 
+        These are defined as:
+            alpha t given s = alpha t / alpha s,
+            sigma t given s = sqrt(1 - (alpha t given s) ^2 ).
+        """
+        sigma2_t_given_s = -torch.expm1(F.softplus(gamma_s) - F.softplus(gamma_t))
+        # alpha_t_given_s = alpha_t / alpha_s
+        log_alpha2_t = F.logsigmoid(-gamma_t)
+        log_alpha2_s = F.logsigmoid(-gamma_s)
+        log_alpha2_t_given_s = log_alpha2_t - log_alpha2_s
+        alpha_t_given_s = torch.exp(0.5 * log_alpha2_t_given_s)
+        sigma_t_given_s = torch.sqrt(sigma2_t_given_s)
+        return sigma2_t_given_s, sigma_t_given_s, alpha_t_given_s
+    
+    def sigma(self, gamma):
+        """Computes sigma given gamma."""
+        return torch.sqrt(torch.sigmoid(gamma))
+
+    def alpha(self, gamma):
+        """Computes alpha given gamma."""
+        return torch.sqrt(torch.sigmoid(-gamma))
+    
     def sample_reverse(
         self,
         t,
@@ -379,22 +430,17 @@ class DiscreteDDPM(nn.Module):
                 + sqrt_alphas_cumprod_prev[batch] * one_m_alphas[batch] * model_out
             )
             mean = (1.0 / sigmas2t[batch]) * mean
-
-            xt_m1 = mean + eta_ddim * std * noise
-
-        elif self.param == "noise":
-            noise_predictor_prefactor = (
-                self.discrete_betas[t] / self.sqrt_1m_alphas_cumprod[t]
-            )
-            noise_predictor_prefactor = noise_predictor_prefactor.unsqueeze(-1)
-            factor = 1.0 / self.sqrt_alphas[t].unsqueeze(-1)
-
-            xt_m1 = (
-                factor[batch] * (xt - noise_predictor_prefactor[batch] * model_out)
-                + std * noise
-            )
-
+            xt_m1 = mean + eta_ddim * std * noise 
+        else:
+            a = 1 / self.sqrt_alphas[t].unsqueeze(-1)[batch].clamp(max=2.0)
+            b = self.discrete_betas[t].unsqueeze(-1)[batch]
+            c = self.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)[batch].clamp_min(1e-4)
+            xt_m1 = a * (xt - (b / c) * model_out) + eta_ddim * std * noise
+            
+        # added while debugging
+        xt_m1 = zero_mean(xt_m1, batch=batch, dim_size=bs, dim=0)
         return xt_m1
+
 
     def sample_pos(self, t, pos, data_batch):
         # Coords: point cloud in R^3
@@ -434,35 +480,53 @@ class DiscreteDDPM(nn.Module):
             if cog_proj:
                 noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
 
-        sigma_sq_ratio = self.get_sigma_pos_sq_ratio(s_int=s, t_int=t)
-
-        prefactor1 = self.get_sigma2_bar(t_int=t)
-        prefactor2 = self.get_sigma2_bar(t_int=s) * self.get_alpha_pos_ts_sq(
-            t_int=t, s_int=s
-        )
-        sigma2_t_s = prefactor1 - prefactor2
-        noise_prefactor_sq = sigma2_t_s * sigma_sq_ratio
-        noise_prefactor = torch.sqrt(noise_prefactor_sq).unsqueeze(-1)
-
         if self.param == "data":
+            sigma_sq_ratio = self.get_sigma_pos_sq_ratio(s_int=s, t_int=t)
+
+            prefactor1 = self.get_sigma2_bar(t_int=t)
+            prefactor2 = self.get_sigma2_bar(t_int=s) * self.get_alpha_pos_ts_sq(
+                t_int=t, s_int=s
+            )
+            sigma2_t_s = prefactor1 - prefactor2
+            noise_prefactor_sq = sigma2_t_s * sigma_sq_ratio
+            noise_prefactor = torch.sqrt(noise_prefactor_sq).unsqueeze(-1)
+        
             z_t_prefactor = (
                 self.get_alpha_pos_ts(t_int=t, s_int=s) * sigma_sq_ratio
             ).unsqueeze(-1)
             x_prefactor = self.get_x_pos_prefactor(s_int=s, t_int=t).unsqueeze(-1)
             mu = z_t_prefactor[batch] * xt + x_prefactor[batch] * model_out
             xt_m1 = mu + eta_ddim * noise_prefactor[batch] * noise
-        elif self.param == "noise":
-            alpha_ts = self.get_alpha_pos_ts(t_int=t, s_int=s).unsqueeze(-1)
-            z_t_prefactor = 1.0 / alpha_ts
-            sigma2_t = self.get_sigma2_bar(t_int=t).unsqueeze(-1)
-            sigma2_s = self.get_sigma2_bar(t_int=s).unsqueeze(-1)
-            sigma2_ts = sigma2_t - alpha_ts.pow(2) * sigma2_s
-            noise_predictor_prefactor = sigma2_ts / (alpha_ts * sigma2_t.sqrt())
-            xt_m1 = (
-                z_t_prefactor[batch] * xt
-                - noise_predictor_prefactor[batch] * model_out
-                + noise_prefactor[batch] * noise
-            )
+        else:
+            gamma_t, gamma_s = self.get_gamma(t_int=t), self.get_gamma(t_int=s)
+            sigma2_t_given_s, sigma_t_given_s, alpha_t_given_s = \
+            self.sigma_and_alpha_t_given_s(gamma_t, gamma_s)
+            
+            alpha_t_given_s = alpha_t_given_s.clamp(min=0.001)             
+            sigma2_t_given_s, sigma_t_given_s, alpha_t_given_s = sigma2_t_given_s.unsqueeze(-1), \
+                sigma_t_given_s.unsqueeze(-1), alpha_t_given_s.unsqueeze(-1)
+            
+            a = 1.0 / alpha_t_given_s
+            a = a[batch]
+            
+            sigma_s, sigma_t = self.sigma(gamma_s).unsqueeze(-1), self.sigma(gamma_t).unsqueeze(-1)
+
+            mu = xt * a.clamp(max=2.5) - (sigma2_t_given_s[batch] * a.clamp(max=2.5) / sigma_t[batch]) * model_out            
+            sigma = sigma_t_given_s * sigma_s / sigma_t            
+            xt_m1 = mu + eta_ddim * sigma[batch] * noise
+            
+            #rev_sigma = self.reverse_posterior_sigma[t].unsqueeze(-1)
+            #noise = torch.randn_like(xt)
+            #std = rev_sigma[batch]
+            #a = 1 / self.sqrt_alphas[t].unsqueeze(-1)[batch].clamp(max=2.0)
+            #b = self.discrete_betas[t].unsqueeze(-1)[batch]
+            #c = self.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)[batch].clamp_min(1e-4)
+            #xt_m1 = a * (xt - (b / c) * model_out) + eta_ddim * std * noise
+
+
+        # added while debugging
+        xt_m1 = zero_mean(xt_m1, batch=batch, dim_size=bs, dim=0)
+
         return xt_m1
 
     def sample_reverse_ddim(
@@ -478,6 +542,11 @@ class DiscreteDDPM(nn.Module):
         assert 0.0 <= eta_ddim <= 1.0
 
         if self.schedule == "cosine":
+            if self.param == "noise":
+                # convert noise prediction back to data prediction
+                alpha_bar, sigma_bar = self.alphas_cum_prod[t].unsqueeze(-1), \
+                    self.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
+                model_out = (1.0 / alpha_bar[batch]) * xt - (sigma_bar[batch] / alpha_bar[batch]) * model_out
             rev_sigma = self.reverse_posterior_sigma[t].unsqueeze(-1)
             rev_sigma_ddim = eta_ddim * rev_sigma
 
@@ -485,8 +554,14 @@ class DiscreteDDPM(nn.Module):
             sqrt_alphas_cumprod_prev = alphas_cumprod_prev.sqrt()
 
             sqrt_alphas_cumprod = self.sqrt_alphas_cumprod[t].unsqueeze(-1)
-            sqrt_one_m_alphas_cumprod = self.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)
+            sqrt_one_m_alphas_cumprod = self.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)  
         elif self.schedule == "adaptive":
+            if self.param == "noise":
+                # convert noise prediction back to data prediction
+                alpha_bar, sigma_bar = self.get_alpha_bar(t_int=t).unsqueeze(-1), \
+                    self.get_sigma_bar(t_int=t).unsqueeze(-1)
+                model_out = (1.0 / alpha_bar[batch]) * xt - (sigma_bar[batch] / alpha_bar[batch]) * model_out
+            
             sigma_sq_ratio = self.get_sigma_pos_sq_ratio(s_int=t - 1, t_int=t)
             prefactor1 = self.get_sigma2_bar(t_int=t)
             prefactor2 = self.get_sigma2_bar(t_int=t - 1) * self.get_alpha_pos_ts_sq(
@@ -527,18 +602,81 @@ class DiscreteDDPM(nn.Module):
 
 
 if __name__ == "__main__":
+    
     T = 500
-    schedule = "cosine"
-
     sde = DiscreteDDPM(
         beta_min=1e-4,
         beta_max=2e-2,
         N=T,
         scaled_reverse_posterior_sigma=True,
-        schedule=schedule,
+        schedule="cosine",
         enforce_zero_terminal_snr=False,
+        nu=2.5
     )
-
+    s = torch.arange(1, T)
+    t = s + 1
+    signal_s = sde.alphas_cumprod[s]
+    noise_s = 1.0 - signal_s
+    snr_s = signal_s / noise_s
+    
+    signal_t = sde.alphas_cumprod[t]
+    noise_t = 1.0 - signal_t
+    snr_t = signal_t / noise_t
+    w = snr_s - snr_t
+    
+    ids = 1
+    plt.plot(range(len(w))[ids:], w[ids:].clamp(min=5.0), label="weighting")
+    plt.legend()
+    plt.show()
+    
+        
+    ids = 1
+    plt.plot(range(len(sde.alphas_cumprod)),(sde.alphas_cumprod / (1.0 - sde.alphas_cumprod)).clamp(min=0.05, max=5.0), label="weighting")
+    plt.legend()
+    plt.show()
+    
+    
+    logsnr_s = torch.log(snr_s)
+    logsnr_t = torch.log(snr_t)
+    
+    weights = torch.clip(torch.exp(-t / 200), min=0.1)
+    ids = 0
+    plt.plot(range(len(weights))[ids:], weights[ids:], label="weighting")
+    plt.legend()
+    plt.show()
+    
+    signal = sde.alphas_cumprod
+    noise = 1.0 - signal
+    plt.plot(np.arange(len(signal)), signal.sqrt(), label="signal")
+    plt.plot(np.arange(len(noise)), noise.sqrt(), label="noise")
+    plt.xlabel("timesteps")
+    # adaptive    
+    sde = DiscreteDDPM(
+        beta_min=1e-4,
+        beta_max=2e-2,
+        N=T,
+        scaled_reverse_posterior_sigma=True,
+        schedule='adaptive',
+        enforce_zero_terminal_snr=False,
+        nu=2.5
+    )
+    t = torch.arange(0, T)
+    signal = sde.get_alpha_bar(t_int=t)
+    noise = sde.get_sigma_bar(t_int=t)
+    plt.plot(t, signal.sqrt(), label="adaptive-signal-sqrt")  
+    plt.plot(t, noise, label="adaptive-noise")
+    plt.xlabel("timesteps")
+    
+    t = torch.arange(0, T)
+    signal = sde.get_alpha_bar(t_int=t)
+    noise = sde.get_sigma_bar(t_int=t)
+    plt.plot(t, signal, label="adaptive-signal")  
+    plt.plot(t, noise, label="adaptive-nois")
+    plt.xlabel("timesteps")
+    
+    plt.legend()
+    plt.show()
+    
     sde.plot_signal_to_noise()
 
     plt.plot(range(len(sde.discrete_betas)), sde.discrete_betas, label="betas")

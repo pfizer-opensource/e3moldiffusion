@@ -22,9 +22,13 @@ from experiments.data.distributions import prepare_context
 from experiments.molecule_utils import Molecule
 from experiments.utils import (
     coalesce_edges,
-    get_empirical_num_nodes,
     get_list_of_edge_adjs,
     zero_mean,
+    load_model,
+    load_bond_model,
+    truncated_exp_distribution,
+    sample_from_truncated_exp,
+    t_frac_to_int, t_int_to_frac
 )
 from experiments.sampling.analyze import analyze_stability_for_molecules
 
@@ -102,9 +106,10 @@ class Trainer(pl.LightningModule):
             N=hparams["timesteps"],
             scaled_reverse_posterior_sigma=True,
             schedule=self.hparams.noise_scheduler,
-            nu=2.5,
+            nu=1.0,
             enforce_zero_terminal_snr=False,
             T=self.hparams.timesteps,
+            clamp_alpha_min=0.05
         )
         self.sde_atom_charge = DiscreteDDPM(
             beta_min=hparams["beta_min"],

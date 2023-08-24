@@ -9,6 +9,7 @@ from rdkit import Chem
 from torch_sparse import coalesce
 from e3moldiffusion.molfeat import atom_type_config
 from torch_scatter import scatter_mean
+import math
 
 # fmt: off
 # Atomic masses are based on:
@@ -486,3 +487,27 @@ def create_bond_model(hparams, dataset_statistics):
         edge_mp=hparams["edge_mp"],
     )
     return model
+
+
+def truncated_exp_distribution(theta, x):
+    return theta * torch.exp(-theta * x) / (1 - math.exp(-theta))
+
+def cdf_exp_distribution(theta, x):
+    return 1 - torch.exp(-theta * x)
+
+def cdf_truncated_exp_distribution(theta, x):
+    return cdf_exp_distribution(theta, x) / cdf_exp_distribution(theta, torch.ones_like(x))
+
+def quantile_func_truncated_exp_distribution(theta, p):
+    return -1 / theta * torch.log(1 - p * (1-math.exp(-theta)))
+
+def sample_from_truncated_exp(theta, num_samples, device='cpu'):
+    t = torch.rand((num_samples,), device=device)
+    w = quantile_func_truncated_exp_distribution(theta=theta, p=t)
+    return w
+
+def t_int_to_frac(t, tmin, tmax):
+    return (t - tmin) / tmax
+
+def t_frac_to_int(t, tmin, tmax):
+    return (t * tmax + tmin).long()
