@@ -83,7 +83,6 @@ class BasicMolecularMetrics(object):
         """generated: list of couples (positions, atom_types)"""
         valid = []
         num_components = []
-        all_smiles = []
         error_message = Counter()
         for mol in generated:
             rdmol = mol.rdkit_mol
@@ -101,7 +100,6 @@ class BasicMolecularMetrics(object):
                     Chem.SanitizeMol(largest_mol)
                     smiles = Chem.MolToSmiles(largest_mol)
                     valid.append(smiles)
-                    all_smiles.append(smiles)
                     error_message[-1] += 1
                 except Chem.rdchem.AtomValenceException:
                     error_message[1] += 1
@@ -127,9 +125,9 @@ class BasicMolecularMetrics(object):
         not_connected = 100.0 * error_message[4] / len(generated)
         connected_components = 100.0 - not_connected
 
-        all_smiles = canonicalize_list(all_smiles)
+        valid = canonicalize_list(valid)
 
-        return valid, connected_components, all_smiles, error_message
+        return valid, connected_components, error_message
 
     def compute_uniqueness(self, valid):
         """valid: list of SMILES strings."""
@@ -151,7 +149,7 @@ class BasicMolecularMetrics(object):
         """generated: list of pairs (positions: n x 3, atom_types: n [int])
         the positions and atom types should already be masked."""
         # Validity
-        valid, connected_components, all_smiles, error_message = self.compute_validity(
+        valid_smiles, connected_components, error_message = self.compute_validity(
             generated, local_rank=local_rank
         )
 
@@ -161,9 +159,11 @@ class BasicMolecularMetrics(object):
         max_components = self.max_components.compute()
 
         # Uniqueness
-        if len(valid) > 0:
-            unique = list(set(valid))
-            self.uniqueness.update(value=len(unique) / len(valid), weight=len(valid))
+        if len(valid_smiles) > 0:
+            unique = list(set(valid_smiles))
+            self.uniqueness.update(
+                value=len(unique) / len(valid_smiles), weight=len(valid_smiles)
+            )
             uniqueness = self.uniqueness.compute()
 
             if self.train_smiles is not None:
@@ -188,7 +188,7 @@ class BasicMolecularMetrics(object):
                 f"{connected_components:.2f}"
             )
 
-        return all_smiles, validity, novelty, uniqueness, connected_components
+        return valid_smiles, validity, novelty, uniqueness, connected_components
 
     def __call__(self, molecules: list, local_rank=0, return_smiles=False):
         # Atom and molecule stability

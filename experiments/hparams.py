@@ -28,7 +28,9 @@ def add_arguments(parser):
     # DATA and FILES
     parser.add_argument("-s", "--save-dir", default=DEFAULT_SAVE_DIR, type=str)
     parser.add_argument(
-        "--dataset", default="drugs", choices=["qm9", "drugs", "aqm", "aqm_qm7x"]
+        "--dataset",
+        default="drugs",
+        choices=["qm9", "drugs", "aqm", "aqm_qm7x", "pcqm4mv2"],
     )
     parser.add_argument(
         "--dataset-root", default="/hpfs/userws/cremej01/projects/data/geom"

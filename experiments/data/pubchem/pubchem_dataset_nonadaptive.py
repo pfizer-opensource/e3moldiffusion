@@ -127,9 +127,9 @@ class PubChemDataModule(LightningDataModule):
         self.dataset = PubChemLMDBDataset(root=self.datadir)
         self.idx_train, self.idx_val, self.idx_test = make_splits(
             len(self.dataset),
-            train_size=0.8,
+            train_size=0.9,
             val_size=0.1,
-            test_size=0.1,
+            test_size=0.0,
             seed=42,
             filename=join(self.hparams["save_dir"], "splits.npz"),
             splits=None,

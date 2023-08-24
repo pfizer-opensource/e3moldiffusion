@@ -73,6 +73,18 @@ if __name__ == "__main__":
         from experiments.data.aqm_qm7x.aqm_qm7x_dataset_nonadaptive import (
             AQMQM7XDataModule as DataModule,
         )
+    elif hparams.dataset == "pcqm4mv2":
+        dataset = "pcqm4mv2"
+        if hparams.use_adaptive_loader:
+            print("Using adaptive dataloader")
+            from experiments.data.pcqm4mv2.pcqm4mv2_dataset_adaptive import (
+                PCQM4Mv2DataModule as DataModule,
+            )
+        else:
+            print("Using non-adaptive dataloader")
+            from experiments.data.pcqm4mv2.pcqm4mv2_dataset_nonadaptive import (
+                PCQM4Mv2DataModule as DataModule,
+            )
     elif hparams.dataset == "pubchem":
         dataset = "pubchem"  # take dataset infos from GEOM for simplicity
         if hparams.use_adaptive_loader:
@@ -105,9 +117,8 @@ if __name__ == "__main__":
     )
     prop_norm, prop_dist = None, None
     if len(hparams.properties_list) > 0 and hparams.context_mapping:
-        dataloader = datamodule.get_dataloader(datamodule.train_dataset, "val")
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
-        prop_dist = DistributionProperty(dataloader, hparams.properties_list)
+        prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
 
     if hparams.continuous:
@@ -117,7 +128,7 @@ if __name__ == "__main__":
             from experiments.diffusion_pretrain_continuous import Trainer
         else:
             from experiments.diffusion_continuous import Trainer
-    elif hparams.bond_guidance_model:
+    elif hparams.bond_prediction:
         print("Starting bond prediction model via discrete diffusion")
         from experiments.bond_prediction_discrete import Trainer
     elif hparams.property_prediction:
