@@ -26,9 +26,6 @@ from experiments.utils import (
     zero_mean,
     load_model,
     load_bond_model,
-    truncated_exp_distribution,
-    sample_from_truncated_exp,
-    t_frac_to_int, t_int_to_frac
 )
 from experiments.sampling.analyze import analyze_stability_for_molecules
 
@@ -617,8 +614,9 @@ class Trainer(pl.LightningModule):
                 print(f"Saving evaluation csv file to {save_dir}")
             else:
                 save_dir = os.path.join(save_dir, "evaluation.csv")
-            with open(save_dir, "a") as f:
-                total_res.to_csv(f, header=True)
+            if self.local_rank == 0:
+                with open(save_dir, "a") as f:
+                    total_res.to_csv(f, header=True)
         except Exception as e:
             print(e)
             pass

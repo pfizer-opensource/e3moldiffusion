@@ -39,10 +39,7 @@ from experiments.utils import (
     get_list_of_edge_adjs,
     zero_mean,
     load_model,
-    load_bond_model,
-    truncated_exp_distribution,
-    sample_from_truncated_exp,
-    t_frac_to_int, t_int_to_frac
+    load_bond_model
 )
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.losses import DiffusionLoss
@@ -73,7 +70,6 @@ class Trainer(pl.LightningModule):
         self.mol_stab = 0.5
 
         self.dataset_info = dataset_info
-
         self.prop_norm = prop_norm
         self.prop_dist = prop_dist
 
@@ -143,7 +139,6 @@ class Trainer(pl.LightningModule):
             enforce_zero_terminal_snr=False,
             T=self.hparams.timesteps,
             param=self.hparams.continuous_param,
-            clamp_alpha_min=0.05
         )
         self.sde_atom_charge = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -554,6 +549,7 @@ class Trainer(pl.LightningModule):
         ddpm: bool = True,
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
+        save_best_ckpt: bool = True
     ):
         b = ngraphs // bs
         l = [bs] * b
@@ -628,7 +624,8 @@ class Trainer(pl.LightningModule):
         if self.mol_stab < stability_dict["mol_stable"]:
             self.mol_stab = stability_dict["mol_stable"]
             save_path = os.path.join(self.hparams.save_dir, "best_mol_stab.ckpt")
-            self.trainer.save_checkpoint(save_path)
+            if save_best_ckpt:
+                self.trainer.save_checkpoint(save_path)
 
         run_time = datetime.now() - start
         if verbose:
@@ -657,8 +654,9 @@ class Trainer(pl.LightningModule):
                 print(f"Saving evaluation csv file to {save_dir}")
             else:
                 save_dir = os.path.join(save_dir, "evaluation.csv")
-            with open(save_dir, "a") as f:
-                total_res.to_csv(f, header=True)
+            if self.local_rank == 0:
+                with open(save_dir, "a") as f:
+                    total_res.to_csv(f, header=True)
         except Exception as e:
             print(e)
             pass

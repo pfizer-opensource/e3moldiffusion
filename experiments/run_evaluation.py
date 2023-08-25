@@ -18,7 +18,7 @@ class dotdict(dict):
 
 
 def evaluate(
-    model_path, save_dir, ngraphs=5000, batch_size=80, step=0, ddpm=True, eta_ddim=1.0
+    model_path, save_dir, ngraphs=5000, batch_size=80, step=0, ddpm=True, eta_ddim=1.0, every_k_step=1
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -132,6 +132,8 @@ def evaluate(
         save_dir=save_dir,
         ddpm=ddpm,
         eta_ddim=eta_ddim,
+        save_best_ckpt=False,
+        every_k_step=every_k_step
     )
     return results_dict, generated_smiles
 
@@ -153,6 +155,8 @@ def get_args():
                         help='How to scale the std of noise in the reverse posterior. \
                             Can also be used for DDPM to track a deterministic trajectory. \
                             Defaults to 1.0')
+    parser.add_argument('--every_k_step', default=1, type=int,
+                            help='How many k-steps along the reverse diffusion trajectory to take. Defaults to 1.')
     args = parser.parse_args()
     return args
 
@@ -167,4 +171,5 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         ddpm=not args.ddim,
         eta_ddim=args.eta_ddim,
+        every_k_step=args.every_k_step
     )

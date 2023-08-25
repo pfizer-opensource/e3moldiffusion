@@ -650,7 +650,7 @@ if __name__ == "__main__":
         scaled_reverse_posterior_sigma=True,
         schedule="adaptive",
         enforce_zero_terminal_snr=False,
-        nu=2.5
+        nu=1.0
     )
     s = torch.arange(1, T)
     t = s + 1
