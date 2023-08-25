@@ -200,9 +200,11 @@ class Trainer(pl.LightningModule):
         )
     
         if self.hparams.loss_weighting == "snr_s_t":
-            weights = self.sde_atom_charge.snr_s_t_weighting(s=t-1, t=t).to(batch.x.device)
+            weights = self.sde_atom_charge.snr_s_t_weighting(s=t-1, t=t,
+                                                             clamp_min=None, clamp_max=None).to(batch.x.device)
         elif self.hparams.loss_weighting == "snr_t":
-            weights = self.sde_atom_charge.snr_t_weighting(t=t, device=batch.x.device)
+            weights = self.sde_atom_charge.snr_t_weighting(t=t, device=batch.x.device,
+                                                           clamp_min=0.05, clamp_max=5.0)
         elif self.hparams.loss_weighting == "exp_t":
             weights = self.sde_atom_charge.exp_t_weighting(t=t, device=batch.x.device)
         elif self.hparams.loss_weighting == "exp_t_half":
@@ -802,6 +804,7 @@ class Trainer(pl.LightningModule):
                         edge_attr_global,
                         edges_pred,
                         batch_edge_global,
+                        edge_attrs=edge_attrs,
                         edge_index_global=edge_index_global,
                     )
             else:

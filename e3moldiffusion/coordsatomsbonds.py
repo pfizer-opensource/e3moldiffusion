@@ -19,7 +19,7 @@ class PredictionHeadEdge(nn.Module):
         edge_dim: int,
         num_atom_features: int,
         num_bond_types: int = 5,
-        coords_param: str = "data"
+        coords_param: str = "data",
     ) -> None:
         super(PredictionHeadEdge, self).__init__()
         self.sdim, self.vdim = hn_dim

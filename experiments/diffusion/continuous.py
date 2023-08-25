@@ -397,6 +397,7 @@ class DiscreteDDPM(nn.Module):
         batch,
         cog_proj=False,
         edge_index_global=None,
+        edge_attrs=None,
         eta_ddim: float = 1.0,
     ):
         rev_sigma = self.reverse_posterior_sigma[t].unsqueeze(-1)
@@ -404,10 +405,12 @@ class DiscreteDDPM(nn.Module):
         std = rev_sigma[batch]
 
         if edge_index_global is not None:
+            noise = torch.randn_like(edge_attrs)
             noise = 0.5 * (noise + noise.permute(1, 0, 2))
             noise = noise[edge_index_global[0, :], edge_index_global[1, :], :]
         else:
             bs = int(batch.max()) + 1
+            noise = torch.randn_like(xt)
             if cog_proj:
                 noise = zero_mean(noise, batch=batch, dim_size=bs, dim=0)
 
@@ -438,7 +441,9 @@ class DiscreteDDPM(nn.Module):
             xt_m1 = a * (xt - (b / c) * model_out) + eta_ddim * std * noise
             
         # added while debugging
-        xt_m1 = zero_mean(xt_m1, batch=batch, dim_size=bs, dim=0)
+        if edge_index_global is None and cog_proj:
+            xt_m1 = zero_mean(xt_m1, batch=batch, dim_size=bs, dim=0)
+            
         return xt_m1
 
 
@@ -525,7 +530,8 @@ class DiscreteDDPM(nn.Module):
 
 
         # added while debugging
-        xt_m1 = zero_mean(xt_m1, batch=batch, dim_size=bs, dim=0)
+        if edge_index_global is None and cog_proj:
+            xt_m1 = zero_mean(xt_m1, batch=batch, dim_size=bs, dim=0)
 
         return xt_m1
 
@@ -602,7 +608,7 @@ class DiscreteDDPM(nn.Module):
 
         return xt_m1
 
-    def snr_s_t_weighting(self, s, t, device, clamp_min: float = 0.05, clamp_max: float = 1.5):
+    def snr_s_t_weighting(self, s, t, device, clamp_min=None, clamp_max=None):
         signal_s = self.alphas_cumprod[s]
         noise_s = 1.0 - signal_s
         snr_s = signal_s / noise_s
@@ -611,8 +617,11 @@ class DiscreteDDPM(nn.Module):
         noise_t = 1.0 - signal_t
         snr_t = signal_t / noise_t
         weights = snr_s - snr_t
-        weights = weights.clamp(min=clamp_min, max=clamp_max).to(device)
-        return weights
+        if clamp_min:
+            weights = weights.clamp_min(clamp_min)
+        if clamp_max:
+            weights = weights.clamp_max(clamp_max)
+        return weights.to(device)
 
     def snr_t_weighting(self, t, device, clamp_min: float = 0.05, clamp_max: float = 1.5):
         weights = (
@@ -639,7 +648,7 @@ if __name__ == "__main__":
         beta_max=2e-2,
         N=T,
         scaled_reverse_posterior_sigma=True,
-        schedule="cosine",
+        schedule="adaptive",
         enforce_zero_terminal_snr=False,
         nu=2.5
     )

@@ -304,7 +304,6 @@ class Trainer(pl.LightningModule):
     def step_fnc(self, batch, batch_idx, stage: str):
         batch_size = int(batch.batch.max()) + 1
         
-    
         t = torch.randint(
             low=1,
             high=self.hparams.timesteps + 1,
@@ -313,9 +312,13 @@ class Trainer(pl.LightningModule):
             device=batch.x.device,
         )
         if self.hparams.loss_weighting == "snr_s_t":
-            weights = self.sde_atom_charge.snr_s_t_weighting(s=t-1, t=t, device=batch.x.device, clamp_min=0.05, clamp_max=1.5)
+            weights = self.sde_atom_charge.snr_s_t_weighting(s=t-1, t=t,
+                                                             clamp_min=None, 
+                                                             clamp_max=None).to(batch.x.device)
         elif self.hparams.loss_weighting == "snr_t":
-            weights = self.sde_atom_charge.snr_t_weighting(t=t, device=batch.x.device, device=batch.x.device, clamp_min=0.05, clamp_max=1.5)
+            weights = self.sde_atom_charge.snr_t_weighting(t=t, device=batch.x.device,
+                                                           clamp_min=0.05,
+                                                           clamp_max=5.0)
         elif self.hparams.loss_weighting == "exp_t":
             weights = self.sde_atom_charge.exp_t_weighting(t=t, device=batch.x.device)
         elif self.hparams.loss_weighting == "exp_t_half":
