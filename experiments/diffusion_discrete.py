@@ -39,7 +39,7 @@ from experiments.utils import (
     get_list_of_edge_adjs,
     zero_mean,
     load_model,
-    load_bond_model
+    load_bond_model,
 )
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.losses import DiffusionLoss
@@ -126,7 +126,7 @@ class Trainer(pl.LightningModule):
                 num_context_features=hparams["num_context_features"],
                 bond_prediction=hparams["bond_prediction"],
                 property_prediction=hparams["property_prediction"],
-                coords_param=hparams["continuous_param"]
+                coords_param=hparams["continuous_param"],
             )
 
         self.sde_pos = DiscreteDDPM(
@@ -183,7 +183,7 @@ class Trainer(pl.LightningModule):
 
         self.diffusion_loss = DiffusionLoss(
             modalities=["coords", "atoms", "charges", "bonds"],
-            param=["data", "data", "data", "data"]
+            param=["data", "data", "data", "data"],
         )
 
         if self.hparams.bond_model_guidance:
@@ -298,7 +298,7 @@ class Trainer(pl.LightningModule):
 
     def step_fnc(self, batch, batch_idx, stage: str):
         batch_size = int(batch.batch.max()) + 1
-        
+
         t = torch.randint(
             low=1,
             high=self.hparams.timesteps + 1,
@@ -307,20 +307,23 @@ class Trainer(pl.LightningModule):
             device=batch.x.device,
         )
         if self.hparams.loss_weighting == "snr_s_t":
-            weights = self.sde_bonds.snr_s_t_weighting(s=t-1, t=t,
-                                                       clamp_min=None, 
-                                                       clamp_max=None).to(batch.x.device)
+            weights = self.sde_atom_charge.snr_s_t_weighting(
+                s=t - 1, t=t, device=self.device, clamp_min=0.05, clamp_max=1.5
+            )
         elif self.hparams.loss_weighting == "snr_t":
-            weights = self.sde_bonds.snr_t_weighting(t=t, device=batch.x.device,
-                                                     clamp_min=0.05,
-                                                     clamp_max=5.0)
+            weights = self.sde_atom_charge.snr_t_weighting(
+                t=t,
+                device=self.device,
+                clamp_min=0.05,
+                clamp_max=1.5,
+            )
         elif self.hparams.loss_weighting == "exp_t":
-            weights = self.sde_bonds.exp_t_weighting(t=t, device=batch.x.device)
+            weights = self.sde_atom_charge.exp_t_weighting(t=t, device=self.device)
         elif self.hparams.loss_weighting == "exp_t_half":
-            weights = self.sde_bonds.exp_t_half_weighting(t=t, device=batch.x.device)
+            weights = self.sde_atom_charge.exp_t_half_weighting(t=t, device=self.device)
         elif self.hparams.loss_weighting == "uniform":
             weights = None
-                          
+
         if self.hparams.context_mapping:
             context = prepare_context(
                 self.hparams["properties_list"],
@@ -329,7 +332,7 @@ class Trainer(pl.LightningModule):
                 self.hparams.dataset,
             )
             batch.context = context
-       
+
         out_dict = self(batch=batch, t=t)
 
         true_data = {
@@ -369,8 +372,7 @@ class Trainer(pl.LightningModule):
             + self.hparams.lc_bonds * loss["bonds"]
             + self.hparams.lc_charges * loss["charges"]
         )
-    
-    
+
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
             print(f"Detected NaNs. Terminating training at epoch {self.current_epoch}")
@@ -499,6 +501,7 @@ class Trainer(pl.LightningModule):
             edge_index_global,
             batch_num_nodes,
             trajs,
+            context,
         ) = self.reverse_sampling(
             num_graphs=num_graphs,
             device=device,
@@ -533,6 +536,7 @@ class Trainer(pl.LightningModule):
             edge_index_global,
             batch_num_nodes,
             trajs,
+            context,
         )
 
     @torch.no_grad()
@@ -543,13 +547,13 @@ class Trainer(pl.LightningModule):
         ngraphs: int = 4000,
         bs: int = 500,
         save_dir: str = None,
-        return_smiles: bool = False,
+        return_molecules: bool = False,
         verbose: bool = False,
         inner_verbose=False,
         ddpm: bool = True,
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
-        save_best_ckpt: bool = True
+        run_test_eval: bool = False,
     ):
         b = ngraphs // bs
         l = [bs] * b
@@ -571,6 +575,7 @@ class Trainer(pl.LightningModule):
                 edge_index_global,
                 batch_num_nodes,
                 _,
+                context,
             ) = self.generate_graphs(
                 num_graphs=num_graphs,
                 verbose=inner_verbose,
@@ -599,11 +604,12 @@ class Trainer(pl.LightningModule):
                 edge_attrs_splits,
             ):
                 molecule = Molecule(
-                    atom_types=atom_types,
-                    positions=positions,
+                    atom_types=atom_types.detach().cpu(),
+                    positions=positions.detach().cpu(),
+                    charges=charges.detach().cpu(),
+                    bond_types=edges.detach().cpu(),
+                    context=context[0].detach().cpu() if context is not None else None,
                     dataset_info=dataset_info,
-                    charges=charges,
-                    bond_types=edges,
                 )
                 molecule_list.append(molecule)
 
@@ -612,20 +618,20 @@ class Trainer(pl.LightningModule):
             validity_dict,
             statistics_dict,
             all_generated_smiles,
+            stable_molecules,
         ) = analyze_stability_for_molecules(
             molecule_list=molecule_list,
             dataset_info=dataset_info,
             smiles_train=self.smiles_list,
             local_rank=self.local_rank,
-            return_smiles=return_smiles,
-            device=self.device,
+            return_molecules=return_molecules,
+            device="cpu",
         )
 
-        if self.mol_stab < stability_dict["mol_stable"]:
+        if self.mol_stab < stability_dict["mol_stable"] and not run_test_eval:
             self.mol_stab = stability_dict["mol_stable"]
             save_path = os.path.join(self.hparams.save_dir, "best_mol_stab.ckpt")
-            if save_best_ckpt:
-                self.trainer.save_checkpoint(save_path)
+            self.trainer.save_checkpoint(save_path)
 
         run_time = datetime.now() - start
         if verbose:
@@ -654,15 +660,14 @@ class Trainer(pl.LightningModule):
                 print(f"Saving evaluation csv file to {save_dir}")
             else:
                 save_dir = os.path.join(save_dir, "evaluation.csv")
-            if self.local_rank == 0:
-                with open(save_dir, "a") as f:
-                    total_res.to_csv(f, header=True)
+            with open(save_dir, "a") as f:
+                total_res.to_csv(f, header=True)
         except Exception as e:
             print(e)
             pass
 
-        if return_smiles:
-            return total_res, all_generated_smiles
+        if return_molecules:
+            return total_res, all_generated_smiles, stable_molecules
         else:
             return total_res
 
@@ -744,7 +749,7 @@ class Trainer(pl.LightningModule):
             chain = range(0, self.hparams.timesteps)
         elif self.hparams.continuous_param == "noise":
             chain = range(0, self.hparams.timesteps - 1)
-            
+
         chain = chain[::every_k_step]
 
         iterator = (
@@ -756,7 +761,7 @@ class Trainer(pl.LightningModule):
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=pos.device
             )
             t = s + 1
-            
+
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
             node_feats_in = torch.cat([atom_types, charge_types], dim=-1)
@@ -781,7 +786,7 @@ class Trainer(pl.LightningModule):
             edges_pred = out["bonds_pred"].softmax(dim=-1)
             # E x b_0
             charges_pred = charges_pred.softmax(dim=-1)
-                
+
             if ddpm:
                 if self.hparams.noise_scheduler == "adaptive":
                     # positions
@@ -811,7 +816,7 @@ class Trainer(pl.LightningModule):
                 x0=charges_pred,
                 t=t[batch],
                 num_classes=self.num_charge_classes,
-            )                     
+            )
             # edges
             if not self.hparams.bond_prediction:
                 (
@@ -859,6 +864,7 @@ class Trainer(pl.LightningModule):
             edge_index_global,
             batch_num_nodes,
             [pos_traj, atom_type_traj, charge_type_traj, edge_type_traj],
+            context,
         )
 
     def configure_optimizers(self):

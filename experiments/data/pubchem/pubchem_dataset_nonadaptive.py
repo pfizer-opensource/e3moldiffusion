@@ -32,7 +32,7 @@ full_atom_encoder = {
     "Hg": 14,
     "Bi": 15,
 }
-GEOM_DATADIR = "/hpfs/userws/cremej01/projects/data/geom/processed"
+GEOM_DATADIR = "/scratch1/cremej01/data/geom/processed"
 
 
 class PubChemLMDBDataset(Dataset):
@@ -51,23 +51,30 @@ class PubChemLMDBDataset(Dataset):
         self.statistics = dataset_utils.Statistics(
             num_nodes=load_pickle(os.path.join(GEOM_DATADIR, self.processed_files[0])),
             atom_types=torch.from_numpy(
-                np.load((os.path.join(GEOM_DATADIR, self.processed_files[1])))
+                np.load(os.path.join(GEOM_DATADIR, self.processed_files[1]))
             ),
             bond_types=torch.from_numpy(
-                np.load((os.path.join(GEOM_DATADIR, self.processed_files[2])))
+                np.load(os.path.join(GEOM_DATADIR, self.processed_files[2]))
             ),
             charge_types=torch.from_numpy(
-                np.load((os.path.join(GEOM_DATADIR, self.processed_files[3])))
+                np.load(os.path.join(GEOM_DATADIR, self.processed_files[3]))
             ),
-            valencies=load_pickle(
-                (os.path.join(GEOM_DATADIR, self.processed_files[4]))
-            ),
+            valencies=load_pickle(os.path.join(GEOM_DATADIR, self.processed_files[4])),
             bond_lengths=load_pickle(
-                (os.path.join(GEOM_DATADIR, self.processed_files[5]))
+                os.path.join(GEOM_DATADIR, self.processed_files[5])
             ),
             bond_angles=torch.from_numpy(
-                np.load((os.path.join(GEOM_DATADIR, self.processed_files[6])))
+                np.load(os.path.join(GEOM_DATADIR, self.processed_files[6]))
             ),
+            is_aromatic=torch.from_numpy(
+                np.load(os.path.join(GEOM_DATADIR, self.processed_files[7]))
+            ).float(),
+            is_in_ring=torch.from_numpy(
+                np.load(os.path.join(GEOM_DATADIR, self.processed_files[8]))
+            ).float(),
+            hybridization=torch.from_numpy(
+                np.load(os.path.join(GEOM_DATADIR, self.processed_files[9]))
+            ).float(),
         )
 
     def _init_db(self):
@@ -113,6 +120,9 @@ class PubChemLMDBDataset(Dataset):
             f"train_valency_{h}.pickle",
             f"train_bond_lengths_{h}.pickle",
             f"train_angles_{h}.npy",
+            f"train_is_aromatic_{h}.npy",
+            f"train_is_in_ring_{h}.npy",
+            f"train_hybridization_{h}.npy",
         ]
 
 

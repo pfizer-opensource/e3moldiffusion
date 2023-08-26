@@ -7,9 +7,9 @@ from torch_scatter import scatter_mean
 
 class DiffusionLoss(nn.Module):
     def __init__(
-        self, 
+        self,
         modalities: List = ["coords", "atoms", "charges", "bonds"],
-        param: List = ["data", "data", "data", "data"]
+        param: List = ["data", "data", "data", "data"],
     ) -> None:
         super().__init__()
         assert len(modalities) == len(param)
@@ -56,10 +56,8 @@ class DiffusionLoss(nn.Module):
                 fnc = F.cross_entropy
             else:
                 fnc = F.mse_loss
-                
-            atoms_loss = fnc(
-                pred_data["atoms"], true_data["atoms"], reduction="none"
-            )
+
+            atoms_loss = fnc(pred_data["atoms"], true_data["atoms"], reduction="none")
             atoms_loss = scatter_mean(
                 atoms_loss, index=batch, dim=0, dim_size=batch_size
             )
@@ -71,7 +69,7 @@ class DiffusionLoss(nn.Module):
                 fnc = F.cross_entropy
             else:
                 fnc = F.mse_loss
-                
+
             charges_loss = fnc(
                 pred_data["charges"], true_data["charges"], reduction="none"
             )
@@ -86,10 +84,8 @@ class DiffusionLoss(nn.Module):
                 fnc = F.cross_entropy
             else:
                 fnc = F.mse_loss
-                
-            bonds_loss = fnc(
-                pred_data["bonds"], true_data["bonds"], reduction="none"
-            )
+
+            bonds_loss = fnc(pred_data["bonds"], true_data["bonds"], reduction="none")
             bonds_loss = 0.5 * scatter_mean(
                 bonds_loss,
                 index=bond_aggregation_index,
@@ -102,10 +98,10 @@ class DiffusionLoss(nn.Module):
             bonds_loss = self.loss_non_nans(bonds_loss, "bonds")
             bonds_loss *= weights
             bonds_loss = bonds_loss.sum(dim=0)
-            
+
             if "ring" in self.modalities:
                 ring_loss = F.cross_entropy(
-                pred_data["ring"], true_data["ring"], reduction="none"
+                    pred_data["ring"], true_data["ring"], reduction="none"
                 )
                 ring_loss = scatter_mean(
                     ring_loss, index=batch, dim=0, dim_size=batch_size
@@ -115,10 +111,10 @@ class DiffusionLoss(nn.Module):
                 ring_loss = torch.sum(ring_loss, dim=0)
             else:
                 ring_loss = None
-                
+
             if "aromatic" in self.modalities:
                 aromatic_loss = F.cross_entropy(
-                pred_data["aromatic"], true_data["aromatic"], reduction="none"
+                    pred_data["aromatic"], true_data["aromatic"], reduction="none"
                 )
                 aromatic_loss = scatter_mean(
                     aromatic_loss, index=batch, dim=0, dim_size=batch_size
@@ -128,20 +124,24 @@ class DiffusionLoss(nn.Module):
                 aromatic_loss = torch.sum(aromatic_loss, dim=0)
             else:
                 aromatic_loss = None
-                
+
             if "hybridization" in self.modalities:
                 hybridization_loss = F.cross_entropy(
-                pred_data["hybridization"], true_data["hybridization"], reduction="none"
+                    pred_data["hybridization"],
+                    true_data["hybridization"],
+                    reduction="none",
                 )
                 hybridization_loss = scatter_mean(
                     hybridization_loss, index=batch, dim=0, dim_size=batch_size
                 )
-                hybridization_loss = self.loss_non_nans(hybridization_loss, "hybridization")
+                hybridization_loss = self.loss_non_nans(
+                    hybridization_loss, "hybridization"
+                )
                 hybridization_loss *= weights
-                hybridization_loss = torch.sum(hybridization_loss, dim=0) 
+                hybridization_loss = torch.sum(hybridization_loss, dim=0)
             else:
                 hybridization_loss = None
-                                
+
         else:
             regr_loss = F.mse_loss(
                 pred_data[self.regression_key],
@@ -152,9 +152,7 @@ class DiffusionLoss(nn.Module):
                 fnc = F.cross_entropy
             else:
                 fnc = F.mse_loss
-            atoms_loss = fnc(
-                pred_data["atoms"], true_data["atoms"], reduction="mean"
-            )
+            atoms_loss = fnc(pred_data["atoms"], true_data["atoms"], reduction="mean")
             if self.param[self.modalities.index("charges")] == "data":
                 fnc = F.cross_entropy
             else:
@@ -166,28 +164,28 @@ class DiffusionLoss(nn.Module):
                 fnc = F.cross_entropy
             else:
                 fnc = F.mse_loss
-            bonds_loss = fnc(
-                pred_data["bonds"], true_data["bonds"], reduction="mean"
-            )
-            
+            bonds_loss = fnc(pred_data["bonds"], true_data["bonds"], reduction="mean")
+
             if "ring" in self.modalities:
-                ring_loss =  F.cross_entropy(
-                pred_data["ring"], true_data["ring"], reduction='mean'
-                )  
+                ring_loss = F.cross_entropy(
+                    pred_data["ring"], true_data["ring"], reduction="mean"
+                )
             else:
                 ring_loss = None
-                
+
             if "aromatic" in self.modalities:
-                aromatic_loss =  F.cross_entropy(
-                pred_data["aromatic"], true_data["aromatic"], reduction='mean'
-                )  
+                aromatic_loss = F.cross_entropy(
+                    pred_data["aromatic"], true_data["aromatic"], reduction="mean"
+                )
             else:
                 aromatic_loss = None
-            
+
             if "hybridization" in self.modalities:
                 hybridization_loss = F.cross_entropy(
-                pred_data["hybridization"], true_data["hybridization"], reduction='mean'
-                )  
+                    pred_data["hybridization"],
+                    true_data["hybridization"],
+                    reduction="mean",
+                )
             else:
                 hybridization_loss = None
 
@@ -198,7 +196,7 @@ class DiffusionLoss(nn.Module):
             "bonds": bonds_loss,
             "ring": ring_loss,
             "aromatic": aromatic_loss,
-            "hybridization": hybridization_loss
+            "hybridization": hybridization_loss,
         }
 
         return loss

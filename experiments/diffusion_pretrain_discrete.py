@@ -148,7 +148,26 @@ class Trainer(pl.LightningModule):
             dtype=torch.long,
             device=batch.x.device,
         )
-        out_dict = self(batch=batch, t=t)
+
+        if self.hparams.loss_weighting == "snr_s_t":
+            weights = self.sde_atom_charge.snr_s_t_weighting(
+                s=t - 1, t=t, device=self.device, clamp_min=0.05, clamp_max=1.5
+            )
+        elif self.hparams.loss_weighting == "snr_t":
+            weights = self.sde_atom_charge.snr_t_weighting(
+                t=t,
+                device=self.device,
+                clamp_min=0.05,
+                clamp_max=1.5,
+            )
+        elif self.hparams.loss_weighting == "exp_t":
+            weights = self.sde_atom_charge.exp_t_weighting(t=t, device=self.device)
+        elif self.hparams.loss_weighting == "exp_t_half":
+            weights = self.sde_atom_charge.exp_t_half_weighting(t=t, device=self.device)
+        elif self.hparams.loss_weighting == "uniform":
+            weights = None
+        out_dict, node_mask = self(batch=batch, t=t)
+        data_batch = batch.batch[node_mask]
 
         true_data = {
             "coords": out_dict["coords_true"],
@@ -174,9 +193,9 @@ class Trainer(pl.LightningModule):
         loss = self.diffusion_loss(
             true_data=true_data,
             pred_data=pred_data,
-            batch=batch.batch,
+            batch=data_batch,
             bond_aggregation_index=out_dict["bond_aggregation_index"],
-            weights=None,
+            weights=weights,
         )
 
         final_loss = (
@@ -334,7 +353,7 @@ class Trainer(pl.LightningModule):
 
         # MASKING PREDICTION
         edge_index_global, edge_mask, node_mask = dropout_node(
-            edge_index_global, p=0.20
+            edge_index_global, p=0.30
         )
         edge_attr_global_perturbed = edge_attr_global_perturbed[edge_mask]
         pos_perturbed = pos_perturbed[node_mask]
@@ -388,7 +407,7 @@ class Trainer(pl.LightningModule):
 
         out["bond_aggregation_index"] = edge_index_global[1]
 
-        return out
+        return out, node_mask
 
     def _log(
         self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, batch_size, stage

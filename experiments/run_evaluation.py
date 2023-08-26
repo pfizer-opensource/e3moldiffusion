@@ -2,7 +2,10 @@ import warnings
 import argparse
 import torch
 from experiments.data.distributions import DistributionProperty
+from experiments.data.utils import write_xyz_file
 
+import pickle
+import os
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
@@ -18,18 +21,25 @@ class dotdict(dict):
 
 
 def evaluate(
-    model_path, save_dir, ngraphs=5000, batch_size=80, step=0, ddpm=True, eta_ddim=1.0, every_k_step=1
+    model_path,
+    save_dir,
+    save_xyz=False,
+    ngraphs=5000,
+    batch_size=80,
+    step=0,
+    ddpm=True,
+    eta_ddim=1.0,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
     hparams = dotdict(hparams)
 
+    hparams.load_ckpt_from_pretrained = False
+
     print(f"Loading {hparams.dataset} Datamodule.")
     non_adaptive = True
     if hparams.dataset == "drugs":
         dataset = "drugs"
-        from experiments.data.data_info import GEOMInfos as DataInfos
-
         if hparams.use_adaptive_loader:
             print("Using adaptive dataloader")
             non_adaptive = False
@@ -43,13 +53,21 @@ def evaluate(
             )
     elif hparams.dataset == "qm9":
         dataset = "qm9"
-        from experiments.data.data_info import QM9Infos as DataInfos
         from experiments.data.qm9.qm9_dataset import QM9DataModule as DataModule
 
+    elif hparams.dataset == "aqm":
+        dataset = "aqm"
+        from experiments.data.aqm.aqm_dataset_nonadaptive import (
+            AQMDataModule as DataModule,
+        )
+
+    elif hparams.dataset == "aqm_qm7x":
+        dataset = "aqm_qm7x"
+        from experiments.data.aqm_qm7x.aqm_qm7x_dataset_nonadaptive import (
+            AQMQM7XDataModule as DataModule,
+        )
     elif hparams.dataset == "pubchem":
         dataset = "drugs"  # take dataset infos from GEOM for simplicity
-        from experiments.data.data_info import PubChemInfos as DataInfos
-
         if hparams.use_adaptive_loader:
             print("Using adaptive dataloader")
             non_adaptive = False
@@ -67,24 +85,17 @@ def evaluate(
         datamodule.prepare_data()
         datamodule.setup("fit")
 
+    from experiments.data.data_info import GeneralInfos as DataInfos
+
     dataset_info = DataInfos(datamodule, hparams)
 
-    # temporary
-    from experiments.data.config_file import get_dataset_info
-    from experiments.utils import get_empirical_num_nodes
-
-    dataset_i = get_dataset_info(hparams.dataset, hparams.remove_hs)
-    empirical_num_nodes = get_empirical_num_nodes(dataset_i)
-
-    train_smiles = datamodule.train_dataset.smiles
-
+    train_smiles = (
+        list(datamodule.train_dataset.smiles) if hparams.dataset != "pubchem" else None
+    )
     prop_norm, prop_dist = None, None
-    properties_list = []
-    context_mapping = False
-    if len(properties_list) > 0 and context_mapping:
-        dataloader = datamodule.get_dataloader(datamodule.train_dataset, "val")
+    if len(hparams.properties_list) > 0 and hparams.context_mapping:
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
-        prop_dist = DistributionProperty(dataloader, hparams.properties_list)
+        prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
 
     if hparams.continuous:
@@ -113,50 +124,74 @@ def evaluate(
         smiles_list=list(train_smiles),
         prop_norm=prop_norm,
         prop_dist=prop_dist,
-        # context_mapping=False,
-        # num_context_features=0,
-        # empirical_num_nodes=empirical_num_nodes,
-        # bond_model_guidance=False,
+        run_evaluation=True,
         strict=False,
     ).to(device)
     model = model.eval()
 
-    results_dict, generated_smiles = model.run_evaluation(
+    results_dict, generated_smiles, stable_molecules = model.run_evaluation(
         step=step,
         dataset_info=model.dataset_info,
         ngraphs=ngraphs,
         bs=batch_size,
-        return_smiles=True,
+        return_molecules=True,
         verbose=True,
         inner_verbose=True,
         save_dir=save_dir,
         ddpm=ddpm,
         eta_ddim=eta_ddim,
-        save_best_ckpt=False,
-        every_k_step=every_k_step
+        run_test_eval=True,
     )
-    return results_dict, generated_smiles
+
+    if save_xyz:
+        context = []
+        atom_decoder = stable_molecules[0].dataset_info.atom_decoder
+        for i in range(len(stable_molecules)):
+            types = [atom_decoder[int(a)] for a in stable_molecules[i].atom_types]
+            write_xyz_file(
+                stable_molecules[i].positions,
+                types,
+                os.path.join(save_dir, f"mol_{i}.xyz"),
+            )
+            if prop_dist is not None:
+                tmp = []
+                for j, key in enumerate(hparams.properties_list):
+                    mean, mad = (
+                        prop_dist.normalizer[key]["mean"],
+                        prop_dist.normalizer[key]["mad"],
+                    )
+                    prop = stable_molecules[i].context[j] * mad + mean
+                    tmp.append(float(prop))
+                context.append(tmp)
+
+    if prop_dist is not None and save_xyz:
+        with open(os.path.join(save_dir, "context.pickle"), "wb") as f:
+            pickle.dump(context, f)
+    with open(os.path.join(save_dir, "generated_smiles.pickle"), "wb") as f:
+        pickle.dump(generated_smiles, f)
+    with open(os.path.join(save_dir, "stable_molecules.pickle"), "wb") as f:
+        pickle.dump(stable_molecules, f)
 
 
 def get_args():
     # fmt: off
     parser = argparse.ArgumentParser(description='Data generation')
-    parser.add_argument('--model-path', default="/hpfs/userws/cremej01/projects/logs/geom/adaptive/run0/last.ckpt", type=str,
+    parser.add_argument('--model-path', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol/best_mol_stab.ckpt", type=str,
                         help='Path to trained model')
-    parser.add_argument('--save-dir', default="/hpfs/userws/cremej01/projects/logs/geom/evaluation", type=str,
+    parser.add_argument('--save-dir', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol", type=str,
                         help='Path to test output')
+    parser.add_argument('--save-xyz', default=False, action="store_true",
+                        help='Whether or not to store generated molecules in xyz files')
     parser.add_argument('--ngraphs', default=5000, type=int,
                             help='How many graphs to sample. Defaults to 5000')
-    parser.add_argument('--batch_size', default=80, type=int,
+    parser.add_argument('--batch-size', default=80, type=int,
                             help='Batch-size to generate the selected ngraphs. Defaults to 80.')
     parser.add_argument('--ddim', default=False, action="store_true",
                         help='If DDIM sampling should be used. Defaults to False')
-    parser.add_argument('--eta_ddim', default=1.0, type=float,
+    parser.add_argument('--eta-ddim', default=1.0, type=float,
                         help='How to scale the std of noise in the reverse posterior. \
                             Can also be used for DDPM to track a deterministic trajectory. \
                             Defaults to 1.0')
-    parser.add_argument('--every_k_step', default=1, type=int,
-                            help='How many k-steps along the reverse diffusion trajectory to take. Defaults to 1.')
     args = parser.parse_args()
     return args
 
@@ -164,12 +199,11 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     # Evaluate negative log-likelihood for the test partitions
-    results_dict, generated_smiles = evaluate(
+    evaluate(
         model_path=args.model_path,
         save_dir=args.save_dir,
         ngraphs=args.ngraphs,
         batch_size=args.batch_size,
         ddpm=not args.ddim,
         eta_ddim=args.eta_ddim,
-        every_k_step=args.every_k_step
     )

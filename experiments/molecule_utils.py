@@ -20,7 +20,17 @@ from experiments.data.utils import x_map as additional_node_map
 
 
 class Molecule:
-    def __init__(self, atom_types, bond_types, positions, charges, dataset_info, is_aromatic=None, hybridization=None):
+    def __init__(
+        self,
+        atom_types,
+        bond_types,
+        positions,
+        charges,
+        dataset_info,
+        context=None,
+        is_aromatic=None,
+        hybridization=None,
+    ):
         """atom_types: n      LongTensor
         charges: n         LongTensor
         bond_types: n x n  LongTensor
@@ -35,51 +45,67 @@ class Molecule:
         assert len(atom_types.shape) == 1
         assert len(bond_types.shape) == 2
         assert len(positions.shape) == 2
-        
-        atom_decoder = dataset_info["atom_decoder"] if isinstance(dataset_info, dict) else dataset_info.atom_decoder
-        
+
+        self.dataset_info = dataset_info
+        atom_decoder = (
+            dataset_info["atom_decoder"]
+            if isinstance(dataset_info, dict)
+            else self.dataset_info.atom_decoder
+        )
+
         self.atom_types = atom_types.long()
         self.bond_types = bond_types.long()
         self.positions = positions
         self.charges = charges
-        
+        self.context = context
+
         if isinstance(is_aromatic, torch.Tensor):
             assert len(is_aromatic.shape) == 1
-            assert is_aromatic.max().item() <= len(additional_node_map["is_aromatic"]) - 1
+            assert (
+                is_aromatic.max().item() <= len(additional_node_map["is_aromatic"]) - 1
+            )
             self.is_aromatic = is_aromatic
         else:
             self.is_aromatic = None
-            
+
         if isinstance(hybridization, torch.Tensor):
             assert len(hybridization.shape) == 1
-            assert hybridization.max().item() <= len(additional_node_map["hybridization"]) - 1
+            assert (
+                hybridization.max().item()
+                <= len(additional_node_map["hybridization"]) - 1
+            )
             self.hybridization = hybridization
         else:
             self.hybridization = None
-    
-        self.additional_feats = isinstance(self.is_aromatic, torch.Tensor) and isinstance(self.hybridization, torch.Tensor)
-        
+
+        self.additional_feats = isinstance(
+            self.is_aromatic, torch.Tensor
+        ) and isinstance(self.hybridization, torch.Tensor)
+
         self.rdkit_mol = self.build_molecule(atom_decoder)
         self.num_nodes = len(atom_types)
         self.num_atom_types = len(atom_decoder)
-        
-        
+
     def build_molecule(self, atom_decoder, verbose=False):
         """If positions is None,"""
         if verbose:
             print("building new molecule")
 
         mol = Chem.RWMol()
-        
+
         if self.additional_feats:
-            for atom, charge, is_aromatic, sp_hybridization in zip(self.atom_types, self.charges, self.is_aromatic, self.hybridization):
+            for atom, charge, is_aromatic, sp_hybridization in zip(
+                self.atom_types, self.charges, self.is_aromatic, self.hybridization
+            ):
                 if atom == -1:
                     continue
                 a = Chem.Atom(atom_decoder[int(atom.item())])
                 if charge.item() != 0:
                     a.SetFormalCharge(charge.item())
                 a.SetIsAromatic(additional_node_map["is_aromatic"][is_aromatic.item()])
-                a.SetHybridization(additional_node_map["hybridization"][sp_hybridization.item()])
+                a.SetHybridization(
+                    additional_node_map["hybridization"][sp_hybridization.item()]
+                )
                 mol.AddAtom(a)
                 if verbose:
                     print("Atom added: ", atom.item(), atom_decoder[atom.item()])
@@ -93,7 +119,6 @@ class Molecule:
                 mol.AddAtom(a)
                 if verbose:
                     print("Atom added: ", atom.item(), atom_decoder[atom.item()])
-                
 
         edge_types = torch.triu(self.bond_types, diagonal=1)
         edge_types[edge_types == -1] = 0
@@ -193,6 +218,7 @@ class Molecule:
                     E[i, j] = order
         return X, A, E
 
+
 class PlaceHolder:
     def __init__(self, pos, X, C, E, y, t_int=None, t=None, node_mask=None):
         self.pos = pos
@@ -273,7 +299,6 @@ class PlaceHolder:
             t=self.t,
             node_mask=self.node_mask,
         )
-
 
 
 # Bond lengths from:

@@ -82,9 +82,10 @@ class BasicMolecularMetrics(object):
     def compute_validity(self, generated, local_rank=0):
         """generated: list of couples (positions, atom_types)"""
         valid = []
+        valid_ids = []
         num_components = []
         error_message = Counter()
-        for mol in generated:
+        for i, mol in enumerate(generated):
             rdmol = mol.rdkit_mol
             if rdmol is not None:
                 try:
@@ -100,6 +101,7 @@ class BasicMolecularMetrics(object):
                     Chem.SanitizeMol(largest_mol)
                     smiles = Chem.MolToSmiles(largest_mol)
                     valid.append(smiles)
+                    valid_ids.append(i)
                     error_message[-1] += 1
                 except Chem.rdchem.AtomValenceException:
                     error_message[1] += 1
@@ -190,14 +192,17 @@ class BasicMolecularMetrics(object):
 
         return valid_smiles, validity, novelty, uniqueness, connected_components
 
-    def __call__(self, molecules: list, local_rank=0, return_smiles=False):
+    def __call__(self, molecules: list, local_rank=0, return_molecules=False):
         # Atom and molecule stability
+        stable_molecules = []
         if local_rank == 0:
             print(f"Analyzing molecule stability on ...")
         for i, mol in enumerate(molecules):
             mol_stable, at_stable, num_bonds = check_stability(mol, self.dataset_info)
             self.mol_stable.update(value=mol_stable)
             self.atom_stable.update(value=at_stable / num_bonds, weight=num_bonds)
+            if mol_stable:
+                stable_molecules.append(mol)
 
         stability_dict = {
             "mol_stable": self.mol_stable.compute().item(),
@@ -226,8 +231,11 @@ class BasicMolecularMetrics(object):
         statistics_dict["connected_components"] = connected_components
 
         self.number_samples = len(all_generated_smiles)
-        self.train_subset = get_random_subset(
-            self.train_smiles, self.number_samples, seed=42
+
+        self.train_subset = (
+            get_random_subset(self.train_smiles, self.number_samples, seed=42)
+            if len(all_generated_smiles) <= len(self.train_smiles)
+            else self.train_smiles
         )
         similarity = self.get_bulk_similarity_with_train(all_generated_smiles)
         diversity = self.get_bulk_diversity(all_generated_smiles)
@@ -248,13 +256,15 @@ class BasicMolecularMetrics(object):
 
         self.reset()
 
-        if not return_smiles:
+        if not return_molecules:
             all_generated_smiles = None
+            stable_molecules = None
         return (
             stability_dict,
             validity_dict,
             statistics_dict,
             all_generated_smiles,
+            stable_molecules,
         )
 
     def compute_statistics(self, molecules, local_rank):
@@ -451,8 +461,8 @@ def analyze_stability_for_molecules(
     dataset_info,
     smiles_train,
     local_rank,
-    return_smiles=False,
-    device="cuda",
+    return_molecules=False,
+    device="cpu",
 ):
     metrics = BasicMolecularMetrics(
         dataset_info, smiles_train=smiles_train, device=device
@@ -462,10 +472,12 @@ def analyze_stability_for_molecules(
         validity_dict,
         statistics_dict,
         sampled_smiles,
-    ) = metrics(molecule_list, local_rank=local_rank, return_smiles=return_smiles)
+        stable_molecules,
+    ) = metrics(molecule_list, local_rank=local_rank, return_molecules=return_molecules)
     return (
         stability_dict,
         validity_dict,
         statistics_dict,
         sampled_smiles,
+        stable_molecules,
     )

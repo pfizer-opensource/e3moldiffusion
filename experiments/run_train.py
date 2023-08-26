@@ -110,7 +110,18 @@ if __name__ == "__main__":
 
     from experiments.data.data_info import GeneralInfos as DataInfos
 
-    dataset_info = DataInfos(datamodule, hparams)
+    if dataset == "aqm_qm7x":
+        from experiments.data.aqm.aqm_dataset_nonadaptive import (
+            AQMDataModule as DataModule,
+        )
+
+        datamodule_aqm = DataModule(hparams)
+        if non_adaptive:
+            datamodule_aqm.prepare_data()
+        dataset_info = DataInfos(datamodule_aqm, hparams)
+        del datamodule_aqm
+    else:
+        dataset_info = DataInfos(datamodule, hparams)
 
     train_smiles = (
         list(datamodule.train_dataset.smiles) if hparams.dataset != "pubchem" else None
@@ -141,7 +152,10 @@ if __name__ == "__main__":
         print("Using discrete diffusion")
         if hparams.diffusion_pretraining:
             print("Starting pre-training")
-            from experiments.diffusion_pretrain_discrete import Trainer
+            if hparams.additional_feats:
+                from experiments.diffusion_pretrain_discrete_moreFeats import Trainer
+            else:
+                from experiments.diffusion_pretrain_discrete import Trainer
         elif hparams.additional_feats:
             print("Using additional features")
             from experiments.diffusion_discrete_moreFeats import Trainer
