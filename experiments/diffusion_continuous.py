@@ -519,6 +519,7 @@ class Trainer(pl.LightningModule):
         ddpm: bool = True,
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
+        run_test_eval=False,
     ):
         b = ngraphs // bs
         l = [bs] * b
@@ -590,7 +591,7 @@ class Trainer(pl.LightningModule):
             return_molecules=return_molecules,
             device=device,
         )
-        if self.mol_stab < stability_dict["mol_stable"]:
+        if self.mol_stab < stability_dict["mol_stable"] and not run_test_eval:
             self.mol_stab = stability_dict["mol_stable"]
             save_path = os.path.join(self.hparams.save_dir, "best_mol_stab.ckpt")
             self.trainer.save_checkpoint(save_path)
