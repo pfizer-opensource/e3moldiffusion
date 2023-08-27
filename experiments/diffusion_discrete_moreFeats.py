@@ -52,11 +52,11 @@ class Trainer(pl.LightningModule):
         self.save_hyperparameters(hparams)
         self.i = 0
         self.mol_stab = 0.5
-        
+
         self.dataset_info = dataset_info
         self.prop_norm = prop_norm
         self.prop_dist = prop_dist
-        
+
         atom_types_distribution = dataset_info.atom_types.float()
         bond_types_distribution = dataset_info.edge_types.float()
         charge_types_distribution = dataset_info.charges_marginals.float()
@@ -185,7 +185,7 @@ class Trainer(pl.LightningModule):
                 "aromatic",
                 "hybridization",
             ],
-            param=["data"] * 7
+            param=["data"] * 7,
         )
 
     def training_step(self, batch, batch_idx):
@@ -200,7 +200,7 @@ class Trainer(pl.LightningModule):
                 print(f"Running evaluation in epoch {self.current_epoch + 1}")
             final_res = self.run_evaluation(
                 step=self.i,
-                device = "cuda" if self.hparams.gpus > 1 else "cpu",
+                device="cuda" if self.hparams.gpus > 1 else "cpu",
                 dataset_info=self.dataset_info,
                 ngraphs=1000,
                 bs=self.hparams.inference_batch_size,
@@ -335,15 +335,12 @@ class Trainer(pl.LightningModule):
             device=batch.x.device,
         )
         if self.hparams.loss_weighting == "snr_s_t":
-            weights = self.sde_atom_charge.snr_s_t_weighting(
-                s=t - 1, t=t, device=self.device, clamp_min=0.05, clamp_max=1.5
-            )
+            weights = self.sde_bonds.snr_s_t_weighting(
+                s=t - 1, t=t, clamp_min=None, clamp_max=None
+            ).to(batch.x.device)
         elif self.hparams.loss_weighting == "snr_t":
-            weights = self.sde_atom_charge.snr_t_weighting(
-                t=t,
-                device=self.device,
-                clamp_min=0.05,
-                clamp_max=1.5,
+            weights = self.sde_bonds.snr_t_weighting(
+                t=t, device=batch.x.device, clamp_min=0.05, clamp_max=5.0
             )
         elif self.hparams.loss_weighting == "exp_t":
             weights = self.sde_atom_charge.exp_t_weighting(t=t, device=self.device)
@@ -351,7 +348,7 @@ class Trainer(pl.LightningModule):
             weights = self.sde_atom_charge.exp_t_half_weighting(t=t, device=self.device)
         elif self.hparams.loss_weighting == "uniform":
             weights = None
-            
+
         if self.hparams.context_mapping:
             context = prepare_context(
                 self.hparams["properties_list"],
@@ -360,7 +357,7 @@ class Trainer(pl.LightningModule):
                 self.hparams.dataset,
             )
             batch.context = context
-            
+
         out_dict = self(batch=batch, t=t)
 
         true_data = {
@@ -466,9 +463,9 @@ class Trainer(pl.LightningModule):
         temb = t.float() / self.hparams.timesteps
         temb = temb.clamp(min=self.hparams.eps_min)
         temb = temb.unsqueeze(dim=1)
-        
+
         pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
-        
+
         if not hasattr(batch, "fc_edge_index"):
             edge_index_global = (
                 torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1))
@@ -492,9 +489,9 @@ class Trainer(pl.LightningModule):
         )
 
         batch_edge_global = data_batch[edge_index_global[0]]
-        
+
         # SAMPLING
-        pos_perturbed, noise_coords_true = self.sde_pos.sample_pos(
+        noise_coords_true, pos_perturbed = self.sde_pos.sample_pos(
             t, pos_centered, data_batch
         )
         atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
@@ -503,7 +500,7 @@ class Trainer(pl.LightningModule):
         charges, charges_perturbed = self.cat_charges.sample_categorical(
             t, charges, data_batch, self.dataset_info, type="charges"
         )
-        
+
         edge_attr_global_perturbed = (
             self.cat_bonds.sample_edges_categorical(
                 t, edge_index_global, edge_attr_global, data_batch
@@ -511,8 +508,8 @@ class Trainer(pl.LightningModule):
             if not self.hparams.bond_prediction
             else None
         )
-        
-        ## tempory: use this version without refactored.        
+
+        ## tempory: use this version without refactored.
         # ring-feat and perturb
         ring_feat = F.one_hot(
             ring_feat.squeeze().long(), num_classes=self.num_is_in_ring
@@ -569,7 +566,7 @@ class Trainer(pl.LightningModule):
             edge_attr_global=edge_attr_global_perturbed,
             batch=data_batch,
             batch_edge_global=batch_edge_global,
-            context=context
+            context=context,
         )
 
         out["coords_perturbed"] = pos_perturbed
@@ -680,7 +677,7 @@ class Trainer(pl.LightningModule):
         ddpm: bool = True,
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
-        save_best_ckpt: bool = True
+        save_best_ckpt: bool = True,
     ):
         b = ngraphs // bs
         l = [bs] * b
@@ -748,7 +745,6 @@ class Trainer(pl.LightningModule):
                     is_aromatic=is_aromatic.detach().to(device),
                     hybridization=hybridization.detach().to(device),
                     dataset_info=dataset_info,
-
                 )
                 molecule_list.append(molecule)
 
@@ -771,7 +767,7 @@ class Trainer(pl.LightningModule):
             save_path = os.path.join(self.hparams.save_dir, "best_mol_stab.ckpt")
             if save_best_ckpt:
                 self.trainer.save_checkpoint(save_path)
-                
+
         run_time = datetime.now() - start
         if verbose:
             if self.local_rank == 0:
@@ -805,7 +801,7 @@ class Trainer(pl.LightningModule):
         except Exception as e:
             print(e)
             pass
-            
+
         if return_smiles:
             return total_res, all_generated_smiles
         else:
@@ -839,7 +835,7 @@ class Trainer(pl.LightningModule):
             context = self.prop_dist.sample_batch(batch_num_nodes).to(self.device)[
                 batch
             ]
-        
+
         # initialiaze the 0-mean point cloud from N(0, I)
         pos = torch.randn(len(batch), 3, device=device, dtype=torch.get_default_dtype())
         pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
@@ -945,7 +941,7 @@ class Trainer(pl.LightningModule):
                 batch_edge_global=batch_edge_global,
                 context=context,
             )
-            
+
             coords_pred = out["coords_pred"].squeeze()
             if ddpm:
                 if self.hparams.noise_scheduler == "adaptive":
@@ -962,7 +958,7 @@ class Trainer(pl.LightningModule):
                 pos = self.sde_pos.sample_reverse_ddim(
                     t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
                 )
-            
+
             # rest
             (
                 atoms_pred,
@@ -1003,7 +999,7 @@ class Trainer(pl.LightningModule):
                 x0=charges_pred,
                 t=t[batch],
                 num_classes=self.num_charge_classes,
-            )   
+            )
 
             # additional feats
             ring_feat = self.cat_ring.sample_reverse_categorical(

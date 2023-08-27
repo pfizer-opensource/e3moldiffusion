@@ -6,6 +6,7 @@ from experiments.data.utils import load_pickle
 from experiments.data.abstract_dataset import (
     AbstractAdaptiveDataModule,
 )
+from experiments.data.pubchem.pubchem_dataset_nonadaptive import PubChemLMDBDataset
 from experiments.utils import make_splits
 from torch.utils.data import Subset
 from rdkit import Chem
@@ -17,83 +18,22 @@ from tqdm import tqdm
 
 full_atom_encoder = {
     "H": 0,
-    "C": 1,
-    "N": 2,
-    "O": 3,
-    "F": 4,
-    "Si": 5,
-    "P": 6,
-    "S": 7,
-    "Cl": 8,
-    "Br": 9,
-    "I": 10,
+    "B": 1,
+    "C": 2,
+    "N": 3,
+    "O": 4,
+    "F": 5,
+    "Al": 6,
+    "Si": 7,
+    "P": 8,
+    "S": 9,
+    "Cl": 10,
+    "As": 11,
+    "Br": 12,
+    "I": 13,
+    "Hg": 14,
+    "Bi": 15,
 }
-
-
-class PubChemDataset(InMemoryDataset):
-    def __init__(
-        self, split, root, remove_h, transform=None, pre_transform=None, pre_filter=None
-    ):
-        assert split in ["train", "val", "test"]
-        self.split = split
-        self.remove_h = remove_h
-
-        self.atom_encoder = full_atom_encoder
-        if remove_h:
-            self.atom_encoder = {
-                k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
-            }
-
-        super().__init__(root, transform, pre_transform, pre_filter)
-        self.data, self.slices = torch.load(self.processed_paths[0])
-
-    @property
-    def raw_file_names(self):
-        return ""
-
-    @property
-    def processed_file_names(self):
-        return [
-            f"pubchem_data.pt",
-        ]
-
-    def download(self):
-        raise ValueError(
-            "Download and preprocessing is manual. If the data is already downloaded, "
-            f"check that the paths are correct. Root dir = {self.root} -- raw files {self.raw_paths}"
-        )
-
-    def process(self):
-        files = glob(os.path.join(self.raw_paths[0], "*.gz"))
-
-        data_list = []
-        for i, file in tqdm(enumerate(files)):
-            if i % 5 == 0:
-                continue
-            else:
-                inf = gzip.open(file)
-                with Chem.ForwardSDMolSupplier(inf) as gzsuppl:
-                    molecules = [x for x in gzsuppl if x is not None]
-                for mol in molecules:
-                    try:
-                        smiles = Chem.MolToSmiles(mol)
-                        data = dataset_utils.mol_to_torch_geometric(
-                            mol, full_atom_encoder, smiles
-                        )
-                        if data.pos.shape[0] != data.x.shape[0]:
-                            print(f"Molecule {smiles} does not have 3D information!")
-                            continue
-                        if data.pos.ndim != 2:
-                            print(f"Molecule {smiles} does not have 3D information!")
-                            continue
-                        if len(data.pos) < 2:
-                            print(f"Molecule {smiles} does not have 3D information!")
-                            continue
-                        data_list.append(data)
-                    except:
-                        continue
-
-        torch.save(self.collate(data_list), self.processed_paths[0])
 
 
 class PubChemDataModule(AbstractAdaptiveDataModule):
@@ -102,22 +42,28 @@ class PubChemDataModule(AbstractAdaptiveDataModule):
         root_path = cfg.dataset_root
         self.pin_memory = True
 
-        dataset = PubChemDataset(split="train", root=root_path, remove_h=cfg.remove_hs)
+        self.dataset = PubChemLMDBDataset(root=self.datadir)
         self.idx_train, self.idx_val, self.idx_test = make_splits(
-            len(dataset),
-            0.9,
-            0.1,
-            None,
-            42,
-            join(self.hparams["save_dir"], "splits.npz"),
-            None,
+            len(self.dataset),
+            train_size=cfg.train_size,
+            val_size=cfg.val_size,
+            test_size=cfg.test_size,
+            seed=cfg.seed,
+            filename=join(cfg.save_dir, "splits.npz"),
+            splits=None,
         )
         print(
             f"train {len(self.idx_train)}, val {len(self.idx_val)}, test {len(self.idx_test)}"
         )
-        train_dataset = Subset(dataset, self.idx_train)
-        val_dataset = Subset(dataset, self.idx_val)
-        test_dataset = Subset(dataset, self.idx_test)
+        self.train_dataset = Subset(self.dataset, self.idx_train)
+        self.val_dataset = Subset(self.dataset, self.idx_val)
+        self.test_dataset = Subset(self.dataset, self.idx_test)
+
+        self.statistics = {
+            "train": self.dataset.statistics,
+            "val": self.dataset.statistics,
+            "test": self.dataset.statistics,
+        }
 
         self.remove_h = cfg.remove_hs
 

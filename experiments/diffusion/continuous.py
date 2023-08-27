@@ -464,7 +464,7 @@ class DiscreteDDPM(nn.Module):
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
 
-        return pos_perturbed, noise_coords_true
+        return noise_coords_true, pos_perturbed
 
     def sample_reverse_adaptive(
         self,

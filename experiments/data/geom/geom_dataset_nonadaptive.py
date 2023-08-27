@@ -4,6 +4,9 @@ from experiments.data.geom.geom_dataset_adaptive import GeomDrugsDataset
 from pytorch_lightning import LightningDataModule
 from torch_geometric.data import DataLoader
 from tqdm import tqdm
+from os.path import join
+from experiments.data.utils import train_subset
+from torch.utils.data import Subset
 
 full_atom_encoder = {
     "H": 0,
@@ -44,6 +47,14 @@ class GeomDataModule(LightningDataModule):
         test_dataset = GeomDrugsDataset(
             split="test", root=root_path, remove_h=cfg.remove_hs
         )
+        if cfg.select_train_subset:
+            self.idx_train = train_subset(
+                train_size=cfg.train_size,
+                seed=cfg.seed,
+                filename=join(cfg.save_dir, "splits.npz"),
+            )
+            train_dataset = Subset(train_dataset, self.idx_train)
+
         self.remove_h = cfg.remove_hs
         self.statistics = {
             "train": train_dataset.statistics,

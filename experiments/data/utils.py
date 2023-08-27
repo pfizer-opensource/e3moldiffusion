@@ -9,6 +9,7 @@ from rdkit import Chem, RDLogger
 from torch_geometric.data import Data
 from torch_geometric.utils import sort_edge_index
 import rdkit
+from pytorch_lightning.utilities import rank_zero_warn
 
 x_map = {
     "is_aromatic": [False, True],
@@ -28,16 +29,15 @@ x_map = {
 
 
 def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = False):
-    
     if remove_hydrogens:
         mol = Chem.RemoveAllHs(mol)
-    
+
     # added:
     try:
         Chem.SanitizeMol(mol)
     except:
         pass
-    
+
     adj = torch.from_numpy(Chem.rdmolops.GetAdjacencyMatrix(mol, useBO=True))
     edge_index = adj.nonzero().contiguous().T
     bond_types = adj[edge_index[0], edge_index[1]]
@@ -51,7 +51,7 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = F
     is_aromatic = []
     is_in_ring = []
     sp_hybridization = []
-    
+
     for atom in mol.GetAtoms():
         atom_types.append(atom_encoder[atom.GetSymbol()])
         all_charges.append(
@@ -78,7 +78,7 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = F
         is_aromatic=is_aromatic,
         is_in_ring=is_in_ring,
         hybridization=hybridization,
-        mol=mol
+        mol=mol,
     )
 
     return data
@@ -95,14 +95,14 @@ def remove_hydrogens(data: Data):
         num_nodes=len(to_keep),
     )
     new_pos = data.pos[to_keep] - torch.mean(data.pos[to_keep], dim=0)
-    
+
     newdata = Data(
         x=data.x[to_keep] - 1,  # Shift onehot encoding to match atom decoder
         pos=new_pos,
         charges=data.charges[to_keep],
         edge_index=new_edge_index,
         edge_attr=new_edge_attr,
-        mol=data.mol
+        mol=data.mol,
     )
 
     if hasattr(data, "is_aromatic"):
@@ -111,7 +111,7 @@ def remove_hydrogens(data: Data):
         newdata["is_in_ring"] = data.get("is_in_ring")[to_keep]
     if hasattr(data, "hybridization"):
         newdata["hybridization"] = data.get("hybridization")[to_keep]
-        
+
     return newdata
 
 
@@ -277,3 +277,120 @@ class Statistics:
         self.is_in_ring = is_in_ring
         self.is_aromatic = is_aromatic
         self.hybridization = hybridization
+
+
+def train_val_test_split(dset_len, train_size, val_size, test_size, seed, order=None):
+    assert (train_size is None) + (val_size is None) + (
+        test_size is None
+    ) <= 1, "Only one of train_size, val_size, test_size is allowed to be None."
+    is_float = (
+        isinstance(train_size, float),
+        isinstance(val_size, float),
+        isinstance(test_size, float),
+    )
+
+    train_size = round(dset_len * train_size) if is_float[0] else train_size
+    val_size = round(dset_len * val_size) if is_float[1] else val_size
+    test_size = round(dset_len * test_size) if is_float[2] else test_size
+
+    if train_size is None:
+        train_size = dset_len - val_size - test_size
+    elif val_size is None:
+        val_size = dset_len - train_size - test_size
+    elif test_size is None:
+        test_size = dset_len - train_size - val_size
+
+    if train_size + val_size + test_size > dset_len:
+        if is_float[2]:
+            test_size -= 1
+        elif is_float[1]:
+            val_size -= 1
+        elif is_float[0]:
+            train_size -= 1
+
+    assert train_size >= 0 and val_size >= 0 and test_size >= 0, (
+        f"One of training ({train_size}), validation ({val_size}) or "
+        f"testing ({test_size}) splits ended up with a negative size."
+    )
+
+    total = train_size + val_size + test_size
+    assert dset_len >= total, (
+        f"The dataset ({dset_len}) is smaller than the "
+        f"combined split sizes ({total})."
+    )
+    if total < dset_len:
+        rank_zero_warn(f"{dset_len - total} samples were excluded from the dataset")
+
+    idxs = np.arange(dset_len, dtype=np.int64)
+    if order is None:
+        idxs = np.random.default_rng(seed).permutation(idxs)
+
+    idx_train = idxs[:train_size]
+    idx_val = idxs[train_size : train_size + val_size]
+    idx_test = idxs[train_size + val_size : total]
+
+    if order is not None:
+        idx_train = [order[i] for i in idx_train]
+        idx_val = [order[i] for i in idx_val]
+        idx_test = [order[i] for i in idx_test]
+
+    return np.array(idx_train), np.array(idx_val), np.array(idx_test)
+
+
+def train_subset(dset_len, train_size, seed, filename=None, order=None):
+    is_float = isinstance(train_size, float)
+    train_size = round(dset_len * train_size) if is_float else train_size
+
+    total = train_size
+    assert dset_len >= total, (
+        f"The dataset ({dset_len}) is smaller than the "
+        f"combined split sizes ({total})."
+    )
+    if total < dset_len:
+        rank_zero_warn(f"{dset_len - total} samples were excluded from the dataset")
+
+    idxs = np.arange(dset_len, dtype=np.int64)
+    if order is None:
+        idxs = np.random.default_rng(seed).permutation(idxs)
+
+    idx_train = idxs[:train_size]
+
+    if order is not None:
+        idx_train = [order[i] for i in idx_train]
+
+    idx_train = np.array(idx_train)
+
+    if filename is not None:
+        np.savez(filename, idx_train=idx_train)
+
+    return torch.from_numpy(idx_train)
+
+
+def make_splits(
+    dataset_len,
+    train_size,
+    val_size,
+    test_size,
+    seed,
+    filename=None,
+    splits=None,
+    order=None,
+):
+    if splits is not None:
+        splits = np.load(splits)
+        idx_train = splits["idx_train"]
+        idx_val = splits["idx_val"]
+        idx_test = splits["idx_test"]
+    else:
+        idx_train, idx_val, idx_test = train_val_test_split(
+            dataset_len, train_size, val_size, test_size, seed, order
+        )
+
+    if filename is not None:
+        np.savez(filename, idx_train=idx_train, idx_val=idx_val, idx_test=idx_test)
+
+    return (
+        torch.from_numpy(idx_train),
+        torch.from_numpy(idx_val),
+        torch.from_numpy(idx_test),
+    )

@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch_geometric.data import InMemoryDataset, DataLoader
 import experiments.data.utils as dataset_utils
-from experiments.data.utils import load_pickle, save_pickle
+from experiments.data.utils import load_pickle, save_pickle, make_splits
 from experiments.data.abstract_dataset import (
     AbstractAdaptiveDataModule,
 )

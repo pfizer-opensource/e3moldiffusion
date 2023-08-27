@@ -239,13 +239,11 @@ class BasicMolecularMetrics(object):
         )
         similarity = self.get_bulk_similarity_with_train(all_generated_smiles)
         diversity = self.get_bulk_diversity(all_generated_smiles)
-        
         if len(all_generated_smiles) > 0:
             kl_score = self.get_kl_divergence(all_generated_smiles)
         else:
             print("No valid smiles have been generated. Setting kl_score to -1")
             kl_score = -1.0
-
         statistics_dict["similarity"] = similarity
         statistics_dict["diversity"] = diversity
         statistics_dict["kl_score"] = kl_score
@@ -258,9 +256,6 @@ class BasicMolecularMetrics(object):
         else:
             print("No valid smiles have been generated. Setting qed_score to -1")
             qeds = -1.0
-
-        # statistics_dict["num_rings"] = rings
-        # statistics_dict["num_aromatic_rings"] = aromatic_rings
         statistics_dict["QED"] = qeds
 
         self.reset()

@@ -3,8 +3,7 @@ import torch
 import numpy as np
 from os.path import join
 from torch_geometric.data import Dataset, DataLoader
-from experiments.data.utils import load_pickle
-from experiments.utils import make_splits
+from experiments.data.utils import load_pickle, make_splits
 from torch.utils.data import Subset
 import lmdb
 import pickle
@@ -32,7 +31,7 @@ full_atom_encoder = {
     "Hg": 14,
     "Bi": 15,
 }
-GEOM_DATADIR = "/scratch1/cremej01/data/geom/processed"
+GEOM_DATADIR = "/hpfs/userws/cremej01/projects/data/geom/processed"
 
 
 class PubChemLMDBDataset(Dataset):
@@ -137,10 +136,10 @@ class PubChemDataModule(LightningDataModule):
         self.dataset = PubChemLMDBDataset(root=self.datadir)
         self.idx_train, self.idx_val, self.idx_test = make_splits(
             len(self.dataset),
-            train_size=0.9,
-            val_size=0.1,
-            test_size=0.0,
-            seed=42,
+            train_size=hparams.train_size,
+            val_size=hparams.val_size,
+            test_size=hparams.test_size,
+            seed=hparams.seed,
             filename=join(self.hparams["save_dir"], "splits.npz"),
             splits=None,
         )

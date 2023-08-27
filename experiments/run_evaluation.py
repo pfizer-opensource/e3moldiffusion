@@ -143,6 +143,7 @@ def evaluate(
         ddpm=ddpm,
         eta_ddim=eta_ddim,
         run_test_eval=True,
+        device="cpu",
     )
 
     if save_xyz:

@@ -2,6 +2,8 @@ from rdkit import RDLogger
 from tqdm import tqdm
 import numpy as np
 import torch
+from os.path import join
+from experiments.data.utils import train_subset
 from torch_geometric.data import InMemoryDataset, DataLoader
 import experiments.data.utils as dataset_utils
 from experiments.data.utils import load_pickle, save_pickle
@@ -9,6 +11,7 @@ from experiments.data.abstract_dataset import (
     AbstractAdaptiveDataModule,
 )
 from experiments.data.metrics import compute_all_statistics
+from torch.utils.data import Subset
 
 
 full_atom_encoder = {
@@ -196,6 +199,15 @@ class GeomDataModule(AbstractAdaptiveDataModule):
         test_dataset = GeomDrugsDataset(
             split="test", root=root_path, remove_h=cfg.remove_hs
         )
+
+        if cfg.select_train_subset:
+            self.idx_train = train_subset(
+                train_size=cfg.train_size,
+                seed=cfg.seed,
+                filename=join(cfg.save_dir, "splits.npz"),
+            )
+            train_dataset = Subset(train_dataset, self.idx_train)
+
         self.remove_h = cfg.remove_hs
         self.statistics = {
             "train": train_dataset.statistics,

@@ -206,7 +206,7 @@ class Trainer(pl.LightningModule):
             if self.local_rank == 0:
                 print(f"Running evaluation in epoch {self.current_epoch + 1}")
             final_res = self.run_evaluation(
-                device = "cuda" if self.hparams.gpus > 1 else "cpu",
+                device="cuda" if self.hparams.gpus > 1 else "cpu",
                 step=self.i,
                 dataset_info=self.dataset_info,
                 ngraphs=1000,
@@ -216,6 +216,7 @@ class Trainer(pl.LightningModule):
                 eta_ddim=1.0,
                 ddpm=True,
                 every_k_step=1,
+                device="cuda" if self.hparams.gpus > 1 else "cpu",
             )
             self.i += 1
             self.log(
@@ -435,7 +436,7 @@ class Trainer(pl.LightningModule):
         batch_edge_global = data_batch[edge_index_global[0]]
 
         # SAMPLING
-        pos_perturbed, noise_coords_true = self.sde_pos.sample_pos(
+        noise_coords_true, pos_perturbed = self.sde_pos.sample_pos(
             t, pos_centered, data_batch
         )
         atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
@@ -529,6 +530,11 @@ class Trainer(pl.LightningModule):
         atom_types_integer_split = atom_types_integer.detach().split(
             batch_num_nodes.cpu().tolist(), dim=0
         )
+        context_split = (
+            context.split(batch_num_nodes.cpu().tolist(), dim=0)
+            if context is not None
+            else None
+        )
         return (
             pos_splits,
             atom_types_integer_split,
@@ -537,7 +543,7 @@ class Trainer(pl.LightningModule):
             edge_index_global,
             batch_num_nodes,
             trajs,
-            context,
+            context_split,
         )
 
     @torch.no_grad()
@@ -545,7 +551,6 @@ class Trainer(pl.LightningModule):
         self,
         step: int,
         dataset_info,
-        device,
         ngraphs: int = 4000,
         bs: int = 500,
         save_dir: str = None,
@@ -556,8 +561,8 @@ class Trainer(pl.LightningModule):
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
         run_test_eval: bool = False,
+        device: str = "cpu",
     ):
-        device = "cuda" if self.hparams.gpus > 1 else "cpu"
         b = ngraphs // bs
         l = [bs] * b
         if sum(l) != ngraphs:
@@ -578,7 +583,7 @@ class Trainer(pl.LightningModule):
                 edge_index_global,
                 batch_num_nodes,
                 _,
-                context,
+                context_split,
             ) = self.generate_graphs(
                 num_graphs=num_graphs,
                 verbose=inner_verbose,
@@ -599,12 +604,13 @@ class Trainer(pl.LightningModule):
             ] = edge_types
             edge_attrs_dense = edge_attrs_dense.argmax(-1)
             edge_attrs_splits = get_list_of_edge_adjs(edge_attrs_dense, batch_num_nodes)
-            
-            for positions, atom_types, charges, edges in zip(
+
+            for positions, atom_types, charges, edges, context in zip(
                 pos_splits,
                 atom_types_integer_split,
                 charge_types_integer_split,
                 edge_attrs_splits,
+                context_split,
             ):
                 molecule = Molecule(
                     atom_types=atom_types.detach().to(device),

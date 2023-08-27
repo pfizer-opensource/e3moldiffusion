@@ -1,7 +1,7 @@
 import os
 import os.path as osp
 from typing import Any, Sequence
-
+from torch.utils.data import Subset
 import numpy as np
 import pandas as pd
 import torch
@@ -13,7 +13,10 @@ from experiments.data.utils import (
     mol_to_torch_geometric,
     remove_hydrogens,
     save_pickle,
+    train_subset,
 )
+from os.path import join
+
 from rdkit import Chem, RDLogger
 from torch_geometric.data import InMemoryDataset, download_url, extract_zip
 from tqdm import tqdm
@@ -274,6 +277,15 @@ class QM9DataModule(AbstractDataModule):
         )
         val_dataset = QM9Dataset(split="val", root=root_path, remove_h=cfg.remove_hs)
         test_dataset = QM9Dataset(split="test", root=root_path, remove_h=cfg.remove_hs)
+
+        if cfg.select_train_subset:
+            self.idx_train = train_subset(
+                train_size=cfg.train_size,
+                seed=cfg.seed,
+                filename=join(cfg.save_dir, "splits.npz"),
+            )
+            train_dataset = Subset(train_dataset, self.idx_train)
+
         self.statistics = {
             "train": train_dataset.statistics,
             "val": val_dataset.statistics,
