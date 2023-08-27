@@ -198,17 +198,20 @@ class Trainer(pl.LightningModule):
         )
     
         if self.hparams.loss_weighting == "snr_s_t":
-            weights = self.sde_bonds.snr_s_t_weighting(s=t-1, t=t,
-                                                       clamp_min=None, 
-                                                       clamp_max=None).to(batch.x.device)
+            weights = self.sde_atom_charge.snr_s_t_weighting(
+                s=t - 1, t=t, device=self.device, clamp_min=0.05, clamp_max=1.5
+            )
         elif self.hparams.loss_weighting == "snr_t":
-            weights = self.sde_bonds.snr_t_weighting(t=t, device=batch.x.device,
-                                                     clamp_min=0.05,
-                                                     clamp_max=5.0)
+            weights = self.sde_atom_charge.snr_t_weighting(
+                t=t,
+                device=self.device,
+                clamp_min=0.05,
+                clamp_max=1.5,
+            )
         elif self.hparams.loss_weighting == "exp_t":
-            weights = self.sde_bonds.exp_t_weighting(t=t, device=batch.x.device)
+            weights = self.sde_atom_charge.exp_t_weighting(t=t, device=self.device)
         elif self.hparams.loss_weighting == "exp_t_half":
-            weights = self.sde_bonds.exp_t_half_weighting(t=t, device=batch.x.device)
+            weights = self.sde_atom_charge.exp_t_half_weighting(t=t, device=self.device)
         elif self.hparams.loss_weighting == "uniform":
             weights = None
             
