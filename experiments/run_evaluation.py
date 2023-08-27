@@ -35,6 +35,7 @@ def evaluate(
     hparams = dotdict(hparams)
 
     hparams.load_ckpt_from_pretrained = False
+    hparams.gpus = 1
 
     print(f"Loading {hparams.dataset} Datamodule.")
     non_adaptive = True
