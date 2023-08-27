@@ -555,6 +555,7 @@ class Trainer(pl.LightningModule):
         every_k_step: int = 1,
         run_test_eval: bool = False,
     ):
+        device = "cuda" if self.hparams.gpus > 1 else "cpu"
         b = ngraphs // bs
         l = [bs] * b
         if sum(l) != ngraphs:
@@ -604,11 +605,13 @@ class Trainer(pl.LightningModule):
                 edge_attrs_splits,
             ):
                 molecule = Molecule(
-                    atom_types=atom_types.detach().cpu(),
-                    positions=positions.detach().cpu(),
-                    charges=charges.detach().cpu(),
-                    bond_types=edges.detach().cpu(),
-                    context=context[0].detach().cpu() if context is not None else None,
+                    atom_types=atom_types.detach().to(device),
+                    positions=positions.detach().to(device),
+                    charges=charges.detach().to(device),
+                    bond_types=edges.detach().to(device),
+                    context=context[0].detach().to(device)
+                    if context is not None
+                    else None,
                     dataset_info=dataset_info,
                 )
                 molecule_list.append(molecule)
@@ -625,7 +628,7 @@ class Trainer(pl.LightningModule):
             smiles_train=self.smiles_list,
             local_rank=self.local_rank,
             return_molecules=return_molecules,
-            device="cpu",
+            device=device,
         )
 
         if self.mol_stab < stability_dict["mol_stable"] and not run_test_eval:
