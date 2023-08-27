@@ -206,6 +206,7 @@ class Trainer(pl.LightningModule):
             if self.local_rank == 0:
                 print(f"Running evaluation in epoch {self.current_epoch + 1}")
             final_res = self.run_evaluation(
+                device = "cuda" if self.hparams.gpus > 1 else "cpu",
                 step=self.i,
                 dataset_info=self.dataset_info,
                 ngraphs=1000,
@@ -544,6 +545,7 @@ class Trainer(pl.LightningModule):
         self,
         step: int,
         dataset_info,
+        device,
         ngraphs: int = 4000,
         bs: int = 500,
         save_dir: str = None,
@@ -596,7 +598,7 @@ class Trainer(pl.LightningModule):
             ] = edge_types
             edge_attrs_dense = edge_attrs_dense.argmax(-1)
             edge_attrs_splits = get_list_of_edge_adjs(edge_attrs_dense, batch_num_nodes)
-
+            
             for positions, atom_types, charges, edges in zip(
                 pos_splits,
                 atom_types_integer_split,
@@ -604,11 +606,11 @@ class Trainer(pl.LightningModule):
                 edge_attrs_splits,
             ):
                 molecule = Molecule(
-                    atom_types=atom_types.detach().cpu(),
-                    positions=positions.detach().cpu(),
-                    charges=charges.detach().cpu(),
-                    bond_types=edges.detach().cpu(),
-                    context=context[0].detach().cpu() if context is not None else None,
+                    atom_types=atom_types.detach().to(device) ,
+                    positions=positions.detach().to(device),
+                    charges=charges.detach().to(device),
+                    bond_types=edges.detach().to(device),
+                    context=context[0].detach().to(device) if context is not None else None,
                     dataset_info=dataset_info,
                 )
                 molecule_list.append(molecule)
@@ -625,7 +627,7 @@ class Trainer(pl.LightningModule):
             smiles_train=self.smiles_list,
             local_rank=self.local_rank,
             return_molecules=return_molecules,
-            device="cpu",
+            device=device,
         )
 
         if self.mol_stab < stability_dict["mol_stable"] and not run_test_eval:
@@ -660,8 +662,9 @@ class Trainer(pl.LightningModule):
                 print(f"Saving evaluation csv file to {save_dir}")
             else:
                 save_dir = os.path.join(save_dir, "evaluation.csv")
-            with open(save_dir, "a") as f:
-                total_res.to_csv(f, header=True)
+            if self.local_rank == 0:
+                with open(save_dir, "a") as f:
+                    total_res.to_csv(f, header=True)
         except Exception as e:
             print(e)
             pass

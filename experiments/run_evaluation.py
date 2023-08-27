@@ -131,6 +131,7 @@ def evaluate(
 
     results_dict, generated_smiles, stable_molecules = model.run_evaluation(
         step=step,
+        device="cpu", # for storing metric tensors
         dataset_info=model.dataset_info,
         ngraphs=ngraphs,
         bs=batch_size,
