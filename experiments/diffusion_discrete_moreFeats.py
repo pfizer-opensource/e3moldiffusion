@@ -200,6 +200,7 @@ class Trainer(pl.LightningModule):
                 print(f"Running evaluation in epoch {self.current_epoch + 1}")
             final_res = self.run_evaluation(
                 step=self.i,
+                device = "cuda" if self.hparams.gpus > 1 else "cpu",
                 dataset_info=self.dataset_info,
                 ngraphs=1000,
                 bs=self.hparams.inference_batch_size,
@@ -666,6 +667,7 @@ class Trainer(pl.LightningModule):
         self,
         step: int,
         dataset_info,
+        device,
         ngraphs: int = 4000,
         bs: int = 500,
         save_dir: str = None,
@@ -736,13 +738,14 @@ class Trainer(pl.LightningModule):
                 edge_attrs_splits,
             ):
                 molecule = Molecule(
-                    atom_types=atom_types,
-                    positions=positions,
+                    atom_types=atom_types.detach().to(device),
+                    positions=positions.detach().to(device),
+                    charges=charges.detach().to(device),
+                    bond_types=edges.detach().to(device),
+                    is_aromatic=is_aromatic.detach().to(device),
+                    hybridization=hybridization.detach().to(device),
                     dataset_info=dataset_info,
-                    charges=charges,
-                    bond_types=edges,
-                    is_aromatic=is_aromatic,
-                    hybridization=hybridization,
+
                 )
                 molecule_list.append(molecule)
 
@@ -757,7 +760,7 @@ class Trainer(pl.LightningModule):
             smiles_train=self.smiles_list,
             local_rank=self.local_rank,
             return_smiles=return_smiles,
-            device=self.device,
+            device=device,
         )
 
         if self.mol_stab < stability_dict["mol_stable"]:

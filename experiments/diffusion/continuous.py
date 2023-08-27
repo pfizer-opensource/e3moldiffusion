@@ -424,7 +424,7 @@ class DiscreteDDPM(nn.Module):
 
             sqrt_alphas = self.sqrt_alphas[t].unsqueeze(-1)
             sqrt_1m_alphas_cumprod_prev = torch.sqrt(
-                (1.0 - self.alphas_cumprod_prev[t]).clamp_min(0.0)
+                (1.0 - self.alphas_cumprod_prev[t]).clamp_min(1e-4)
             ).unsqueeze(-1)
             one_m_alphas_cumprod_prev = sqrt_1m_alphas_cumprod_prev.pow(2)
             sqrt_alphas_cumprod_prev = torch.sqrt(
@@ -439,7 +439,7 @@ class DiscreteDDPM(nn.Module):
             mean = (1.0 / sigmas2t[batch]) * mean
             xt_m1 = mean + eta_ddim * std * noise
         else:
-            a = 1 / self.sqrt_alphas[t].unsqueeze(-1)[batch].clamp(max=2.0)
+            a = (1 / self.sqrt_alphas[t].unsqueeze(-1)[batch]).clamp(max=2.0)
             b = self.discrete_betas[t].unsqueeze(-1)[batch]
             c = self.sqrt_1m_alphas_cumprod[t].unsqueeze(-1)[batch].clamp_min(1e-4)
             xt_m1 = a * (xt - (b / c) * model_out) + eta_ddim * std * noise

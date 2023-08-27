@@ -163,6 +163,7 @@ class Trainer(pl.LightningModule):
             print(f"Running evaluation in epoch {self.current_epoch + 1}")
             final_res = self.run_evaluation(
                 step=self.i,
+                device = "cuda" if self.hparams.gpus > 1 else "cpu",
                 dataset_info=self.dataset_info,
                 ngraphs=1000,
                 bs=self.hparams.inference_batch_size,
@@ -505,10 +506,11 @@ class Trainer(pl.LightningModule):
         self,
         step: int,
         dataset_info,
+        device,
         ngraphs: int = 4000,
         bs: int = 500,
         save_dir: str = None,
-        return_smiles: bool = False,
+        return_molecules: bool = False,
         verbose: bool = False,
         inner_verbose=False,
         ddpm: bool = True,
@@ -563,11 +565,11 @@ class Trainer(pl.LightningModule):
                 edge_attrs_splits,
             ):
                 molecule = Molecule(
-                    atom_types=atom_types,
-                    positions=positions,
+                    atom_types=atom_types.detach().to(device),
+                    positions=positions.detach().to(device),
+                    charges=charges.detach().to(device),
+                    bond_types=edges.detach().to(device),
                     dataset_info=dataset_info,
-                    charges=charges,
-                    bond_types=edges,
                 )
                 molecule_list.append(molecule)
 
@@ -576,13 +578,14 @@ class Trainer(pl.LightningModule):
             validity_dict,
             statistics_dict,
             all_generated_smiles,
+            stable_molecules,
         ) = analyze_stability_for_molecules(
             molecule_list=molecule_list,
             dataset_info=dataset_info,
             smiles_train=self.smiles_list,
             local_rank=self.local_rank,
-            return_smiles=return_smiles,
-            device=self.device,
+            return_molecules=return_molecules,
+            device=device,
         )
         if self.mol_stab < stability_dict["mol_stable"]:
             self.mol_stab = stability_dict["mol_stable"]
@@ -623,8 +626,8 @@ class Trainer(pl.LightningModule):
             print(e)
             pass
 
-        if return_smiles:
-            return total_res, all_generated_smiles
+        if return_molecules:
+            return total_res, all_generated_smiles, stable_molecules
         else:
             return total_res
 
