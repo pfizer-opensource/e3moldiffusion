@@ -604,7 +604,7 @@ class Trainer(pl.LightningModule):
             edge_attrs_dense = edge_attrs_dense.argmax(-1)
             edge_attrs_splits = get_list_of_edge_adjs(edge_attrs_dense, batch_num_nodes)
 
-            for i, positions, atom_types, charges, edges in enumerate(
+            for i, (positions, atom_types, charges, edges) in enumerate(
                 zip(
                     pos_splits,
                     atom_types_integer_split,
