@@ -206,7 +206,6 @@ class Trainer(pl.LightningModule):
             if self.local_rank == 0:
                 print(f"Running evaluation in epoch {self.current_epoch + 1}")
             final_res = self.run_evaluation(
-                device="cuda" if self.hparams.gpus > 1 else "cpu",
                 step=self.i,
                 dataset_info=self.dataset_info,
                 ngraphs=1000,

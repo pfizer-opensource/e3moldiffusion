@@ -278,19 +278,22 @@ class QM9DataModule(AbstractDataModule):
         val_dataset = QM9Dataset(split="val", root=root_path, remove_h=cfg.remove_hs)
         test_dataset = QM9Dataset(split="test", root=root_path, remove_h=cfg.remove_hs)
 
-        if cfg.select_train_subset:
-            self.idx_train = train_subset(
-                train_size=cfg.train_size,
-                seed=cfg.seed,
-                filename=join(cfg.save_dir, "splits.npz"),
-            )
-            train_dataset = Subset(train_dataset, self.idx_train)
-
         self.statistics = {
             "train": train_dataset.statistics,
             "val": val_dataset.statistics,
             "test": test_dataset.statistics,
         }
+
+        if cfg.select_train_subset:
+            self.idx_train = train_subset(
+                dset_len=len(train_dataset),
+                train_size=cfg.train_size,
+                seed=cfg.seed,
+                filename=join(cfg.save_dir, "splits.npz"),
+            )
+            self.train_smiles = train_dataset.smiles
+            train_dataset = Subset(train_dataset, self.idx_train)
+
         self.remove_h = cfg.remove_hs
         super().__init__(
             cfg,

@@ -124,7 +124,13 @@ if __name__ == "__main__":
         dataset_info = DataInfos(datamodule, hparams)
 
     train_smiles = (
-        list(datamodule.train_dataset.smiles) if hparams.dataset != "pubchem" else None
+        (
+            list(datamodule.train_dataset.smiles)
+            if hparams.dataset != "pubchem"
+            else None
+        )
+        if not hparams.select_train_subset
+        else datamodule.train_smiles
     )
     prop_norm, prop_dist = None, None
     if len(hparams.properties_list) > 0 and hparams.context_mapping:
