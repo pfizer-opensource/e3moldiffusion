@@ -604,20 +604,21 @@ class Trainer(pl.LightningModule):
             edge_attrs_dense = edge_attrs_dense.argmax(-1)
             edge_attrs_splits = get_list_of_edge_adjs(edge_attrs_dense, batch_num_nodes)
 
-            for positions, atom_types, charges, edges, context in zip(
-                pos_splits,
-                atom_types_integer_split,
-                charge_types_integer_split,
-                edge_attrs_splits,
-                context_split,
+            for i, positions, atom_types, charges, edges in enumerate(
+                zip(
+                    pos_splits,
+                    atom_types_integer_split,
+                    charge_types_integer_split,
+                    edge_attrs_splits,
+                )
             ):
                 molecule = Molecule(
                     atom_types=atom_types.detach().to(device),
                     positions=positions.detach().to(device),
                     charges=charges.detach().to(device),
                     bond_types=edges.detach().to(device),
-                    context=context[0].detach().to(device)
-                    if context is not None
+                    context=context_split[i][0].detach().to(device)
+                    if context_split is not None
                     else None,
                     dataset_info=dataset_info,
                 )

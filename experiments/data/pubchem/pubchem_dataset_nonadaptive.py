@@ -43,7 +43,7 @@ class PubChemLMDBDataset(Dataset):
         Constructor
         """
         self.data_file = root
-        self._num_graphs = 95173205
+        self._num_graphs = 95173200
         super().__init__(root)
 
         self.remove_h = False
