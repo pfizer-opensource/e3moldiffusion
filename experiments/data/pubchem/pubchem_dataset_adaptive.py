@@ -39,7 +39,6 @@ full_atom_encoder = {
 class PubChemDataModule(AbstractAdaptiveDataModule):
     def __init__(self, cfg):
         self.datadir = cfg.dataset_root
-        root_path = cfg.dataset_root
         self.pin_memory = True
 
         self.dataset = PubChemLMDBDataset(root=self.datadir)
@@ -55,9 +54,9 @@ class PubChemDataModule(AbstractAdaptiveDataModule):
         print(
             f"train {len(self.idx_train)}, val {len(self.idx_val)}, test {len(self.idx_test)}"
         )
-        self.train_dataset = Subset(self.dataset, self.idx_train)
-        self.val_dataset = Subset(self.dataset, self.idx_val)
-        self.test_dataset = Subset(self.dataset, self.idx_test)
+        train_dataset = Subset(self.dataset, self.idx_train)
+        val_dataset = Subset(self.dataset, self.idx_val)
+        test_dataset = Subset(self.dataset, self.idx_test)
 
         self.statistics = {
             "train": self.dataset.statistics,
