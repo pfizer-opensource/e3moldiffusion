@@ -6,7 +6,7 @@ from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.data.abstract_dataset import AbstractDatasetInfos
 from experiments.data.distributions import prepare_context
-from torch_geometric.utils import dense_to_sparse, sort_edge_index, dropout_node
+from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.losses import DiffusionLoss
@@ -14,9 +14,11 @@ from experiments.utils import (
     coalesce_edges,
     load_model,
     zero_mean,
+    dropout_node
 )
 from torch import Tensor
 from torch_geometric.data import Batch
+from torch_scatter import scatter_add
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(
@@ -277,7 +279,7 @@ class Trainer(pl.LightningModule):
             )
             batch.context = context
 
-        out_dict, t, node_mask, batch_size = self(batch=batch)
+        out_dict, t, node_mask, batch_size = self(batch=batch)            
         data_batch = batch.batch[node_mask]
 
         if self.hparams.loss_weighting == "snr_s_t":
@@ -485,9 +487,10 @@ class Trainer(pl.LightningModule):
         ).float()
 
         # MASKING PREDICTION
-        edge_index_global, edge_mask, node_mask = dropout_node(
+        edge_index_global, edge_mask, node_mask, batch_mask = dropout_node(
             edge_index_global,
             p=self.hparams.dropout_prob,
+            batch=data_batch, num_nodes=n
         )
         edge_attr_global_perturbed = edge_attr_global_perturbed[edge_mask]
         pos_perturbed = pos_perturbed[node_mask]
@@ -499,7 +502,7 @@ class Trainer(pl.LightningModule):
 
         batch_edge_global = data_batch[edge_index_global[0]]
         data_batch = data_batch[node_mask]
-        batch_size = len(data_batch.unique())
+        batch_size = int(sum(batch_mask))
 
         atom_feats_in_perturbed = torch.cat(
             [
@@ -525,11 +528,11 @@ class Trainer(pl.LightningModule):
         )
 
         # TIME EMBEDDING
-        t = t[data_batch.unique()]
+        t = t[batch_mask]
         temb = t.float() / self.hparams.timesteps
         temb = temb.clamp(min=self.hparams.eps_min)
         temb = temb.unsqueeze(dim=1)
-
+        
         # FORWARD
         out = self.model(
             x=atom_feats_in_perturbed,

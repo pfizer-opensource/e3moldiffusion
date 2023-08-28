@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 from torch_geometric.data import Batch
-from torch_geometric.utils import dense_to_sparse, sort_edge_index, dropout_node
+from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from experiments.data.distributions import prepare_context
 
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
@@ -16,6 +16,7 @@ from experiments.data.abstract_dataset import AbstractDatasetInfos
 from experiments.utils import (
     coalesce_edges,
     zero_mean,
+    dropout_node
 )
 from experiments.losses import DiffusionLoss
 
@@ -67,8 +68,7 @@ class Trainer(pl.LightningModule):
 
         if hparams.get("no_h"):
             print("Training without hydrogen")
-            self.hparams.num_atom_types -= 1
-
+       
         self.smiles_list = smiles_list
 
         self.model = DenoisingEdgeNetwork(
@@ -297,8 +297,10 @@ class Trainer(pl.LightningModule):
         )
 
         # MASKING PREDICTION
-        edge_index_global, edge_mask, node_mask = dropout_node(
-            edge_index_global, p=self.hparams.dropout_prob
+        edge_index_global, edge_mask, node_mask, batch_mask = dropout_node(
+            edge_index_global,
+            p=self.hparams.dropout_prob,
+            batch=data_batch, num_nodes=n
         )
         edge_attr_global_perturbed = edge_attr_global_perturbed[edge_mask]
         pos_perturbed = pos_perturbed[node_mask]
@@ -307,7 +309,7 @@ class Trainer(pl.LightningModule):
 
         batch_edge_global = data_batch[edge_index_global[0]]
         data_batch = data_batch[node_mask]
-        batch_size = len(data_batch.unique())
+        batch_size = int(sum(batch_mask))
 
         atom_feats_in_perturbed = torch.cat(
             [atom_types_perturbed, charges_perturbed], dim=-1
@@ -326,7 +328,7 @@ class Trainer(pl.LightningModule):
         )
 
         # TIME EMBEDDING
-        t = t[data_batch.unique()]
+        t = t[batch_mask]
         temb = t.float() / self.hparams.timesteps
         temb = temb.clamp(min=self.hparams.eps_min)
         temb = temb.unsqueeze(dim=1)
