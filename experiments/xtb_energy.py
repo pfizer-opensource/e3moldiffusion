@@ -1,7 +1,6 @@
 from ase import Atoms
 from xtb.ase.calculator import XTB
 import argparse
-import torch
 import numpy as np
 
 
