@@ -154,6 +154,8 @@ def evaluate(
         for i in range(len(stable_molecules)):
             atom_types = [atom_decoder[int(a)] for a in stable_molecules[i].atom_types]
             e, f = calculate_xtb_energy(stable_molecules[i].positions, atom_types)
+            stable_molecules[i].energy = e
+            stable_molecules[i].forces_norm = f
             energies.append(e)
             forces_norms.append(f)
 

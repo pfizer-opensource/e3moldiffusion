@@ -31,6 +31,7 @@ class Molecule:
         is_aromatic=None,
         hybridization=None,
         energy=None,
+        forces_norm=None,
     ):
         """atom_types: n      LongTensor
         charges: n         LongTensor
@@ -60,6 +61,7 @@ class Molecule:
         self.charges = charges
         self.context = context
         self.energy = energy
+        self.forces_norm = forces_norm
 
         if isinstance(is_aromatic, torch.Tensor):
             assert len(is_aromatic.shape) == 1
