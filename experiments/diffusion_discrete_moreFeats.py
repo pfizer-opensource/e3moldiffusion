@@ -613,6 +613,7 @@ class Trainer(pl.LightningModule):
             edge_index_global,
             batch_num_nodes,
             trajs,
+            context,
         ) = self.reverse_sampling(
             num_graphs=num_graphs,
             device=device,
@@ -636,7 +637,6 @@ class Trainer(pl.LightningModule):
         atom_types_integer_split = atom_types_integer.detach().split(
             batch_num_nodes.cpu().tolist(), dim=0
         )
-
         # additional feats
         # for rdkit molecule <atom> class, we just select the aromatic and hybridization feats:
         # SetIsAromatic and SetHybridization
@@ -649,7 +649,11 @@ class Trainer(pl.LightningModule):
         hybridization_feat_integer_split = hybridization_feat_integer.detach().split(
             batch_num_nodes.cpu().tolist(), dim=0
         )
-
+        context_split = (
+            context.split(batch_num_nodes.cpu().tolist(), dim=0)
+            if context is not None
+            else None
+        )
         return (
             pos_splits,
             atom_types_integer_split,
@@ -660,6 +664,7 @@ class Trainer(pl.LightningModule):
             edge_index_global,
             batch_num_nodes,
             trajs,
+            context_split,
         )
 
     @torch.no_grad()
@@ -670,14 +675,14 @@ class Trainer(pl.LightningModule):
         ngraphs: int = 4000,
         bs: int = 500,
         save_dir: str = None,
+        return_molecules: bool = False,
         verbose: bool = False,
         inner_verbose=False,
-        return_smiles: bool = False,
         ddpm: bool = True,
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
-        save_best_ckpt: bool = True,
-        device: str = "cuda",
+        run_test_eval: bool = False,
+        device: str = "cpu",
     ):
         b = ngraphs // bs
         l = [bs] * b
@@ -701,6 +706,7 @@ class Trainer(pl.LightningModule):
                 edge_index_global,
                 batch_num_nodes,
                 _,
+                context_split,
             ) = self.generate_graphs(
                 num_graphs=num_graphs,
                 verbose=inner_verbose,
@@ -722,26 +728,31 @@ class Trainer(pl.LightningModule):
             edge_attrs_dense = edge_attrs_dense.argmax(-1)
             edge_attrs_splits = get_list_of_edge_adjs(edge_attrs_dense, batch_num_nodes)
 
-            for (
+            for i, (
                 positions,
                 atom_types,
                 charges,
                 is_aromatic,
                 hybridization,
                 edges,
-            ) in zip(
-                pos_splits,
-                atom_types_integer_split,
-                charge_types_integer_split,
-                aromatic_feat_integer_split,
-                hybridization_feat_integer_split,
-                edge_attrs_splits,
+            ) in enumerate(
+                zip(
+                    pos_splits,
+                    atom_types_integer_split,
+                    charge_types_integer_split,
+                    aromatic_feat_integer_split,
+                    hybridization_feat_integer_split,
+                    edge_attrs_splits,
+                )
             ):
                 molecule = Molecule(
                     atom_types=atom_types.detach().to(device),
                     positions=positions.detach().to(device),
                     charges=charges.detach().to(device),
                     bond_types=edges.detach().to(device),
+                    context=context_split[i][0].detach().to(device)
+                    if context_split is not None
+                    else None,
                     is_aromatic=is_aromatic.detach().to(device),
                     hybridization=hybridization.detach().to(device),
                     dataset_info=dataset_info,
@@ -753,20 +764,20 @@ class Trainer(pl.LightningModule):
             validity_dict,
             statistics_dict,
             all_generated_smiles,
+            stable_molecules,
         ) = analyze_stability_for_molecules(
             molecule_list=molecule_list,
             dataset_info=dataset_info,
             smiles_train=self.smiles_list,
             local_rank=self.local_rank,
-            return_smiles=return_smiles,
+            return_molecules=return_molecules,
             device=device,
         )
 
-        if self.mol_stab < stability_dict["mol_stable"]:
+        if self.mol_stab < stability_dict["mol_stable"] and not run_test_eval:
             self.mol_stab = stability_dict["mol_stable"]
             save_path = os.path.join(self.hparams.save_dir, "best_mol_stab.ckpt")
-            if save_best_ckpt:
-                self.trainer.save_checkpoint(save_path)
+            self.trainer.save_checkpoint(save_path)
 
         run_time = datetime.now() - start
         if verbose:
@@ -802,8 +813,8 @@ class Trainer(pl.LightningModule):
             print(e)
             pass
 
-        if return_smiles:
-            return total_res, all_generated_smiles
+        if return_molecules:
+            return total_res, all_generated_smiles, stable_molecules
         else:
             return total_res
 
@@ -1073,6 +1084,7 @@ class Trainer(pl.LightningModule):
             edge_index_global,
             batch_num_nodes,
             [pos_traj, atom_type_traj, charge_type_traj, edge_type_traj],
+            context,
         )
 
     def configure_optimizers(self):

@@ -54,6 +54,11 @@ def add_arguments(parser):
         default="reduce_on_plateau",
         choices=["reduce_on_plateau", "cosine_annealing", "cyclic"],
     )
+    parser.add_argument(
+        "--optimizer",
+        default="adam",
+        choices=["adam", "sgd"],
+    )
     parser.add_argument("--lr", default=5e-4, type=float)
     parser.add_argument("--lr-min", default=5e-5, type=float)
     parser.add_argument("--lr-step-size", default=10000, type=int)
