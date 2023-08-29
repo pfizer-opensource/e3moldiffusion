@@ -880,12 +880,20 @@ class Trainer(pl.LightningModule):
         )
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
-            self.model.parameters(),
-            lr=self.hparams["lr"],
-            amsgrad=True,
-            weight_decay=1.0e-12,
-        )
+        if self.hparams.optimizer == "adam":
+            optimizer = torch.optim.AdamW(
+                self.model.parameters(),
+                lr=self.hparams["lr"],
+                amsgrad=True,
+                weight_decay=1.0e-12,
+            )
+        elif self.hparams.optimizer == "sgd":
+            optimizer = torch.optim.SGD(
+                self.model.parameters(),
+                lr=self.hparams["lr"],
+                momentum=0.9,
+                nesterov=True,
+            )
         if self.hparams["lr_scheduler"] == "reduce_on_plateau":
             lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer=optimizer,
