@@ -179,6 +179,17 @@ if __name__ == "__main__":
     from pytorch_lightning.plugins.environments import LightningEnvironment
 
     strategy = "ddp" if hparams.gpus > 1 else "auto"
+    callbacks = [
+            ema_callback,
+            lr_logger,
+            checkpoint_callback,
+            TQDMProgressBar(refresh_rate=5),
+            ModelSummary(max_depth=2),
+        ]
+    
+    if hparams.ema_decay == 1.0:
+        callbacks = callbacks[1:]
+    
     trainer = pl.Trainer(
         accelerator="gpu" if hparams.gpus else "cpu",
         devices=hparams.gpus if hparams.gpus else 1,
@@ -190,13 +201,7 @@ if __name__ == "__main__":
         accumulate_grad_batches=hparams.accum_batch,
         val_check_interval=hparams.eval_freq,
         gradient_clip_val=hparams.grad_clip_val,
-        callbacks=[
-            ema_callback,
-            lr_logger,
-            checkpoint_callback,
-            TQDMProgressBar(refresh_rate=5),
-            ModelSummary(max_depth=2),
-        ],
+        callbacks=callbacks,
         precision=hparams.precision,
         num_sanity_val_steps=2,
         max_epochs=hparams.num_epochs,
