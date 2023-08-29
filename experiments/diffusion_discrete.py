@@ -100,7 +100,7 @@ class Trainer(pl.LightningModule):
             print("Loading from pre-trained model checkpoint...")
 
             self.model = load_model(
-                self.hparams.load_ckpt_from_pretrained, dataset_info
+                self.hparams.load_ckpt_from_pretrained, self.num_atom_features
             )
             # num_params = len(self.model.state_dict())
             # for i, param in enumerate(self.model.parameters()):

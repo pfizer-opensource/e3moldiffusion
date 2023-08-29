@@ -311,12 +311,12 @@ def assert_zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0, eps: float 
     return abs(out) < eps
 
 
-def load_model(filepath, dataset_statistics, device="cpu", **kwargs):
+def load_model(filepath, num_atom_features, device="cpu", **kwargs):
     import re
 
     ckpt = torch.load(filepath, map_location="cpu")
     args = ckpt["hyper_parameters"]
-    model = create_model(args, dataset_statistics)
+    model = create_model(args, num_atom_features)
 
     state_dict = ckpt["state_dict"]
     state_dict = {
@@ -333,12 +333,9 @@ def load_model(filepath, dataset_statistics, device="cpu", **kwargs):
     return model.to(device)
 
 
-def create_model(hparams, dataset_statistics):
+def create_model(hparams, num_atom_features):
     from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 
-    num_atom_types = dataset_statistics.input_dims.X
-    num_charge_classes = dataset_statistics.input_dims.C
-    num_atom_features = num_atom_types + num_charge_classes
     model = DenoisingEdgeNetwork(
         hn_dim=(hparams["sdim"], hparams["vdim"]),
         num_layers=hparams["num_layers"],
@@ -437,11 +434,13 @@ def t_frac_to_int(t, tmin, tmax):
     return (t * tmax + tmin).long()
 
 
-def dropout_node(edge_index: Tensor, 
-                 batch: Tensor,
-                 p: float = 0.5,
-                 num_nodes: Optional[int] = None,
-                 training: bool = True) -> Tuple[Tensor, Tensor, Tensor]:
+def dropout_node(
+    edge_index: Tensor,
+    batch: Tensor,
+    p: float = 0.5,
+    num_nodes: Optional[int] = None,
+    training: bool = True,
+) -> Tuple[Tensor, Tensor, Tensor]:
     r"""Randomly drops nodes from the adjacency matrix
     :obj:`edge_index` with probability :obj:`p` using samples from
     a Bernoulli distribution.
@@ -473,9 +472,8 @@ def dropout_node(edge_index: Tensor,
         >>> node_mask
         tensor([ True,  True, False, False])
     """
-    if p < 0. or p > 1.:
-        raise ValueError(f'Dropout probability has to be between 0 and 1 '
-                         f'(got {p}')
+    if p < 0.0 or p > 1.0:
+        raise ValueError(f"Dropout probability has to be between 0 and 1 " f"(got {p}")
 
     num_nodes = maybe_num_nodes(edge_index, num_nodes)
 
@@ -486,24 +484,24 @@ def dropout_node(edge_index: Tensor,
 
     prob = torch.rand(num_nodes, device=edge_index.device)
     node_mask = prob > p
-    
+
     bs = len(batch.unique())
     nSelect = scatter_add(node_mask.float(), index=batch, dim=0, dim_size=bs).float()
     batch_mask = ~(nSelect == 0.0)
-    
+
     deleted_graphs = torch.where(~batch_mask)[0]
     if len(deleted_graphs) > 0:
         take_again = torch.zeros_like(batch)
         for graph_idx in deleted_graphs.cpu().numpy():
-            graph_ids = (graph_idx == batch)
+            graph_ids = graph_idx == batch
             take_again += graph_ids
         node_mask = (node_mask + take_again).bool()
-        
+
     nSelect = scatter_add(node_mask.float(), index=batch, dim=0, dim_size=bs).float()
     batch_mask = ~(nSelect == 0.0)
-    
-    edge_index, _, edge_mask = subgraph(node_mask, edge_index,
-                                        num_nodes=num_nodes,
-                                        return_edge_mask=True)
-    
+
+    edge_index, _, edge_mask = subgraph(
+        node_mask, edge_index, num_nodes=num_nodes, return_edge_mask=True
+    )
+
     return edge_index, edge_mask, node_mask, batch_mask

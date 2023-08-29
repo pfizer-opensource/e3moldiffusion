@@ -97,7 +97,7 @@ class Trainer(pl.LightningModule):
             print("Loading from pre-trained model checkpoint...")
 
             self.model = load_model(
-                self.hparams.load_ckpt_from_pretrained, dataset_info
+                self.hparams.load_ckpt_from_pretrained, self.num_atom_features
             )
             # num_params = len(self.model.state_dict())
             # for i, param in enumerate(self.model.parameters()):
@@ -667,7 +667,6 @@ class Trainer(pl.LightningModule):
         self,
         step: int,
         dataset_info,
-        device,
         ngraphs: int = 4000,
         bs: int = 500,
         save_dir: str = None,
@@ -678,6 +677,7 @@ class Trainer(pl.LightningModule):
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
         save_best_ckpt: bool = True,
+        device: str = "cuda",
     ):
         b = ngraphs // bs
         l = [bs] * b

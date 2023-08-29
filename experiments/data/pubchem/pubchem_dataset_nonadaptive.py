@@ -31,8 +31,9 @@ full_atom_encoder = {
     "Hg": 14,
     "Bi": 15,
 }
-# GEOM_DATADIR = "/hpfs/userws/cremej01/projects/data/geom/processed"
-GEOM_DATADIR = "/scratch1/cremej01/data/geom/processed"
+GEOM_DATADIR = "/hpfs/userws/cremej01/projects/data/geom/processed"
+# GEOM_DATADIR = "/scratch1/cremej01/data/geom/processed"
+
 
 class PubChemLMDBDataset(Dataset):
     def __init__(
