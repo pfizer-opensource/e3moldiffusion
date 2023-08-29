@@ -1,6 +1,7 @@
 from ase import Atoms
 from xtb.ase.calculator import XTB
 import argparse
+import torch
 
 
 def get_args():
@@ -13,12 +14,14 @@ def get_args():
     return args
 
 
-def calculate_xtb_energy(data):
-    atoms = Atoms(positions=data["pos"], numbers=data["atomic_numbers"])
+def calculate_xtb_energy(positions, atom_types):
+    atoms = Atoms(positions=positions, types=atom_types)
     atoms.calc = XTB(method="GFN2-xTB")
     pot_e = atoms.get_potential_energy()
+    forces = atoms.get_forces()
+    forces_norm = torch.mean(torch.norm(forces, dim=1), dim=0)
 
-    return pot_e
+    return pot_e, forces_norm
 
 
 if __name__ == "__main__":

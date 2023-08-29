@@ -3,7 +3,7 @@ import argparse
 import torch
 from experiments.data.distributions import DistributionProperty
 from experiments.data.utils import write_xyz_file
-
+from experiments.xtb_energy import calculate_xtb_energy
 import pickle
 import os
 
@@ -24,6 +24,7 @@ def evaluate(
     model_path,
     save_dir,
     save_xyz=False,
+    calculate_energy=False,
     ngraphs=5000,
     batch_size=80,
     step=0,
@@ -145,9 +146,19 @@ def evaluate(
         device="cpu",
     )
 
+    atom_decoder = stable_molecules[0].dataset_info.atom_decoder
+
+    energies = []
+    forces_norms = []
+    if calculate_energy:
+        for i in range(len(stable_molecules)):
+            atom_types = [atom_decoder[int(a)] for a in stable_molecules[i].atom_types]
+            e, f = calculate_xtb_energy(stable_molecules[i].positions, atom_types)
+            energies.append(e)
+            forces_norms.append(f)
+
     if save_xyz:
         context = []
-        atom_decoder = stable_molecules[0].dataset_info.atom_decoder
         for i in range(len(stable_molecules)):
             types = [atom_decoder[int(a)] for a in stable_molecules[i].atom_types]
             write_xyz_file(
@@ -169,6 +180,11 @@ def evaluate(
     if prop_dist is not None and save_xyz:
         with open(os.path.join(save_dir, "context.pickle"), "wb") as f:
             pickle.dump(context, f)
+    if calculate_energy:
+        with open(os.path.join(save_dir, "energies.pickle"), "wb") as f:
+            pickle.dump(energies, f)
+        with open(os.path.join(save_dir, "forces_norms.pickle"), "wb") as f:
+            pickle.dump(forces_norms, f)
     with open(os.path.join(save_dir, "generated_smiles.pickle"), "wb") as f:
         pickle.dump(generated_smiles, f)
     with open(os.path.join(save_dir, "stable_molecules.pickle"), "wb") as f:
@@ -184,6 +200,8 @@ def get_args():
                         help='Path to test output')
     parser.add_argument('--save-xyz', default=False, action="store_true",
                         help='Whether or not to store generated molecules in xyz files')
+    parser.add_argument('--calculate-energy', default=False, action="store_true",
+                        help='Whether or not to calculate xTB energies and forces')
     parser.add_argument('--ngraphs', default=5000, type=int,
                             help='How many graphs to sample. Defaults to 5000')
     parser.add_argument('--batch-size', default=80, type=int,
@@ -209,4 +227,5 @@ if __name__ == "__main__":
         ddpm=not args.ddim,
         eta_ddim=args.eta_ddim,
         save_xyz=args.save_xyz,
+        calculate_energy=args.calculate_energy,
     )
