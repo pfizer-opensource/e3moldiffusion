@@ -54,7 +54,10 @@ def process(dataset):
     forces_norm = []
     for mol in tqdm(train_dataset):
         atom_types = [atom_decoder[int(a)] for a in mol.x]
-        e, f = calculate_xtb_energy(mol.pos, atom_types)
+        try:
+            e, f = calculate_xtb_energy(mol.pos, atom_types)
+        except:
+            continue
         energies.append(e)
         forces_norm.append(f)
 
