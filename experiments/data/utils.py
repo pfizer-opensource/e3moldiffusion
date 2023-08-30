@@ -29,8 +29,8 @@ x_map = {
 
 
 def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = False):
-    if remove_hydrogens:
-        mol = Chem.RemoveAllHs(mol)
+    # if remove_hydrogens:
+    #    mol = Chem.RemoveAllHs(mol)
 
     # added:
     try:
