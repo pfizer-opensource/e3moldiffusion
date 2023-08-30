@@ -33,6 +33,8 @@ def evaluate(
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
+    hparams['select_train_subset'] = False
+    hparams['train_size'] = 0.9
     hparams = dotdict(hparams)
 
     hparams.load_ckpt_from_pretrained = False
@@ -131,6 +133,9 @@ def evaluate(
     ).to(device)
     model = model.eval()
 
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+        
     results_dict, generated_smiles, stable_molecules = model.run_evaluation(
         step=step,
         dataset_info=model.dataset_info,

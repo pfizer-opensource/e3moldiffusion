@@ -461,7 +461,7 @@ class Trainer(pl.LightningModule):
             pos=pos_perturbed,
             edge_index_local=None,
             edge_index_global=edge_index_global,
-            edge_attr_global=edge_attr_global_perturbed,
+            edge_attr_global=edge_attr_global_perturbed if not self.hparams.bond_prediction else None,
             batch=data_batch,
             batch_edge_global=batch_edge_global,
             context=context,

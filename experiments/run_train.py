@@ -147,10 +147,10 @@ if __name__ == "__main__":
             from experiments.diffusion_continuous import Trainer
     elif hparams.bond_prediction:
         print("Starting bond prediction model via discrete diffusion")
-        from experiments.bond_prediction_discrete import Trainer
+        from experiments.diffusion_discrete import Trainer
     elif hparams.property_prediction:
         print("Starting property prediction model via discrete diffusion")
-        from experiments.property_prediction_discrete import Trainer
+        from experiments.diffusion_discrete import Trainer
     elif hparams.latent_dim:
         print("Using latent diffusion")
         from experiments.diffusion_latent_discrete import Trainer

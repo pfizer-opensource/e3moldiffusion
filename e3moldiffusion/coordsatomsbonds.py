@@ -193,7 +193,7 @@ class DenoisingEdgeNetwork(nn.Module):
 
         if bond_mapping or bond_prediction:
             if bond_prediction:
-                num_bond_types = 2 * num_atom_features
+                num_bond_types = 1 * num_atom_features + 1
             self.bond_mapping = DenseLayer(num_bond_types, edge_dim)
         else:
             self.bond_mapping = nn.Identity()
@@ -289,7 +289,7 @@ class DenoisingEdgeNetwork(nn.Module):
         pos: Tensor,
         edge_index_local: Tensor,
         edge_index_global: Tensor,
-        edge_attr_global: OptTensor = Tensor,
+        edge_attr_global: OptTensor,
         batch: OptTensor = None,
         batch_edge_global: OptTensor = None,
         z: OptTensor = None,
@@ -315,8 +315,10 @@ class DenoisingEdgeNetwork(nn.Module):
         s = self.atom_time_mapping(s + tnode)
 
         if self.bond_prediction:
+            # symmetric initial edge-feature
+            d = (pos[edge_index_global[1]] - pos[edge_index_global[0]]).pow(2).sum(-1, keepdim=True).sqrt()
             edge_attr_global = torch.concat(
-                [x[edge_index_global[1]], x[edge_index_global[0]]], dim=-1
+                [x[edge_index_global[1]] + x[edge_index_global[0]], d], dim=-1
             )
         edge_attr_global_transformed = self.bond_mapping(edge_attr_global)
         edge_attr_global_transformed = self.bond_time_mapping(
