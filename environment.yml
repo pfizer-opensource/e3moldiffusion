@@ -20,6 +20,7 @@ dependencies:
   - conda-forge::pytorch-lightning=2.0.6
   - conda-forge::jupyter
   - conda-forge::openbabel
+  - conda-forge::xtb
   - pip:
       - ase
       - py3Dmol
@@ -32,3 +33,4 @@ dependencies:
       #- torch-sparse # might only install cpu
       #- torch-cluster # might only install cpu
       - biopython
+      - xtb
