@@ -9,6 +9,7 @@ def get_args():
     # fmt: off
     parser = argparse.ArgumentParser(description='Energy calculation')
     parser.add_argument('--dataset', type=str, help='Which dataset')
+    parser.add_argument('--split', type=str, help='Which data split train/val/test')
     args = parser.parse_args()
     return args
 
@@ -34,25 +35,25 @@ atom_encoder = {
 atom_decoder = {v: k for k, v in atom_encoder.items()}
 
 
-def process(dataset):
+def process(dataset, split):
     if dataset == "drugs":
         from experiments.data.geom.geom_dataset_adaptive import (
             GeomDrugsDataset as DataModule,
         )
 
-        root_path = "/hpfs/userws/cremej01/data/geom"
+        root_path = "/hpfs/userws/cremej01/projects/data/geom"
     elif dataset == "qm9":
         from experiments.data.qm9.qm9_dataset import GeomDrugsDataset as DataModule
 
-        root_path = "/hpfs/userws/cremej01/data/qm9"
+        root_path = "/hpfs/userws/cremej01/projects/data/qm9"
 
     remove_hs = False
 
-    train_dataset = DataModule(split="train", root=root_path, remove_h=remove_hs)
+    dataset = DataModule(split=split, root=root_path, remove_h=remove_hs)
 
     energies = []
     forces_norm = []
-    for mol in tqdm(train_dataset):
+    for mol in tqdm(dataset):
         atom_types = [atom_decoder[int(a)] for a in mol.x]
         try:
             e, f = calculate_xtb_energy(mol.pos, atom_types)
@@ -61,12 +62,12 @@ def process(dataset):
         energies.append(e)
         forces_norm.append(f)
 
-    with open(os.path.join(root_path, "energies.pickle"), "wb") as f:
+    with open(os.path.join(root_path, f"energies_{split}.pickle"), "wb") as f:
         pickle.dump(energies, f)
-    with open(os.path.join(root_path, "forces_norms.pickle"), "wb") as f:
+    with open(os.path.join(root_path, f"forces_norms_{split}.pickle"), "wb") as f:
         pickle.dump(forces_norm, f)
 
 
 if __name__ == "__main__":
     args = get_args()
-    process(args.dataset)
+    process(args.dataset, args.split)
