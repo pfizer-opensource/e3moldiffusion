@@ -639,7 +639,15 @@ class Trainer(pl.LightningModule):
             device=device,
         )
 
-        if self.mol_stab < stability_dict["mol_stable"] and not run_test_eval:
+        save_cond = (
+            self.mol_stab < stability_dict["mol_stable"]
+            if self.hparams.dataset != "qm9"
+            else (
+                self.mol_stab < stability_dict["mol_stable"]
+                and stability_dict["novelty"] > 0.70
+            )
+        )
+        if save_cond and not run_test_eval:
             self.mol_stab = stability_dict["mol_stable"]
             save_path = os.path.join(self.hparams.save_dir, "best_mol_stab.ckpt")
             self.trainer.save_checkpoint(save_path)
@@ -927,7 +935,7 @@ class Trainer(pl.LightningModule):
             "scheduler": lr_scheduler,
             "interval": "epoch",
             "frequency": self.hparams["lr_frequency"],
-            "monitor": "val/coords_loss_epoch",
+            "monitor": self.mol_stab,
             "strict": False,
         }
         return [optimizer], [scheduler]

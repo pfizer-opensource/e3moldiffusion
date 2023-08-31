@@ -41,10 +41,10 @@ beta_min: 1.e-4
 beta_max: 2.e-2
 timesteps: 500
 max_time: 06:00:00:00
-loss_weighting: snr_t
+loss_weighting: uniform
 
 #LOGGING
-save_dir: /hpfs/userws/cremej01/projects/logs/pubchem/pretrain_x0_5_adaptive
+save_dir: /hpfs/userws/cremej01/projects/logs/pubchem/x0_pretrain_3_new
 
 #LEARNING
 lr_scheduler: reduce_on_plateau
