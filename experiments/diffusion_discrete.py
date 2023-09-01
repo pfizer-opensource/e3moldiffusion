@@ -644,7 +644,7 @@ class Trainer(pl.LightningModule):
             if self.hparams.dataset != "qm9"
             else (
                 self.mol_stab < stability_dict["mol_stable"]
-                and stability_dict["novelty"] > 0.70
+                and validity_dict["novelty"] > 0.70
             )
         )
         if save_cond and not run_test_eval:
