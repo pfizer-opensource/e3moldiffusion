@@ -166,10 +166,6 @@ def process_xyz():
     print(f"Number of test samples: {len(test_data)}.")
     print(f"Number of errors: {len(errors)}.")
 
-    import pdb
-
-    pdb.set_trace()
-
     with open("/scratch1/cremej01/data/pcqm4mv2/raw/train_data.pickle", "wb") as f:
         pickle.dump(train_data, f)
 

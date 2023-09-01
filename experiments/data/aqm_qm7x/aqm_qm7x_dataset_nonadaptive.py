@@ -274,12 +274,12 @@ class AQMQM7XDataModule(LightningDataModule):
         return dataloader
 
     def compute_mean_mad(self, properties_list):
-        if self.hparams["dataset"] == "aqm":
+        if self.hparams["dataset"] == "aqm_qm7x":
             dataloader = self.get_dataloader(self.train_dataset, "val")
             return self.compute_mean_mad_from_dataloader(dataloader, properties_list)
         elif (
-            self.hparams["dataset"] == "aqm_half"
-            or self.hparams["dataset"] == "aqm_2half"
+            self.hparams["dataset"] == "aqm_qm7x_half"
+            or self.hparams["dataset"] == "aqm_qm7x_2half"
         ):
             dataloader = self.get_dataloader(self.val_dataset, "val")
             return self.compute_mean_mad_from_dataloader(dataloader, properties_list)
