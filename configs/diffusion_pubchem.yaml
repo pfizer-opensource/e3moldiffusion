@@ -31,7 +31,7 @@ vector_aggr: mean
 
 #DATA
 dataset: pubchem
-dataset_root: /hpfs/userws/cremej01/projects/data/pubchem/database
+dataset_root: /scratch1/cremej01/data/pubchem/database
 
 # DIFFUSION
 continuous: false
@@ -44,7 +44,7 @@ max_time: 06:00:00:00
 loss_weighting: snr_t
 
 #LOGGING
-save_dir: /hpfs/userws/cremej01/projects/logs/pubchem/pretrain_x0_5_adaptive
+save_dir:
 
 #LEARNING
 lr_scheduler: reduce_on_plateau

@@ -216,11 +216,19 @@ class DenoisingEdgeNetwork(nn.Module):
         assert fully_connected
         assert not local_global_model
 
+        if latent_dim:
+            if context_mapping:
+                latent_dim_ = None
+            else:
+                latent_dim_ = latent_dim
+        else:
+            latent_dim_ = None
+            
         self.gnn = EQGATEdgeGNN(
             hn_dim=hn_dim,
             cutoff_local=cutoff_local,
             edge_dim=edge_dim,
-            latent_dim=latent_dim,
+            latent_dim=latent_dim_,
             num_layers=num_layers,
             use_cross_product=use_cross_product,
             vector_aggr=vector_aggr,
