@@ -461,7 +461,9 @@ class Trainer(pl.LightningModule):
             pos=pos_perturbed,
             edge_index_local=None,
             edge_index_global=edge_index_global,
-            edge_attr_global=edge_attr_global_perturbed if not self.hparams.bond_prediction else None,
+            edge_attr_global=edge_attr_global_perturbed
+            if not self.hparams.bond_prediction
+            else None,
             batch=data_batch,
             batch_edge_global=batch_edge_global,
             context=context,
@@ -644,7 +646,7 @@ class Trainer(pl.LightningModule):
             if self.hparams.dataset != "qm9"
             else (
                 self.mol_stab < stability_dict["mol_stable"]
-                and stability_dict["novelty"] > 0.70
+                and validity_dict["novelty"] > 0.70
             )
         )
         if save_cond and not run_test_eval:

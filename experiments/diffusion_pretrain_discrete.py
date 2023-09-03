@@ -13,11 +13,7 @@ from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.data.abstract_dataset import AbstractDatasetInfos
 
-from experiments.utils import (
-    coalesce_edges,
-    zero_mean,
-    dropout_node
-)
+from experiments.utils import coalesce_edges, zero_mean, dropout_node
 from experiments.losses import DiffusionLoss
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
@@ -68,7 +64,7 @@ class Trainer(pl.LightningModule):
 
         if hparams.get("no_h"):
             print("Training without hydrogen")
-       
+
         self.smiles_list = smiles_list
 
         self.model = DenoisingEdgeNetwork(
@@ -156,7 +152,9 @@ class Trainer(pl.LightningModule):
             batch.context = context
 
         out_dict, t, node_mask, batch_size = self(batch=batch)
-        data_batch = batch.batch[node_mask]
+        data_batch = (
+            batch.batch[node_mask] if self.hparams.dropout_prob > 0 else batch.batch
+        )
 
         if self.hparams.loss_weighting == "snr_s_t":
             weights = self.sde_atom_charge.snr_s_t_weighting(
@@ -238,11 +236,12 @@ class Trainer(pl.LightningModule):
         bond_edge_index = batch.edge_index
         bond_edge_attr = batch.edge_attr
         n = batch.num_nodes
-        bs = int(data_batch.max()) + 1
+        batch_size = int(data_batch.max()) + 1
+        node_mask = None
         t = torch.randint(
             low=1,
             high=self.hparams.timesteps + 1,
-            size=(bs,),
+            size=(batch_size,),
             dtype=torch.long,
             device=batch.x.device,
         )
@@ -251,7 +250,7 @@ class Trainer(pl.LightningModule):
             edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
         )
 
-        pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
+        pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=batch_size)
 
         if not hasattr(batch, "fc_edge_index"):
             edge_index_global = (
@@ -297,42 +296,43 @@ class Trainer(pl.LightningModule):
         )
 
         # MASKING PREDICTION
-        edge_index_global, edge_mask, node_mask, batch_mask = dropout_node(
-            edge_index_global,
-            p=self.hparams.dropout_prob,
-            batch=data_batch, num_nodes=n
-        )
-        edge_attr_global_perturbed = edge_attr_global_perturbed[edge_mask]
-        pos_perturbed = pos_perturbed[node_mask]
-        atom_types_perturbed = atom_types_perturbed[node_mask]
-        charges_perturbed = charges_perturbed[node_mask]
+        if self.hparams.dropout_prob > 0:
+            edge_index_global, edge_mask, node_mask, batch_mask = dropout_node(
+                edge_index_global,
+                p=self.hparams.dropout_prob,
+                batch=data_batch,
+                num_nodes=n,
+            )
+            edge_attr_global_perturbed = edge_attr_global_perturbed[edge_mask]
+            pos_perturbed = pos_perturbed[node_mask]
+            atom_types_perturbed = atom_types_perturbed[node_mask]
+            charges_perturbed = charges_perturbed[node_mask]
 
-        batch_edge_global = data_batch[edge_index_global[0]]
-        data_batch = data_batch[node_mask]
-        batch_size = int(sum(batch_mask))
+            batch_edge_global = data_batch[edge_index_global[0]]
+            data_batch = data_batch[node_mask]
+            batch_size = int(sum(batch_mask))
 
-        atom_feats_in_perturbed = torch.cat(
-            [atom_types_perturbed, charges_perturbed], dim=-1
-        )
-
-        edge_index_global = (
-            torch.eq(data_batch.unsqueeze(0), data_batch.unsqueeze(-1))
-            .int()
-            .fill_diagonal_(0)
-        )
-        edge_index_global, _ = dense_to_sparse(edge_index_global)
-        edge_index_global, edge_attr_global_perturbed = sort_edge_index(
-            edge_index=edge_index_global,
-            edge_attr=edge_attr_global_perturbed,
-            sort_by_row=False,
-        )
+            edge_index_global = (
+                torch.eq(data_batch.unsqueeze(0), data_batch.unsqueeze(-1))
+                .int()
+                .fill_diagonal_(0)
+            )
+            edge_index_global, _ = dense_to_sparse(edge_index_global)
+            edge_index_global, edge_attr_global_perturbed = sort_edge_index(
+                edge_index=edge_index_global,
+                edge_attr=edge_attr_global_perturbed,
+                sort_by_row=False,
+            )
 
         # TIME EMBEDDING
-        t = t[batch_mask]
+        t = t[batch_mask] if self.hparams.dropout_prob > 0 else t
         temb = t.float() / self.hparams.timesteps
         temb = temb.clamp(min=self.hparams.eps_min)
         temb = temb.unsqueeze(dim=1)
 
+        atom_feats_in_perturbed = torch.cat(
+            [atom_types_perturbed, charges_perturbed], dim=-1
+        )
         out = self.model(
             x=atom_feats_in_perturbed,
             t=temb,
@@ -350,11 +350,12 @@ class Trainer(pl.LightningModule):
         out["charges_perturbed"] = charges_perturbed
         out["bonds_perturbed"] = edge_attr_global_perturbed
 
-        # MASKING LABELS
-        edge_attr_global = edge_attr_global[edge_mask]
-        pos_centered = pos_centered[node_mask]
-        atom_types = atom_types[node_mask]
-        charges = charges[node_mask]
+        if self.hparams.dropout_prob > 0:
+            # MASKING LABELS
+            edge_attr_global = edge_attr_global[edge_mask]
+            pos_centered = pos_centered[node_mask]
+            atom_types = atom_types[node_mask]
+            charges = charges[node_mask]
 
         out["coords_true"] = pos_centered
         out["atoms_true"] = atom_types.argmax(dim=-1)

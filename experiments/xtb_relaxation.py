@@ -1,8 +1,8 @@
 import numpy as np
-import ase.calculators.calculator
 import ase.units
 import ase
 from ase import Atoms
+from ase.io import write, read
 import ase.units as units
 import logging
 import os
@@ -10,6 +10,8 @@ import subprocess
 from rdkit import rdBase
 import argparse
 import pickle
+import shutil
+from tqdm import tqdm
 
 rdBase.DisableLog("rdApp.error")
 logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO"))
@@ -63,9 +65,10 @@ def xtb_optimization(data, file_path):
     energies = []
     failed_mol_ids = []
 
-    make_dir(file_path)
+    for i, mol in tqdm(enumerate(data)):
+        xtb_temp_dir = os.path.join(file_path, "xtb_tmp")
+        make_dir(xtb_temp_dir)
 
-    for i, mol in enumerate(data):
         mol_size = mol.GetNumAtoms()
         opt = "lax" if mol_size > 60 else "normal"
 
@@ -76,8 +79,10 @@ def xtb_optimization(data, file_path):
         z = np.array(atomic_number, dtype=np.int64)
         mol = Atoms(numbers=z, positions=pos)
 
-        mol_path = os.path.join(file_path, f"xtb_conformer.xyz")
-        ase.io.write(mol_path, images=mol)
+        mol_path = os.path.join(xtb_temp_dir, f"xtb_conformer.xyz")
+        write(mol_path, images=mol)
+
+        os.chdir(xtb_temp_dir)
         try:
             subprocess.call(
                 # ["xtb", mol_path, "--opt", opt, "--cycles", "2000", "--gbsa", "water"],
@@ -86,10 +91,15 @@ def xtb_optimization(data, file_path):
                 stderr=subprocess.STDOUT,
             )
         except:
+            print(f"Molecule with id {i} failed!")
             failed_mol_ids.append(i)
             continue
-        result = parse_xtb_xyz(os.path.join(file_path, f"xtbopt.xyz"))
-        atom = ase.io.read(filename=os.path.join(file_path, f"xtbopt.xyz"))
+        result = parse_xtb_xyz(os.path.join(xtb_temp_dir, f"xtbopt.xyz"))
+        atom = read(filename=os.path.join(xtb_temp_dir, f"xtbopt.xyz"))
+
+        os.chdir(file_path)
+        shutil.rmtree(xtb_temp_dir)
+
         z = atom.get_atomic_numbers()
         energy = result["energy"]
         pos = atom.get_positions()
