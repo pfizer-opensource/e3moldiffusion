@@ -9,6 +9,8 @@ from experiments.data.abstract_dataset import (
     AbstractAdaptiveDataModule,
 )
 from experiments.data.metrics import compute_all_statistics
+from experiments.data.utils import train_subset
+from os.path import join
 
 from torch_geometric.data import Dataset
 from torch.utils.data import Subset
@@ -196,6 +198,7 @@ class PCQM4MV2LMDBDataset(Dataset):
             
         self.remove_h = remove_h
         self.split = split
+        self.smiles = load_pickle(os.path.join(self.data_process_pyg, self.processed_files[10]))
         
         super().__init__(root)
 
@@ -274,6 +277,7 @@ class PCQM4MV2LMDBDataset(Dataset):
             f"{self.split}_is_aromatic_{h}.npy",
             f"{self.split}_is_in_ring_{h}.npy",
             f"{self.split}_hybridization_{h}.npy",
+            f"{self.split}_smiles.pickle",
         ]
 
 
@@ -307,6 +311,16 @@ class PCQM4Mv2DataModule(AbstractAdaptiveDataModule):
             "val": val_dataset.statistics,
             "test": test_dataset.statistics,
         }
+        if cfg.select_train_subset:
+            self.idx_train = train_subset(
+                dset_len=len(train_dataset),
+                train_size=cfg.train_size,
+                seed=cfg.seed,
+                filename=join(cfg.save_dir, "splits.npz"),
+            )
+            self.train_smiles = train_dataset.smiles
+            train_dataset = Subset(train_dataset, self.idx_train)
+            
         super().__init__(cfg, train_dataset, val_dataset, test_dataset)
 
     def _train_dataloader(self, shuffle=True):

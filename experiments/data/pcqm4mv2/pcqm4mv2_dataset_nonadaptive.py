@@ -4,6 +4,9 @@ from experiments.data.pcqm4mv2.pcqm4mv2_dataset_adaptive import PCQM4Mv2Dataset,
 from pytorch_lightning import LightningDataModule
 from torch_geometric.data import DataLoader
 from tqdm import tqdm
+from experiments.data.utils import train_subset
+from os.path import join
+from torch.utils.data import Subset
 
 full_atom_encoder = {
     "H": 0,
@@ -23,7 +26,6 @@ full_atom_encoder = {
     "Hg": 14,
     "Bi": 15,
 }
-
 
 class PCQM4Mv2DataModule(LightningDataModule):
     def __init__(self, cfg):
@@ -79,6 +81,16 @@ class PCQM4Mv2DataModule(LightningDataModule):
             val_dataset._init_db()
             test_dataset = PCQM4MV2LMDBDataset(root=self.datadir, split="test", remove_h=self.cfg.remove_hs)
             test_dataset._init_db()
+            
+        if self.cfg.select_train_subset:
+            self.idx_train = train_subset(
+                dset_len=len(train_dataset),
+                train_size=self.cfg.train_size,
+                seed=self.cfg.seed,
+                filename=join(self.cfg.save_dir, "splits.npz"),
+            )
+            self.train_smiles = train_dataset.smiles
+            train_dataset = Subset(train_dataset, self.idx_train)
 
         if stage == "fit" or stage is None:
             self.train_dataset = train_dataset
