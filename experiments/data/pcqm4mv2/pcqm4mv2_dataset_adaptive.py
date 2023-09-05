@@ -10,6 +10,14 @@ from experiments.data.abstract_dataset import (
 )
 from experiments.data.metrics import compute_all_statistics
 
+from torch_geometric.data import Dataset
+from torch.utils.data import Subset
+import lmdb
+import pickle
+import gzip
+import io
+import os
+
 full_atom_encoder = {
     "H": 0,
     "B": 1,
@@ -167,21 +175,132 @@ class PCQM4Mv2Dataset(InMemoryDataset):
         np.save(self.processed_paths[11], statistics.hybridization)
 
 
+class PCQM4MV2LMDBDataset(Dataset):
+    def __init__(
+        self,
+        root: str,
+        split: str = "train",
+        remove_h=False
+    ):
+        """
+        Constructor
+        """
+        self.data_file = os.path.join(root, f"lmdb_{split}")
+        self.data_process_pyg = os.path.join(root, "processed")
+        if split == "train":
+            self._num_graphs = 2_701_452
+        elif split == "val":
+            self._num_graphs = 337_681
+        elif split == "test":
+            self._num_graphs = 337_683
+            
+        self.remove_h = remove_h
+        self.split = split
+        
+        super().__init__(root)
+
+        self.statistics = dataset_utils.Statistics(
+            num_nodes=load_pickle(os.path.join(self.data_process_pyg, self.processed_files[0])),
+            atom_types=torch.from_numpy(
+                np.load(os.path.join(self.data_process_pyg, self.processed_files[1]))
+            ),
+            bond_types=torch.from_numpy(
+                np.load(os.path.join(self.data_process_pyg, self.processed_files[2]))
+            ),
+            charge_types=torch.from_numpy(
+                np.load(os.path.join(self.data_process_pyg, self.processed_files[3]))
+            ),
+            valencies=load_pickle(os.path.join(self.data_process_pyg, self.processed_files[4])),
+            bond_lengths=load_pickle(
+                os.path.join(self.data_process_pyg, self.processed_files[5])
+            ),
+            bond_angles=torch.from_numpy(
+                np.load(os.path.join(self.data_process_pyg, self.processed_files[6]))
+            ),
+            is_aromatic=torch.from_numpy(
+                np.load(os.path.join(self.data_process_pyg, self.processed_files[7]))
+            ).float(),
+            is_in_ring=torch.from_numpy(
+                np.load(os.path.join(self.data_process_pyg, self.processed_files[8]))
+            ).float(),
+            hybridization=torch.from_numpy(
+                np.load(os.path.join(self.data_process_pyg, self.processed_files[9]))
+            ).float(),
+        )
+
+    def _init_db(self):
+        self._env = lmdb.open(
+            str(self.data_file),
+            readonly=True,
+            lock=False,
+            readahead=False,
+            meminit=False,
+            create=False,
+        )
+
+    def get(self, index: int):
+        self._init_db()
+
+        with self._env.begin(write=False) as txn:
+            compressed = txn.get(str(index).encode())
+            buf = io.BytesIO(compressed)
+            with gzip.GzipFile(fileobj=buf, mode="rb") as f:
+                serialized = f.read()
+            try:
+                item = pickle.loads(serialized)["data"]
+            except:
+                return None
+
+        return item
+
+    def len(self) -> int:
+        r"""Returns the number of graphs stored in the dataset."""
+        return self._num_graphs
+
+    def __len__(self) -> int:
+        return self._num_graphs
+
+    @property
+    def processed_files(self):
+        h = "noh" if self.remove_h else "h"
+        return [
+            f"{self.split}_n_{h}.pickle",
+            f"{self.split}_atom_types_{h}.npy",
+            f"{self.split}_bond_types_{h}.npy",
+            f"{self.split}_charges_{h}.npy",
+            f"{self.split}_valency_{h}.pickle",
+            f"{self.split}_bond_lengths_{h}.pickle",
+            f"{self.split}_angles_{h}.npy",
+            f"{self.split}_is_aromatic_{h}.npy",
+            f"{self.split}_is_in_ring_{h}.npy",
+            f"{self.split}_hybridization_{h}.npy",
+        ]
+
+
 class PCQM4Mv2DataModule(AbstractAdaptiveDataModule):
     def __init__(self, cfg):
         self.datadir = cfg.dataset_root
         root_path = cfg.dataset_root
         self.pin_memory = True
-
-        train_dataset = PCQM4Mv2Dataset(
-            split="train", root=root_path, remove_h=cfg.remove_hs
-        )
-        val_dataset = PCQM4Mv2Dataset(
-            split="val", root=root_path, remove_h=cfg.remove_hs
-        )
-        test_dataset = PCQM4Mv2Dataset(
-            split="test", root=root_path, remove_h=cfg.remove_hs
-        )
+        lmdb = True
+        if not lmdb:
+            train_dataset = PCQM4Mv2Dataset(
+                split="train", root=root_path, remove_h=cfg.remove_hs
+            )
+            val_dataset = PCQM4Mv2Dataset(
+                split="val", root=root_path, remove_h=cfg.remove_hs
+            )
+            test_dataset = PCQM4Mv2Dataset(
+                split="test", root=root_path, remove_h=cfg.remove_hs
+            )
+        else:
+            train_dataset = PCQM4MV2LMDBDataset(root=root_path, split="train", remove_h=cfg.remove_hs)
+            train_dataset._init_db()
+            val_dataset = PCQM4MV2LMDBDataset(root=root_path, split="val", remove_h=cfg.remove_hs)
+            val_dataset._init_db()
+            test_dataset = PCQM4MV2LMDBDataset(root=root_path, split="test", remove_h=cfg.remove_hs)
+            test_dataset._init_db()
+            
         self.remove_h = cfg.remove_hs
         self.statistics = {
             "train": train_dataset.statistics,
@@ -275,26 +394,4 @@ class PCQM4Mv2DataModule(AbstractAdaptiveDataModule):
 
 
 if __name__ == "__main__":
-    # Creating the Pytorch Geometric InMemoryDatasets
-
-    ff = "/hpfs/userws/"
-    # ff = "/hpfs/userws/"
-    # ff = "/sharedhome/"
-
-    DATAROOT = f"{ff}let55/projects/e3moldiffusion/experiments/geom/data"
-    dataset = GeomDrugsDataset(root=DATAROOT, split="val", remove_h=True)
-    # DATAROOT = f"{ff}let55/projects/e3moldiffusion_experiments/data/geom/data"
-    DATAROOT = (
-        "/home/let55/workspace/projects/e3moldiffusion_experiments/data/geom/data"
-    )
-    dataset = GeomDrugsDataset(root=DATAROOT, split="val", remove_h=False)
-    print(dataset)
-    dataset = GeomDrugsDataset(root=DATAROOT, split="test", remove_h=True)
-    dataset = GeomDrugsDataset(root=DATAROOT, split="test", remove_h=False)
-    print(dataset)
-    dataset = GeomDrugsDataset(root=DATAROOT, split="train", remove_h=True)
-    dataset = GeomDrugsDataset(root=DATAROOT, split="train", remove_h=False)
-    print(dataset)
-    print(dataset[0])
-    print(dataset[0].edge_attr)
-    print(dataset[0].edge_attr)
+  pass
