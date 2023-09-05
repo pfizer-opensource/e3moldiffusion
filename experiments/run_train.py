@@ -137,37 +137,42 @@ if __name__ == "__main__":
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
-
-    if hparams.continuous:
-        print("Using continuous diffusion")
-        if hparams.diffusion_pretraining:
-            print("Starting pre-training")
-            from experiments.diffusion_pretrain_continuous import Trainer
-        else:
-            from experiments.diffusion_continuous import Trainer
-    elif hparams.bond_prediction:
-        print("Starting bond prediction model via discrete diffusion")
-        from experiments.diffusion_discrete import Trainer
-    elif hparams.property_prediction:
-        print("Starting property prediction model via discrete diffusion")
-        from experiments.diffusion_discrete import Trainer
-    elif hparams.latent_dim:
-        print("Using latent diffusion")
-        from experiments.diffusion_latent_discrete import Trainer
-    else:
-        print("Using discrete diffusion")
-        if hparams.diffusion_pretraining:
-            print("Starting pre-training")
-            if hparams.additional_feats:
-                from experiments.diffusion_pretrain_discrete_moreFeats import Trainer
+    
+    if not hparams.energy_training:
+        if hparams.continuous:
+            print("Using continuous diffusion")
+            if hparams.diffusion_pretraining:
+                print("Starting pre-training")
+                from experiments.diffusion_pretrain_continuous import Trainer
             else:
-                from experiments.diffusion_pretrain_discrete import Trainer
-        elif hparams.additional_feats:
-            print("Using additional features")
-            from experiments.diffusion_discrete_moreFeats import Trainer
-        else:
+                from experiments.diffusion_continuous import Trainer
+        elif hparams.bond_prediction:
+            print("Starting bond prediction model via discrete diffusion")
             from experiments.diffusion_discrete import Trainer
-
+        elif hparams.property_prediction:
+            print("Starting property prediction model via discrete diffusion")
+            from experiments.diffusion_discrete import Trainer
+        elif hparams.latent_dim:
+            print("Using latent diffusion")
+            from experiments.diffusion_latent_discrete import Trainer
+        else:
+            print("Using discrete diffusion")
+            if hparams.diffusion_pretraining:
+                print("Starting pre-training")
+                if hparams.additional_feats:
+                    from experiments.diffusion_pretrain_discrete_moreFeats import Trainer
+                else:
+                    from experiments.diffusion_pretrain_discrete import Trainer
+            elif hparams.additional_feats:
+                print("Using additional features")
+                from experiments.diffusion_discrete_moreFeats import Trainer
+            else:
+                from experiments.diffusion_discrete import Trainer
+    else:
+        print("Running energy training")
+        from experiments.energy_training import Trainer
+        assert hparams.dataset == "geom"
+            
     model = Trainer(
         hparams=hparams.__dict__,
         dataset_info=dataset_info,
