@@ -98,7 +98,10 @@ class Trainer(pl.LightningModule):
             local_global_model=hparams["local_global_model"],
             recompute_edge_attributes=True,
             recompute_radius_graph=False,
+            context_mapping=hparams["context_mapping"],
+            num_context_features=hparams["num_context_features"],
         )
+        assert hparams["num_context_features"] == hparams["latent_dim"]
 
         self.encoder = LatentEncoderNetwork(
             num_atom_features=self.num_atom_types,
@@ -586,9 +589,14 @@ class Trainer(pl.LightningModule):
             [atom_types_perturbed, charges_perturbed], dim=-1
         )
 
+        if self.hparams.context_mapping:
+            context = z[data_batch]
+            z = None
+        else:
+            context = None
         out = self.model(
             x=atom_feats_in_perturbed,
-            z=z,
+            z=z, context=context,
             t=temb,
             pos=pos_perturbed,
             edge_index_local=None,
@@ -907,10 +915,17 @@ class Trainer(pl.LightningModule):
             batch_num_nodes = batch_num_nodes.detach().long()
         else:
             assert batch_num_nodes is not None
-            
+        
         batch = torch.arange(num_graphs,
                              device=device).repeat_interleave(batch_num_nodes,
                                                               dim=0)
+                             
+        if self.hparams.context_mapping:
+                context = z[batch]
+                z = None
+        else:
+                context = None
+       
         N = len(batch)
         
         # initialiaze the 0-mean point cloud from N(0, I)
@@ -973,7 +988,7 @@ class Trainer(pl.LightningModule):
             out = self.model(
                 x=node_feats_in,
                 t=temb,
-                z=z,
+                z=z, context=context,
                 pos=pos,
                 edge_index_local=edge_index_local,
                 edge_index_global=edge_index_global,
@@ -999,7 +1014,6 @@ class Trainer(pl.LightningModule):
                     t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
                 )
                 
-            
             # rest
             atoms_pred, charges_pred = out["atoms_pred"].split(
                 [self.num_atom_types, self.num_charge_classes], dim=-1

@@ -288,7 +288,7 @@ class Trainer(pl.LightningModule):
             ).to(batch.x.device)
         elif self.hparams.loss_weighting == "snr_t":
             weights = self.sde_atom_charge.snr_t_weighting(
-                t=t, device=batch.x.device, clamp_min=0.05, clamp_max=5.0
+                t=t, device=batch.x.device, clamp_min=0.05, clamp_max=1.5
             )
         elif self.hparams.loss_weighting == "exp_t":
             weights = self.sde_atom_charge.exp_t_weighting(t=t, device=batch.x.device)

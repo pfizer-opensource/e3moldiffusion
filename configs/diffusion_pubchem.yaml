@@ -31,7 +31,7 @@ vector_aggr: mean
 
 #DATA
 dataset: pubchem
-dataset_root: /hpfs/userws/cremej01/projects/data/pubchem/database
+dataset_root: /scratch1/cremej01/data/pubchem/database
 
 # DIFFUSION
 continuous: false

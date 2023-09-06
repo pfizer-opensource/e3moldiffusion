@@ -8,10 +8,70 @@ from e3moldiffusion.convs import (
     EQGATGlobalEdgeConvFinal,
     EQGATLocalConvFinal,
     TopoEdgeConvLayer,
+    EQGATConv
 )
 from e3moldiffusion.modules import LayerNorm, AdaptiveLayerNorm
 
+class EQGATEnergyGNN(nn.Module):
+    def __init__(
+        self,
+        hn_dim: Tuple[int, int] = (256, 128),
+        cutoff: float = 5.0,
+        num_layers: int = 5,
+        num_rbfs: int = 20,
+        use_cross_product: bool = False,
+        vector_aggr: str = "mean",
+        
+    ):
+        
+        self.sdim, self.vdim = hn_dim
+        self.cutoff = cutoff
+        self.num_layers = num_layers
+       
+        convs = []
+        
+        for i in range(num_layers):
+            convs.append(
+                EQGATConv(
+                    in_dims=hn_dim,
+                    out_dims=hn_dim,
+                    num_rbfs=num_rbfs,
+                    cutoff=cutoff,
+                    has_v_in=i > 0,
+                    use_mlp_update=i < (num_layers - 1),
+                    vector_aggr=vector_aggr,
+                    use_cross_product=use_cross_product,
+                )
+            )
 
+        self.convs = nn.ModuleList(convs)
+        
+        self.norms = nn.ModuleList(
+            [LayerNorm(dims=hn_dim) for _ in range(num_layers)]
+        )
+        
+    def forward(
+        self,
+        s: Tensor,
+        v: Tensor,
+        edge_index: Tensor,
+        edge_attr: Tuple[Tensor, Tensor],
+        batch: Tensor = None,
+    ) -> Dict:
+        # edge_attr_xyz (distances, relative_positions)
+        # (E, E x 3)
+        for i in range(len(self.convs)):
+            s, v = self.norms[i](x={"s": s, "v": v}, batch=batch)
+            out = self.convs[i](
+                x=(s, v),
+                batch=batch,
+                edge_index=edge_index,
+                edge_attr=edge_attr,
+            )
+            s, v = out["s"], out["v"]
+        out = {"s": s, "v": v}
+        return out
+        
 class EQGATEdgeGNN(nn.Module):
     """_summary_
     EQGAT GNN Network updating node-level scalar, vectors and position features as well as edge-features.
