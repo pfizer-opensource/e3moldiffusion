@@ -40,6 +40,19 @@ class GeneralInfos(AbstractDatasetInfos):
             self.atom_encoder = {
                 k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
             }
+        self.atom_idx_mapping = {
+            0: 0,
+            1: 2,
+            2: 3,
+            3: 4,
+            4: 5,
+            5: 7,
+            6: 8,
+            7: 9,
+            8: 10,
+            9: 12,
+            10: 13,
+        }
 
         super().complete_infos(datamodule.statistics, self.atom_encoder)
 

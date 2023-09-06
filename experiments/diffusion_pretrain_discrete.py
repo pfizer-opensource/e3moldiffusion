@@ -158,7 +158,7 @@ class Trainer(pl.LightningModule):
 
         if self.hparams.loss_weighting == "snr_s_t":
             weights = self.sde_atom_charge.snr_s_t_weighting(
-                s=t - 1, t=t, device=self.device, clamp_min=0.05, clamp_max=5.0
+                s=t - 1, t=t, device=self.device, clamp_min=0.05, clamp_max=1.5
             )
         elif self.hparams.loss_weighting == "snr_t":
             weights = self.sde_atom_charge.snr_t_weighting(

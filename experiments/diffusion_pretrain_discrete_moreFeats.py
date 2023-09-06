@@ -10,12 +10,7 @@ from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.losses import DiffusionLoss
-from experiments.utils import (
-    coalesce_edges,
-    load_model,
-    zero_mean,
-    dropout_node
-)
+from experiments.utils import coalesce_edges, load_model, zero_mean, dropout_node
 from torch import Tensor
 from torch_geometric.data import Batch
 from torch_scatter import scatter_add
@@ -279,8 +274,10 @@ class Trainer(pl.LightningModule):
             )
             batch.context = context
 
-        out_dict, t, node_mask, batch_size = self(batch=batch)            
-        data_batch = batch.batch[node_mask]
+        out_dict, t, node_mask, batch_size = self(batch=batch)
+        data_batch = (
+            batch.batch[node_mask] if self.hparams.dropout_prob > 0 else batch.batch
+        )
 
         if self.hparams.loss_weighting == "snr_s_t":
             weights = self.sde_atom_charge.snr_s_t_weighting(
@@ -387,11 +384,12 @@ class Trainer(pl.LightningModule):
         bond_edge_attr = batch.edge_attr
         context = batch.context if self.hparams.context_mapping else None
         n = batch.num_nodes
-        bs = int(data_batch.max()) + 1
+        node_mask = None
+        batch_size = int(data_batch.max()) + 1
         t = torch.randint(
             low=1,
             high=self.hparams.timesteps + 1,
-            size=(bs,),
+            size=(batch_size,),
             dtype=torch.long,
             device=batch.x.device,
         )
@@ -404,7 +402,7 @@ class Trainer(pl.LightningModule):
             edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
         )
 
-        pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
+        pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=batch_size)
 
         if not hasattr(batch, "fc_edge_index"):
             edge_index_global = (
@@ -487,22 +485,36 @@ class Trainer(pl.LightningModule):
         ).float()
 
         # MASKING PREDICTION
-        edge_index_global, edge_mask, node_mask, batch_mask = dropout_node(
-            edge_index_global,
-            p=self.hparams.dropout_prob,
-            batch=data_batch, num_nodes=n
-        )
-        edge_attr_global_perturbed = edge_attr_global_perturbed[edge_mask]
-        pos_perturbed = pos_perturbed[node_mask]
-        atom_types_perturbed = atom_types_perturbed[node_mask]
-        charges_perturbed = charges_perturbed[node_mask]
-        ring_feat_perturbed = ring_feat_perturbed[node_mask]
-        aromatic_feat_perturbed = aromatic_feat_perturbed[node_mask]
-        hybridization_feat_perturbed = hybridization_feat_perturbed[node_mask]
+        if self.hparams.dropout_prob > 0:
+            edge_index_global, edge_mask, node_mask, batch_mask = dropout_node(
+                edge_index_global,
+                p=self.hparams.dropout_prob,
+                batch=data_batch,
+                num_nodes=n,
+            )
+            edge_attr_global_perturbed = edge_attr_global_perturbed[edge_mask]
+            pos_perturbed = pos_perturbed[node_mask]
+            atom_types_perturbed = atom_types_perturbed[node_mask]
+            charges_perturbed = charges_perturbed[node_mask]
+            ring_feat_perturbed = ring_feat_perturbed[node_mask]
+            aromatic_feat_perturbed = aromatic_feat_perturbed[node_mask]
+            hybridization_feat_perturbed = hybridization_feat_perturbed[node_mask]
 
-        batch_edge_global = data_batch[edge_index_global[0]]
-        data_batch = data_batch[node_mask]
-        batch_size = int(sum(batch_mask))
+            batch_edge_global = data_batch[edge_index_global[0]]
+            data_batch = data_batch[node_mask]
+            batch_size = int(sum(batch_mask))
+
+            edge_index_global = (
+                torch.eq(data_batch.unsqueeze(0), data_batch.unsqueeze(-1))
+                .int()
+                .fill_diagonal_(0)
+            )
+            edge_index_global, _ = dense_to_sparse(edge_index_global)
+            edge_index_global, edge_attr_global_perturbed = sort_edge_index(
+                edge_index=edge_index_global,
+                edge_attr=edge_attr_global_perturbed,
+                sort_by_row=False,
+            )
 
         atom_feats_in_perturbed = torch.cat(
             [
@@ -515,24 +527,12 @@ class Trainer(pl.LightningModule):
             dim=-1,
         )
 
-        edge_index_global = (
-            torch.eq(data_batch.unsqueeze(0), data_batch.unsqueeze(-1))
-            .int()
-            .fill_diagonal_(0)
-        )
-        edge_index_global, _ = dense_to_sparse(edge_index_global)
-        edge_index_global, edge_attr_global_perturbed = sort_edge_index(
-            edge_index=edge_index_global,
-            edge_attr=edge_attr_global_perturbed,
-            sort_by_row=False,
-        )
-
         # TIME EMBEDDING
-        t = t[batch_mask]
+        t = t[batch_mask] if self.hparams.dropout_prob > 0 else t
         temb = t.float() / self.hparams.timesteps
         temb = temb.clamp(min=self.hparams.eps_min)
         temb = temb.unsqueeze(dim=1)
-        
+
         # FORWARD
         out = self.model(
             x=atom_feats_in_perturbed,
@@ -554,14 +554,15 @@ class Trainer(pl.LightningModule):
         out["aromatic_perturbed"] = aromatic_feat_perturbed
         out["hybridization_perturbed"] = hybridization_feat_perturbed
 
-        # MASKING LABELS
-        edge_attr_global = edge_attr_global[edge_mask]
-        pos_centered = pos_centered[node_mask]
-        atom_types = atom_types[node_mask]
-        charges = charges[node_mask]
-        ring_feat = ring_feat[node_mask]
-        aromatic_feat = aromatic_feat[node_mask]
-        hybridization_feat = hybridization_feat[node_mask]
+        if self.hparams.dropout_prob > 0:
+            # MASKING LABELS
+            edge_attr_global = edge_attr_global[edge_mask]
+            pos_centered = pos_centered[node_mask]
+            atom_types = atom_types[node_mask]
+            charges = charges[node_mask]
+            ring_feat = ring_feat[node_mask]
+            aromatic_feat = aromatic_feat[node_mask]
+            hybridization_feat = hybridization_feat[node_mask]
 
         out["coords_true"] = pos_centered
         out["coords_noise_true"] = noise_coords_true

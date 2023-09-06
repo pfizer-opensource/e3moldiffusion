@@ -18,7 +18,7 @@ def chunks(lst, n):
         yield lst[i : i + n]
 
 
-DATA_PATH = "/sharedhome/cremej01/workspace/data/pubchem"
+DATA_PATH = "/hpfs/userws/cremej01/projects/data/pubchem"
 FULL_ATOM_ENCODER = {
     "H": 0,
     "B": 1,
@@ -55,7 +55,7 @@ def process_files(
 
     data_list = glob(os.path.join(DATA_PATH, "raw/*.gz"))
 
-    save_path = os.path.join(DATA_PATH, "database")
+    save_path = os.path.join(DATA_PATH, "database_2")
     if os.path.exists(save_path):
         print("FYI: Output directory has been created already.")
     chunked_list = list(chunks(data_list, chunk_size))
