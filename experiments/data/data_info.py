@@ -24,6 +24,7 @@ full_atom_encoder = {
     "Bi": 15,
 }
 
+
 class GeneralInfos(AbstractDatasetInfos):
     def __init__(self, datamodule, cfg):
         self.remove_h = cfg.remove_hs
@@ -33,6 +34,11 @@ class GeneralInfos(AbstractDatasetInfos):
         self.statistics = datamodule.statistics
         self.name = "drugs"
         self.atom_encoder = full_atom_encoder
+        # for debugging, to do some inference on trained model
+        #if self.remove_h:
+        #    self.atom_encoder = {
+        #        k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
+        #    } 
         self.charge_offset = 2
         self.collapse_charges = torch.Tensor([-2, -1, 0, 1, 2, 3]).int()
         self.atom_idx_mapping = {
@@ -95,6 +101,11 @@ class GEOMInfos(AbstractDatasetInfos):
         self.statistics = datamodule.statistics
         self.name = "drugs"
         self.atom_encoder = full_atom_encoder_drugs
+        # for debugging, to do some inference on trained model
+        #if self.remove_h:
+        #    self.atom_encoder = {
+        #        k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
+        #    } 
         self.charge_offset = 2
         self.collapse_charges = torch.Tensor([-2, -1, 0, 1, 2, 3]).int()
         super().complete_infos(datamodule.statistics, self.atom_encoder)

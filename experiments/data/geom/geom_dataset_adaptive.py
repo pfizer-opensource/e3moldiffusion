@@ -296,7 +296,7 @@ if __name__ == "__main__":
 
     # ff = "/hpfs/userws/"
     ff = "/sharedhome/"
-    DATAROOT = f"{ff}let55/projects/e3moldiffusion_experiments/data/geom/data_tmp"
+    DATAROOT = f"{ff}let55/projects/e3moldiffusion_experiments/data/geom/data_noH"
     #DATAROOT = (
     #    "/home/let55/workspace/projects/e3moldiffusion_experiments/data/geom/data_noH"
     #)

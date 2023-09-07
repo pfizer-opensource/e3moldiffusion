@@ -32,17 +32,13 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = F
     if remove_hydrogens:
         # mol = Chem.RemoveAllHs(mol)
         mol = Chem.RemoveHs(mol) # only remove (explicit) hydrogens attached to molecular graph
-
-    # added:
-    try:
-        Chem.SanitizeMol(mol)
-    except:
-        pass
-
+        Chem.Kekulize(mol)
     adj = torch.from_numpy(Chem.rdmolops.GetAdjacencyMatrix(mol, useBO=True))
     edge_index = adj.nonzero().contiguous().T
     bond_types = adj[edge_index[0], edge_index[1]]
     bond_types[bond_types == 1.5] = 4
+    if remove_hydrogens:
+        assert max(bond_types) != 4
     edge_attr = bond_types.long()
 
     pos = torch.tensor(mol.GetConformers()[0].GetPositions()).float()
