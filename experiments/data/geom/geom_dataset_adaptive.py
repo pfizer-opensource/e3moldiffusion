@@ -45,12 +45,7 @@ class GeomDrugsDataset(InMemoryDataset):
         self.compute_bond_distance_angles = True
 
         self.atom_encoder = full_atom_encoder
-
-        if remove_h:
-            self.atom_encoder = {
-                k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
-            }
-
+        
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
         self.statistics = dataset_utils.Statistics(
@@ -144,16 +139,10 @@ class GeomDrugsDataset(InMemoryDataset):
                     break
                 data = dataset_utils.mol_to_torch_geometric(
                     conformer,
-                    full_atom_encoder,
+                    self.atom_encoder,
                     smiles,
-                    remove_hydrogens=self.remove_h,  # need to give full atom encoder since hydrogens might still be available if Chem.RemoveHs is called
+                    remove_hydrogens=self.remove_h,
                 )
-                # even when calling Chem.RemoveHs, hydrogens might be present
-                if self.remove_h:
-                    data = dataset_utils.remove_hydrogens(
-                        data
-                    )  # remove through masking
-
                 if self.pre_filter is not None and not self.pre_filter(data):
                     continue
                 if self.pre_transform is not None:

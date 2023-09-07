@@ -82,11 +82,6 @@ class AQMDataset(InMemoryDataset):
         self.remove_h = remove_h
 
         self.atom_encoder = full_atom_encoder
-        if remove_h:
-            self.atom_encoder = {
-                k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
-            }
-
         self.label2idx = {k: i for i, k in enumerate(mol_properties)}
 
         super().__init__(root, transform, pre_transform, pre_filter)

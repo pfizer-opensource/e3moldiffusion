@@ -43,6 +43,7 @@ def process_files(
     processes: int = 18,
     chunk_size: int = 1024,
     subchunk: int = 128,
+    removeHs=False
 ):
     """
     :param dataset:
@@ -54,8 +55,8 @@ def process_files(
     """
 
     data_list = glob(os.path.join(DATA_PATH, "raw/*.gz"))
-
-    save_path = os.path.join(DATA_PATH, "database_2")
+    h = "noh" if removeHs else "h"
+    save_path = os.path.join(DATA_PATH, f"database_{h}")
     if os.path.exists(save_path):
         print("FYI: Output directory has been created already.")
     chunked_list = list(chunks(data_list, chunk_size))
@@ -70,8 +71,9 @@ def process_files(
         for chunklist in tqdm(chunked_list, total=len(chunked_list), desc="Chunks"):
             chunkresult = []
             for datachunk in tqdm(chunklist, total=len(chunklist), desc="Datachunks"):
+                removeHs_list = [removeHs] * len(datachunk)
                 with mp.Pool(processes=processes) as pool:
-                    res = pool.map(func=db_sample_helper, iterable=datachunk)
+                    res = pool.starmap(func=db_sample_helper, iterable=zip(datachunk, removeHs_list))
                     res = [r for r in res if r is not None]
                 chunkresult.append(res)
 
@@ -102,7 +104,7 @@ def process_files(
         print("Finished!")
 
 
-def db_sample_helper(file):
+def db_sample_helper(file, removeHs=False):
     saved_confs_list = []
     smiles_list = []
 
@@ -112,7 +114,7 @@ def db_sample_helper(file):
     for mol in molecules:
         try:
             smiles = Chem.MolToSmiles(mol)
-            data = dataset_utils.mol_to_torch_geometric(mol, FULL_ATOM_ENCODER, smiles)
+            data = dataset_utils.mol_to_torch_geometric(mol, FULL_ATOM_ENCODER, smiles, remove_hydrogens=removeHs)
             if data.pos.shape[0] != data.x.shape[0]:
                 continue
             if data.pos.ndim != 2:
@@ -139,4 +141,5 @@ def db_sample_helper(file):
 
 
 if __name__ == "__main__":
-    process_files()
+    process_files(removeHs=False)
+    process_files(removeHs=True)

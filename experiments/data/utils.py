@@ -29,8 +29,9 @@ x_map = {
 
 
 def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = False):
-    # if remove_hydrogens:
-    #    mol = Chem.RemoveAllHs(mol)
+    if remove_hydrogens:
+        # mol = Chem.RemoveAllHs(mol)
+        mol = Chem.RemoveHs(mol) # only remove (explicit) hydrogens attached to molecular graph
 
     # added:
     try:
@@ -85,6 +86,7 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = F
 
 
 # in case the rdkit.molecule has explicit hydrogens, the number of attached hydrogens to heavy atoms are not saved
+# do not use, better let rdkit handle removing hydrogens!
 def remove_hydrogens(data: Data):
     to_keep = data.x > 0
     new_edge_index, new_edge_attr = subgraph(
@@ -147,12 +149,12 @@ def load_pickle(path):
         return pickle.load(f)
 
 
-def get_rdkit_mol(fname_xyz):
+def get_rdkit_mol(fname_xyz, removeHs=False, sanitize=False):
     mol = next(pybel.readfile("xyz", fname_xyz))
     mol = Chem.MolFromPDBBlock(
         molBlock=mol.write(format="pdb"),
-        sanitize=False,
-        removeHs=False,
+        sanitize=sanitize,
+        removeHs=removeHs,
         proximityBonding=True,
     )
     # assert len(Chem.GetMolFrags(mol)) == 2

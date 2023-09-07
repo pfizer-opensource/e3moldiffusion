@@ -46,17 +46,14 @@ class PCQM4Mv2Dataset(InMemoryDataset):
     ):
         assert split in ["train", "val", "test"]
         self.split = split
-        self.remove_h = remove_h
-
+        self.remove_h = remove_h    
         self.compute_bond_distance_angles = True
 
-        self.atom_encoder = full_atom_encoder
-
         if remove_h:
-            self.atom_encoder = {
-                k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
-            }
-
+            print("No Hydrogens Dataset has not been processed yet!")
+            raise NotImplementedError
+        
+        self.atom_encoder = full_atom_encoder
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
         self.statistics = dataset_utils.Statistics(
@@ -143,9 +140,6 @@ class PCQM4Mv2Dataset(InMemoryDataset):
         data_list = []
         all_smiles = []
         for i, data in enumerate(tqdm(all_data)):
-            if self.remove_h:
-                data = dataset_utils.remove_hydrogens(data)  # remove through masking
-
             if self.pre_filter is not None and not self.pre_filter(data):
                 continue
             if self.pre_transform is not None:

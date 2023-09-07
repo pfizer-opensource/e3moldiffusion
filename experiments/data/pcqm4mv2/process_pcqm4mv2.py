@@ -127,19 +127,18 @@ def data_info():
     print(f"Atom types: {atom_types}")
 
 
-def _process_xyz_single(xyz: str):
+def _process_xyz_single(xyz: str, removeHs=False):
     atoms, coords = read_xyz_file(xyz)
     
     with tempfile.NamedTemporaryFile() as tmp:
         tmp_file = tmp.name
         # Write xyz file
         write_xyz_file(coords=coords, atom_types=atoms, filename=tmp_file)
-        rdkit_mol = get_rdkit_mol(tmp_file)
+        rdkit_mol = get_rdkit_mol(tmp_file, removeHs=removeHs, sanitize=False)
         smiles = Chem.MolToSmiles(rdkit_mol, isomericSmiles=False)
-        
     try:
         data = dataset_utils.mol_to_torch_geometric(
-            rdkit_mol, full_atom_encoder, smiles
+            rdkit_mol, full_atom_encoder, smiles, remove_hydrogens=removeHs
         )
         data.mol = rdkit_mol
     except:
@@ -147,10 +146,10 @@ def _process_xyz_single(xyz: str):
         
     return data
 
-def _process_xyz_chunk(datalist, savedir):
+def _process_xyz_chunk(datalist, savedir, removeHs=False):
     outlist = []
     for f in tqdm(datalist, desc="Molecules", total=len(datalist)):
-        out = _process_xyz_single(f)
+        out = _process_xyz_single(f, removeHs=removeHs)
         if out is not None:
             outlist.append(out)
             
@@ -164,16 +163,17 @@ def chunks(l, n):
         yield l[i::n]
         
         
-def process_xyz_mp(num_cores: int = 8):
+def process_xyz_mp(num_cores: int = 8, removeHs=False):
     raw_paths = ["/scratch1/cremej01/data/pcqm4mv2/pcqm4m-v2_xyz"]
     data_list = []
     xyz_files = glob(raw_paths[0] + "/*/*.xyz")
     xyz_files_chunks = list(chunks(xyz_files, n=num_cores))   
     save_dirs = [osp.join(f'/scratch1/let55/data/pcqm4mv2/raw/chunk_{i}.pickle') for i in range(len(xyz_files_chunks))]
+    removeHs_list = [removeHs] * len(xyz_files_chunks)
     
     with Pool(processes=num_cores) as pool:
         results = pool.starmap(func=_process_xyz_chunk,
-                               iterable=zip(xyz_files_chunks, save_dirs)
+                               iterable=zip(xyz_files_chunks, save_dirs, removeHs_list)
                                )
         
     data_list = [item for sublist in results for item in sublist]
@@ -183,7 +183,7 @@ def process_xyz_mp(num_cores: int = 8):
     train_data = data_list[:n_train]
     val_data = data_list[n_train : n_train + n_val]
     test_data = data_list[n_train + n_val :]
-
+    
     print(f"Number of datapoints: {len(data_list)}.")
     print(f"Number of training samples: {len(train_data)}.")
     print(f"Number of validation samples: {len(val_data)}.")
@@ -191,13 +191,15 @@ def process_xyz_mp(num_cores: int = 8):
     errors = len(xyz_files) - len(data_list)
     print(f"Number of errors: {len(errors)}.")
 
-    with open("/scratch1/let55/data/pcqm4mv2/raw/test_data_new.pickle", "wb") as f:
+    h = "noh" if removeHs else "h"
+    
+    with open(f"/scratch1/let55/data/pcqm4mv2/raw/test_data_new_{h}.pickle", "wb") as f:
         pickle.dump(test_data, f)
     
-    with open("/scratch1/let55/data/pcqm4mv2/raw/val_data_new.pickle", "wb") as f:
+    with open(f"/scratch1/let55/data/pcqm4mv2/raw/val_data_new_{h}.pickle", "wb") as f:
         pickle.dump(val_data, f)
     
-    with open("/scratch1/let55/data/pcqm4mv2/raw/train_data_new.pickle", "wb") as f:
+    with open(f"/scratch1/let55/data/pcqm4mv2/raw/train_data_new_{h}.pickle", "wb") as f:
         pickle.dump(train_data, f)
         
     print("Finished")
