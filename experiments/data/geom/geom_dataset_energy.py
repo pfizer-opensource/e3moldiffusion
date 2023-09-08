@@ -35,7 +35,7 @@ full_atom_encoder = {
 atom_decoder = {v: k for k, v in full_atom_encoder.items()}
 
 GEOM_DATADIR = "/hpfs/userws/cremej01/projects/data/geom/processed"
-
+GEOM_DATADIR = "/scratch1/cremej01/data/geom/processed"
 
 class GeomDrugsDataset(InMemoryDataset):
     def __init__(
@@ -48,6 +48,15 @@ class GeomDrugsDataset(InMemoryDataset):
         self.atom_encoder = full_atom_encoder
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
+        
+        # normalize energy, as of now use z-score normalization.
+        mean = self.data.energy.mean(dim=0, keepdim=True)
+        std = self.data.energy.std(dim=0, keepdim=True)
+        self.data.energy = (self.data.energy - mean) / std
+        # could also try mean absolute deviation normalization, less sensitive to outliers, scaling is smaller, i.e. values are larger after.
+        # mad = torch.abs(self.data.energy - mean) 
+        # self.data.energy = (self.data.energy - mean) / mad
+        
         self.statistics = dataset_utils.Statistics(
             num_nodes=load_pickle(os.path.join(GEOM_DATADIR, self.processed_names[0])),
             atom_types=torch.from_numpy(
@@ -98,7 +107,7 @@ class GeomDrugsDataset(InMemoryDataset):
             ]
         else:
             return [
-                f"test_h.pt",
+                f"test_data_energy.pt",
             ]
 
     def download(self):

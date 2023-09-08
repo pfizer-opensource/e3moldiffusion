@@ -111,9 +111,8 @@ class Trainer(pl.LightningModule):
         elif self.hparams.loss_weighting == "uniform":
             weights = torch.ones(batch_size, device=self.device)
 
-        import pdb
-
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
         loss = torch.mean(
             weights
             * self.energy_loss(
