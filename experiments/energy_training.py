@@ -11,6 +11,7 @@ from e3moldiffusion.coordsatomsbonds import EQGATEnergyNetwork
 from experiments.data.abstract_dataset import AbstractDatasetInfos
 from experiments.utils import zero_mean
 
+
 class Trainer(pl.LightningModule):
     def __init__(
         self,
@@ -24,12 +25,6 @@ class Trainer(pl.LightningModule):
 
         self.num_atom_types_geom = 16
         atom_types_distribution = dataset_info.atom_types.float()
-        if self.hparams.dataset == "pubchem":
-            pubchem_ids = [0, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13]
-            geom_only = [
-                i for i in range(self.num_atom_types_geom) if i not in pubchem_ids
-            ]
-        atom_types_distribution[geom_only] = 0.0
         bond_types_distribution = dataset_info.edge_types.float()
         charge_types_distribution = dataset_info.charges_marginals.float()
 
@@ -41,7 +36,7 @@ class Trainer(pl.LightningModule):
         self.num_charge_classes = dataset_info.input_dims.C
         self.num_atom_types = self.hparams.num_atom_types
         self.num_atom_features = self.num_atom_types + self.num_charge_classes
-        
+
         if hparams.get("no_h"):
             print("Training without hydrogen")
 
@@ -64,7 +59,7 @@ class Trainer(pl.LightningModule):
             nu=1,
             enforce_zero_terminal_snr=False,
         )
-        
+
         self.cat_atoms = CategoricalDiffusionKernel(
             terminal_distribution=atom_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
@@ -73,7 +68,7 @@ class Trainer(pl.LightningModule):
             terminal_distribution=charge_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
         )
-        
+
         self.model = EQGATEnergyNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
@@ -81,13 +76,13 @@ class Trainer(pl.LightningModule):
             use_cross_product=hparams["use_cross_product"],
             num_atom_features=self.num_atom_features,
             cutoff_local=hparams["cutoff_local"],
-            vector_aggr=hparams["vector_aggr"]
+            vector_aggr=hparams["vector_aggr"],
         )
 
         if hparams["energy_loss"] == "l2":
-            self.energy_loss = torch.nn.MSELoss(reduce=None, reduction=None)
+            self.energy_loss = torch.nn.MSELoss(reduce=False, reduction="none")
         else:
-            self.energy_loss = torch.nn.L1Loss(reduce=None, reduction=None)
+            self.energy_loss = torch.nn.L1Loss(reduce=False, reduction="none")
 
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
@@ -96,7 +91,6 @@ class Trainer(pl.LightningModule):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="val")
 
     def step_fnc(self, batch, batch_idx, stage: str):
-        
         out_dict, t, batch_size = self(batch=batch)
 
         if self.hparams.loss_weighting == "snr_s_t":
@@ -116,22 +110,30 @@ class Trainer(pl.LightningModule):
             weights = self.sde_atom_charge.exp_t_half_weighting(t=t, device=self.device)
         elif self.hparams.loss_weighting == "uniform":
             weights = torch.ones(batch_size, device=self.device)
-            
-        loss = torch.mean(weights * self.energy_loss(out_dict["energy_pred"].squeeze(-1), batch.energy.squeeze(-1)), dim=0)
-        
+
+        import pdb
+
+        pdb.set_trace()
+        loss = torch.mean(
+            weights
+            * self.energy_loss(
+                out_dict["energy_pred"].squeeze(-1), batch.energy.squeeze(-1)
+            ),
+            dim=0,
+        )
+
         self.log(
             f"{stage}/loss",
             loss,
             on_step=True,
             batch_size=batch_size,
-            prog_bar=False,
+            prog_bar=True,
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
-        
+
         return loss
 
     def forward(self, batch: Batch):
-        
         atom_types: Tensor = batch.x
         pos: Tensor = batch.pos
         charges: Tensor = batch.charges
@@ -147,7 +149,7 @@ class Trainer(pl.LightningModule):
         )
 
         pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
-        
+
         # SAMPLING
         noise_coords_true, pos_perturbed = self.sde_pos.sample_pos(
             t, pos_centered, data_batch
@@ -158,7 +160,7 @@ class Trainer(pl.LightningModule):
         charges, charges_perturbed = self.cat_charges.sample_categorical(
             t, charges, data_batch, self.dataset_info, type="charges"
         )
-        
+
         atom_feats_in_perturbed = torch.cat(
             [atom_types_perturbed, charges_perturbed], dim=-1
         )
@@ -169,14 +171,10 @@ class Trainer(pl.LightningModule):
         temb = temb.unsqueeze(dim=1)
 
         out = self.model(
-            x=atom_feats_in_perturbed,
-            t=temb,
-            pos=pos_perturbed,
-            batch=data_batch
+            x=atom_feats_in_perturbed, t=temb, pos=pos_perturbed, batch=data_batch
         )
 
         return out, t, bs
-
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(

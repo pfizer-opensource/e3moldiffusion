@@ -196,8 +196,8 @@ class AdaptiveLayerNorm(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        self.weight_bias.bias.data[:self.sdim] = 1
-        self.weight_bias.bias.data[self.sdim:] = 0
+        self.weight_bias.bias.data[: self.sdim] = 1
+        self.weight_bias.bias.data[self.sdim :] = 0
 
     def forward(self, x: Dict, batch: Tensor) -> Tuple[Tensor, Optional[Tensor]]:
         s, v, z = x["s"], x["v"], x["z"]
@@ -228,8 +228,8 @@ class AdaptiveLayerNorm(nn.Module):
 
     def __repr__(self):
         return f"{self.__class__.__name__}(dims={self.dims}, " f"affine={self.affine})"
-    
-    
+
+
 class SE3Norm(nn.Module):
     def __init__(self, eps: float = 1e-5, device=None, dtype=None) -> None:
         """Note: There is a relatively similar layer implemented by NVIDIA:

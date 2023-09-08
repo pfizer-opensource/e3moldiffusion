@@ -230,7 +230,7 @@ class DenoisingEdgeNetwork(nn.Module):
                 latent_dim_ = latent_dim
         else:
             latent_dim_ = None
-            
+
         self.gnn = EQGATEdgeGNN(
             hn_dim=hn_dim,
             cutoff_local=cutoff_local,
@@ -767,34 +767,37 @@ class EdgePredictionNetwork(nn.Module):
 
 
 class EQGATEnergyNetwork(nn.Module):
-    def __init__(self,
-                 num_atom_features: int,
-                 hn_dim: Tuple[int, int] = (256, 64),
-                 num_rbfs: int = 20,
-                 cutoff_local: float = 5.0,
-                 num_layers: int = 5,
-                 use_cross_product: bool = False,
-                 vector_aggr: str = "mean",
-                 ) -> None:
+    def __init__(
+        self,
+        num_atom_features: int,
+        hn_dim: Tuple[int, int] = (256, 64),
+        num_rbfs: int = 20,
+        cutoff_local: float = 5.0,
+        num_layers: int = 5,
+        use_cross_product: bool = False,
+        vector_aggr: str = "mean",
+    ) -> None:
         super().__init__()
         self.cutoff = cutoff_local
         self.sdim, self.vdim = hn_dim
+
+        self.time_mapping_atom = DenseLayer(1, hn_dim[0])
         self.atom_mapping = DenseLayer(num_atom_features, hn_dim[0])
-        self.gnn = EQGATEnergyGNN(hn_dim=hn_dim,
-                                  cutoff=cutoff_local,
-                                  num_rbfs=num_rbfs,
-                                  num_layers=num_layers,
-                                  use_cross_product=use_cross_product,
-                                  vector_aggr=vector_aggr
-                                  )    
-        self.energy_head = GatedEquivBlock(in_dims=hn_dim, 
-                                           out_dims=(1, None),
-                                           use_mlp=True
-                                           )
-        
-    def calculate_edge_attrs(
-        self, edge_index: Tensor, pos: Tensor
-    ):
+        self.atom_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
+
+        self.gnn = EQGATEnergyGNN(
+            hn_dim=hn_dim,
+            cutoff=cutoff_local,
+            num_rbfs=num_rbfs,
+            num_layers=num_layers,
+            use_cross_product=use_cross_product,
+            vector_aggr=vector_aggr,
+        )
+        self.energy_head = GatedEquivBlock(
+            in_dims=hn_dim, out_dims=(1, None), use_mlp=True
+        )
+
+    def calculate_edge_attrs(self, edge_index: Tensor, pos: Tensor):
         source, target = edge_index
         r = pos[target] - pos[source]
         d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6)
@@ -802,30 +805,32 @@ class EQGATEnergyNetwork(nn.Module):
         r_norm = torch.div(r, (1.0 + d.unsqueeze(-1)))
         edge_attr = (d, r_norm)
         return edge_attr
-        
-    def forward(self,
-                x: Tensor,
-                pos: Tensor,
-                batch: OptTensor=None) -> Dict:
-        
-        edge_index = radius_graph(x=pos, r=self.cutoff, 
-                                  batch=batch, 
-                                  max_num_neighbors=128)
+
+    def forward(
+        self, x: Tensor, pos: Tensor, t: Tensor, batch: OptTensor = None
+    ) -> Dict:
+        edge_index = radius_graph(
+            x=pos, r=self.cutoff, batch=batch, max_num_neighbors=128
+        )
+        ta = self.time_mapping_atom(t)
+        tnode = ta[batch]
         s = self.atom_mapping(x)
-        v = torch.zeros(size=(x.size(0), 3, self.vdim),
-                        device=x.device,
-                        dtype=pos.dtype)
-        
+        s = self.atom_time_mapping(s + tnode)
+        v = torch.zeros(
+            size=(x.size(0), 3, self.vdim), device=x.device, dtype=pos.dtype
+        )
+
         edge_attr = self.calculate_edge_attrs(edge_index, pos)
-        s, v = self.gnn(s=s, v=v, 
-                        edge_index=edge_index,
-                        edge_attr=edge_attr,
-                        batch=batch)
-        energy_atoms = self.energy_head((s, v))
+        s, v = self.gnn(
+            s=s, v=v, edge_index=edge_index, edge_attr=edge_attr, batch=batch
+        )
+        energy_atoms, v = self.energy_head((s, v))
+        energy_atoms = energy_atoms + v.sum() * 0
         bs = len(batch.unique())
         energy_molecule = scatter_add(energy_atoms, index=batch, dim=0, dim_size=bs)
-        out = {'energy_pred': energy_molecule}
+        out = {"energy_pred": energy_molecule}
         return out
-    
+
+
 if __name__ == "__main__":
     pass

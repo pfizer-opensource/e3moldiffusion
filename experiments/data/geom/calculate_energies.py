@@ -3,6 +3,8 @@ import os
 import pickle
 import argparse
 from experiments.xtb_energy import calculate_xtb_energy
+from torch_geometric.data.collate import collate
+import torch
 
 
 def get_args():
@@ -41,11 +43,13 @@ def process(dataset, split):
             GeomDrugsDataset as DataModule,
         )
 
-        root_path = "/scratch1/cremej01/data/geom"
+        root_path = "/hpfs/userws/cremej01/projects/data/geom"
     elif dataset == "qm9":
         from experiments.data.qm9.qm9_dataset import GeomDrugsDataset as DataModule
 
-        root_path = "/scratch1/cremej01/data/qm9"
+        root_path = "/hpfs/userws/cremej01/projects/data/qm9"
+    else:
+        raise ValueError("Dataset not found")
 
     remove_hs = False
 
@@ -65,10 +69,31 @@ def process(dataset, split):
         mol.forces_norm = f
         mols.append(mol)
 
-    with open(os.path.join(root_path, f"raw/{split}_data_energy.pickle"), "wb") as f:
-        pickle.dump(mols, f)
+    print(f"Collate the data...")
+    data, slices = _collate(mols)
+
+    print(f"Saving the data...")
+    torch.save((data, slices), (os.path.join(root_path, f"raw/{split}_data_energy.pt")))
+
     with open(os.path.join(root_path, f"failed_ids_{split}.pickle"), "wb") as f:
         pickle.dump(failed_ids, f)
+
+
+def _collate(data_list):
+    r"""Collates a Python list of :obj:`torch_geometric.data.Data` objects
+    to the internal storage format of
+    :class:`~torch_geometric.data.InMemoryDataset`."""
+    if len(data_list) == 1:
+        return data_list[0], None
+
+    data, slices, _ = collate(
+        data_list[0].__class__,
+        data_list=data_list,
+        increment=False,
+        add_batch=False,
+    )
+
+    return data, slices
 
 
 if __name__ == "__main__":

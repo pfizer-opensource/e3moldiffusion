@@ -31,9 +31,10 @@ x_map = {
 def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = False):
     if remove_hydrogens:
         # mol = Chem.RemoveAllHs(mol)
-        mol = Chem.RemoveHs(mol) # only remove (explicit) hydrogens attached to molecular graph
+        mol = Chem.RemoveHs(
+            mol
+        )  # only remove (explicit) hydrogens attached to molecular graph
         Chem.Kekulize(mol, clearAromaticFlags=True)
-        
     adj = torch.from_numpy(Chem.rdmolops.GetAdjacencyMatrix(mol, useBO=True))
     edge_index = adj.nonzero().contiguous().T
     bond_types = adj[edge_index[0], edge_index[1]]
