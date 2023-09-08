@@ -115,6 +115,9 @@ def add_arguments(parser):
         default="uniform",
         choices=["snr_s_t", "snr_t", "exp_t", "expt_t_half", "uniform"],
     )
+    parser.add_argument("--snr-clamp-min", default=0.05, type=float)
+    parser.add_argument("--snr-clamp-max", default=1.50, type=float)
+
     parser.add_argument("--diffusion-pretraining", default=False, action="store_true")
     parser.add_argument(
         "--continuous-param", default="data", type=str, choices=["data", "noise"]

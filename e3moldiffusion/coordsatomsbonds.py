@@ -828,6 +828,7 @@ class EQGATEnergyNetwork(nn.Module):
         energy_atoms = energy_atoms + v.sum() * 0
         bs = len(batch.unique())
         energy_molecule = scatter_add(energy_atoms, index=batch, dim=0, dim_size=bs)
+        assert energy_molecule.size(1) == 1
         out = {"energy_pred": energy_molecule}
         return out
 

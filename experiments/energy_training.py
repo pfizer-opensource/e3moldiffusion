@@ -91,7 +91,9 @@ class Trainer(pl.LightningModule):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="val")
 
     def step_fnc(self, batch, batch_idx, stage: str):
-        out_dict, t, batch_size = self(batch=batch)
+        
+        is_train = stage == "train"
+        out_dict, t, batch_size = self(batch=batch, train=is_train)
 
         if self.hparams.loss_weighting == "snr_s_t":
             weights = self.sde_atom_charge.snr_s_t_weighting(
@@ -101,15 +103,15 @@ class Trainer(pl.LightningModule):
             weights = self.sde_atom_charge.snr_t_weighting(
                 t=t,
                 device=self.device,
-                clamp_min=0.05,
-                clamp_max=1.5,
+                clamp_min=self.hparams.snr_clamp_min,
+                clamp_max=self.hparams.snr_clamp_max,
             )
         elif self.hparams.loss_weighting == "exp_t":
             weights = self.sde_atom_charge.exp_t_weighting(t=t, device=self.device)
         elif self.hparams.loss_weighting == "exp_t_half":
             weights = self.sde_atom_charge.exp_t_half_weighting(t=t, device=self.device)
         elif self.hparams.loss_weighting == "uniform":
-            weights = torch.ones(batch_size, device=self.device)
+            weights = torch.ones((batch_size,), device=self.device)
 
         #import pdb
         #pdb.set_trace()
@@ -132,13 +134,14 @@ class Trainer(pl.LightningModule):
 
         return loss
 
-    def forward(self, batch: Batch):
+    def forward(self, batch: Batch, train: bool = True):
         atom_types: Tensor = batch.x
         pos: Tensor = batch.pos
         charges: Tensor = batch.charges
         data_batch: Tensor = batch.batch
         n = batch.num_nodes
         bs = int(data_batch.max()) + 1
+        
         t = torch.randint(
             low=1,
             high=self.hparams.timesteps + 1,
@@ -146,6 +149,9 @@ class Trainer(pl.LightningModule):
             dtype=torch.long,
             device=batch.x.device,
         )
+        
+        if not train:
+            t = torch.zeros_like(t)
 
         pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
 
