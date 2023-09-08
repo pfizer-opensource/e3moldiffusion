@@ -24,6 +24,7 @@ def cross_product(a: Tensor, b: Tensor, dim: int) -> Tensor:
         cross = torch.stack([s1, s2, s3], dim=dim)
         return cross
 
+
 class PolynomialCutoff(nn.Module):
     def __init__(self, cutoff, p: int = 6):
         super(PolynomialCutoff, self).__init__()
@@ -31,11 +32,7 @@ class PolynomialCutoff(nn.Module):
         self.p = p
 
     @staticmethod
-    def polynomial_cutoff(
-        r: Tensor,
-        rcut: float,
-        p: float = 6.0
-    ) -> Tensor:
+    def polynomial_cutoff(r: Tensor, rcut: float, p: float = 6.0) -> Tensor:
         """
         Polynomial cutoff, as proposed in DimeNet: https://arxiv.org/abs/2003.03123
         """
@@ -58,11 +55,10 @@ class PolynomialCutoff(nn.Module):
 
     def __repr__(self):
         return f"{self.__class__.__name__}(cutoff={self.cutoff}, p={self.p})"
-    
+
+
 class BesselExpansion(nn.Module):
-    def __init__(
-        self, max_value: float, K: int = 20
-    ):
+    def __init__(self, max_value: float, K: int = 20):
         super(BesselExpansion, self).__init__()
         self.max_value = max_value
         self.K = K
@@ -87,6 +83,7 @@ class BesselExpansion(nn.Module):
         out *= math.sqrt(2 / self.max_value)
         return out
 
+
 class EQGATConv(MessagePassing):
     def __init__(
         self,
@@ -100,9 +97,7 @@ class EQGATConv(MessagePassing):
         use_mlp_update: bool = True,
         vector_aggr: str = "mean",
     ):
-        super(EQGATConv, self).__init__(
-            node_dim=0, aggr=None, flow="source_to_target"
-        )
+        super(EQGATConv, self).__init__(node_dim=0, aggr=None, flow="source_to_target")
 
         self.vector_aggr = vector_aggr
         self.in_dims = in_dims
@@ -127,18 +122,21 @@ class EQGATConv(MessagePassing):
             K=num_rbfs,
         )
         self.cutoff_fnc = PolynomialCutoff(cutoff, p=6)
-        self.edge_net = nn.Sequential(DenseLayer(2 * self.si + self.num_rbfs,
-                                                 self.si,
-                                                 bias=True, activation=nn.SiLU()),
-                                      DenseLayer(self.si, self.v_mul * self.vi + self.si,
-                                                 bias=True)
-                                      )
+        self.edge_net = nn.Sequential(
+            DenseLayer(
+                2 * self.si + self.num_rbfs, self.si, bias=True, activation=nn.SiLU()
+            ),
+            DenseLayer(self.si, self.v_mul * self.vi + self.si, bias=True),
+        )
         self.scalar_net = DenseLayer(self.si, self.si, bias=True)
-        self.update_net = GatedEquivBlock(in_dims=(self.si, self.vi),
-                                          hs_dim=self.si, hv_dim=self.vi,
-                                          out_dims=(self.si, self.vi),
-                                          norm_eps=eps,
-                                          use_mlp=use_mlp_update)
+        self.update_net = GatedEquivBlock(
+            in_dims=(self.si, self.vi),
+            hs_dim=self.si,
+            hv_dim=self.vi,
+            out_dims=(self.si, self.vi),
+            norm_eps=eps,
+            use_mlp=use_mlp_update,
+        )
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -151,8 +149,8 @@ class EQGATConv(MessagePassing):
         x: Tuple[Tensor, Tensor],
         edge_index: Tensor,
         edge_attr: Tuple[Tensor, Tensor],
+        batch: Optional[Tensor],
     ):
-
         s, v = x
         d, r = edge_attr
 
@@ -178,12 +176,14 @@ class EQGATConv(MessagePassing):
 
     def aggregate(
         self,
-            inputs: Tuple[Tensor, Tensor],
-            index: Tensor,
-            dim_size: Optional[int] = None
+        inputs: Tuple[Tensor, Tensor],
+        index: Tensor,
+        dim_size: Optional[int] = None,
     ) -> Tuple[Tensor, Tensor]:
         s = scatter(inputs[0], index=index, dim=0, reduce="add", dim_size=dim_size)
-        v = scatter(inputs[1], index=index, dim=0, reduce=self.vector_aggr, dim_size=dim_size)
+        v = scatter(
+            inputs[1], index=index, dim=0, reduce=self.vector_aggr, dim_size=dim_size
+        )
         return s, v
 
     def message(
@@ -196,9 +196,8 @@ class EQGATConv(MessagePassing):
         vb_j: Tensor,
         index: Tensor,
         edge_attr: Tuple[Tensor, Tensor],
-        dim_size: Optional[int]
+        dim_size: Optional[int],
     ) -> Tuple[Tensor, Tensor]:
-
         d, r = edge_attr
 
         de = self.distance_expansion(d)
@@ -209,7 +208,7 @@ class EQGATConv(MessagePassing):
         aij = self.edge_net(aij)
 
         if self.has_v_in:
-            aij, vij0 = aij.split([self.si, self.v_mul*self.vi], dim=-1)
+            aij, vij0 = aij.split([self.si, self.v_mul * self.vi], dim=-1)
             vij0 = vij0.unsqueeze(1)
             if self.use_cross_product:
                 vij0, vij1, vij2 = vij0.chunk(3, dim=-1)
@@ -234,9 +233,10 @@ class EQGATConv(MessagePassing):
                 nv_j = nv0_j + nv1_j
         else:
             nv_j = nv0_j
-            
+
         return ns_j, nv_j
-    
+
+
 ########### With Edge Features ###########
 class EQGATGlobalEdgeConvFinal(MessagePassing):
     """
@@ -264,7 +264,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         vector_aggr: str = "mean",
         use_cross_product: bool = False,
         edge_mp: bool = False,
-        use_pos_norm: bool = True
+        use_pos_norm: bool = True,
     ):
         super(EQGATGlobalEdgeConvFinal, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
@@ -287,7 +287,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         else:
             self.v_mul = 1
             self.vector_net = nn.Identity()
-            
+
         if use_pos_norm:
             self.posnorm = SE3Norm()
         else:
@@ -304,23 +304,23 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
             ),
         )
         self.edge_post = DenseLayer(edge_dim, edge_dim)
-        
+
         self.edge_mp = edge_mp
-        
+
         emlp = False
-        
+
         if edge_mp:
             if emlp:
-                self.edge_lin = nn.Sequential(DenseLayer(2 * edge_dim + 3, edge_dim, activation=nn.SiLU()),
-                                              DenseLayer(edge_dim, edge_dim)
-                                              )
+                self.edge_lin = nn.Sequential(
+                    DenseLayer(2 * edge_dim + 3, edge_dim, activation=nn.SiLU()),
+                    DenseLayer(edge_dim, edge_dim),
+                )
             else:
                 self.edge_lin = DenseLayer(2 * edge_dim + 3, edge_dim)
         # previously, still keep in case old model checkpoints are loaded
         else:
             self.edge_lin = None
-        
-        
+
         self.scalar_net = DenseLayer(self.si, self.si, bias=True)
         self.update_net = GatedEquivBlock(
             in_dims=(self.si, self.vi),
@@ -340,8 +340,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         reset(self.update_net)
         if self.posnorm:
             self.posnorm.reset_parameters()
-        
-    
+
     @staticmethod
     def get_triplet(edge_index: torch.Tensor, num_nodes: int):
         assert edge_index.size(0) == 2
@@ -351,8 +350,9 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         value = torch.arange(source.size(0), device=source.device)
         # as row-index select the target (column) nodes --> transpose
         # create neighbours from j
-        adj_t = SparseTensor(row=target, col=source, value=value,
-                             sparse_sizes=(num_nodes, num_nodes))
+        adj_t = SparseTensor(
+            row=target, col=source, value=value, sparse_sizes=(num_nodes, num_nodes)
+        )
         # get neighbours from j
         adj_t_row = adj_t[source]
         # returns the target nodes (k) that include the source (j)
@@ -371,33 +371,44 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         idx_ji = adj_t_row.storage.row()[mask]
 
         return input_edge_index, idx_i, idx_j, idx_k, idx_kj, idx_ji
-    
-    
-    def edge_message_passing(self, p: Tensor, batch: Tensor, k: int, edge_index_full: Tensor, edge_attr_full: Tensor):
-        
+
+    def edge_message_passing(
+        self,
+        p: Tensor,
+        batch: Tensor,
+        k: int,
+        edge_index_full: Tensor,
+        edge_attr_full: Tensor,
+    ):
         num_nodes = p.size(0)
-        
-        E_full = torch.zeros(size=(num_nodes, num_nodes, edge_attr_full.size(-1)), device=edge_attr_full.device, dtype=edge_attr_full.dtype)
+
+        E_full = torch.zeros(
+            size=(num_nodes, num_nodes, edge_attr_full.size(-1)),
+            device=edge_attr_full.device,
+            dtype=edge_attr_full.dtype,
+        )
         E_full[edge_index_full[0], edge_index_full[1], :] = edge_attr_full
-        
+
         # create kNN graph
         edge_index_knn = knn_graph(x=p, k=k, batch=batch, flow="source_to_target")
         j, i = edge_index_knn
-        
+
         p_ij = p[j] - p[i]
         p_ij_n = F.normalize(p_ij, p=2, dim=-1)
         d_ij = torch.pow(p_ij, 2).sum(-1, keepdim=True).sqrt()
-        
+
         edge_ij = E_full[j, i, :]
-        
-        edge_index_knn,\
-        idx_i, idx_j, idx_k,\
-        idx_kj, idx_ji = self.get_triplet(edge_index_knn, num_nodes=num_nodes)
-        
+
+        edge_index_knn, idx_i, idx_j, idx_k, idx_kj, idx_ji = self.get_triplet(
+            edge_index_knn, num_nodes=num_nodes
+        )
+
         p_jk = -1.0 * p_ij_n[idx_kj]
         p_ji = p_ij_n[idx_ji]
-        
-        theta_ijk = torch.sum(p_jk*p_ji, -1, keepdim=True).clamp_(-1.0 + 1e-7, 1.0 - 1e-7)
+
+        theta_ijk = torch.sum(p_jk * p_ji, -1, keepdim=True).clamp_(
+            -1.0 + 1e-7, 1.0 - 1e-7
+        )
         theta_ijk = torch.arccos(theta_ijk)
         d_ji = d_ij[idx_ji]
         d_jk = d_ij[idx_kj]
@@ -405,16 +416,22 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         edge_1 = edge_ij[idx_kj]
         f_ijk = torch.cat([edge_0, edge_1, theta_ijk, d_ji, d_jk], dim=-1)
         f_ijk = self.edge_lin(f_ijk)
-        aggr_edges = scatter(src=f_ijk, index=idx_ji, dim=0, reduce="mean", dim_size=edge_index_knn.size(-1))
+        aggr_edges = scatter(
+            src=f_ijk,
+            index=idx_ji,
+            dim=0,
+            reduce="mean",
+            dim_size=edge_index_knn.size(-1),
+        )
         E_aggr = torch.zeros_like(E_full)
         E_aggr[edge_index_knn[0], edge_index_knn[1], :] = aggr_edges
-        
+
         E_out = E_full + E_aggr
-        
+
         edge_attr_full = E_out[edge_index_full[0], edge_index_full[1], :]
-        
+
         return edge_attr_full
-        
+
     def forward(
         self,
         x: Tuple[Tensor, Tensor, Tensor],
@@ -424,13 +441,14 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
     ):
         s, v, p = x
         d, a, r, e = edge_attr
-        
-        
+
         e = self.edge_pre(e)
-        
+
         if self.edge_mp:
-            e = self.edge_message_passing(p=p, batch=batch, k=4, edge_index_full=edge_index, edge_attr_full=e)
-        
+            e = self.edge_message_passing(
+                p=p, batch=batch, k=4, edge_index_full=edge_index, edge_attr_full=e
+            )
+
         ms, mv, mp, me = self.propagate(
             sa=s,
             sb=self.scalar_net(s),
@@ -533,7 +551,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
             nv_j = nv0_j
 
         return ns_j, nv_j, pj, edge
-        
+
+
 ########### Local Without Edge Features ###########
 class EQGATLocalConvFinal(MessagePassing):
     """
@@ -704,13 +723,11 @@ class EQGATLocalConvFinal(MessagePassing):
             nv_j = nv0_j
 
         return ns_j, nv_j
-    
+
 
 # Topological Conv without 3d coords
 class TopoEdgeConvLayer(MessagePassing):
-    def __init__(
-        self, in_dim: int, out_dim: int, edge_dim: int, aggr: str = "mean"
-    ):
+    def __init__(self, in_dim: int, out_dim: int, edge_dim: int, aggr: str = "mean"):
         super(TopoEdgeConvLayer, self).__init__(aggr=None)
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -721,9 +738,9 @@ class TopoEdgeConvLayer(MessagePassing):
 
         self.neighbour_lin = DenseLayer(in_dim, in_dim)
         self.msg_mlp = nn.Sequential(
-            DenseLayer(2*in_dim + edge_dim, in_dim, activation=nn.SiLU()),
-            DenseLayer(in_dim, in_dim + edge_dim)
-            )
+            DenseLayer(2 * in_dim + edge_dim, in_dim, activation=nn.SiLU()),
+            DenseLayer(in_dim, in_dim + edge_dim),
+        )
         self.update_mlp = nn.Sequential(
             DenseLayer(in_dim, in_dim, activation=nn.SiLU()),
             DenseLayer(in_dim, out_dim),
@@ -739,27 +756,26 @@ class TopoEdgeConvLayer(MessagePassing):
 
     def forward(self, x: Tensor, edge_index: Tensor, edge_attr: Tensor) -> Tensor:
         xn = self.neighbour_lin(x)
-        
+
         e = self.edge_pre(edge_attr)
         mx, me = self.propagate(x=x, xu=xn, edge_index=edge_index, edge_attr=e)
         x = mx + x
         e = F.silu(me + e)
         e = self.edge_post(e)
-        
+
         ox = self.update_mlp(x)
         x = ox + x
         return x, e
 
     def aggregate(
         self,
-            inputs: Tuple[Tensor, Tensor],
-            index: Tensor,
-            dim_size: Optional[int] = None
+        inputs: Tuple[Tensor, Tensor],
+        index: Tensor,
+        dim_size: Optional[int] = None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         s = scatter(inputs[0], index=index, dim=0, reduce=self._aggr, dim_size=dim_size)
         edge = inputs[1]
         return s, edge
-
 
     def message(
         self, x_i: Tensor, x_j: Tensor, xu_j: Tensor, edge_attr: Tensor

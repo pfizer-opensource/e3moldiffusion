@@ -34,7 +34,7 @@ full_atom_encoder = {
 }
 atom_decoder = {v: k for k, v in full_atom_encoder.items()}
 
-GEOM_DATADIR = "/scratch1/cremej01/data/geom/processed"
+GEOM_DATADIR = "/hpfs/userws/cremej01/projects/data/geom/processed"
 
 
 class GeomDrugsDataset(InMemoryDataset):
@@ -76,7 +76,7 @@ class GeomDrugsDataset(InMemoryDataset):
                 np.load(os.path.join(GEOM_DATADIR, self.processed_names[9]))
             ).float(),
         )
-        self.smiles = load_pickle(self.processed_names[10])
+        self.smiles = load_pickle(os.path.join(GEOM_DATADIR, self.processed_names[10]))
 
     @property
     def raw_file_names(self):
@@ -90,15 +90,15 @@ class GeomDrugsDataset(InMemoryDataset):
     def processed_file_names(self):
         if self.split == "train":
             return [
-                f"train_energy.pt",
+                f"train_data_energy.pt",
             ]
         elif self.split == "val":
             return [
-                f"val_energy.pt",
+                f"val_data_energy.pt",
             ]
         else:
             return [
-                f"test_energy.pt",
+                f"test_h.pt",
             ]
 
     def download(self):
@@ -141,6 +141,7 @@ class GeomDrugsDataset(InMemoryDataset):
 
         torch.save(self.collate(data_list), self.processed_paths[0])
 
+    @property
     def processed_names(self):
         h = "noh" if self.remove_h else "h"
         if self.split == "train":

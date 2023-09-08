@@ -8,9 +8,10 @@ from e3moldiffusion.convs import (
     EQGATGlobalEdgeConvFinal,
     EQGATLocalConvFinal,
     TopoEdgeConvLayer,
-    EQGATConv
+    EQGATConv,
 )
 from e3moldiffusion.modules import LayerNorm, AdaptiveLayerNorm
+
 
 class EQGATEnergyGNN(nn.Module):
     def __init__(
@@ -21,15 +22,14 @@ class EQGATEnergyGNN(nn.Module):
         num_rbfs: int = 20,
         use_cross_product: bool = False,
         vector_aggr: str = "mean",
-        
     ):
-        
+        super(EQGATEnergyGNN, self).__init__()
         self.sdim, self.vdim = hn_dim
         self.cutoff = cutoff
         self.num_layers = num_layers
-       
+
         convs = []
-        
+
         for i in range(num_layers):
             convs.append(
                 EQGATConv(
@@ -45,11 +45,9 @@ class EQGATEnergyGNN(nn.Module):
             )
 
         self.convs = nn.ModuleList(convs)
-        
-        self.norms = nn.ModuleList(
-            [LayerNorm(dims=hn_dim) for _ in range(num_layers)]
-        )
-        
+
+        self.norms = nn.ModuleList([LayerNorm(dims=hn_dim) for _ in range(num_layers)])
+
     def forward(
         self,
         s: Tensor,
@@ -68,10 +66,10 @@ class EQGATEnergyGNN(nn.Module):
                 edge_index=edge_index,
                 edge_attr=edge_attr,
             )
-            s, v = out["s"], out["v"]
-        out = {"s": s, "v": v}
-        return out
-        
+            s, v = out
+        return s, v
+
+
 class EQGATEdgeGNN(nn.Module):
     """_summary_
     EQGAT GNN Network updating node-level scalar, vectors and position features as well as edge-features.

@@ -40,10 +40,7 @@ FULL_ATOM_ENCODER = {
 
 
 def process_files(
-    processes: int = 18,
-    chunk_size: int = 1024,
-    subchunk: int = 128,
-    removeHs=False
+    processes: int = 18, chunk_size: int = 1024, subchunk: int = 128, removeHs=False
 ):
     """
     :param dataset:
@@ -73,7 +70,9 @@ def process_files(
             for datachunk in tqdm(chunklist, total=len(chunklist), desc="Datachunks"):
                 removeHs_list = [removeHs] * len(datachunk)
                 with mp.Pool(processes=processes) as pool:
-                    res = pool.starmap(func=db_sample_helper, iterable=zip(datachunk, removeHs_list))
+                    res = pool.starmap(
+                        func=db_sample_helper, iterable=zip(datachunk, removeHs_list)
+                    )
                     res = [r for r in res if r is not None]
                 chunkresult.append(res)
 
@@ -114,7 +113,9 @@ def db_sample_helper(file, removeHs=False):
     for mol in molecules:
         try:
             smiles = Chem.MolToSmiles(mol)
-            data = dataset_utils.mol_to_torch_geometric(mol, FULL_ATOM_ENCODER, smiles, remove_hydrogens=removeHs)
+            data = dataset_utils.mol_to_torch_geometric(
+                mol, FULL_ATOM_ENCODER, smiles, remove_hydrogens=removeHs
+            )
             if data.pos.shape[0] != data.x.shape[0]:
                 continue
             if data.pos.ndim != 2:

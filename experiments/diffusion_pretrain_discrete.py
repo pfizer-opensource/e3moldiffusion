@@ -280,6 +280,11 @@ class Trainer(pl.LightningModule):
         noise_coords_true, pos_perturbed = self.sde_pos.sample_pos(
             t, pos_centered, data_batch
         )
+
+        atom_types = torch.tensor(
+            [self.dataset_info.atom_idx_mapping[int(atom)] for atom in atom_types],
+            device="cuda",
+        ).long()
         atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
             t, atom_types, data_batch, self.dataset_info, type="atoms"
         )

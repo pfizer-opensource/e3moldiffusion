@@ -50,9 +50,14 @@ if __name__ == "__main__":
         if hparams.use_adaptive_loader:
             print("Using adaptive dataloader")
             non_adaptive = False
-            from experiments.data.geom.geom_dataset_adaptive import (
-                GeomDataModule as DataModule,
-            )
+            if hparams.energy_training:
+                from experiments.data.geom.geom_dataset_energy import (
+                    GeomDataModule as DataModule,
+                )
+            else:
+                from experiments.data.geom.geom_dataset_adaptive import (
+                    GeomDataModule as DataModule,
+                )
         else:
             print("Using non-adaptive dataloader")
             from experiments.data.geom.geom_dataset_nonadaptive import (
@@ -137,7 +142,7 @@ if __name__ == "__main__":
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
-    
+
     if not hparams.energy_training:
         if hparams.continuous:
             print("Using continuous diffusion")
@@ -160,7 +165,9 @@ if __name__ == "__main__":
             if hparams.diffusion_pretraining:
                 print("Starting pre-training")
                 if hparams.additional_feats:
-                    from experiments.diffusion_pretrain_discrete_moreFeats import Trainer
+                    from experiments.diffusion_pretrain_discrete_moreFeats import (
+                        Trainer,
+                    )
                 else:
                     from experiments.diffusion_pretrain_discrete import Trainer
             elif hparams.additional_feats:
@@ -171,8 +178,9 @@ if __name__ == "__main__":
     else:
         print("Running energy training")
         from experiments.energy_training import Trainer
-        assert hparams.dataset == "geom"
-            
+
+        assert hparams.dataset == "drugs"
+
     model = Trainer(
         hparams=hparams.__dict__,
         dataset_info=dataset_info,
@@ -185,16 +193,16 @@ if __name__ == "__main__":
 
     strategy = "ddp" if hparams.gpus > 1 else "auto"
     callbacks = [
-            ema_callback,
-            lr_logger,
-            checkpoint_callback,
-            TQDMProgressBar(refresh_rate=5),
-            ModelSummary(max_depth=2),
-        ]
-    
+        ema_callback,
+        lr_logger,
+        checkpoint_callback,
+        TQDMProgressBar(refresh_rate=5),
+        ModelSummary(max_depth=2),
+    ]
+
     if hparams.ema_decay == 1.0:
         callbacks = callbacks[1:]
-    
+
     trainer = pl.Trainer(
         accelerator="gpu" if hparams.gpus else "cpu",
         devices=hparams.gpus if hparams.gpus else 1,
