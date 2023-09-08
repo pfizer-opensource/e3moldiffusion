@@ -3,8 +3,9 @@
 # load_ckpt_from_pretrained: /hpfs/userws/cremej01/projects/logs/geom/pretrain_x0/run0/epoch=254-step=373830.ckpt
 
 diffusion_pretraining: true
+dropout_prob: 0.15
 
-batch_size: 150
+batch_size: 100
 inference_batch_size: 70
 ema_decay: 0.999
 grad_clip_val: 10
@@ -15,7 +16,7 @@ use_adaptive_loader: false
 remove_hs: false
 
 gpus: 4
-num_epochs: 3000
+num_epochs: 1
 test_interval: 20
 
 #EQGAT
@@ -35,16 +36,17 @@ dataset_root: /scratch1/cremej01/data/pubchem/database
 
 # DIFFUSION
 continuous: false
+continuous_param: data
 noise_scheduler: adaptive
 eps_min: 1.e-3
 beta_min: 1.e-4
 beta_max: 2.e-2
 timesteps: 500
 max_time: 06:00:00:00
-loss_weighting: uniform
+loss_weighting: snr_t
 
 #LOGGING
-save_dir: /hpfs/userws/cremej01/projects/logs/pubchem/x0_pretrain_3_new
+save_dir: /sharedhome/let55/projects/e3moldiffusion_experiments/logs/pretrain/snr_t_drop_015_bs100_nonadaptive_lr2e4
 
 #LEARNING
 lr_scheduler: reduce_on_plateau

@@ -9,7 +9,7 @@ dist
 
 # setuptools_scm
 e3moldiffusion/_version.py
-
+figs/
 e3moldiffusion/potential.py
 geom/train_potential.py
 geom/data/*

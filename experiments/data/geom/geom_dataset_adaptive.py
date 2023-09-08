@@ -143,6 +143,8 @@ class GeomDrugsDataset(InMemoryDataset):
                     smiles,
                     remove_hydrogens=self.remove_h,
                 )
+                if data is None:
+                    continue
                 if self.pre_filter is not None and not self.pre_filter(data):
                     continue
                 if self.pre_transform is not None:
@@ -296,7 +298,7 @@ if __name__ == "__main__":
 
     # ff = "/hpfs/userws/"
     ff = "/sharedhome/"
-    DATAROOT = f"{ff}let55/projects/e3moldiffusion_experiments/data/geom/data_noH"
+    DATAROOT = f"{ff}let55/projects/e3moldiffusion_experiments/data/geom/data_noH_k"
     #DATAROOT = (
     #    "/home/let55/workspace/projects/e3moldiffusion_experiments/data/geom/data_noH"
     #)
