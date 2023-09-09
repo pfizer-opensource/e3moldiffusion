@@ -581,6 +581,7 @@ class Trainer(pl.LightningModule):
             energy_model = load_energy_model(ckpt_energy_model, self.num_atom_features)
             # for param in self.energy_model.parameters():
             #    param.requires_grad = False
+            energy_model.to(self.device)
             energy_model.eval()
 
         b = ngraphs // bs
