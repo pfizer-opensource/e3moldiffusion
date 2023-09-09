@@ -802,7 +802,7 @@ class EQGATEnergyNetwork(nn.Module):
         r = pos[target] - pos[source]
         d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6)
         d = d.sqrt()
-        r_norm = torch.div(r, d.unsqueeze(-1))
+        r_norm = torch.div(r, (1.0 + d.unsqueeze(-1)))
         edge_attr = (d, r_norm)
         return edge_attr
 

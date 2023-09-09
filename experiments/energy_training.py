@@ -90,6 +90,12 @@ class Trainer(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="val")
 
+    def loss_non_nans(self, loss: Tensor, modality: str) -> Tensor:
+        m = loss.isnan()
+        if torch.any(m):
+            print(f"Recovered NaNs in {modality}. Selecting NoN-Nans")
+        return loss[~m]
+    
     def step_fnc(self, batch, batch_idx, stage: str):
         
         is_train = stage == "train"
@@ -115,13 +121,10 @@ class Trainer(pl.LightningModule):
 
         #import pdb
         #pdb.set_trace()
-        loss = torch.mean(
-            weights
-            * self.energy_loss(
-                out_dict["energy_pred"].squeeze(-1), batch.energy.squeeze(-1)
-            ),
-            dim=0,
-        )
+        
+        loss = weights * self.energy_loss(out_dict["energy_pred"].squeeze(-1), batch.energy.squeeze(-1))
+        loss = self.loss_non_nans(loss=loss, modality="energy")
+        loss = torch.mean(loss, dim=0)
 
         self.log(
             f"{stage}/loss",
@@ -185,8 +188,8 @@ class Trainer(pl.LightningModule):
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.hparams["lr"],
-            amsgrad=True,
-            weight_decay=1e-12,
+            amsgrad=False,
+            weight_decay=1e-6,
         )
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer=optimizer,

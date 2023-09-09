@@ -54,10 +54,14 @@ class DiffusionLoss(nn.Module):
 
             if self.param[self.modalities.index("atoms")] == "data":
                 fnc = F.cross_entropy
+                take_mean = False
             else:
                 fnc = F.mse_loss
+                take_mean = True
 
             atoms_loss = fnc(pred_data["atoms"], true_data["atoms"], reduction="none")
+            if take_mean:
+                atoms_loss = atoms_loss.mean(dim=1)
             atoms_loss = scatter_mean(
                 atoms_loss, index=batch, dim=0, dim_size=batch_size
             )
@@ -67,12 +71,16 @@ class DiffusionLoss(nn.Module):
 
             if self.param[self.modalities.index("charges")] == "data":
                 fnc = F.cross_entropy
+                take_mean = False
             else:
                 fnc = F.mse_loss
-
+                take_mean = True
+                
             charges_loss = fnc(
                 pred_data["charges"], true_data["charges"], reduction="none"
             )
+            if take_mean:
+                charges_loss = charges_loss.mean(dim=1)   
             charges_loss = scatter_mean(
                 charges_loss, index=batch, dim=0, dim_size=batch_size
             )
@@ -82,10 +90,14 @@ class DiffusionLoss(nn.Module):
 
             if self.param[self.modalities.index("bonds")] == "data":
                 fnc = F.cross_entropy
+                take_mean = False
             else:
                 fnc = F.mse_loss
+                take_mean = True
 
             bonds_loss = fnc(pred_data["bonds"], true_data["bonds"], reduction="none")
+            if take_mean:
+                bonds_loss = bonds_loss.mean(dim=1)
             bonds_loss = 0.5 * scatter_mean(
                 bonds_loss,
                 index=bond_aggregation_index,
