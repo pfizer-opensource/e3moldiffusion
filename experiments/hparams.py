@@ -126,7 +126,10 @@ def add_arguments(parser):
     parser.add_argument("--bond-guidance-model", default=False, action="store_true")
     parser.add_argument("--bond-prediction", default=False, action="store_true")
     parser.add_argument("--bond-model-guidance", default=False, action="store_true")
+    parser.add_argument("--energy-model-guidance", default=False, action="store_true")
     parser.add_argument("--ckpt-bond-model", default=None, type=str)
+    parser.add_argument("--ckpt-energy-model", default=None, type=str)
+    parser.add_argument("--guidance-scale", default=1.0e-4, type=float)
 
     # CONTEXT
     parser.add_argument("--context-mapping", default=False, action="store_true")

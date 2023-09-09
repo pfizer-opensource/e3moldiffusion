@@ -92,3 +92,35 @@ def bond_guidance(
             )[0]
 
     return pos + guidance_scale * dist_shift
+
+
+def energy_guidance(
+    pos,
+    node_feats_in,
+    temb,
+    energy_model,
+    batch,
+    guidance_scale=1.0e-4,
+):
+    with torch.enable_grad():
+        node_feats_in = node_feats_in.detach()
+        pos = pos.detach().requires_grad_(True)
+        energy_prediction = energy_model(
+            x=node_feats_in,
+            t=temb,
+            pos=pos,
+            batch=batch,
+        )
+
+        grad_outputs: List[Optional[torch.Tensor]] = [
+            torch.ones_like(energy_prediction)
+        ]
+        pos_shift = -torch.autograd.grad(
+            [energy_prediction],
+            [pos],
+            grad_outputs=grad_outputs,
+            create_graph=False,
+            retain_graph=False,
+        )[0]
+
+    return pos + guidance_scale * pos_shift

@@ -32,7 +32,11 @@ from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.data.distributions import prepare_context
-from experiments.diffusion.utils import initialize_edge_attrs_reverse, bond_guidance
+from experiments.diffusion.utils import (
+    initialize_edge_attrs_reverse,
+    bond_guidance,
+    energy_guidance,
+)
 from experiments.molecule_utils import Molecule
 from experiments.utils import (
     coalesce_edges,
@@ -40,6 +44,7 @@ from experiments.utils import (
     zero_mean,
     load_model,
     load_bond_model,
+    load_energy_model,
 )
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.losses import DiffusionLoss
@@ -194,6 +199,15 @@ class Trainer(pl.LightningModule):
             for param in self.bond_model.parameters():
                 param.requires_grad = False
             self.bond_model.eval()
+
+        if self.hparams.energy_model_guidance:
+            print("Using energy model guidance...")
+            self.energy_model = load_energy_model(
+                self.hparams.ckpt_energy_model, self.num_atom_features
+            )
+            # for param in self.energy_model.parameters():
+            #    param.requires_grad = False
+            self.energy_model.eval()
 
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
@@ -870,6 +884,15 @@ class Trainer(pl.LightningModule):
                     edge_attr_global,
                     edge_index_local,
                     edge_index_global,
+                )
+            if self.energy_model_guidance:
+                pos = energy_guidance(
+                    pos,
+                    node_feats_in,
+                    temb,
+                    self.energy_model,
+                    batch,
+                    guidance_scale=self.hparams.guidance_scale,
                 )
 
             if save_traj:
