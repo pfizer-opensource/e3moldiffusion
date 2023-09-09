@@ -200,15 +200,6 @@ class Trainer(pl.LightningModule):
                 param.requires_grad = False
             self.bond_model.eval()
 
-        if self.hparams.energy_model_guidance:
-            print("Using energy model guidance...")
-            self.energy_model = load_energy_model(
-                self.hparams.ckpt_energy_model, self.num_atom_features
-            )
-            # for param in self.energy_model.parameters():
-            #    param.requires_grad = False
-            self.energy_model.eval()
-
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
 
@@ -509,6 +500,8 @@ class Trainer(pl.LightningModule):
         ddpm: bool = True,
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
+        guidance_scale: float = 1.0e-4,
+        energy_model=None,
     ):
         (
             pos,
@@ -528,6 +521,8 @@ class Trainer(pl.LightningModule):
             ddpm=ddpm,
             eta_ddim=eta_ddim,
             every_k_step=every_k_step,
+            guidance_scale=guidance_scale,
+            energy_model=energy_model,
         )
 
         if torch.any(pos.isnan()):
@@ -576,8 +571,18 @@ class Trainer(pl.LightningModule):
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
         run_test_eval: bool = False,
+        guidance_scale: float = 1.0e-4,
+        use_energy_guidance: bool = False,
+        ckpt_energy_model: str = None,
         device: str = "cpu",
     ):
+        energy_model = None
+        if use_energy_guidance:
+            energy_model = load_energy_model(ckpt_energy_model, self.num_atom_features)
+            # for param in self.energy_model.parameters():
+            #    param.requires_grad = False
+            energy_model.eval()
+
         b = ngraphs // bs
         l = [bs] * b
         if sum(l) != ngraphs:
@@ -608,6 +613,8 @@ class Trainer(pl.LightningModule):
                 ddpm=ddpm,
                 eta_ddim=eta_ddim,
                 every_k_step=every_k_step,
+                guidance_scale=guidance_scale,
+                energy_model=energy_model,
             )
 
             n = batch_num_nodes.sum().item()
@@ -717,6 +724,8 @@ class Trainer(pl.LightningModule):
         ddpm: bool = True,
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
+        guidance_scale: float = 1.0e-4,
+        energy_model=None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         batch_num_nodes = torch.multinomial(
             input=empirical_distribution_num_nodes,
@@ -885,14 +894,14 @@ class Trainer(pl.LightningModule):
                     edge_index_local,
                     edge_index_global,
                 )
-            if self.energy_model_guidance:
+            if energy_model is not None:
                 pos = energy_guidance(
                     pos,
                     node_feats_in,
                     temb,
-                    self.energy_model,
+                    energy_model,
                     batch,
-                    guidance_scale=self.hparams.guidance_scale,
+                    guidance_scale=guidance_scale,
                 )
 
             if save_traj:

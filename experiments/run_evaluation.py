@@ -25,6 +25,9 @@ def evaluate(
     save_dir,
     save_xyz=False,
     calculate_energy=False,
+    use_energy_guidance=False,
+    ckpt_energy_model=None,
+    guidance_scale=1.0e-4,
     ngraphs=5000,
     batch_size=80,
     step=0,
@@ -33,11 +36,12 @@ def evaluate(
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
-    hparams['select_train_subset'] = False
-    hparams['train_size'] = 0.9
+    hparams["select_train_subset"] = False
+    hparams["train_size"] = 0.9
     hparams = dotdict(hparams)
 
-    hparams.load_ckpt_from_pretrained = False
+    hparams.dataset_root = "/scratch1/cremej01/data/geom"
+    hparams.load_ckpt_from_pretrained = None
     hparams.gpus = 1
 
     print(f"Loading {hparams.dataset} Datamodule.")
@@ -128,6 +132,9 @@ def evaluate(
         smiles_list=list(train_smiles),
         prop_norm=prop_norm,
         prop_dist=prop_dist,
+        load_ckpt_from_pretrained=None,
+        # energy_model_guidance=True if use_energy_guidance else False,
+        # ckpt_energy_model=ckpt_energy_model,
         run_evaluation=True,
         strict=False,
     ).to(device)
@@ -135,7 +142,7 @@ def evaluate(
 
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-        
+
     results_dict, generated_smiles, stable_molecules = model.run_evaluation(
         step=step,
         dataset_info=model.dataset_info,
@@ -148,6 +155,9 @@ def evaluate(
         ddpm=ddpm,
         eta_ddim=eta_ddim,
         run_test_eval=True,
+        guidance_scale=guidance_scale,
+        use_energy_guidance=use_energy_guidance,
+        ckpt_energy_model=ckpt_energy_model,
         device="cpu",
     )
 
@@ -158,7 +168,10 @@ def evaluate(
     if calculate_energy:
         for i in range(len(stable_molecules)):
             atom_types = [atom_decoder[int(a)] for a in stable_molecules[i].atom_types]
-            e, f = calculate_xtb_energy(stable_molecules[i].positions, atom_types)
+            try:
+                e, f = calculate_xtb_energy(stable_molecules[i].positions, atom_types)
+            except:
+                continue
             stable_molecules[i].energy = e
             stable_molecules[i].forces_norm = f
             energies.append(e)
@@ -203,6 +216,10 @@ def get_args():
     parser = argparse.ArgumentParser(description='Data generation')
     parser.add_argument('--model-path', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol/best_mol_stab.ckpt", type=str,
                         help='Path to trained model')
+    parser.add_argument("--use-energy-guidance", default=False, action="store_true")
+    parser.add_argument("--ckpt-energy-model", default=None, type=str)
+    parser.add_argument('--guidance-scale', default=1.0e-4, type=float,
+                        help='How to scale the guidance shift')
     parser.add_argument('--save-dir', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol", type=str,
                         help='Path to test output')
     parser.add_argument('--save-xyz', default=False, action="store_true",
@@ -235,4 +252,7 @@ if __name__ == "__main__":
         eta_ddim=args.eta_ddim,
         save_xyz=args.save_xyz,
         calculate_energy=args.calculate_energy,
+        use_energy_guidance=args.use_energy_guidance,
+        ckpt_energy_model=args.ckpt_energy_model,
+        guidance_scale=args.guidance_scale,
     )
