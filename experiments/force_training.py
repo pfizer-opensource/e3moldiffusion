@@ -67,28 +67,37 @@ class Trainer(pl.LightningModule):
             cutoff_local=hparams["cutoff_local"],
             vector_aggr=hparams["vector_aggr"],
         )
-       
+     
+    def loss_non_nans(self, loss: Tensor, modality: str) -> Tensor:
+        m = loss.isnan()
+        if torch.any(m):
+            print(f"Recovered NaNs in {modality}. Selecting NoN-Nans")
+        return loss[~m]  
+
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
 
     def validation_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="val")
    
-    def step_fnc(self, batch, batch_idx, stage: str, anneal_power=2):
+   
+    def step_fnc(self, batch, batch_idx, stage: str, anneal_power=2.):
     
         out_dict, used_sigmas, noise = self(batch=batch)        
         scores = out_dict["pseudo_forces_pred"] / used_sigmas
-        target = -1.0 / (used_sigmas ** 2) * noise
+        target = -1.0 / (used_sigmas**2) * noise
         target = target.view(target.shape[0], -1)
         scores = scores.view(scores.shape[0], -1)
         loss = 1 / 2. * ((scores - target) ** 2).sum(dim=-1) * used_sigmas.squeeze() ** anneal_power
+        loss = scatter_mean(loss, index=batch.batch, dim=0, dim_size=len(batch.batch.unique()))
+        loss = self.loss_non_nans(loss, 'pseudo-forces')
         loss = torch.mean(loss)
         
         self.log(
             f"{stage}/loss",
             loss,
             on_step=True,
-            batch_size=len(batch.batch.unique()) ,
+            batch_size=len(batch.batch.unique()),
             prog_bar=True,
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
@@ -139,7 +148,7 @@ class Trainer(pl.LightningModule):
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.hparams["lr"],
-            amsgrad=False,
+            amsgrad=True,
             weight_decay=1e-6,
         )
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
