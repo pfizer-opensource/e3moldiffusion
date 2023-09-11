@@ -65,7 +65,7 @@ class Trainer(pl.LightningModule):
             use_cross_product=hparams["use_cross_product"],
             num_atom_features=self.num_atom_features,
             cutoff_local=hparams["cutoff_local"],
-            vector_aggr=hparams["vector_aggr"],
+            vector_aggr="add",
         )
      
     def loss_non_nans(self, loss: Tensor, modality: str) -> Tensor:
@@ -80,7 +80,6 @@ class Trainer(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="val")
    
-   
     def step_fnc(self, batch, batch_idx, stage: str, anneal_power=2.):
     
         out_dict, used_sigmas, noise = self(batch=batch)        
@@ -89,9 +88,9 @@ class Trainer(pl.LightningModule):
         target = target.view(target.shape[0], -1)
         scores = scores.view(scores.shape[0], -1)
         loss = 1 / 2. * ((scores - target) ** 2).sum(dim=-1) * used_sigmas.squeeze() ** anneal_power
-        loss = scatter_mean(loss, index=batch.batch, dim=0, dim_size=len(batch.batch.unique()))
+        # loss = scatter_mean(loss, index=batch.batch, dim=0, dim_size=len(batch.batch.unique()))
         loss = self.loss_non_nans(loss, 'pseudo-forces')
-        loss = torch.mean(loss)
+        loss = torch.mean(loss, dim=0)
         
         self.log(
             f"{stage}/loss",
