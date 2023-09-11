@@ -851,16 +851,12 @@ class EQGATForceNetwork(nn.Module):
         self.cutoff = cutoff_local
         self.sdim, self.vdim = hn_dim
 
-        self.time_mapping_atom = DenseLayer(1, hn_dim[0])
-        self.atom_mapping = DenseLayer(num_atom_features, hn_dim[0])
         self.atom_mapping = DenseLayer(num_atom_features, hn_dim[0])
         
         if edge_dim:
             self.bond_mapping = DenseLayer(5, edge_dim)
         else:
             self.bond_mapping = None
-
-        self.atom_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
 
         self.gnn = EQGATEnergyGNN(
             hn_dim=hn_dim,
@@ -886,13 +882,10 @@ class EQGATForceNetwork(nn.Module):
         return edge_attr
 
     def forward(
-        self, x: Tensor, pos: Tensor, t: Tensor, edge_index: Tensor, edge_attr: Tensor, batch: OptTensor = None,
+        self, x: Tensor, pos: Tensor, edge_index: Tensor, edge_attr: Tensor, batch: OptTensor = None,
     ) -> Dict:
                  
-        ta = self.time_mapping_atom(t)
-        tnode = ta[batch]
         s = self.atom_mapping(x)
-        s = self.atom_time_mapping(s + tnode)
         v = torch.zeros(
             size=(x.size(0), 3, self.vdim), device=x.device, dtype=pos.dtype
         )
