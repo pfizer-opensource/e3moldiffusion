@@ -50,7 +50,7 @@ if __name__ == "__main__":
         if hparams.use_adaptive_loader:
             print("Using adaptive dataloader")
             non_adaptive = False
-            if hparams.energy_training:
+            if hparams.guidance_training in ["energy", "forces"]:
                 from experiments.data.geom.geom_dataset_energy import (
                     GeomDataModule as DataModule,
                 )
@@ -143,7 +143,7 @@ if __name__ == "__main__":
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
 
-    if not hparams.energy_training:
+    if hparams.guidance_training not in ["energy", "forces"]:
         if hparams.continuous:
             print("Using continuous diffusion")
             if hparams.diffusion_pretraining:
@@ -175,10 +175,13 @@ if __name__ == "__main__":
                 from experiments.diffusion_discrete_moreFeats import Trainer
             else:
                 from experiments.diffusion_discrete import Trainer
-    else:
+    elif hparams.guidance_training == "energy":
         print("Running energy training")
         from experiments.energy_training import Trainer
-
+        assert hparams.dataset == "drugs"
+    elif hparams.guidance_training == "forces":
+        print("Running pseudo-force training")
+        from experiments.force_training import Trainer
         assert hparams.dataset == "drugs"
 
     model = Trainer(

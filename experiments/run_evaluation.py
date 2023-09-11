@@ -33,6 +33,7 @@ def evaluate(
     step=0,
     ddpm=True,
     eta_ddim=1.0,
+    guidance_start=None,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -41,8 +42,12 @@ def evaluate(
     hparams = dotdict(hparams)
 
     hparams.dataset_root = "/scratch1/cremej01/data/geom"
+    # hparams.dataset_root = "/scratch1/let55/geom_data_noH"
+    hparams.remove_hs = False
+    
     hparams.load_ckpt_from_pretrained = None
     hparams.gpus = 1
+    print(hparams)
 
     print(f"Loading {hparams.dataset} Datamodule.")
     non_adaptive = True
@@ -159,6 +164,7 @@ def evaluate(
         use_energy_guidance=use_energy_guidance,
         ckpt_energy_model=ckpt_energy_model,
         device="cpu",
+        guidance_start=guidance_start
     )
 
     atom_decoder = stable_molecules[0].dataset_info.atom_decoder
@@ -218,6 +224,7 @@ def get_args():
                         help='Path to trained model')
     parser.add_argument("--use-energy-guidance", default=False, action="store_true")
     parser.add_argument("--ckpt-energy-model", default=None, type=str)
+    parser.add_argument("--guidance-start", default=None, type=int)
     parser.add_argument('--guidance-scale', default=1.0e-4, type=float,
                         help='How to scale the guidance shift')
     parser.add_argument('--save-dir', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol", type=str,
@@ -255,4 +262,5 @@ if __name__ == "__main__":
         use_energy_guidance=args.use_energy_guidance,
         ckpt_energy_model=args.ckpt_energy_model,
         guidance_scale=args.guidance_scale,
+        guidance_start=args.guidance_start,
     )

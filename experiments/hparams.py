@@ -82,8 +82,7 @@ def add_arguments(parser):
     parser.add_argument("--use-cross-product", default=False, action="store_true")
     parser.add_argument("--cutoff-local", default=7.0, type=float)
     parser.add_argument("--cutoff-global", default=10.0, type=float)
-    parser.add_argument("--energy-training", default=False, action="store_true")
-    parser.add_argument("--energy-loss", default="l2", type=str, choices=["l2", "l1"])
+    parser.add_argument("--guidance-training", default=None, choices=[None, "energy", "forces"])
 
     # For Discrete: Include more features: (is_aromatic, is_in_ring, hybridization)
     parser.add_argument("--additional-feats", default=False, action="store_true")

@@ -520,6 +520,10 @@ class Trainer(pl.LightningModule):
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
         run_test_eval=False,
+        guidance_scale: float = 1.0e-4,
+        use_energy_guidance: bool = False,
+        ckpt_energy_model: str = None,
+        **kwargs
     ):
         b = ngraphs // bs
         l = [bs] * b

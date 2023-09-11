@@ -110,7 +110,7 @@ def energy_guidance(
             t=temb,
             pos=pos,
             batch=batch,
-        )
+        )["energy_pred"]
 
         grad_outputs: List[Optional[torch.Tensor]] = [
             torch.ones_like(energy_prediction)

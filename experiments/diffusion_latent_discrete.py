@@ -1025,35 +1025,39 @@ class Trainer(pl.LightningModule):
             charges_pred = charges_pred.softmax(dim=-1)
 
             # atoms
-            atom_types = self.cat_atoms.sample_reverse_categorical(
-                xt=atom_types,
-                x0=atoms_pred,
-                t=t[batch],
-                num_classes=self.num_atom_types,
-            )
-            # charges
-            charge_types = self.cat_charges.sample_reverse_categorical(
-                xt=charge_types,
-                x0=charges_pred,
-                t=t[batch],
-                num_classes=self.num_charge_classes,
-            )
-            # edges
-            (
-                edge_attr_global,
-                edge_index_global,
-                mask,
-                mask_i,
-            ) = self.cat_bonds.sample_reverse_edges_categorical(
-                edge_attr_global,
-                edges_pred,
-                t,
-                mask,
-                mask_i,
-                batch=batch,
-                edge_index_global=edge_index_global,
-                num_classes=self.num_bond_classes,
-            )
+            try:
+                atom_types = self.cat_atoms.sample_reverse_categorical(
+                    xt=atom_types,
+                    x0=atoms_pred,
+                    t=t[batch],
+                    num_classes=self.num_atom_types,
+                )
+                # charges
+                charge_types = self.cat_charges.sample_reverse_categorical(
+                    xt=charge_types,
+                    x0=charges_pred,
+                    t=t[batch],
+                    num_classes=self.num_charge_classes,
+                )
+                # edges
+                (
+                    edge_attr_global,
+                    edge_index_global,
+                    mask,
+                    mask_i,
+                ) = self.cat_bonds.sample_reverse_edges_categorical(
+                    edge_attr_global,
+                    edges_pred,
+                    t,
+                    mask,
+                    mask_i,
+                    batch=batch,
+                    edge_index_global=edge_index_global,
+                    num_classes=self.num_bond_classes,
+                )
+            except Exception as e:
+                print(f"Sampling error at timestep = {timestep}")
+                print(e)
 
             if save_traj:
                 pos_traj.append(pos.detach())
@@ -1085,7 +1089,7 @@ class Trainer(pl.LightningModule):
             all_params += list(self.latentmodel.parameters())
                     
         optimizer = torch.optim.AdamW(
-            all_params, lr=self.hparams["lr"], amsgrad=True, weight_decay=1e-12
+            all_params, lr=self.hparams["lr"], amsgrad=not self.hparams.latent_dim, weight_decay=1e-6
         )
         if self.hparams["lr_scheduler"] == "reduce_on_plateau":
             lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(

@@ -34,9 +34,9 @@ full_atom_encoder = {
 }
 atom_decoder = {v: k for k, v in full_atom_encoder.items()}
 
-GEOM_DATADIR = "/hpfs/userws/cremej01/projects/data/geom/processed"
-# GEOM_DATADIR = "/scratch1/cremej01/data/geom/processed"
 
+# GEOM_DATADIR = "/hpfs/userws/cremej01/projects/data/geom/processed"
+GEOM_DATADIR = "/scratch1/cremej01/data/geom/processed"
 
 class GeomDrugsDataset(InMemoryDataset):
     def __init__(

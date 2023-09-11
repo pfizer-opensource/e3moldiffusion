@@ -91,6 +91,7 @@ class EQGATConv(MessagePassing):
         out_dims: Tuple[int, Optional[int]],
         num_rbfs: int,
         cutoff: float,
+        edge_dim=None,
         eps: float = 1e-6,
         has_v_in: bool = True,
         use_cross_product: bool = False,
@@ -122,9 +123,11 @@ class EQGATConv(MessagePassing):
             K=num_rbfs,
         )
         self.cutoff_fnc = PolynomialCutoff(cutoff, p=6)
+        self.edge_dim = edge_dim if edge_dim else 0
+        
         self.edge_net = nn.Sequential(
             DenseLayer(
-                2 * self.si + self.num_rbfs, self.si, bias=True, activation=nn.SiLU()
+                2 * self.si + self.num_rbfs + self.edge_dim, self.si, bias=True, activation=nn.SiLU()
             ),
             DenseLayer(self.si, self.v_mul * self.vi + self.si, bias=True),
         )
@@ -148,18 +151,18 @@ class EQGATConv(MessagePassing):
         self,
         x: Tuple[Tensor, Tensor],
         edge_index: Tensor,
-        edge_attr: Tuple[Tensor, Tensor],
+        edge_attr: Tuple[Tensor, Tensor, OptTensor],
         batch: Optional[Tensor],
     ):
         s, v = x
-        d, r = edge_attr
+        d, r, e = edge_attr
 
         ms, mv = self.propagate(
             sa=s,
             sb=self.scalar_net(s),
             va=v,
             vb=self.vector_net(v),
-            edge_attr=(d, r),
+            edge_attr=(d, r, e),
             edge_index=edge_index,
             dim_size=s.size(0),
         )
@@ -195,16 +198,18 @@ class EQGATConv(MessagePassing):
         va_j: Tensor,
         vb_j: Tensor,
         index: Tensor,
-        edge_attr: Tuple[Tensor, Tensor],
+        edge_attr: Tuple[Tensor, Tensor, OptTensor],
         dim_size: Optional[int],
     ) -> Tuple[Tensor, Tensor]:
-        d, r = edge_attr
+        d, r, e = edge_attr
 
         de = self.distance_expansion(d)
         dc = self.cutoff_fnc(d)
         de = dc.view(-1, 1) * de
 
         aij = torch.cat([sa_i, sa_j, de], dim=-1)
+        if self.edge_dim:
+            aij = torch.cat([aij, e], dim=-1)
         aij = self.edge_net(aij)
 
         if self.has_v_in:

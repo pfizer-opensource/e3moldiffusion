@@ -4,13 +4,14 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 from torch_geometric.data import Batch
+from torch_geometric.nn import radius_graph
 
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
-from e3moldiffusion.coordsatomsbonds import EQGATEnergyNetwork
+from e3moldiffusion.coordsatomsbonds import EQGATForceNetwork
 from experiments.data.abstract_dataset import AbstractDatasetInfos
-from experiments.utils import zero_mean
-
+from experiments.utils import coalesce_edges, zero_mean
+from torch_scatter import scatter_add, scatter_mean
 
 class Trainer(pl.LightningModule):
     def __init__(
@@ -24,6 +25,7 @@ class Trainer(pl.LightningModule):
         self.dataset_info = dataset_info
 
         self.num_atom_types_geom = 16
+        self.num_bond_classes = 5
         atom_types_distribution = dataset_info.atom_types.float()
         bond_types_distribution = dataset_info.edge_types.float()
         charge_types_distribution = dataset_info.charges_marginals.float()
@@ -69,17 +71,19 @@ class Trainer(pl.LightningModule):
             alphas=self.sde_atom_charge.alphas.clone(),
         )
 
-        self.model = EQGATEnergyNetwork(
+        self.model = EQGATForceNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
             num_rbfs=hparams["rbf_dim"],
+            edge_dim=hparams["rbf_dim"],
             use_cross_product=hparams["use_cross_product"],
             num_atom_features=self.num_atom_features,
             cutoff_local=hparams["cutoff_local"],
             vector_aggr=hparams["vector_aggr"],
         )
-        self.energy_loss = torch.nn.MSELoss(reduce=False, reduction="none")
-     
+
+        self.force_loss = torch.nn.MSELoss(reduce=False, reduction="none")
+       
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
 
@@ -117,9 +121,12 @@ class Trainer(pl.LightningModule):
 
         #import pdb
         #pdb.set_trace()
-        
-        loss = weights * self.energy_loss(out_dict["energy_pred"].squeeze(-1), batch.energy.squeeze(-1))
-        loss = self.loss_non_nans(loss=loss, modality="energy")
+        loss = self.force_loss(out_dict["pseudo_forces_pred"], out_dict["pseudo_forces_true"])
+        if loss.ndim == 2:
+            loss = loss.mean(dim=1)
+        loss = scatter_mean(loss, index=batch.batch, dim=0, dim_size=batch_size)
+        loss = weights * loss
+        loss = self.loss_non_nans(loss=loss, modality="forces")
         loss = torch.mean(loss, dim=0)
 
         self.log(
@@ -139,6 +146,9 @@ class Trainer(pl.LightningModule):
         charges: Tensor = batch.charges
         data_batch: Tensor = batch.batch
         n = batch.num_nodes
+        bond_edge_index = batch.edge_index
+        bond_edge_attr = batch.edge_attr
+        
         bs = int(data_batch.max()) + 1
         
         t = torch.randint(
@@ -152,21 +162,38 @@ class Trainer(pl.LightningModule):
         if not train:
             t = torch.zeros_like(t)
 
+        edge_index_local = radius_graph(
+            x=pos,
+            r=self.hparams.cutoff_local,
+            batch=data_batch,
+            max_num_neighbors=128,
+            flow="source_to_target",
+        )
+        edge_index_local, edge_attr_local = coalesce_edges(
+            edge_index=edge_index_local,
+            bond_edge_index=bond_edge_index,
+            bond_edge_attr=bond_edge_attr,
+            n=pos.size(0),
+        )
+        edge_attr_local = F.one_hot(
+            edge_attr_local, num_classes=self.num_bond_classes
+        ).float()
+        
         pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
 
         # SAMPLING
         noise_coords_true, pos_perturbed = self.sde_pos.sample_pos(
             t, pos_centered, data_batch
         )
-        atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
+        atom_types, _ = self.cat_atoms.sample_categorical(
             t, atom_types, data_batch, self.dataset_info, type="atoms"
         )
-        charges, charges_perturbed = self.cat_charges.sample_categorical(
+        charges, _ = self.cat_charges.sample_categorical(
             t, charges, data_batch, self.dataset_info, type="charges"
         )
-
-        atom_feats_in_perturbed = torch.cat(
-            [atom_types_perturbed, charges_perturbed], dim=-1
+        
+        atom_feats_in = torch.cat(
+            [atom_types, charges], dim=-1
         )
 
         # TIME EMBEDDING
@@ -175,8 +202,10 @@ class Trainer(pl.LightningModule):
         temb = temb.unsqueeze(dim=1)
 
         out = self.model(
-            x=atom_feats_in_perturbed, t=temb, pos=pos_perturbed, batch=data_batch
+            x=atom_feats_in, t=temb, pos=pos_perturbed, batch=data_batch,
+            edge_index=edge_index_local, edge_attr=edge_attr_local
         )
+        out["pseudo_forces_true"] = noise_coords_true
 
         return out, t, bs
 

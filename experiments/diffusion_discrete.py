@@ -502,6 +502,7 @@ class Trainer(pl.LightningModule):
         every_k_step: int = 1,
         guidance_scale: float = 1.0e-4,
         energy_model=None,
+        guidance_start=None,
     ):
         (
             pos,
@@ -523,6 +524,7 @@ class Trainer(pl.LightningModule):
             every_k_step=every_k_step,
             guidance_scale=guidance_scale,
             energy_model=energy_model,
+            guidance_start=guidance_start
         )
 
         if torch.any(pos.isnan()):
@@ -575,6 +577,7 @@ class Trainer(pl.LightningModule):
         use_energy_guidance: bool = False,
         ckpt_energy_model: str = None,
         device: str = "cpu",
+        guidance_start=None,
     ):
         energy_model = None
         if use_energy_guidance:
@@ -616,8 +619,8 @@ class Trainer(pl.LightningModule):
                 every_k_step=every_k_step,
                 guidance_scale=guidance_scale,
                 energy_model=energy_model,
+                guidance_start=guidance_start
             )
-
             n = batch_num_nodes.sum().item()
             edge_attrs_dense = torch.zeros(
                 size=(n, n, 5), dtype=edge_types.dtype, device=edge_types.device
@@ -727,6 +730,7 @@ class Trainer(pl.LightningModule):
         every_k_step: int = 1,
         guidance_scale: float = 1.0e-4,
         energy_model=None,
+        guidance_start=None
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         batch_num_nodes = torch.multinomial(
             input=empirical_distribution_num_nodes,
@@ -896,15 +900,17 @@ class Trainer(pl.LightningModule):
                     edge_index_global,
                 )
             if energy_model is not None:
-                pos = energy_guidance(
-                    pos,
-                    node_feats_in,
-                    temb,
-                    energy_model,
-                    batch,
-                    guidance_scale=guidance_scale,
-                )
-
+                if guidance_start is None:
+                    guidance_start = self.hparams.timesteps
+                if timestep in range(1, guidance_start):
+                    pos = energy_guidance(
+                        pos,
+                        node_feats_in,
+                        temb,
+                        energy_model,
+                        batch,
+                        guidance_scale=guidance_scale,
+                    )
             if save_traj:
                 pos_traj.append(pos.detach())
                 atom_type_traj.append(atom_types.detach())
