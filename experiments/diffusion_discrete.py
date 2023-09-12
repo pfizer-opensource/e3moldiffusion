@@ -27,7 +27,7 @@ from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from tqdm import tqdm
 
-from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
+from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork, EQGATEnergyNetwork, EQGATForceNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
@@ -36,6 +36,7 @@ from experiments.diffusion.utils import (
     initialize_edge_attrs_reverse,
     bond_guidance,
     energy_guidance,
+    force_guidance
 )
 from experiments.molecule_utils import Molecule
 from experiments.utils import (
@@ -45,6 +46,7 @@ from experiments.utils import (
     load_model,
     load_bond_model,
     load_energy_model,
+    load_force_model,
 )
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.losses import DiffusionLoss
@@ -501,7 +503,7 @@ class Trainer(pl.LightningModule):
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
         guidance_scale: float = 1.0e-4,
-        energy_model=None,
+        guidance_model=None,
         guidance_start=None,
     ):
         (
@@ -523,7 +525,7 @@ class Trainer(pl.LightningModule):
             eta_ddim=eta_ddim,
             every_k_step=every_k_step,
             guidance_scale=guidance_scale,
-            energy_model=energy_model,
+            guidance_model=guidance_model,
             guidance_start=guidance_start
         )
 
@@ -729,7 +731,7 @@ class Trainer(pl.LightningModule):
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
         guidance_scale: float = 1.0e-4,
-        energy_model=None,
+        guidance_model=None,
         guidance_start=None
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         batch_num_nodes = torch.multinomial(
@@ -899,24 +901,33 @@ class Trainer(pl.LightningModule):
                     edge_index_local,
                     edge_index_global,
                 )
-            if energy_model is not None:
+            if guidance_model is not None:
                 if guidance_start is None:
                     guidance_start = self.hparams.timesteps
                 if timestep in range(1, guidance_start):
-                    pos = energy_guidance(
-                        pos,
-                        node_feats_in,
-                        temb,
-                        energy_model,
-                        batch,
-                        guidance_scale=guidance_scale,
-                    )
+                    if isinstance(guidance_model, EQGATEnergyNetwork):
+                        pos = energy_guidance(
+                            pos,
+                            node_feats_in,
+                            temb,
+                            guidance_model,
+                            batch,
+                            guidance_scale=guidance_scale,
+                        )
+                    elif isinstance(guidance_model, EQGATForceNetwork):
+                        pos = force_guidance(
+                            pos,
+                            node_feats_in,
+                            guidance_model,
+                            batch,
+                            guidance_scale=guidance_scale,
+                            cutoff=self.hparams.cutoff_lower
+                        )
             if save_traj:
                 pos_traj.append(pos.detach())
                 atom_type_traj.append(atom_types.detach())
                 edge_type_traj.append(edge_attr_global.detach())
                 charge_type_traj.append(charge_types.detach())
-
         return (
             pos,
             atom_types,

@@ -82,7 +82,7 @@ class Trainer(pl.LightningModule):
    
     def step_fnc(self, batch, batch_idx, stage: str, anneal_power=2.):
     
-        out_dict, used_sigmas, noise = self(batch=batch)        
+        out_dict, used_sigmas, noise = self(batch=batch, fitting=True)        
         scores = out_dict["pseudo_forces_pred"] / used_sigmas
         target = -1.0 / (used_sigmas**2) * noise
         target = target.view(target.shape[0], -1)
@@ -103,7 +103,7 @@ class Trainer(pl.LightningModule):
 
         return loss
 
-    def forward(self, batch: Batch):
+    def forward(self, batch: Batch, fitting=True):
         atom_types: Tensor = batch.x
         pos: Tensor = batch.pos
         charges: Tensor = batch.charges
@@ -135,7 +135,6 @@ class Trainer(pl.LightningModule):
         noise = zero_mean(noise, batch.batch, dim=0, dim_size=bs)
         noise = used_sigmas * noise
         pos_perturbed = pos_centered + noise
-        
         out = self.model(
             x=atom_feats_in, pos=pos_perturbed, batch=data_batch,
             edge_index=edge_index_local, edge_attr=edge_attr_local

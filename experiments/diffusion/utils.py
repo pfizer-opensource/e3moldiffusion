@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from typing import Optional, List
 from torch_scatter import scatter_mean
-
+from torch_geometric.nn import radius_graph
 
 def initialize_edge_attrs_reverse(
     edge_index_global, n, bonds_prior, num_bond_classes, device
@@ -124,3 +124,27 @@ def energy_guidance(
         )[0]
 
     return pos + guidance_scale * pos_shift
+
+def force_guidance(pos,
+                   node_feats_in,
+                   force_model,
+                   batch,
+                   guidance_scale=0.005,
+                   cutoff=7.5
+                   ):
+    
+    edge_index_local = radius_graph(
+            x=pos,
+            r=cutoff,
+            batch=batch,
+            max_num_neighbors=128,
+            flow="source_to_target",
+        )
+       
+    out = force_model(
+            x=node_feats_in, pos=pos, batch=batch,
+            edge_index=edge_index_local, edge_attr=None
+    )["pseudo_forces_pred"]
+
+    pos = pos + guidance_scale * out
+    return pos
