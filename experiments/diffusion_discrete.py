@@ -576,18 +576,23 @@ class Trainer(pl.LightningModule):
         every_k_step: int = 1,
         run_test_eval: bool = False,
         guidance_scale: float = 1.0e-4,
-        use_energy_guidance: bool = False,
-        ckpt_energy_model: str = None,
+        use_guidance: bool = False,
+        ckpt_guidance_model: str = None,
         device: str = "cpu",
         guidance_start=None,
+        guidance_model_type: str = "energy"
     ):
-        energy_model = None
-        if use_energy_guidance:
-            energy_model = load_energy_model(ckpt_energy_model, self.num_atom_features)
+        guidance_model = None
+        if use_guidance:
+            if guidance_model_type == "energy":
+                guidance_model = load_energy_model(ckpt_guidance_model, self.num_atom_features)
+            elif guidance_model_type == "forces":
+                guidance_model = load_force_model(ckpt_guidance_model, self.num_atom_features)
+                
             # for param in self.energy_model.parameters():
             #    param.requires_grad = False
-            energy_model.to(self.device)
-            energy_model.eval()
+            guidance_model.to(self.device)
+            guidance_model.eval()
 
         b = ngraphs // bs
         l = [bs] * b
@@ -620,7 +625,7 @@ class Trainer(pl.LightningModule):
                 eta_ddim=eta_ddim,
                 every_k_step=every_k_step,
                 guidance_scale=guidance_scale,
-                energy_model=energy_model,
+                guidance_model=guidance_model,
                 guidance_start=guidance_start
             )
             n = batch_num_nodes.sum().item()

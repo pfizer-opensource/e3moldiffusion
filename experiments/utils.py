@@ -360,8 +360,8 @@ def load_force_model(filepath, num_atom_features, device="cpu"):
 
     ckpt = torch.load(filepath, map_location="cpu")
     args = ckpt["hyper_parameters"]
-    model = create_energy_model(args, num_atom_features)
-
+    model = create_force_model(args, num_atom_features)
+    
     state_dict = ckpt["state_dict"]
     state_dict = {
         re.sub(r"^model\.", "", k): v
