@@ -926,7 +926,7 @@ class Trainer(pl.LightningModule):
                             guidance_model,
                             batch,
                             guidance_scale=guidance_scale,
-                            cutoff=self.hparams.cutoff_lower
+                            cutoff=self.hparams.cutoff_local
                         )
             if save_traj:
                 pos_traj.append(pos.detach())
