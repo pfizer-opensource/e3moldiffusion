@@ -158,8 +158,12 @@ if __name__ == "__main__":
             print("Starting property prediction model via discrete diffusion")
             from experiments.diffusion_discrete import Trainer
         elif hparams.latent_dim:
-            print("Using latent diffusion")
-            from experiments.diffusion_latent_discrete import Trainer
+            if not hparams.latent_reduced:
+                print("Using latent diffusion")
+                from experiments.diffusion_latent_discrete import Trainer
+            else:
+                print("Using reduced latent diffusion")
+                from experiments.diffusion_latent_discrete_reduced import Trainer
         else:
             print("Using discrete diffusion")
             if hparams.diffusion_pretraining:
@@ -225,7 +229,23 @@ if __name__ == "__main__":
     )
 
     pl.seed_everything(seed=hparams.seed, workers=hparams.gpus > 1)
-
+    
+    #if hparams.load_ckpt:
+    #    model = Trainer.load_from_checkpoint(hparams.load_ckpt,
+    #                                         hparams=hparams.__dict__, 
+    #                                         learning_rate=hparams.lr,
+    #                                         dataset_info=dataset_info,
+    #                                         smiles_list=train_smiles,
+    #                                         prop_dist=prop_dist,
+    #                                         prop_norm=prop_norm)
+    #else:
+    model = Trainer(
+        hparams=hparams.__dict__,
+        dataset_info=dataset_info,
+        smiles_list=train_smiles,
+        prop_dist=prop_dist,
+        prop_norm=prop_norm,
+    )
     trainer.fit(
         model=model,
         datamodule=datamodule,

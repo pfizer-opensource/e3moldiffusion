@@ -905,6 +905,6 @@ class EQGATForceNetwork(nn.Module):
         force_atoms = force_atoms - scatter_mean(force_atoms, index=batch, dim=0, dim_size=bs)[batch]
         out = {"pseudo_forces_pred": force_atoms}
         return out
-   
+    
 if __name__ == "__main__":
     pass

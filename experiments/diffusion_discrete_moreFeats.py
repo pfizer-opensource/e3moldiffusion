@@ -683,6 +683,7 @@ class Trainer(pl.LightningModule):
         every_k_step: int = 1,
         run_test_eval: bool = False,
         device: str = "cpu",
+        **kwargs
     ):
         b = ngraphs // bs
         l = [bs] * b

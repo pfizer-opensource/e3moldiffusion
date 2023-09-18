@@ -83,12 +83,18 @@ class Trainer(pl.LightningModule):
     def step_fnc(self, batch, batch_idx, stage: str, anneal_power=2.):
     
         out_dict, used_sigmas, noise = self(batch=batch, fitting=True)        
-        scores = out_dict["pseudo_forces_pred"] / used_sigmas
-        target = -1.0 / (used_sigmas**2) * noise
-        target = target.view(target.shape[0], -1)
-        scores = scores.view(scores.shape[0], -1)
-        loss = 1 / 2. * ((scores - target) ** 2).sum(dim=-1) * used_sigmas.squeeze() ** anneal_power
-        # loss = scatter_mean(loss, index=batch.batch, dim=0, dim_size=len(batch.batch.unique()))
+        dsm = False
+        if dsm:
+            ### DSM objective:
+            scores = out_dict["pseudo_forces_pred"] / used_sigmas
+            target = -1.0 / (used_sigmas**2) * noise
+            target = target.view(target.shape[0], -1)
+            scores = scores.view(scores.shape[0], -1)
+            loss = 1 / 2. * ((scores - target) ** 2).sum(dim=-1) * used_sigmas.squeeze() ** anneal_power
+            # loss = scatter_mean(loss, index=batch.batch, dim=0, dim_size=len(batch.batch.unique()))
+        else:
+            loss = torch.pow(noise - out_dict["pseudo_forces_pred"], 2).sum(-1)
+            
         loss = self.loss_non_nans(loss, 'pseudo-forces')
         loss = torch.mean(loss, dim=0)
         
@@ -147,7 +153,7 @@ class Trainer(pl.LightningModule):
             self.model.parameters(),
             lr=self.hparams["lr"],
             amsgrad=True,
-            weight_decay=1e-6,
+            weight_decay=1e-4,
         )
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer=optimizer,
