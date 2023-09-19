@@ -2,6 +2,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Optional, List, Tuple
+from torch_sparse import coalesce
 
 import pandas as pd
 import pytorch_lightning as pl
@@ -16,10 +17,10 @@ from experiments.losses import DiffusionLoss
 from experiments.molecule_utils import Molecule
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import (
-    coalesce_edges,
     get_list_of_edge_adjs,
     load_model,
     zero_mean,
+    remove_mean_pocket,
 )
 from torch import Tensor
 from torch_geometric.data import Batch
@@ -27,7 +28,7 @@ from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from tqdm import tqdm
 
-from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork, EQGATEnergyNetwork, EQGATForceNetwork
+from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
@@ -36,7 +37,6 @@ from experiments.diffusion.utils import (
     initialize_edge_attrs_reverse,
     bond_guidance,
     energy_guidance,
-    force_guidance
 )
 from experiments.molecule_utils import Molecule
 from experiments.utils import (
@@ -46,7 +46,6 @@ from experiments.utils import (
     load_model,
     load_bond_model,
     load_energy_model,
-    load_force_model,
 )
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.losses import DiffusionLoss
@@ -84,6 +83,10 @@ class Trainer(pl.LightningModule):
         bond_types_distribution = dataset_info.edge_types.float()
         charge_types_distribution = dataset_info.charges_marginals.float()
 
+        self.register_buffer("atoms_prior", atom_types_distribution.clone())
+        self.register_buffer("bonds_prior", bond_types_distribution.clone())
+        self.register_buffer("charges_prior", charge_types_distribution.clone())
+
         self.hparams.num_atom_types = dataset_info.input_dims.X
         self.num_charge_classes = dataset_info.input_dims.C
         self.remove_hs = hparams.get("remove_hs")
@@ -101,21 +104,17 @@ class Trainer(pl.LightningModule):
 
         if self.hparams.load_ckpt_from_pretrained is not None:
             print("Loading from pre-trained model checkpoint...")
-            # self.num_charge_classes += 1
-            # self.num_atom_features += 2
-            self.model, args = load_model(
+
+            self.model = load_model(
                 self.hparams.load_ckpt_from_pretrained, self.num_atom_features
             )
-            # if args["atom_type_masking"]:
-            # mask_token = torch.tensor([0.0])
-            # atom_types_distribution = torch.cat([atom_types_distribution, mask_token])
-            # charge_types_distribution = torch.cat(
-            #     [charge_types_distribution, mask_token]
-            # )
             # num_params = len(self.model.state_dict())
             # for i, param in enumerate(self.model.parameters()):
             #     if i < num_params // 2:
             #         param.requires_grad = False
+        elif self.hparams.load_ckpt:
+            print("Loading from model checkpoint...")
+            self.model = load_model(self.hparams.load_ckpt, self.num_atom_features)
         else:
             self.model = DenoisingEdgeNetwork(
                 hn_dim=(hparams["sdim"], hparams["vdim"]),
@@ -138,10 +137,6 @@ class Trainer(pl.LightningModule):
                 property_prediction=hparams["property_prediction"],
                 coords_param=hparams["continuous_param"],
             )
-
-        self.register_buffer("atoms_prior", atom_types_distribution.clone())
-        self.register_buffer("bonds_prior", bond_types_distribution.clone())
-        self.register_buffer("charges_prior", charge_types_distribution.clone())
 
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -177,16 +172,21 @@ class Trainer(pl.LightningModule):
             terminal_distribution=atom_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
             num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes,
             num_charge_types=self.num_charge_classes,
         )
         self.cat_bonds = CategoricalDiffusionKernel(
             terminal_distribution=bond_types_distribution,
             alphas=self.sde_bonds.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
         )
         self.cat_charges = CategoricalDiffusionKernel(
             terminal_distribution=charge_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
             num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes,
             num_charge_types=self.num_charge_classes,
         )
 
@@ -307,6 +307,7 @@ class Trainer(pl.LightningModule):
         )
 
     def step_fnc(self, batch, batch_idx, stage: str):
+        batch.batch = batch.pos_batch
         batch_size = int(batch.batch.max()) + 1
 
         t = torch.randint(
@@ -371,7 +372,7 @@ class Trainer(pl.LightningModule):
         loss = self.diffusion_loss(
             true_data=true_data,
             pred_data=pred_data,
-            batch=batch.batch,
+            batch=batch.pos_batch,
             bond_aggregation_index=out_dict["bond_aggregation_index"],
             weights=weights,
         )
@@ -402,9 +403,12 @@ class Trainer(pl.LightningModule):
 
     def forward(self, batch: Batch, t: Tensor):
         atom_types: Tensor = batch.x
+        atom_types_pocket: Tensor = batch.x_pocket
         pos: Tensor = batch.pos
+        pos_pocket: Tensor = batch.pos_pocket
         charges: Tensor = batch.charges
         data_batch: Tensor = batch.batch
+        data_batch_pocket: Tensor = batch.pos_pocket_batch
         bond_edge_index = batch.edge_index
         bond_edge_attr = batch.edge_attr
         context = batch.context if self.hparams.context_mapping else None
@@ -419,29 +423,9 @@ class Trainer(pl.LightningModule):
         temb = temb.clamp(min=self.hparams.eps_min)
         temb = temb.unsqueeze(dim=1)
 
-        pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
-
-        if not hasattr(batch, "fc_edge_index"):
-            edge_index_global = (
-                torch.eq(batch.batch.unsqueeze(0), batch.batch.unsqueeze(-1))
-                .int()
-                .fill_diagonal_(0)
-            )
-            edge_index_global, _ = dense_to_sparse(edge_index_global)
-            edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
-        else:
-            edge_index_global = batch.fc_edge_index
-
-        edge_index_global, edge_attr_global = coalesce_edges(
-            edge_index=edge_index_global,
-            bond_edge_index=bond_edge_index,
-            bond_edge_attr=bond_edge_attr,
-            n=pos.size(0),
+        pos_centered, pos_centered_pocket = remove_mean_pocket(
+            pos, pos_pocket, data_batch, data_batch_pocket
         )
-        edge_index_global, edge_attr_global = sort_edge_index(
-            edge_index=edge_index_global, edge_attr=edge_attr_global, sort_by_row=False
-        )
-        batch_edge_global = data_batch[edge_index_global[0]]
 
         # SAMPLING
         noise_coords_true, pos_perturbed = self.sde_pos.sample_pos(
@@ -450,19 +434,102 @@ class Trainer(pl.LightningModule):
         atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
             t, atom_types, data_batch, self.dataset_info, type="atoms"
         )
+        atom_types_pocket = F.one_hot(
+            atom_types_pocket.squeeze().long(), num_classes=self.num_atom_types
+        ).float()
         charges, charges_perturbed = self.cat_charges.sample_categorical(
             t, charges, data_batch, self.dataset_info, type="charges"
         )
+        # Concatenate Ligand-Pocket
+        pos_perturbed = (
+            torch.cat([pos_perturbed, pos_centered_pocket], dim=0)
+            .float()
+            .to(self.device)
+        )
+        charges_pocket = torch.zeros(
+            pos_pocket.shape[0], charges_perturbed.shape[1], dtype=torch.float32
+        ).to(self.device)
+
+        atom_types_perturbed = torch.cat(
+            [atom_types_perturbed, atom_types_pocket], dim=0
+        )
+        charges_perturbed = torch.cat([charges_perturbed, charges_pocket], dim=0)
+
+        atom_feats_in_perturbed = torch.cat(
+            [atom_types_perturbed, charges_perturbed], dim=-1
+        )
+
+        # EDGES
+        # Fully-connected ligand
+        edge_index_global_lig = (
+            torch.eq(data_batch.unsqueeze(0), data_batch.unsqueeze(-1))
+            .int()
+            .fill_diagonal_(0)
+        )
+        edge_index_global_lig, _ = dense_to_sparse(edge_index_global_lig)
+        edge_index_global_lig = sort_edge_index(
+            edge_index_global_lig, sort_by_row=False
+        )
+        edge_index_global_lig, edge_attr_global_lig = coalesce_edges(
+            edge_index=edge_index_global_lig,
+            bond_edge_index=bond_edge_index,
+            bond_edge_attr=bond_edge_attr,
+            n=data_batch.size(0),
+        )
+        edge_index_global_lig, edge_attr_global_lig = sort_edge_index(
+            edge_index=edge_index_global_lig,
+            edge_attr=edge_attr_global_lig,
+            sort_by_row=False,
+        )
         edge_attr_global_perturbed = (
             self.cat_bonds.sample_edges_categorical(
-                t, edge_index_global, edge_attr_global, data_batch
+                t,
+                edge_index_global_lig,
+                edge_attr_global_lig,
+                data_batch,
+                return_one_hot=False,
             )
             if not self.hparams.bond_prediction
             else None
         )
-        atom_feats_in_perturbed = torch.cat(
-            [atom_types_perturbed, charges_perturbed], dim=-1
+        # Local interaction Ligand-Pocket
+        batch_full = torch.cat([data_batch, data_batch_pocket])
+        edge_index_rg = radius_graph(
+            x=pos_perturbed,
+            r=self.hparams["cutoff_global"],
+            batch=batch_full,
+            max_num_neighbors=self.hparams["max_num_neighbors"],
         )
+        edge_index_global, edge_attr_global_perturbed = coalesce_edges(
+            edge_index=edge_index_rg,
+            bond_edge_index=edge_index_global_lig,
+            bond_edge_attr=edge_attr_global_perturbed,
+            n=batch_full.size(0),
+        )
+        edge_index_global, edge_attr_global_perturbed = sort_edge_index(
+            edge_index=edge_index_global,
+            edge_attr=edge_attr_global_perturbed,
+            sort_by_row=False,
+        )
+
+        j, i = edge_index_global
+        edge_mask_j = j >= pos.shape[0]
+        edge_mask_i = i >= pos.shape[0]
+        edge_mask = edge_mask_j + edge_mask_i
+        edge_attr_global_perturbed = F.one_hot(
+            edge_attr_global_perturbed, num_classes=self.num_bond_classes
+        ).float() * (~edge_mask).unsqueeze(1)
+
+        import pdb
+
+        pdb.set_trace()
+        batch_edge_global = batch_full[edge_index_global[0]]  #
+        pocket_mask = (
+            torch.zeros_like(batch_full, dtype=torch.float32)
+            .to(self.device)
+            .unsqueeze(1)
+        )
+        pocket_mask[: pos.shape[0]] = 1.0
 
         out = self.model(
             x=atom_feats_in_perturbed,
@@ -473,23 +540,36 @@ class Trainer(pl.LightningModule):
             edge_attr_global=edge_attr_global_perturbed
             if not self.hparams.bond_prediction
             else None,
-            batch=data_batch,
+            batch=batch_full,
             batch_edge_global=batch_edge_global,
             context=context,
+            pocket_mask=pocket_mask,
         )
 
-        out["coords_perturbed"] = pos_perturbed
-        out["atoms_perturbed"] = atom_types_perturbed
-        out["charges_perturbed"] = charges_perturbed
-        out["bonds_perturbed"] = edge_attr_global_perturbed
+        # Prediction masking
+        out["coords_pred"] = out["coords_pred"] * pocket_mask
+        out["coords_pred"] = out["coords_pred"][: pos.shape[0]]
+        out["atoms_pred"] = out["atoms_pred"] * pocket_mask
+        out["atoms_pred"] = out["atoms_pred"][: pos.shape[0]]
+        out["bonds_pred"] = out["bonds_pred"] * (~edge_mask).unsqueeze(1)
+        edge_mask_j = j < pos.shape[0]
+        edge_mask_i = i < pos.shape[0]
+        edge_mask = edge_mask_j * edge_mask_i
+        out["bonds_pred"] = out["bonds_pred"][edge_mask]
 
-        out["coords_true"] = pos_centered
+        # Ground truth masking
+        out["coords_perturbed"] = pos_perturbed[: pos.shape[0]]
+        out["atoms_perturbed"] = atom_types_perturbed[: pos.shape[0]]
+        out["charges_perturbed"] = charges_perturbed[: pos.shape[0]]
+        out["bonds_perturbed"] = edge_attr_global_perturbed[edge_mask]
+
+        out["coords_true"] = pos_centered[: pos.shape[0]]
         out["coords_noise_true"] = noise_coords_true
-        out["atoms_true"] = atom_types.argmax(dim=-1)
-        out["bonds_true"] = edge_attr_global
-        out["charges_true"] = charges.argmax(dim=-1)
+        out["atoms_true"] = atom_types[: pos.shape[0]].argmax(dim=-1)
+        out["bonds_true"] = edge_attr_global_lig
+        out["charges_true"] = charges[: pos.shape[0]].argmax(dim=-1)
 
-        out["bond_aggregation_index"] = edge_index_global[1]
+        out["bond_aggregation_index"] = edge_index_global_lig[1]
 
         return out
 
@@ -505,8 +585,7 @@ class Trainer(pl.LightningModule):
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
         guidance_scale: float = 1.0e-4,
-        guidance_model=None,
-        guidance_start=None,
+        energy_model=None,
     ):
         (
             pos,
@@ -527,8 +606,7 @@ class Trainer(pl.LightningModule):
             eta_ddim=eta_ddim,
             every_k_step=every_k_step,
             guidance_scale=guidance_scale,
-            guidance_model=guidance_model,
-            guidance_start=guidance_start
+            energy_model=energy_model,
         )
 
         if torch.any(pos.isnan()):
@@ -578,23 +656,17 @@ class Trainer(pl.LightningModule):
         every_k_step: int = 1,
         run_test_eval: bool = False,
         guidance_scale: float = 1.0e-4,
-        use_guidance: bool = False,
-        ckpt_guidance_model: str = None,
+        use_energy_guidance: bool = False,
+        ckpt_energy_model: str = None,
         device: str = "cpu",
-        guidance_start=None,
-        guidance_model_type: str = "energy"
     ):
-        guidance_model = None
-        if use_guidance:
-            if guidance_model_type == "energy":
-                guidance_model = load_energy_model(ckpt_guidance_model, self.num_atom_features)
-            elif guidance_model_type == "forces":
-                guidance_model = load_force_model(ckpt_guidance_model, self.num_atom_features)
-                
+        energy_model = None
+        if use_energy_guidance:
+            energy_model = load_energy_model(ckpt_energy_model, self.num_atom_features)
             # for param in self.energy_model.parameters():
             #    param.requires_grad = False
-            guidance_model.to(self.device)
-            guidance_model.eval()
+            energy_model.to(self.device)
+            energy_model.eval()
 
         b = ngraphs // bs
         l = [bs] * b
@@ -627,9 +699,9 @@ class Trainer(pl.LightningModule):
                 eta_ddim=eta_ddim,
                 every_k_step=every_k_step,
                 guidance_scale=guidance_scale,
-                guidance_model=guidance_model,
-                guidance_start=guidance_start
+                energy_model=energy_model,
             )
+
             n = batch_num_nodes.sum().item()
             edge_attrs_dense = torch.zeros(
                 size=(n, n, 5), dtype=edge_types.dtype, device=edge_types.device
@@ -738,8 +810,7 @@ class Trainer(pl.LightningModule):
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
         guidance_scale: float = 1.0e-4,
-        guidance_model=None,
-        guidance_start=None
+        energy_model=None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         batch_num_nodes = torch.multinomial(
             input=empirical_distribution_num_nodes,
@@ -908,33 +979,22 @@ class Trainer(pl.LightningModule):
                     edge_index_local,
                     edge_index_global,
                 )
-            if guidance_model is not None:
-                if guidance_start is None:
-                    guidance_start = self.hparams.timesteps
-                if timestep in range(1, guidance_start):
-                    if isinstance(guidance_model, EQGATEnergyNetwork):
-                        pos = energy_guidance(
-                            pos,
-                            node_feats_in,
-                            temb,
-                            guidance_model,
-                            batch,
-                            guidance_scale=guidance_scale,
-                        )
-                    elif isinstance(guidance_model, EQGATForceNetwork):
-                        pos = force_guidance(
-                            pos,
-                            node_feats_in,
-                            guidance_model,
-                            batch,
-                            guidance_scale=guidance_scale,
-                            cutoff=self.hparams.cutoff_local
-                        )
+            if energy_model is not None and timestep <= 20:
+                pos = energy_guidance(
+                    pos,
+                    node_feats_in,
+                    temb,
+                    energy_model,
+                    batch,
+                    guidance_scale=guidance_scale,
+                )
+
             if save_traj:
                 pos_traj.append(pos.detach())
                 atom_type_traj.append(atom_types.detach())
                 edge_type_traj.append(edge_attr_global.detach())
                 charge_type_traj.append(charge_types.detach())
+
         return (
             pos,
             atom_types,

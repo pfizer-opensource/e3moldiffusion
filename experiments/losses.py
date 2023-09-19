@@ -36,7 +36,7 @@ class DiffusionLoss(nn.Module):
         batch: Tensor,
         bond_aggregation_index: Tensor,
         weights: Optional[Tensor] = None,
-        batch_reduce: bool = True
+        batch_reduce: bool = True,
     ) -> Dict:
         batch_size = int(batch.max()) + 1
 
@@ -49,7 +49,7 @@ class DiffusionLoss(nn.Module):
                 reduction="none",
             ).mean(-1)
             regr_loss = scatter_mean(regr_loss, index=batch, dim=0, dim_size=batch_size)
-            #regr_loss = self.loss_non_nans(regr_loss, self.regression_key)
+            # regr_loss = self.loss_non_nans(regr_loss, self.regression_key)
             regr_loss *= weights
             regr_loss = torch.sum(regr_loss, dim=0)
 
@@ -66,9 +66,9 @@ class DiffusionLoss(nn.Module):
             atoms_loss = scatter_mean(
                 atoms_loss, index=batch, dim=0, dim_size=batch_size
             )
-            #atoms_loss = self.loss_non_nans(atoms_loss, "atoms")
+            # atoms_loss = self.loss_non_nans(atoms_loss, "atoms")
             atoms_loss *= weights
-            
+
             if batch_reduce:
                 atoms_loss = torch.sum(atoms_loss, dim=0)
 
@@ -78,16 +78,16 @@ class DiffusionLoss(nn.Module):
             else:
                 fnc = F.mse_loss
                 take_mean = True
-                
+
             charges_loss = fnc(
                 pred_data["charges"], true_data["charges"], reduction="none"
             )
             if take_mean:
-                charges_loss = charges_loss.mean(dim=1)   
+                charges_loss = charges_loss.mean(dim=1)
             charges_loss = scatter_mean(
                 charges_loss, index=batch, dim=0, dim_size=batch_size
             )
-            #charges_loss = self.loss_non_nans(charges_loss, "charges")
+            # charges_loss = self.loss_non_nans(charges_loss, "charges")
             charges_loss *= weights
             if batch_reduce:
                 charges_loss = torch.sum(charges_loss, dim=0)
@@ -111,7 +111,7 @@ class DiffusionLoss(nn.Module):
             bonds_loss = scatter_mean(
                 bonds_loss, index=batch, dim=0, dim_size=batch_size
             )
-            #bonds_loss = self.loss_non_nans(bonds_loss, "bonds")
+            # bonds_loss = self.loss_non_nans(bonds_loss, "bonds")
             bonds_loss *= weights
             if batch_reduce:
                 bonds_loss = bonds_loss.sum(dim=0)

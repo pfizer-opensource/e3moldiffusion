@@ -31,17 +31,13 @@ def process_ligand_and_pocket(pdbfile, sdffile, atom_dict, dist_cutoff, ca_only)
     pdb_struct = PDBParser(QUIET=True).get_structure("", pdbfile)
 
     try:
-        ligand = Chem.SDMolSupplier(str(sdffile))[0]
+        ligand = Chem.SDMolSupplier(str(sdffile), removeHs=False)[0]
     except:
         raise Exception(f"cannot read sdf mol ({sdffile})")
 
     # remove H atoms if not in atom_dict, other atom types that aren't allowed
     # should stay so that the entire ligand can be removed from the dataset
-    lig_atoms = [
-        a.GetSymbol()
-        for a in ligand.GetAtoms()
-        if (a.GetSymbol().capitalize() in atom_dict or a.element != "H")
-    ]
+    lig_atoms = [a.GetSymbol() for a in ligand.GetAtoms()]
     lig_coords = np.array(
         [
             list(ligand.GetConformer(0).GetAtomPosition(idx))
@@ -77,6 +73,7 @@ def process_ligand_and_pocket(pdbfile, sdffile, atom_dict, dist_cutoff, ca_only)
         "lig_coords": lig_coords,
         "lig_one_hot": lig_one_hot,
         "lig_atoms": lig_atoms,
+        "lig_mol": ligand,
     }
     if ca_only:
         try:
@@ -98,7 +95,7 @@ def process_ligand_and_pocket(pdbfile, sdffile, atom_dict, dist_cutoff, ca_only)
         except KeyError as e:
             raise KeyError(f"{e} not in amino acid dict ({pdbfile}, {sdffile})")
         pocket_data = {
-            "pocket_ca": full_coords,
+            "pocket_coords": full_coords,
             "pocket_one_hot": pocket_one_hot,
             "pocket_ids": pocket_ids,
         }
@@ -133,7 +130,7 @@ def process_ligand_and_pocket(pdbfile, sdffile, atom_dict, dist_cutoff, ca_only)
         except KeyError as e:
             raise KeyError(f"{e} not in atom dict ({pdbfile})")
         pocket_data = {
-            "pocket_ca": full_coords,
+            "pocket_coords": full_coords,
             "pocket_one_hot": pocket_one_hot,
             "pocket_ids": pocket_ids,
             "pocket_atoms": full_atoms,
@@ -273,9 +270,12 @@ def saveall(
     pdb_and_mol_ids,
     lig_coords,
     lig_one_hot,
+    lig_atom,
     lig_mask,
-    pocket_c_alpha,
+    lig_mol,
+    pocket_coords,
     pocket_one_hot,
+    pocket_atom,
     pocket_mask,
 ):
     np.savez(
@@ -283,9 +283,12 @@ def saveall(
         names=pdb_and_mol_ids,
         lig_coords=lig_coords,
         lig_one_hot=lig_one_hot,
+        lig_atom=lig_atom,
         lig_mask=lig_mask,
-        pocket_c_alpha=pocket_c_alpha,
+        lig_mol=lig_mol,
+        pocket_coords=pocket_coords,
         pocket_one_hot=pocket_one_hot,
+        pocket_atom=pocket_atom,
         pocket_mask=pocket_mask,
     )
     return True
@@ -336,9 +339,12 @@ if __name__ == "__main__":
     for split in data_split.keys():
         lig_coords = []
         lig_one_hot = []
+        lig_atom = []
         lig_mask = []
-        pocket_c_alpha = []
+        lig_mol = []
+        pocket_coords = []
         pocket_one_hot = []
+        pocket_atom = []
         pocket_mask = []
         pdb_and_mol_ids = []
         count_protein = []
@@ -390,13 +396,17 @@ if __name__ == "__main__":
             lig_coords.append(ligand_data["lig_coords"])
             lig_one_hot.append(ligand_data["lig_one_hot"])
             lig_mask.append(count * np.ones(len(ligand_data["lig_coords"])))
-            pocket_c_alpha.append(pocket_data["pocket_ca"])
+            lig_atom.append(ligand_data["lig_atoms"])
+            lig_mol.append(ligand_data["lig_mol"])
+            pocket_coords.append(pocket_data["pocket_coords"])
             pocket_one_hot.append(pocket_data["pocket_one_hot"])
-            pocket_mask.append(count * np.ones(len(pocket_data["pocket_ca"])))
-            count_protein.append(pocket_data["pocket_ca"].shape[0])
+            pocket_atom.append(pocket_data["pocket_atoms"])
+            pocket_mask.append(count * np.ones(len(pocket_data["pocket_coords"])))
+            count_protein.append(pocket_data["pocket_coords"].shape[0])
             count_ligand.append(ligand_data["lig_coords"].shape[0])
             count_total.append(
-                pocket_data["pocket_ca"].shape[0] + ligand_data["lig_coords"].shape[0]
+                pocket_data["pocket_coords"].shape[0]
+                + ligand_data["lig_coords"].shape[0]
             )
             count += 1
 
@@ -417,9 +427,12 @@ if __name__ == "__main__":
 
         lig_coords = np.concatenate(lig_coords, axis=0)
         lig_one_hot = np.concatenate(lig_one_hot, axis=0)
+        lig_atom = np.concatenate(lig_atom, axis=0)
         lig_mask = np.concatenate(lig_mask, axis=0)
-        pocket_c_alpha = np.concatenate(pocket_c_alpha, axis=0)
+        lig_mol = np.array(lig_mol)
+        pocket_coords = np.concatenate(pocket_coords, axis=0)
         pocket_one_hot = np.concatenate(pocket_one_hot, axis=0)
+        pocket_atom = np.concatenate(pocket_atom, axis=0)
         pocket_mask = np.concatenate(pocket_mask, axis=0)
 
         saveall(
@@ -427,9 +440,12 @@ if __name__ == "__main__":
             pdb_and_mol_ids,
             lig_coords,
             lig_one_hot,
+            lig_atom,
             lig_mask,
-            pocket_c_alpha,
+            lig_mol,
+            pocket_coords,
             pocket_one_hot,
+            pocket_atom,
             pocket_mask,
         )
 
@@ -444,7 +460,9 @@ if __name__ == "__main__":
         pocket_mask = data["pocket_mask"]
         lig_coords = data["lig_coords"]
         lig_one_hot = data["lig_one_hot"]
+        lig_atom = data["lig_atom"]
         pocket_one_hot = data["pocket_one_hot"]
+        pocket_atom = data["pocket_atom"]
 
     # Compute SMILES for all training examples
     train_smiles = compute_smiles(lig_coords, lig_one_hot, lig_mask)

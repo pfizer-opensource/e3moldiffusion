@@ -30,7 +30,15 @@ def add_arguments(parser):
     parser.add_argument(
         "--dataset",
         default="drugs",
-        choices=["qm9", "drugs", "aqm", "aqm_qm7x", "pcqm4mv2"],
+        choices=[
+            "qm9",
+            "drugs",
+            "aqm",
+            "aqm_qm7x",
+            "pcqm4mv2",
+            "pepconf",
+            "crossdocked",
+        ],
     )
     parser.add_argument(
         "--dataset-root", default="/hpfs/userws/cremej01/projects/data/geom"
@@ -82,7 +90,14 @@ def add_arguments(parser):
     parser.add_argument("--use-cross-product", default=False, action="store_true")
     parser.add_argument("--cutoff-local", default=7.0, type=float)
     parser.add_argument("--cutoff-global", default=10.0, type=float)
-    parser.add_argument("--guidance-training", default=None, choices=[None, "energy", "forces"])
+    parser.add_argument("--energy-training", default=False, action="store_true")
+    parser.add_argument("--energy-loss", default="l2", type=str, choices=["l2", "l1"])
+    parser.add_argument("--atom-type-masking", default=False, action="store_true")
+    parser.add_argument("--masked-diffusion", default=False, action="store_true")
+    parser.add_argument("--use-absorbing-state", default=False, action="store_true")
+    parser.add_argument(
+        "--guidance-training", default=None, choices=[None, "energy", "forces"]
+    )
 
     # For Discrete: Include more features: (is_aromatic, is_in_ring, hybridization)
     parser.add_argument("--additional-feats", default=False, action="store_true")
@@ -148,12 +163,11 @@ def add_arguments(parser):
     parser.add_argument("--latent-layers", default=7, type=int)
     parser.add_argument("--latentmodel", default="diffusion", type=str)
     parser.add_argument("--latent-detach", default=False, action="store_true")
-    parser.add_argument("--latent-reduced", default=False, action="store_true")
 
     # GENERAL
     parser.add_argument("-i", "--id", type=int, default=0)
     parser.add_argument("-g", "--gpus", default=1, type=int)
-    parser.add_argument("-e", "--num_epochs", default=300, type=int)
+    parser.add_argument("-e", "--num-epochs", default=300, type=int)
     parser.add_argument("--eval-freq", default=1.0, type=float)
     parser.add_argument("--test-interval", default=5, type=int)
     parser.add_argument("-nh", "--no_h", default=False, action="store_true")

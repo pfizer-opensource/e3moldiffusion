@@ -35,16 +35,13 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = F
             mol
         )  # only remove (explicit) hydrogens attached to molecular graph
         Chem.Kekulize(mol, clearAromaticFlags=True)
+
     adj = torch.from_numpy(Chem.rdmolops.GetAdjacencyMatrix(mol, useBO=True))
     edge_index = adj.nonzero().contiguous().T
     bond_types = adj[edge_index[0], edge_index[1]]
     bond_types[bond_types == 1.5] = 4
     if remove_hydrogens:
-        if len(bond_types) > 0:
-            if max(bond_types) == 4:
-                print('bond-type 4 catched')
-                return None
-                
+        assert max(bond_types) != 4
     edge_attr = bond_types.long()
 
     pos = torch.tensor(mol.GetConformers()[0].GetPositions()).float()
@@ -88,7 +85,6 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = F
 
 
 # in case the rdkit.molecule has explicit hydrogens, the number of attached hydrogens to heavy atoms are not saved
-# do not use, better let rdkit handle removing hydrogens!
 def remove_hydrogens(data: Data):
     to_keep = data.x > 0
     new_edge_index, new_edge_attr = subgraph(
@@ -151,12 +147,12 @@ def load_pickle(path):
         return pickle.load(f)
 
 
-def get_rdkit_mol(fname_xyz, removeHs=False, sanitize=False):
+def get_rdkit_mol(fname_xyz):
     mol = next(pybel.readfile("xyz", fname_xyz))
     mol = Chem.MolFromPDBBlock(
         molBlock=mol.write(format="pdb"),
-        sanitize=sanitize,
-        removeHs=removeHs,
+        sanitize=False,
+        removeHs=False,
         proximityBonding=True,
     )
     # assert len(Chem.GetMolFrags(mol)) == 2

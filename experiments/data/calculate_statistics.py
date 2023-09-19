@@ -1,11 +1,12 @@
 from tqdm import tqdm
 import os
-import pickle
 import argparse
-from experiments.xtb_energy import calculate_xtb_energy
-from torch_geometric.data.collate import collate
-import torch
 import numpy as np
+from torch.utils.data import Subset
+from tqdm import tqdm
+import numpy as np
+from experiments.data.utils import save_pickle
+from experiments.data.metrics import compute_all_statistics
 from torch.utils.data import Subset
 
 
@@ -40,6 +41,18 @@ atom_encoder = {
 }
 atom_decoder = {v: k for k, v in atom_encoder.items()}
 
+h = "h"
+processed_paths = [
+    f"train_n_{h}.pickle",
+    f"train_atom_types_{h}.npy",
+    f"train_bond_types_{h}.npy",
+    f"train_charges_{h}.npy",
+    f"train_valency_{h}.pickle",
+    f"train_bond_lengths_{h}.pickle",
+    f"train_angles_{h}.npy",
+    "train_smiles.pickle",
+]
+
 
 def process(dataset, split, idx):
     if dataset == "drugs":
@@ -63,7 +76,7 @@ def process(dataset, split, idx):
             PubChemLMDBDataset as DataModule,
         )
 
-        root_path = "/hpfs/userws/cremej01/projects/data/pubchem/database_h"
+        root_path = "/hpfs/userws/cremej01/projects/data/pubchem/database"
     else:
         raise ValueError("Dataset not found")
 
@@ -71,7 +84,8 @@ def process(dataset, split, idx):
 
     datamodule = DataModule(split=split, root=root_path, remove_h=remove_hs)
 
-    energies = []
+    data_list = []
+    all_smiles = []
 
     if dataset == "pubchem":
         split_len = len(datamodule) // 500
@@ -79,29 +93,34 @@ def process(dataset, split, idx):
         rng = rng[idx * split_len : (idx + 1) * split_len]
         datamodule = Subset(datamodule, rng)
 
-    for i, mol in tqdm(enumerate(datamodule), total=len(datamodule)):
-        atom_types = [atom_decoder[int(a)] for a in mol.x]
-        try:
-            e, f = calculate_xtb_energy(mol.pos, atom_types)
-        except:
-            print(f"Molecule with id {i} failed...")
-            # failed_ids.append(i)
-            continue
-        energies.append(e)
+    for mol in tqdm(datamodule, total=len(datamodule)):
+        data_list.append(mol)
 
     if dataset == "pubchem":
-        with open(
-            os.path.join(root_path, f"energies/energies_{split}_{idx}.pickle"), "wb"
-        ) as f:
-            pickle.dump(energies, f)
+        processed_path = [
+            os.path.join(root_path, f"statistics/{idx}_" + path)
+            for path in processed_paths
+        ]
     else:
-        with open(
-            os.path.join(root_path, f"energies/energies_{split}.pickle"), "wb"
-        ) as f:
-            pickle.dump(energies, f)
-
-    # with open(os.path.join(root_path, f"failed_ids_{split}_{idx}.pickle"), "wb") as f:
-    #     pickle.dump(failed_ids, f)
+        processed_path = [
+            os.path.join(root_path, "statistics/" + path) for path in processed_paths
+        ]
+    statistics = compute_all_statistics(
+        data_list,
+        atom_encoder,
+        charges_dic={-2: 0, -1: 1, 0: 2, 1: 3, 2: 4, 3: 5},
+        additional_feats=False,
+        normalize=False,
+        # do not compute bond distance and bond angle statistics due to time and we do not use it anyways currently
+    )
+    save_pickle(statistics.num_nodes, processed_path[0])
+    np.save(processed_path[1], statistics.atom_types)
+    np.save(processed_path[2], statistics.bond_types)
+    np.save(processed_path[3], statistics.charge_types)
+    save_pickle(statistics.valencies, processed_path[4])
+    save_pickle(statistics.bond_lengths, processed_path[5])
+    np.save(processed_path[6], statistics.bond_angles)
+    save_pickle(set(all_smiles), processed_path[7])
 
 
 if __name__ == "__main__":

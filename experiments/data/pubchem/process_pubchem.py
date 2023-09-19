@@ -108,7 +108,7 @@ def db_sample_helper(file, removeHs=False):
     smiles_list = []
 
     inf = gzip.open(file)
-    with Chem.ForwardSDMolSupplier(inf) as gzsuppl:
+    with Chem.ForwardSDMolSupplier(inf, removeHs=removeHs) as gzsuppl:
         molecules = [x for x in gzsuppl if x is not None]
     for mol in molecules:
         try:
@@ -143,4 +143,4 @@ def db_sample_helper(file, removeHs=False):
 
 if __name__ == "__main__":
     process_files(removeHs=False)
-    process_files(removeHs=True)
+    # process_files(removeHs=True)

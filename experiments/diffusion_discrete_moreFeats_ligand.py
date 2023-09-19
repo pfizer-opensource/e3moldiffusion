@@ -1,7 +1,6 @@
 import logging
 import os
 from datetime import datetime
-from typing import Optional, List, Tuple
 
 import pandas as pd
 import pytorch_lightning as pl
@@ -10,6 +9,8 @@ import torch.nn.functional as F
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.data.abstract_dataset import AbstractDatasetInfos
+from experiments.data.distributions import prepare_context
+from experiments.diffusion.utils import initialize_edge_attrs_reverse, bond_guidance
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.losses import DiffusionLoss
@@ -26,30 +27,6 @@ from torch_geometric.data import Batch
 from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from tqdm import tqdm
-
-from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork, EQGATEnergyNetwork, EQGATForceNetwork
-from e3moldiffusion.molfeat import get_bond_feature_dims
-from experiments.diffusion.continuous import DiscreteDDPM
-from experiments.diffusion.categorical import CategoricalDiffusionKernel
-from experiments.data.distributions import prepare_context
-from experiments.diffusion.utils import (
-    initialize_edge_attrs_reverse,
-    bond_guidance,
-    energy_guidance,
-    force_guidance
-)
-from experiments.molecule_utils import Molecule
-from experiments.utils import (
-    coalesce_edges,
-    get_list_of_edge_adjs,
-    zero_mean,
-    load_model,
-    load_bond_model,
-    load_energy_model,
-    load_force_model,
-)
-from experiments.sampling.analyze import analyze_stability_for_molecules
-from experiments.losses import DiffusionLoss
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(
@@ -83,17 +60,34 @@ class Trainer(pl.LightningModule):
         atom_types_distribution = dataset_info.atom_types.float()
         bond_types_distribution = dataset_info.edge_types.float()
         charge_types_distribution = dataset_info.charges_marginals.float()
+        is_aromatic_distribution = dataset_info.is_aromatic.float()
+        is_ring_distribution = dataset_info.is_in_ring.float()
+        hybridization_disitribution = dataset_info.hybridization.float()
+
+        self.register_buffer("atoms_prior", atom_types_distribution.clone())
+        self.register_buffer("bonds_prior", bond_types_distribution.clone())
+        self.register_buffer("charges_prior", charge_types_distribution.clone())
+        self.register_buffer("is_aromatic_prior", is_aromatic_distribution.clone())
+        self.register_buffer("is_in_ring_prior", is_ring_distribution.clone())
+        self.register_buffer("hybridization_prior", hybridization_disitribution.clone())
+
+        self.num_is_aromatic = self.num_is_in_ring = 2
+        self.num_hybridization = 9
 
         self.hparams.num_atom_types = dataset_info.input_dims.X
         self.num_charge_classes = dataset_info.input_dims.C
+        self.num_atom_types = self.hparams.num_atom_types
+        self.num_atom_features = (
+            self.num_atom_types
+            + self.num_charge_classes
+            + self.num_is_aromatic
+            + self.num_is_in_ring
+            + self.num_hybridization
+        )
+        self.num_bond_classes = 5
         self.remove_hs = hparams.get("remove_hs")
         if self.remove_hs:
             print("Model without modelling explicit hydrogens")
-
-        self.num_atom_types = self.hparams.num_atom_types
-        self.num_atom_features = self.num_atom_types + self.num_charge_classes
-        self.num_bond_classes = 5
-
         self.smiles_list = smiles_list
 
         empirical_num_nodes = dataset_info.n_nodes
@@ -101,21 +95,17 @@ class Trainer(pl.LightningModule):
 
         if self.hparams.load_ckpt_from_pretrained is not None:
             print("Loading from pre-trained model checkpoint...")
-            # self.num_charge_classes += 1
-            # self.num_atom_features += 2
-            self.model, args = load_model(
+
+            self.model = load_model(
                 self.hparams.load_ckpt_from_pretrained, self.num_atom_features
             )
-            # if args["atom_type_masking"]:
-            # mask_token = torch.tensor([0.0])
-            # atom_types_distribution = torch.cat([atom_types_distribution, mask_token])
-            # charge_types_distribution = torch.cat(
-            #     [charge_types_distribution, mask_token]
-            # )
             # num_params = len(self.model.state_dict())
             # for i, param in enumerate(self.model.parameters()):
             #     if i < num_params // 2:
             #         param.requires_grad = False
+        elif self.hparams.load_ckpt:
+            print("Loading from model checkpoint...")
+            self.model = load_model(self.hparams.load_ckpt, self.num_atom_features)
         else:
             self.model = DenoisingEdgeNetwork(
                 hn_dim=(hparams["sdim"], hparams["vdim"]),
@@ -132,16 +122,7 @@ class Trainer(pl.LightningModule):
                 recompute_edge_attributes=True,
                 recompute_radius_graph=False,
                 edge_mp=hparams["edge_mp"],
-                context_mapping=hparams["context_mapping"],
-                num_context_features=hparams["num_context_features"],
-                bond_prediction=hparams["bond_prediction"],
-                property_prediction=hparams["property_prediction"],
-                coords_param=hparams["continuous_param"],
             )
-
-        self.register_buffer("atoms_prior", atom_types_distribution.clone())
-        self.register_buffer("bonds_prior", bond_types_distribution.clone())
-        self.register_buffer("charges_prior", charge_types_distribution.clone())
 
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -151,7 +132,6 @@ class Trainer(pl.LightningModule):
             schedule=self.hparams.noise_scheduler,
             nu=2.5,
             enforce_zero_terminal_snr=False,
-            T=self.hparams.timesteps,
             param=self.hparams.continuous_param,
         )
         self.sde_atom_charge = DiscreteDDPM(
@@ -176,8 +156,6 @@ class Trainer(pl.LightningModule):
         self.cat_atoms = CategoricalDiffusionKernel(
             terminal_distribution=atom_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
-            num_atom_types=self.num_atom_types,
-            num_charge_types=self.num_charge_classes,
         )
         self.cat_bonds = CategoricalDiffusionKernel(
             terminal_distribution=bond_types_distribution,
@@ -186,23 +164,32 @@ class Trainer(pl.LightningModule):
         self.cat_charges = CategoricalDiffusionKernel(
             terminal_distribution=charge_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
-            num_atom_types=self.num_atom_types,
-            num_charge_types=self.num_charge_classes,
+        )
+        self.cat_aromatic = CategoricalDiffusionKernel(
+            terminal_distribution=is_aromatic_distribution,
+            alphas=self.sde_atom_charge.alphas.clone(),
+        )
+        self.cat_ring = CategoricalDiffusionKernel(
+            terminal_distribution=is_ring_distribution,
+            alphas=self.sde_atom_charge.alphas.clone(),
+        )
+        self.cat_hybridization = CategoricalDiffusionKernel(
+            terminal_distribution=hybridization_disitribution,
+            alphas=self.sde_atom_charge.alphas.clone(),
         )
 
         self.diffusion_loss = DiffusionLoss(
-            modalities=["coords", "atoms", "charges", "bonds"],
-            param=["data", "data", "data", "data"],
+            modalities=[
+                "coords",
+                "atoms",
+                "charges",
+                "bonds",
+                "ring",
+                "aromatic",
+                "hybridization",
+            ],
+            param=["data"] * 7,
         )
-
-        if self.hparams.bond_model_guidance:
-            print("Using bond model guidance...")
-            self.bond_model = load_bond_model(
-                self.hparams.ckpt_bond_model, dataset_info
-            )
-            for param in self.bond_model.parameters():
-                param.requires_grad = False
-            self.bond_model.eval()
 
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
@@ -216,6 +203,7 @@ class Trainer(pl.LightningModule):
                 print(f"Running evaluation in epoch {self.current_epoch + 1}")
             final_res = self.run_evaluation(
                 step=self.i,
+                device="cuda" if self.hparams.gpus > 1 else "cpu",
                 dataset_info=self.dataset_info,
                 ngraphs=1000,
                 bs=self.hparams.inference_batch_size,
@@ -224,7 +212,6 @@ class Trainer(pl.LightningModule):
                 eta_ddim=1.0,
                 ddpm=True,
                 every_k_step=1,
-                device="cuda" if self.hparams.gpus > 1 else "cpu",
             )
             self.i += 1
             self.log(
@@ -259,7 +246,17 @@ class Trainer(pl.LightningModule):
             )
 
     def _log(
-        self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, batch_size, stage
+        self,
+        loss,
+        coords_loss,
+        atoms_loss,
+        charges_loss,
+        bonds_loss,
+        ring_loss,
+        aromatic_loss,
+        hybridization_loss,
+        batch_size,
+        stage,
     ):
         self.log(
             f"{stage}/loss",
@@ -306,9 +303,33 @@ class Trainer(pl.LightningModule):
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
 
+        self.log(
+            f"{stage}/ring_loss",
+            ring_loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage == "train"),
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+        )
+        self.log(
+            f"{stage}/aromatic_loss",
+            aromatic_loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage == "train"),
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+        )
+        self.log(
+            f"{stage}/hybridization_loss",
+            hybridization_loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage == "train"),
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+        )
+
     def step_fnc(self, batch, batch_idx, stage: str):
         batch_size = int(batch.batch.max()) + 1
-
         t = torch.randint(
             low=1,
             high=self.hparams.timesteps + 1,
@@ -317,15 +338,12 @@ class Trainer(pl.LightningModule):
             device=batch.x.device,
         )
         if self.hparams.loss_weighting == "snr_s_t":
-            weights = self.sde_atom_charge.snr_s_t_weighting(
-                s=t - 1, t=t, device=self.device, clamp_min=0.05, clamp_max=1.5
-            )
+            weights = self.sde_bonds.snr_s_t_weighting(
+                s=t - 1, t=t, clamp_min=None, clamp_max=None
+            ).to(batch.x.device)
         elif self.hparams.loss_weighting == "snr_t":
-            weights = self.sde_atom_charge.snr_t_weighting(
-                t=t,
-                device=self.device,
-                clamp_min=0.05,
-                clamp_max=1.5,
+            weights = self.sde_bonds.snr_t_weighting(
+                t=t, device=batch.x.device, clamp_min=0.05, clamp_max=5.0
             )
         elif self.hparams.loss_weighting == "exp_t":
             weights = self.sde_atom_charge.exp_t_weighting(t=t, device=self.device)
@@ -352,12 +370,28 @@ class Trainer(pl.LightningModule):
             "atoms": out_dict["atoms_true"],
             "charges": out_dict["charges_true"],
             "bonds": out_dict["bonds_true"],
+            "ring": out_dict["ring_true"],
+            "aromatic": out_dict["aromatic_true"],
+            "hybridization": out_dict["hybridization_true"],
         }
 
         coords_pred = out_dict["coords_pred"]
         atoms_pred = out_dict["atoms_pred"]
-        atoms_pred, charges_pred = atoms_pred.split(
-            [self.num_atom_types, self.num_charge_classes], dim=-1
+        (
+            atoms_pred,
+            charges_pred,
+            ring_pred,
+            aromatic_pred,
+            hybridization_pred,
+        ) = atoms_pred.split(
+            [
+                self.num_atom_types,
+                self.num_charge_classes,
+                self.num_is_in_ring,
+                self.num_is_aromatic,
+                self.num_hybridization,
+            ],
+            dim=-1,
         )
         edges_pred = out_dict["bonds_pred"]
 
@@ -366,6 +400,9 @@ class Trainer(pl.LightningModule):
             "atoms": atoms_pred,
             "charges": charges_pred,
             "bonds": edges_pred,
+            "ring": ring_pred,
+            "aromatic": aromatic_pred,
+            "hybridization": hybridization_pred,
         }
 
         loss = self.diffusion_loss(
@@ -381,6 +418,9 @@ class Trainer(pl.LightningModule):
             + self.hparams.lc_atoms * loss["atoms"]
             + self.hparams.lc_bonds * loss["bonds"]
             + self.hparams.lc_charges * loss["charges"]
+            + 0.7 * loss["hybridization"]
+            + 0.7 * loss["ring"]
+            + 1.0 * loss["aromatic"]
         )
 
         if torch.any(final_loss.isnan()):
@@ -394,6 +434,9 @@ class Trainer(pl.LightningModule):
             loss["atoms"],
             loss["charges"],
             loss["bonds"],
+            loss["ring"],
+            loss["aromatic"],
+            loss["hybridization"],
             batch_size,
             stage,
         )
@@ -410,6 +453,11 @@ class Trainer(pl.LightningModule):
         context = batch.context if self.hparams.context_mapping else None
         n = batch.num_nodes
         bs = int(data_batch.max()) + 1
+
+        ring_feat = batch.is_in_ring
+        aromatic_feat = batch.is_aromatic
+        hybridization_feat = batch.hybridization
+
         bond_edge_index, bond_edge_attr = sort_edge_index(
             edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
         )
@@ -438,9 +486,11 @@ class Trainer(pl.LightningModule):
             bond_edge_attr=bond_edge_attr,
             n=pos.size(0),
         )
+
         edge_index_global, edge_attr_global = sort_edge_index(
             edge_index=edge_index_global, edge_attr=edge_attr_global, sort_by_row=False
         )
+
         batch_edge_global = data_batch[edge_index_global[0]]
 
         # SAMPLING
@@ -453,6 +503,7 @@ class Trainer(pl.LightningModule):
         charges, charges_perturbed = self.cat_charges.sample_categorical(
             t, charges, data_batch, self.dataset_info, type="charges"
         )
+
         edge_attr_global_perturbed = (
             self.cat_bonds.sample_edges_categorical(
                 t, edge_index_global, edge_attr_global, data_batch
@@ -460,8 +511,53 @@ class Trainer(pl.LightningModule):
             if not self.hparams.bond_prediction
             else None
         )
+
+        ## tempory: use this version without refactored.
+        # ring-feat and perturb
+        ring_feat = F.one_hot(
+            ring_feat.squeeze().long(), num_classes=self.num_is_in_ring
+        ).float()
+        probs = self.cat_ring.marginal_prob(ring_feat, t[data_batch])
+        ring_feat_perturbed = F.one_hot(
+            probs.multinomial(
+                1,
+            ).squeeze(),
+            num_classes=self.num_is_in_ring,
+        ).float()
+
+        # aromatic-feat and perturb
+        aromatic_feat = F.one_hot(
+            aromatic_feat.squeeze().long(), num_classes=self.num_is_aromatic
+        ).float()
+        probs = self.cat_aromatic.marginal_prob(aromatic_feat, t[data_batch])
+        aromatic_feat_perturbed = F.one_hot(
+            probs.multinomial(
+                1,
+            ).squeeze(),
+            num_classes=self.num_is_aromatic,
+        ).float()
+
+        # hybridization and perturb
+        hybridization_feat = F.one_hot(
+            hybridization_feat.squeeze().long(), num_classes=self.num_hybridization
+        ).float()
+        probs = self.cat_hybridization.marginal_prob(hybridization_feat, t[data_batch])
+        hybridization_feat_perturbed = F.one_hot(
+            probs.multinomial(
+                1,
+            ).squeeze(),
+            num_classes=self.num_hybridization,
+        ).float()
+
         atom_feats_in_perturbed = torch.cat(
-            [atom_types_perturbed, charges_perturbed], dim=-1
+            [
+                atom_types_perturbed,
+                charges_perturbed,
+                ring_feat_perturbed,
+                aromatic_feat_perturbed,
+                hybridization_feat_perturbed,
+            ],
+            dim=-1,
         )
 
         out = self.model(
@@ -470,9 +566,7 @@ class Trainer(pl.LightningModule):
             pos=pos_perturbed,
             edge_index_local=None,
             edge_index_global=edge_index_global,
-            edge_attr_global=edge_attr_global_perturbed
-            if not self.hparams.bond_prediction
-            else None,
+            edge_attr_global=edge_attr_global_perturbed,
             batch=data_batch,
             batch_edge_global=batch_edge_global,
             context=context,
@@ -482,12 +576,18 @@ class Trainer(pl.LightningModule):
         out["atoms_perturbed"] = atom_types_perturbed
         out["charges_perturbed"] = charges_perturbed
         out["bonds_perturbed"] = edge_attr_global_perturbed
+        out["ring_perturbed"] = ring_feat_perturbed
+        out["aromatic_perturbed"] = aromatic_feat_perturbed
+        out["hybridization_perturbed"] = hybridization_feat_perturbed
 
         out["coords_true"] = pos_centered
         out["coords_noise_true"] = noise_coords_true
         out["atoms_true"] = atom_types.argmax(dim=-1)
         out["bonds_true"] = edge_attr_global
         out["charges_true"] = charges.argmax(dim=-1)
+        out["ring_true"] = ring_feat.argmax(dim=-1)
+        out["aromatic_true"] = aromatic_feat.argmax(dim=-1)
+        out["hybridization_true"] = hybridization_feat.argmax(dim=-1)
 
         out["bond_aggregation_index"] = edge_index_global[1]
 
@@ -504,14 +604,14 @@ class Trainer(pl.LightningModule):
         ddpm: bool = True,
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
-        guidance_scale: float = 1.0e-4,
-        guidance_model=None,
-        guidance_start=None,
     ):
         (
             pos,
             atom_types,
             charge_types,
+            ring_feat,
+            aromatic_feat,
+            hybridization_feat,
             edge_types,
             edge_index_global,
             batch_num_nodes,
@@ -526,13 +626,7 @@ class Trainer(pl.LightningModule):
             ddpm=ddpm,
             eta_ddim=eta_ddim,
             every_k_step=every_k_step,
-            guidance_scale=guidance_scale,
-            guidance_model=guidance_model,
-            guidance_start=guidance_start
         )
-
-        if torch.any(pos.isnan()):
-            print(pos.numel(), pos.isnan().sum())
 
         pos_splits = pos.detach().split(batch_num_nodes.cpu().tolist(), dim=0)
 
@@ -546,6 +640,18 @@ class Trainer(pl.LightningModule):
         atom_types_integer_split = atom_types_integer.detach().split(
             batch_num_nodes.cpu().tolist(), dim=0
         )
+        # additional feats
+        # for rdkit molecule <atom> class, we just select the aromatic and hybridization feats:
+        # SetIsAromatic and SetHybridization
+        aromatic_feat_integer = torch.argmax(aromatic_feat, dim=-1)
+        aromatic_feat_integer_split = aromatic_feat_integer.detach().split(
+            batch_num_nodes.cpu().tolist(), dim=0
+        )
+
+        hybridization_feat_integer = torch.argmax(hybridization_feat, dim=-1)
+        hybridization_feat_integer_split = hybridization_feat_integer.detach().split(
+            batch_num_nodes.cpu().tolist(), dim=0
+        )
         context_split = (
             context.split(batch_num_nodes.cpu().tolist(), dim=0)
             if context is not None
@@ -555,6 +661,8 @@ class Trainer(pl.LightningModule):
             pos_splits,
             atom_types_integer_split,
             charge_types_integer_split,
+            aromatic_feat_integer_split,
+            hybridization_feat_integer_split,
             edge_types,
             edge_index_global,
             batch_num_nodes,
@@ -577,25 +685,8 @@ class Trainer(pl.LightningModule):
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
         run_test_eval: bool = False,
-        guidance_scale: float = 1.0e-4,
-        use_guidance: bool = False,
-        ckpt_guidance_model: str = None,
         device: str = "cpu",
-        guidance_start=None,
-        guidance_model_type: str = "energy"
     ):
-        guidance_model = None
-        if use_guidance:
-            if guidance_model_type == "energy":
-                guidance_model = load_energy_model(ckpt_guidance_model, self.num_atom_features)
-            elif guidance_model_type == "forces":
-                guidance_model = load_force_model(ckpt_guidance_model, self.num_atom_features)
-                
-            # for param in self.energy_model.parameters():
-            #    param.requires_grad = False
-            guidance_model.to(self.device)
-            guidance_model.eval()
-
         b = ngraphs // bs
         l = [bs] * b
         if sum(l) != ngraphs:
@@ -612,6 +703,8 @@ class Trainer(pl.LightningModule):
                 pos_splits,
                 atom_types_integer_split,
                 charge_types_integer_split,
+                aromatic_feat_integer_split,
+                hybridization_feat_integer_split,
                 edge_types,
                 edge_index_global,
                 batch_num_nodes,
@@ -626,10 +719,8 @@ class Trainer(pl.LightningModule):
                 ddpm=ddpm,
                 eta_ddim=eta_ddim,
                 every_k_step=every_k_step,
-                guidance_scale=guidance_scale,
-                guidance_model=guidance_model,
-                guidance_start=guidance_start
             )
+
             n = batch_num_nodes.sum().item()
             edge_attrs_dense = torch.zeros(
                 size=(n, n, 5), dtype=edge_types.dtype, device=edge_types.device
@@ -640,11 +731,20 @@ class Trainer(pl.LightningModule):
             edge_attrs_dense = edge_attrs_dense.argmax(-1)
             edge_attrs_splits = get_list_of_edge_adjs(edge_attrs_dense, batch_num_nodes)
 
-            for i, (positions, atom_types, charges, edges) in enumerate(
+            for i, (
+                positions,
+                atom_types,
+                charges,
+                is_aromatic,
+                hybridization,
+                edges,
+            ) in enumerate(
                 zip(
                     pos_splits,
                     atom_types_integer_split,
                     charge_types_integer_split,
+                    aromatic_feat_integer_split,
+                    hybridization_feat_integer_split,
                     edge_attrs_splits,
                 )
             ):
@@ -656,6 +756,8 @@ class Trainer(pl.LightningModule):
                     context=context_split[i][0].detach().to(device)
                     if context_split is not None
                     else None,
+                    is_aromatic=is_aromatic.detach().to(device),
+                    hybridization=hybridization.detach().to(device),
                     dataset_info=dataset_info,
                 )
                 molecule_list.append(molecule)
@@ -675,15 +777,7 @@ class Trainer(pl.LightningModule):
             device=device,
         )
 
-        save_cond = (
-            self.mol_stab < stability_dict["mol_stable"]
-            if self.hparams.dataset != "qm9"
-            else (
-                self.mol_stab < stability_dict["mol_stable"]
-                and validity_dict["novelty"] > 0.70
-            )
-        )
-        if save_cond and not run_test_eval:
+        if self.mol_stab < stability_dict["mol_stable"] and not run_test_eval:
             self.mol_stab = stability_dict["mol_stable"]
             save_path = os.path.join(self.hparams.save_dir, "best_mol_stab.ckpt")
             self.trainer.save_checkpoint(save_path)
@@ -737,10 +831,7 @@ class Trainer(pl.LightningModule):
         ddpm: bool = True,
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
-        guidance_scale: float = 1.0e-4,
-        guidance_model=None,
-        guidance_start=None
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
+    ):
         batch_num_nodes = torch.multinomial(
             input=empirical_distribution_num_nodes,
             num_samples=num_graphs,
@@ -771,16 +862,35 @@ class Trainer(pl.LightningModule):
         )
         atom_types = F.one_hot(atom_types, self.num_atom_types).float()
 
+        # charges
         charge_types = torch.multinomial(
             self.charges_prior, num_samples=n, replacement=True
         )
         charge_types = F.one_hot(charge_types, self.num_charge_classes).float()
 
-        # edge_index_local = radius_graph(x=pos,
-        #                                r=self.hparams.cutoff_local,
-        #                                batch=batch,
-        #                                max_num_neighbors=self.hparams.max_num_neighbors)
+        # ring
+        ring_feat = torch.multinomial(
+            self.is_in_ring_prior, num_samples=n, replacement=True
+        )
+        ring_feat = F.one_hot(ring_feat, self.num_is_in_ring).float()
+
+        # aromatic
+        aromatic_feat = torch.multinomial(
+            self.is_aromatic_prior, num_samples=n, replacement=True
+        )
+        aromatic_feat = F.one_hot(aromatic_feat, self.num_is_aromatic).float()
+
+        # hybridization
+        hybridization_feat = torch.multinomial(
+            self.hybridization_prior, num_samples=n, replacement=True
+        )
+        hybridization_feat = F.one_hot(
+            hybridization_feat, self.num_hybridization
+        ).float()
+
         edge_index_local = None
+
+        # edge types for FC graph
         edge_index_global = (
             torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
         )
@@ -797,6 +907,7 @@ class Trainer(pl.LightningModule):
             )
         else:
             edge_attr_global = None
+
         batch_edge_global = batch[edge_index_global[0]]
 
         pos_traj = []
@@ -814,7 +925,6 @@ class Trainer(pl.LightningModule):
         iterator = (
             tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         )
-
         for timestep in iterator:
             s = torch.full(
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=pos.device
@@ -823,7 +933,17 @@ class Trainer(pl.LightningModule):
 
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
-            node_feats_in = torch.cat([atom_types, charge_types], dim=-1)
+
+            node_feats_in = torch.cat(
+                [
+                    atom_types,
+                    charge_types,
+                    ring_feat,
+                    aromatic_feat,
+                    hybridization_feat,
+                ],
+                dim=-1,
+            )
             out = self.model(
                 x=node_feats_in,
                 t=temb,
@@ -837,15 +957,6 @@ class Trainer(pl.LightningModule):
             )
 
             coords_pred = out["coords_pred"].squeeze()
-            atoms_pred, charges_pred = out["atoms_pred"].split(
-                [self.num_atom_types, self.num_charge_classes], dim=-1
-            )
-            atoms_pred = atoms_pred.softmax(dim=-1)
-            # N x a_0
-            edges_pred = out["bonds_pred"].softmax(dim=-1)
-            # E x b_0
-            charges_pred = charges_pred.softmax(dim=-1)
-
             if ddpm:
                 if self.hparams.noise_scheduler == "adaptive":
                     # positions
@@ -862,6 +973,32 @@ class Trainer(pl.LightningModule):
                     t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
                 )
 
+            # rest
+            (
+                atoms_pred,
+                charges_pred,
+                ring_pred,
+                aromatic_pred,
+                hybridization_pred,
+            ) = out["atoms_pred"].split(
+                [
+                    self.num_atom_types,
+                    self.num_charge_classes,
+                    self.num_is_in_ring,
+                    self.num_is_aromatic,
+                    self.num_hybridization,
+                ],
+                dim=-1,
+            )
+            atoms_pred = atoms_pred.softmax(dim=-1)
+            # N x a_0
+            edges_pred = out["bonds_pred"].softmax(dim=-1)
+            # E x b_0
+            charges_pred = charges_pred.softmax(dim=-1)
+            ring_pred = ring_pred.softmax(dim=-1)
+            aromatic_pred = aromatic_pred.softmax(dim=-1)
+            hybridization_pred = hybridization_pred.softmax(dim=-1)
+
             # atoms
             atom_types = self.cat_atoms.sample_reverse_categorical(
                 xt=atom_types,
@@ -869,6 +1006,7 @@ class Trainer(pl.LightningModule):
                 t=t[batch],
                 num_classes=self.num_atom_types,
             )
+
             # charges
             charge_types = self.cat_charges.sample_reverse_categorical(
                 xt=charge_types,
@@ -876,6 +1014,29 @@ class Trainer(pl.LightningModule):
                 t=t[batch],
                 num_classes=self.num_charge_classes,
             )
+
+            # additional feats
+            ring_feat = self.cat_ring.sample_reverse_categorical(
+                xt=ring_feat,
+                x0=ring_pred,
+                t=t[batch],
+                num_classes=self.num_is_in_ring,
+            )
+
+            aromatic_feat = self.cat_aromatic.sample_reverse_categorical(
+                xt=aromatic_feat,
+                x0=aromatic_pred,
+                t=t[batch],
+                num_classes=self.num_is_aromatic,
+            )
+
+            hybridization_feat = self.cat_hybridization.sample_reverse_categorical(
+                xt=hybridization_feat,
+                x0=hybridization_pred,
+                t=t[batch],
+                num_classes=self.num_hybridization,
+            )
+
             # edges
             if not self.hparams.bond_prediction:
                 (
@@ -908,37 +1069,20 @@ class Trainer(pl.LightningModule):
                     edge_index_local,
                     edge_index_global,
                 )
-            if guidance_model is not None:
-                if guidance_start is None:
-                    guidance_start = self.hparams.timesteps
-                if timestep in range(1, guidance_start):
-                    if isinstance(guidance_model, EQGATEnergyNetwork):
-                        pos = energy_guidance(
-                            pos,
-                            node_feats_in,
-                            temb,
-                            guidance_model,
-                            batch,
-                            guidance_scale=guidance_scale,
-                        )
-                    elif isinstance(guidance_model, EQGATForceNetwork):
-                        pos = force_guidance(
-                            pos,
-                            node_feats_in,
-                            guidance_model,
-                            batch,
-                            guidance_scale=guidance_scale,
-                            cutoff=self.hparams.cutoff_local
-                        )
+
             if save_traj:
                 pos_traj.append(pos.detach())
                 atom_type_traj.append(atom_types.detach())
                 edge_type_traj.append(edge_attr_global.detach())
                 charge_type_traj.append(charge_types.detach())
+
         return (
             pos,
             atom_types,
             charge_types,
+            ring_feat,
+            aromatic_feat,
+            hybridization_feat,
             edge_attr_global,
             edge_index_global,
             batch_num_nodes,
@@ -947,20 +1091,12 @@ class Trainer(pl.LightningModule):
         )
 
     def configure_optimizers(self):
-        if self.hparams.optimizer == "adam":
-            optimizer = torch.optim.AdamW(
-                self.model.parameters(),
-                lr=self.hparams["lr"],
-                amsgrad=True,
-                weight_decay=1.0e-12,
-            )
-        elif self.hparams.optimizer == "sgd":
-            optimizer = torch.optim.SGD(
-                self.model.parameters(),
-                lr=self.hparams["lr"],
-                momentum=0.9,
-                nesterov=True,
-            )
+        optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=self.hparams["lr"],
+            amsgrad=True,
+            weight_decay=1.0e-12,
+        )
         if self.hparams["lr_scheduler"] == "reduce_on_plateau":
             lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer=optimizer,
@@ -994,7 +1130,7 @@ class Trainer(pl.LightningModule):
             "scheduler": lr_scheduler,
             "interval": "epoch",
             "frequency": self.hparams["lr_frequency"],
-            "monitor": self.mol_stab,
+            "monitor": "val/coords_loss_epoch",
             "strict": False,
         }
         return [optimizer], [scheduler]

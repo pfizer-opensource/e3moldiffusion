@@ -1,27 +1,17 @@
-from itertools import accumulate
 from rdkit import RDLogger
 from tqdm import tqdm
 import numpy as np
 import torch
+from os.path import join
+from experiments.data.utils import train_subset
 from torch_geometric.data import InMemoryDataset, DataLoader
 import experiments.data.utils as dataset_utils
 from experiments.data.utils import load_pickle, save_pickle
 from experiments.data.abstract_dataset import (
-    AbstractDataModuleLigand,
+    AbstractAdaptiveDataModule,
 )
 from experiments.data.metrics import compute_all_statistics
-from experiments.data.utils import *
-import tempfile
-
-
-def get_mol_babel(coords, atom_types):
-    with tempfile.NamedTemporaryFile() as tmp:
-        tmp_file = tmp.name
-        # Write xyz file
-        write_xyz_file(coords=coords, atom_types=atom_types, filename=tmp_file)
-        rdkit_mol = get_rdkit_mol(tmp_file)
-        smiles = Chem.MolToSmiles(rdkit_mol, isomericSmiles=False)
-    return smiles, rdkit_mol
+from torch.utils.data import Subset
 
 
 full_atom_encoder = {
@@ -42,29 +32,27 @@ full_atom_encoder = {
     "Hg": 14,
     "Bi": 15,
 }
-atom_decoder = {v: k for k, v in full_atom_encoder.items()}
 
 
-class LigandPocketDataset(InMemoryDataset):
+class PepConfDataset(InMemoryDataset):
     def __init__(
-        self,
-        split,
-        root,
-        remove_hs=True,
-        transform=None,
-        pre_transform=None,
-        pre_filter=None,
+        self, split, root, remove_h, transform=None, pre_transform=None, pre_filter=None
     ):
         assert split in ["train", "val", "test"]
         self.split = split
-        self.remove_hs = remove_hs
+        self.remove_h = remove_h
 
         self.compute_bond_distance_angles = True
+
         self.atom_encoder = full_atom_encoder
+
+        if remove_h:
+            self.atom_encoder = {
+                k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
+            }
 
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
-
         self.statistics = dataset_utils.Statistics(
             num_nodes=load_pickle(self.processed_paths[1]),
             atom_types=torch.from_numpy(np.load(self.processed_paths[2])),
@@ -73,23 +61,23 @@ class LigandPocketDataset(InMemoryDataset):
             valencies=load_pickle(self.processed_paths[5]),
             bond_lengths=load_pickle(self.processed_paths[6]),
             bond_angles=torch.from_numpy(np.load(self.processed_paths[7])),
-            is_aromatic=torch.from_numpy(np.load(self.processed_paths[8])).float(),
-            is_in_ring=torch.from_numpy(np.load(self.processed_paths[9])).float(),
-            hybridization=torch.from_numpy(np.load(self.processed_paths[10])).float(),
+            is_aromatic=torch.from_numpy(np.load(self.processed_paths[9])).float(),
+            is_in_ring=torch.from_numpy(np.load(self.processed_paths[10])).float(),
+            hybridization=torch.from_numpy(np.load(self.processed_paths[11])).float(),
         )
-        self.smiles = load_pickle(self.processed_paths[11])
+        self.smiles = load_pickle(self.processed_paths[8])
 
     @property
     def raw_file_names(self):
         if self.split == "train":
-            return ["train.npz"]
+            return ["train_data.pickle"]
         elif self.split == "val":
-            return ["val.npz"]
+            return ["val_data.pickle"]
         else:
-            return ["test.npz"]
+            return ["test_data.pickle"]
 
     def processed_file_names(self):
-        h = "noh" if self.remove_hs else "h"
+        h = "noh" if self.remove_h else "h"
         if self.split == "train":
             return [
                 f"train_{h}.pt",
@@ -100,10 +88,10 @@ class LigandPocketDataset(InMemoryDataset):
                 f"train_valency_{h}.pickle",
                 f"train_bond_lengths_{h}.pickle",
                 f"train_angles_{h}.npy",
+                "train_smiles.pickle",
                 f"train_is_aromatic_{h}.npy",
                 f"train_is_in_ring_{h}.npy",
                 f"train_hybridization_{h}.npy",
-                "train_smiles.pickle",
             ]
         elif self.split == "val":
             return [
@@ -115,10 +103,10 @@ class LigandPocketDataset(InMemoryDataset):
                 f"val_valency_{h}.pickle",
                 f"val_bond_lengths_{h}.pickle",
                 f"val_angles_{h}.npy",
+                "val_smiles.pickle",
                 f"val_is_aromatic_{h}.npy",
                 f"val_is_in_ring_{h}.npy",
                 f"val_hybridization_{h}.npy",
-                "val_smiles.pickle",
             ]
         else:
             return [
@@ -130,10 +118,10 @@ class LigandPocketDataset(InMemoryDataset):
                 f"test_valency_{h}.pickle",
                 f"test_bond_lengths_{h}.pickle",
                 f"test_angles_{h}.npy",
+                "test_smiles.pickle",
                 f"test_is_aromatic_{h}.npy",
                 f"test_is_in_ring_{h}.npy",
                 f"test_hybridization_{h}.npy",
-                "test_smiles.pickle",
             ]
 
     def download(self):
@@ -144,96 +132,31 @@ class LigandPocketDataset(InMemoryDataset):
 
     def process(self):
         RDLogger.DisableLog("rdApp.*")
+        all_data = load_pickle(self.raw_paths[0])
 
-        data_list_lig = []
-        data_list_pocket = []
+        data_list = []
         all_smiles = []
-
-        with np.load(self.raw_paths[0], allow_pickle=True) as f:
-            data = {key: val for key, val in f.items()}
-
-        # split data based on mask
-        mol_data = {}
-        for k, v in data.items():
-            if k == "names" or k == "receptors" or k == "lig_mol":
-                mol_data[k] = v
-                continue
-
-            sections = (
-                np.where(np.diff(data["lig_mask"]))[0] + 1
-                if "lig" in k
-                else np.where(np.diff(data["pocket_mask"]))[0] + 1
+        for i, data in enumerate(tqdm(all_data)):
+            smiles, conformer = data
+            all_smiles.append(smiles)
+            data = dataset_utils.mol_to_torch_geometric(
+                conformer,
+                full_atom_encoder,
+                smiles,
+                remove_hydrogens=self.remove_h,  # need to give full atom encoder since hydrogens might still be available if Chem.RemoveHs is called
             )
-            if k == "lig_atom" or k == "pocket_atom":
-                mol_data[k] = [
-                    torch.tensor([full_atom_encoder[a] for a in atoms])
-                    for atoms in np.split(v, sections)
-                ]
-            else:
-                mol_data[k] = [torch.from_numpy(x) for x in np.split(v, sections)]
-            # add number of nodes for convenience
-            if k == "lig_mask":
-                mol_data["num_lig_atoms"] = torch.tensor(
-                    [len(x) for x in mol_data["lig_mask"]]
-                )
-            elif k == "pocket_mask":
-                mol_data["num_pocket_nodes"] = torch.tensor(
-                    [len(x) for x in mol_data["pocket_mask"]]
-                )
 
-        for i, (
-            mol_lig,
-            coords_lig,
-            atoms_lig,
-            mask_lig,
-            coords_pocket,
-            atoms_pocket,
-            mask_pocket,
-        ) in enumerate(
-            zip(
-                mol_data["lig_mol"],
-                mol_data["lig_coords"],
-                mol_data["lig_atom"],
-                mol_data["lig_mask"],
-                mol_data["pocket_coords"],
-                mol_data["pocket_atom"],
-                mol_data["pocket_mask"],
-            )
-        ):
-            try:
-                # atom_types = [atom_decoder[int(a)] for a in atoms_lig]
-                # smiles_lig, conformer_lig = get_mol_babel(coords_lig, atom_types)
-                smiles_lig = Chem.MolToSmiles(mol_lig)
-                data = dataset_utils.mol_to_torch_geometric(
-                    mol_lig,
-                    full_atom_encoder,
-                    smiles_lig,
-                    remove_hydrogens=self.remove_hs,  # already removed by default
-                )
-            except:
-                print(f"Ligand {i} failed")
+            if self.pre_filter is not None and not self.pre_filter(data):
                 continue
-            data.pos_pocket = coords_pocket
-            data.x_pocket = atoms_pocket
-            data.lig_mask = mask_lig
-            data.pocket_mask = mask_pocket
+            if self.pre_transform is not None:
+                data = self.pre_transform(data)
 
-            all_smiles.append(smiles_lig)
-            data_list_lig.append(data)
+            data_list.append(data)
 
-        center = True
-        if center:
-            for i in range(len(data_list_lig)):
-                mean = (
-                    data_list_lig[i].pos.sum(0) + data_list_lig[i].pos_pocket.sum(0)
-                ) / (len(data_list_lig[i].pos) + len(data_list_lig[i].pos_pocket))
-                data_list_lig[i].pos = data_list_lig[i].pos - mean
-                data_list_lig[i].pos_pocket = data_list_lig[i].pos_pocket - mean
-
-        torch.save(self.collate(data_list_lig), self.processed_paths[0])
+        torch.save(self.collate(data_list), self.processed_paths[0])
 
         statistics = compute_all_statistics(
-            data_list_lig,
+            data_list,
             self.atom_encoder,
             charges_dic={-2: 0, -1: 1, 0: 2, 1: 3, 2: 4, 3: 5},
             additional_feats=True,
@@ -246,34 +169,47 @@ class LigandPocketDataset(InMemoryDataset):
         save_pickle(statistics.valencies, self.processed_paths[5])
         save_pickle(statistics.bond_lengths, self.processed_paths[6])
         np.save(self.processed_paths[7], statistics.bond_angles)
-        np.save(self.processed_paths[8], statistics.is_aromatic)
-        np.save(self.processed_paths[9], statistics.is_in_ring)
-        np.save(self.processed_paths[10], statistics.hybridization)
+        save_pickle(set(all_smiles), self.processed_paths[8])
 
-        save_pickle(set(all_smiles), self.processed_paths[11])
+        np.save(self.processed_paths[9], statistics.is_aromatic)
+        np.save(self.processed_paths[10], statistics.is_in_ring)
+        np.save(self.processed_paths[11], statistics.hybridization)
 
 
-class LigandPocketDataModule(AbstractDataModuleLigand):
+class PepconfDataModule(AbstractAdaptiveDataModule):
     def __init__(self, cfg):
         self.datadir = cfg.dataset_root
         root_path = cfg.dataset_root
         self.pin_memory = True
 
-        train_dataset = LigandPocketDataset(
-            split="train", root=root_path, remove_hs=cfg.remove_hs
+        train_dataset = PepConfDataset(
+            split="train", root=root_path, remove_h=cfg.remove_hs
         )
-        val_dataset = LigandPocketDataset(
-            split="val", root=root_path, remove_hs=cfg.remove_hs
+        val_dataset = PepConfDataset(
+            split="val", root=root_path, remove_h=cfg.remove_hs
         )
-        test_dataset = LigandPocketDataset(
-            split="test", root=root_path, remove_hs=cfg.remove_hs
+        test_dataset = PepConfDataset(
+            split="test", root=root_path, remove_h=cfg.remove_hs
         )
-        self.remove_hs = cfg.remove_hs
+
         self.statistics = {
             "train": train_dataset.statistics,
             "val": val_dataset.statistics,
             "test": test_dataset.statistics,
         }
+
+        if cfg.select_train_subset:
+            self.idx_train = train_subset(
+                dset_len=len(train_dataset),
+                train_size=cfg.train_size,
+                seed=cfg.seed,
+                filename=join(cfg.save_dir, "splits.npz"),
+            )
+            self.train_smiles = train_dataset.smiles
+            train_dataset = Subset(train_dataset, self.idx_train)
+
+        self.remove_h = cfg.remove_hs
+
         super().__init__(cfg, train_dataset, val_dataset, test_dataset)
 
     def _train_dataloader(self, shuffle=True):
@@ -358,3 +294,22 @@ class LigandPocketDataModule(AbstractDataModuleLigand):
         )
 
         return dl
+
+
+if __name__ == "__main__":
+    # Creating the Pytorch Geometric InMemoryDatasets
+
+    # ff = "/hpfs/userws/"
+    # ff = "/sharedhome/"
+    # DATAROOT = f"{ff}let55/projects/e3moldiffusion_experiments/data/geom/data"
+    DATAROOT = (
+        "/home/let55/workspace/projects/e3moldiffusion_experiments/data/geom/data"
+    )
+    dataset = GeomDrugsDataset(root=DATAROOT, split="val", remove_h=False)
+    print(dataset)
+    dataset = GeomDrugsDataset(root=DATAROOT, split="test", remove_h=False)
+    print(dataset)
+    dataset = GeomDrugsDataset(root=DATAROOT, split="train", remove_h=False)
+    print(dataset)
+    print(dataset[0])
+    print(dataset[0].edge_attr)

@@ -1,6 +1,6 @@
 from typing import Optional
 
-from experiments.data.geom.geom_dataset_adaptive import GeomDrugsDataset
+from experiments.data.pepconf.pepconf_dataset_adaptive import PepConfDataset
 from pytorch_lightning import LightningDataModule
 from torch_geometric.data import DataLoader
 from tqdm import tqdm
@@ -29,30 +29,23 @@ full_atom_encoder = {
 }
 
 
-class GeomDataModule(AbstractDataModule):
+class PepConfDataModule(AbstractDataModule):
     def __init__(self, cfg):
-        super().__init__()
-
         self.datadir = cfg.dataset_root
         root_path = cfg.dataset_root
         self.cfg = cfg
         self.pin_memory = True
         self.persistent_workers = False
 
-        train_dataset = GeomDrugsDataset(
+        train_dataset = PepConfDataset(
             split="train", root=root_path, remove_h=cfg.remove_hs
         )
-        val_dataset = GeomDrugsDataset(
+        val_dataset = PepConfDataset(
             split="val", root=root_path, remove_h=cfg.remove_hs
         )
-        test_dataset = GeomDrugsDataset(
+        test_dataset = PepConfDataset(
             split="test", root=root_path, remove_h=cfg.remove_hs
         )
-        self.statistics = {
-            "train": train_dataset.statistics,
-            "val": val_dataset.statistics,
-            "test": test_dataset.statistics,
-        }
         if cfg.select_train_subset:
             self.idx_train = train_subset(
                 dset_len=len(train_dataset),
@@ -60,11 +53,14 @@ class GeomDataModule(AbstractDataModule):
                 seed=cfg.seed,
                 filename=join(cfg.save_dir, "splits.npz"),
             )
-            self.train_smiles = train_dataset.smiles
             train_dataset = Subset(train_dataset, self.idx_train)
 
         self.remove_h = cfg.remove_hs
-
+        self.statistics = {
+            "train": train_dataset.statistics,
+            "val": val_dataset.statistics,
+            "test": test_dataset.statistics,
+        }
         super().__init__(cfg, train_dataset, val_dataset, test_dataset)
 
     def train_dataloader(self, shuffle=True):
@@ -117,20 +113,3 @@ class GeomDataModule(AbstractDataModule):
         )
 
         return dl
-
-
-if __name__ == "__main__":
-    # Creating the Pytorch Geometric InMemoryDatasets
-
-    ff = "/hpfs/userws/"
-    # ff = "/sharedhome/"
-
-    DATAROOT = f"{ff}let55/projects/e3moldiffusion/experiments/geom/data"
-    dataset = GeomDrugsDataset(root=DATAROOT, split="val", remove_h=True)
-    print(dataset)
-    dataset = GeomDrugsDataset(root=DATAROOT, split="test", remove_h=True)
-    print(dataset)
-    dataset = GeomDrugsDataset(root=DATAROOT, split="train", remove_h=True)
-    print(dataset)
-    print(dataset[0])
-    print(dataset[0].edge_attr)

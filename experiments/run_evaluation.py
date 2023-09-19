@@ -38,13 +38,9 @@ def evaluate(
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
     hparams["select_train_subset"] = False
-    hparams["train_size"] = 0.9
+    hparams["diffusion_pretraining"] = False
     hparams = dotdict(hparams)
 
-    hparams.dataset_root = "/scratch1/cremej01/data/geom"
-    # hparams.dataset_root = "/scratch1/let55/geom_data_noH"
-    hparams.remove_hs = False
-    
     hparams.load_ckpt_from_pretrained = None
     hparams.gpus = 1
     print(hparams)
@@ -80,7 +76,7 @@ def evaluate(
             AQMQM7XDataModule as DataModule,
         )
     elif hparams.dataset == "pubchem":
-        dataset = "drugs"  # take dataset infos from GEOM for simplicity
+        dataset = "pubchem"  # take dataset infos from GEOM for simplicity
         if hparams.use_adaptive_loader:
             print("Using adaptive dataloader")
             non_adaptive = False
@@ -93,17 +89,19 @@ def evaluate(
                 PubChemDataModule as DataModule,
             )
 
-    datamodule = DataModule(hparams)
-    if non_adaptive:
-        datamodule.prepare_data()
-        datamodule.setup("fit")
+    if dataset == "pubchem":
+        datamodule = DataModule(hparams, evaluation=True)
+    else:
+        datamodule = DataModule(hparams)
 
     from experiments.data.data_info import GeneralInfos as DataInfos
 
     dataset_info = DataInfos(datamodule, hparams)
 
     train_smiles = (
-        list(datamodule.train_dataset.smiles) if hparams.dataset != "pubchem" else None
+        list(datamodule.train_dataset.smiles)
+        if hparams.dataset != "pubchem"
+        else datamodule.train_smiles
     )
     prop_norm, prop_dist = None, None
     if len(hparams.properties_list) > 0 and hparams.context_mapping:
@@ -134,7 +132,7 @@ def evaluate(
     model = Trainer.load_from_checkpoint(
         model_path,
         dataset_info=dataset_info,
-        smiles_list=list(train_smiles),
+        smiles_list=train_smiles,
         prop_norm=prop_norm,
         prop_dist=prop_dist,
         load_ckpt_from_pretrained=None,

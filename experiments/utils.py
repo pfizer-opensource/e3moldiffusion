@@ -306,6 +306,15 @@ def zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0):
     return out
 
 
+def remove_mean_pocket(x_lig, x_pocket, batch, batch_pocket):
+    # Just subtract the center of mass of the sampled part
+    mean = scatter_mean(x_lig, batch, dim=0)
+
+    x_lig = x_lig - mean[batch]
+    x_pocket = x_pocket - mean[batch_pocket]
+    return x_lig, x_pocket
+
+
 def assert_zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0, eps: float = 1e-6):
     out = scatter_mean(x, index=batch, dim=dim, dim_size=dim_size).mean()
     return abs(out) < eps
@@ -351,45 +360,14 @@ def create_model(hparams, num_atom_features):
         recompute_edge_attributes=True,
         recompute_radius_graph=False,
         edge_mp=hparams["edge_mp"],
+        context_mapping=hparams["context_mapping"],
+        num_context_features=hparams["num_context_features"],
+        bond_prediction=hparams["bond_prediction"],
+        property_prediction=hparams["property_prediction"],
+        coords_param=hparams["continuous_param"],
     )
     return model
 
-
-def load_force_model(filepath, num_atom_features, device="cpu"):
-    import re
-
-    ckpt = torch.load(filepath, map_location="cpu")
-    args = ckpt["hyper_parameters"]
-    model = create_force_model(args, num_atom_features)
-    
-    state_dict = ckpt["state_dict"]
-    state_dict = {
-        re.sub(r"^model\.", "", k): v
-        for k, v in ckpt["state_dict"].items()
-        if k.startswith("model")
-    }
-    state_dict = {
-        k: v
-        for k, v in state_dict.items()
-        if not any(x in k for x in ["prior", "sde", "cat"])
-    }
-    model.load_state_dict(state_dict)
-    return model.to(device)
-
-
-def create_force_model(hparams, num_atom_features):
-    from e3moldiffusion.coordsatomsbonds import EQGATForceNetwork
-
-    model = EQGATForceNetwork(
-        hn_dim=(hparams["sdim"], hparams["vdim"]),
-        num_layers=hparams["num_layers"],
-        num_rbfs=hparams["rbf_dim"],
-        use_cross_product=hparams["use_cross_product"],
-        num_atom_features=num_atom_features,
-        cutoff_local=hparams["cutoff_local"],
-        vector_aggr=hparams["vector_aggr"],
-    )
-    return model
 
 def load_energy_model(filepath, num_atom_features, device="cpu"):
     import re

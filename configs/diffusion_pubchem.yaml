@@ -1,9 +1,9 @@
 
-# load_ckpt: /hpfs/userws/cremej01/projects/logs/geom/adaptive/run0/last-v1.ckpt
+#load_ckpt: /hpfs/userws/cremej01/projects/logs/pubchem/x0_pretraining_h_3_snr_diffmask_bs400/run0/last.ckpt
 # load_ckpt_from_pretrained: /hpfs/userws/cremej01/projects/logs/geom/pretrain_x0/run0/epoch=254-step=373830.ckpt
 
 diffusion_pretraining: true
-dropout_prob: 0.15
+dropout_prob: 0.0
 
 batch_size: 100
 inference_batch_size: 70
@@ -16,7 +16,7 @@ use_adaptive_loader: false
 remove_hs: false
 
 gpus: 4
-num_epochs: 1
+num_epochs: 10
 test_interval: 20
 
 #EQGAT
@@ -32,7 +32,7 @@ vector_aggr: mean
 
 #DATA
 dataset: pubchem
-dataset_root: /scratch1/cremej01/data/pubchem/database
+dataset_root: /hpfs/userws/cremej01/projects/data/pubchem/database_h
 
 # DIFFUSION
 continuous: false

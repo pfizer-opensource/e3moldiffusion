@@ -1,29 +1,18 @@
 from rdkit import RDLogger
 from tqdm import tqdm
 import numpy as np
-from typing import Optional
 import torch
 from os.path import join
+from experiments.data.utils import train_subset
 from torch_geometric.data import InMemoryDataset, DataLoader
 import experiments.data.utils as dataset_utils
-from experiments.data.utils import (
-    load_pickle,
-    save_pickle,
+from experiments.data.utils import load_pickle, save_pickle
+from experiments.data.abstract_dataset import (
+    AbstractAdaptiveDataModule,
 )
-from experiments.data.abstract_dataset import AbstractDataModule
-from experiments.data.utils import train_subset
+from experiments.xtb_energy import calculate_xtb_energy
 from torch.utils.data import Subset
-
 import os
-from experiments.data.metrics import compute_all_statistics
-from pytorch_lightning import LightningDataModule
-
-import tempfile
-from rdkit import Chem
-from torch_geometric.data.collate import collate
-from torch_geometric.data.separate import separate
-from torch_geometric.data import Data, Dataset
-from tqdm import tqdm
 
 full_atom_encoder = {
     "H": 0,
@@ -43,42 +32,12 @@ full_atom_encoder = {
     "Hg": 14,
     "Bi": 15,
 }
+atom_decoder = {v: k for k, v in full_atom_encoder.items()}
 
-mol_properties = [
-    "DIP",
-    "HLgap",
-    "eAT",
-    "eC",
-    "eEE",
-    "eH",
-    "eKIN",
-    "eKSE",
-    "eL",
-    "eNE",
-    "eNN",
-    "eMBD",
-    "eTS",
-    "eX",
-    "eXC",
-    "eXX",
-    "mPOL",
-]
-
-atomic_energies_dict = {
-    1: -13.643321054,
-    6: -1027.610746263,
-    7: -1484.276217092,
-    8: -2039.751675679,
-    9: -3139.751675679,
-    15: -9283.015861995,
-    16: -10828.726222083,
-    17: -12516.462339357,
-}
-atomic_numbers = [1, 6, 7, 8, 9, 15, 16, 17]
-convert_z_to_x = {k: i for i, k in enumerate(atomic_numbers)}
+PEPCONF_DATADIR = "/scratch1/cremej01/data/pepconf/processed"
 
 
-class AQMDataset(InMemoryDataset):
+class PepConfDataset(InMemoryDataset):
     def __init__(
         self, split, root, remove_h, transform=None, pre_transform=None, pre_filter=None
     ):
@@ -87,28 +46,47 @@ class AQMDataset(InMemoryDataset):
         self.remove_h = remove_h
 
         self.atom_encoder = full_atom_encoder
+
         if remove_h:
             self.atom_encoder = {
                 k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
             }
 
-        self.label2idx = {k: i for i, k in enumerate(mol_properties)}
-
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
         self.statistics = dataset_utils.Statistics(
-            num_nodes=load_pickle(self.processed_paths[1]),
-            atom_types=torch.from_numpy(np.load(self.processed_paths[2])),
-            bond_types=torch.from_numpy(np.load(self.processed_paths[3])),
-            charge_types=torch.from_numpy(np.load(self.processed_paths[4])),
-            valencies=load_pickle(self.processed_paths[5]),
-            bond_lengths=load_pickle(self.processed_paths[6]),
-            bond_angles=torch.from_numpy(np.load(self.processed_paths[7])),
-            is_aromatic=torch.from_numpy(np.load(self.processed_paths[9])).float(),
-            is_in_ring=torch.from_numpy(np.load(self.processed_paths[10])).float(),
-            hybridization=torch.from_numpy(np.load(self.processed_paths[11])).float(),
+            num_nodes=load_pickle(
+                os.path.join(PEPCONF_DATADIR, self.processed_names[0])
+            ),
+            atom_types=torch.from_numpy(
+                np.load(os.path.join(PEPCONF_DATADIR, self.processed_names[1]))
+            ),
+            bond_types=torch.from_numpy(
+                np.load(os.path.join(PEPCONF_DATADIR, self.processed_names[2]))
+            ),
+            charge_types=torch.from_numpy(
+                np.load(os.path.join(PEPCONF_DATADIR, self.processed_names[3]))
+            ),
+            valencies=load_pickle(
+                os.path.join(PEPCONF_DATADIR, self.processed_names[4])
+            ),
+            bond_lengths=load_pickle(
+                os.path.join(PEPCONF_DATADIR, self.processed_names[5])
+            ),
+            bond_angles=torch.from_numpy(
+                np.load(os.path.join(PEPCONF_DATADIR, self.processed_names[6]))
+            ),
+            is_aromatic=torch.from_numpy(
+                np.load(os.path.join(PEPCONF_DATADIR, self.processed_names[7]))
+            ).float(),
+            is_in_ring=torch.from_numpy(
+                np.load(os.path.join(PEPCONF_DATADIR, self.processed_names[8]))
+            ).float(),
+            hybridization=torch.from_numpy(
+                np.load(os.path.join(PEPCONF_DATADIR, self.processed_names[9]))
+            ).float(),
         )
-        self.smiles = load_pickle(self.processed_paths[8])
+        self.smiles = load_pickle(self.processed_names[10])
 
     @property
     def raw_file_names(self):
@@ -119,53 +97,18 @@ class AQMDataset(InMemoryDataset):
         else:
             return ["test_data.pickle"]
 
-    @property
     def processed_file_names(self):
-        h = "noh" if self.remove_h else "h"
         if self.split == "train":
             return [
-                f"train_{h}.pt",
-                f"train_n_{h}.pickle",
-                f"train_atom_types_{h}.npy",
-                f"train_bond_types_{h}.npy",
-                f"train_charges_{h}.npy",
-                f"train_valency_{h}.pickle",
-                f"train_bond_lengths_{h}.pickle",
-                f"train_angles_{h}.npy",
-                "train_smiles.pickle",
-                f"train_is_aromatic_{h}.npy",
-                f"train_is_in_ring_{h}.npy",
-                f"train_hybridization_{h}.npy",
+                f"train_energy.pt",
             ]
         elif self.split == "val":
             return [
-                f"val_{h}.pt",
-                f"val_n_{h}.pickle",
-                f"val_atom_types_{h}.npy",
-                f"val_bond_types_{h}.npy",
-                f"val_charges_{h}.npy",
-                f"val_valency_{h}.pickle",
-                f"val_bond_lengths_{h}.pickle",
-                f"val_angles_{h}.npy",
-                "val_smiles.pickle",
-                f"val_is_aromatic_{h}.npy",
-                f"val_is_in_ring_{h}.npy",
-                f"val_hybridization_{h}.npy",
+                f"val_energy.pt",
             ]
         else:
             return [
-                f"test_{h}.pt",
-                f"test_n_{h}.pickle",
-                f"test_atom_types_{h}.npy",
-                f"test_bond_types_{h}.npy",
-                f"test_charges_{h}.npy",
-                f"test_valency_{h}.pickle",
-                f"test_bond_lengths_{h}.pickle",
-                f"test_angles_{h}.npy",
-                "test_smiles.pickle",
-                f"test_is_aromatic_{h}.npy",
-                f"test_is_in_ring_{h}.npy",
-                f"test_hybridization_{h}.npy",
+                f"test_energy.pt",
             ]
 
     def download(self):
@@ -181,53 +124,102 @@ class AQMDataset(InMemoryDataset):
         data_list = []
         all_smiles = []
         for i, data in enumerate(tqdm(all_data)):
-            data_list.append(data)
+            smiles, conformer = data
+            all_smiles.append(smiles)
+            data = dataset_utils.mol_to_torch_geometric(
+                conformer,
+                full_atom_encoder,
+                smiles,
+                remove_hydrogens=self.remove_h,  # need to give full atom encoder since hydrogens might still be available if Chem.RemoveHs is called
+            )
+            try:
+                atom_types = [atom_decoder[int(a)] for a in data.x]
+                e, _ = calculate_xtb_energy(data.pos, atom_types)
+                data.energy = e
+            except:
+                print(f"Molecule with id {i} and conformer id {j} failed...")
+                continue
+            # even when calling Chem.RemoveHs, hydrogens might be present
+            if self.remove_h:
+                data = dataset_utils.remove_hydrogens(data)  # remove through masking
 
-            all_smiles.append(data.smiles)
+            if self.pre_filter is not None and not self.pre_filter(data):
+                continue
+            if self.pre_transform is not None:
+                data = self.pre_transform(data)
+
+            data_list.append(data)
 
         torch.save(self.collate(data_list), self.processed_paths[0])
 
-        statistics = compute_all_statistics(
-            data_list,
-            self.atom_encoder,
-            charges_dic={-2: 0, -1: 1, 0: 2, 1: 3, 2: 4, 3: 5},
-            additional_feats=True,
-        )
-        save_pickle(statistics.num_nodes, self.processed_paths[1])
-        np.save(self.processed_paths[2], statistics.atom_types)
-        np.save(self.processed_paths[3], statistics.bond_types)
-        np.save(self.processed_paths[4], statistics.charge_types)
-        save_pickle(statistics.valencies, self.processed_paths[5])
-        save_pickle(statistics.bond_lengths, self.processed_paths[6])
-        np.save(self.processed_paths[7], statistics.bond_angles)
-        save_pickle(set(all_smiles), self.processed_paths[8])
+    def processed_names(self):
+        h = "noh" if self.remove_h else "h"
+        if self.split == "train":
+            return [
+                f"train_n_{h}.pickle",
+                f"train_atom_types_{h}.npy",
+                f"train_bond_types_{h}.npy",
+                f"train_charges_{h}.npy",
+                f"train_valency_{h}.pickle",
+                f"train_bond_lengths_{h}.pickle",
+                f"train_angles_{h}.npy",
+                f"train_is_aromatic_{h}.npy",
+                f"train_is_in_ring_{h}.npy",
+                f"train_hybridization_{h}.npy",
+                "train_smiles.pickle",
+            ]
+        elif self.split == "val":
+            return [
+                f"val_n_{h}.pickle",
+                f"val_atom_types_{h}.npy",
+                f"val_bond_types_{h}.npy",
+                f"val_charges_{h}.npy",
+                f"val_valency_{h}.pickle",
+                f"val_bond_lengths_{h}.pickle",
+                f"val_angles_{h}.npy",
+                f"val_is_aromatic_{h}.npy",
+                f"val_is_in_ring_{h}.npy",
+                f"val_hybridization_{h}.npy",
+                "val_smiles.pickle",
+            ]
+        else:
+            return [
+                f"test_n_{h}.pickle",
+                f"test_atom_types_{h}.npy",
+                f"test_bond_types_{h}.npy",
+                f"test_charges_{h}.npy",
+                f"test_valency_{h}.pickle",
+                f"test_bond_lengths_{h}.pickle",
+                f"test_angles_{h}.npy",
+                f"test_is_aromatic_{h}.npy",
+                f"test_is_in_ring_{h}.npy",
+                f"test_hybridization_{h}.npy",
+                "test_smiles.pickle",
+            ]
 
-        np.save(self.processed_paths[9], statistics.is_aromatic)
-        np.save(self.processed_paths[10], statistics.is_in_ring)
-        np.save(self.processed_paths[11], statistics.hybridization)
 
-
-class AQMDataModule(AbstractDataModule):
+class PepConfDataModule(AbstractAdaptiveDataModule):
     def __init__(self, cfg):
-        self.save_hyperparameters(cfg)
         self.datadir = cfg.dataset_root
         root_path = cfg.dataset_root
         self.pin_memory = True
-        self.cfg = cfg
 
-        self.label2idx = {k: i for i, k in enumerate(mol_properties)}
-
-        train_dataset = AQMDataset(
+        train_dataset = PepConfDataset(
             split="train", root=root_path, remove_h=cfg.remove_hs
         )
-        val_dataset = AQMDataset(split="val", root=root_path, remove_h=cfg.remove_hs)
-        test_dataset = AQMDataset(split="test", root=root_path, remove_h=cfg.remove_hs)
-        self.remove_h = cfg.remove_hs
+        val_dataset = PepConfDataset(
+            split="val", root=root_path, remove_h=cfg.remove_hs
+        )
+        test_dataset = PepConfDataset(
+            split="test", root=root_path, remove_h=cfg.remove_hs
+        )
+
         self.statistics = {
             "train": train_dataset.statistics,
             "val": val_dataset.statistics,
             "test": test_dataset.statistics,
         }
+
         if cfg.select_train_subset:
             self.idx_train = train_subset(
                 dset_len=len(train_dataset),
@@ -238,9 +230,11 @@ class AQMDataModule(AbstractDataModule):
             self.train_smiles = train_dataset.smiles
             train_dataset = Subset(train_dataset, self.idx_train)
 
+        self.remove_h = cfg.remove_hs
+
         super().__init__(cfg, train_dataset, val_dataset, test_dataset)
 
-    def train_dataloader(self, shuffle=True):
+    def _train_dataloader(self, shuffle=True):
         dataloader = DataLoader(
             dataset=self.train_dataset,
             batch_size=self.cfg.batch_size,
@@ -251,7 +245,7 @@ class AQMDataModule(AbstractDataModule):
         )
         return dataloader
 
-    def val_dataloader(self, shuffle=False):
+    def _val_dataloader(self, shuffle=False):
         dataloader = DataLoader(
             dataset=self.val_dataset,
             batch_size=self.cfg.batch_size,
@@ -262,7 +256,7 @@ class AQMDataModule(AbstractDataModule):
         )
         return dataloader
 
-    def test_dataloader(self, shuffle=False):
+    def _test_dataloader(self, shuffle=False):
         dataloader = DataLoader(
             dataset=self.test_dataset,
             batch_size=self.cfg.batch_size,
@@ -274,13 +268,10 @@ class AQMDataModule(AbstractDataModule):
         return dataloader
 
     def compute_mean_mad(self, properties_list):
-        if self.hparams["dataset"] == "aqm":
+        if self.cfg.dataset == "qm9" or self.cfg.dataset == "drugs":
             dataloader = self.get_dataloader(self.train_dataset, "val")
             return self.compute_mean_mad_from_dataloader(dataloader, properties_list)
-        elif (
-            self.hparams["dataset"] == "aqm_half"
-            or self.hparams["dataset"] == "aqm_2half"
-        ):
+        elif self.cfg.dataset == "qm9_1half" or self.cfg.dataset == "qm9_2half":
             dataloader = self.get_dataloader(self.val_dataset, "val")
             return self.compute_mean_mad_from_dataloader(dataloader, properties_list)
         else:
@@ -289,16 +280,23 @@ class AQMDataModule(AbstractDataModule):
     def compute_mean_mad_from_dataloader(self, dataloader, properties_list):
         property_norms = {}
         for property_key in properties_list:
-            idx = self.label2idx[property_key]
+            try:
+                property_name = property_key + "_mm"
+                values = getattr(dataloader.dataset[:], property_name)
+            except:
+                property_name = property_key
+                idx = dataloader.dataset[:].label2idx[property_name]
+                values = torch.tensor(
+                    [data.y[:, idx] for data in dataloader.dataset[:]]
+                )
 
-            values_train = dataloader.dataset.data.y[:, idx]
-            mean = torch.mean(values_train)
-            ma = torch.abs(values_train - mean)
+            mean = torch.mean(values)
+            ma = torch.abs(values - mean)
             mad = torch.mean(ma)
             property_norms[property_key] = {}
             property_norms[property_key]["mean"] = mean
             property_norms[property_key]["mad"] = mad
-            del values_train
+            del values
         return property_norms
 
     def get_dataloader(self, dataset, stage):
@@ -318,3 +316,22 @@ class AQMDataModule(AbstractDataModule):
         )
 
         return dl
+
+
+if __name__ == "__main__":
+    # Creating the Pytorch Geometric InMemoryDatasets
+
+    # ff = "/hpfs/userws/"
+    # ff = "/sharedhome/"
+    # DATAROOT = f"{ff}let55/projects/e3moldiffusion_experiments/data/geom/data"
+    DATAROOT = (
+        "/home/let55/workspace/projects/e3moldiffusion_experiments/data/geom/data"
+    )
+    dataset = GeomDrugsDataset(root=DATAROOT, split="val", remove_h=False)
+    print(dataset)
+    dataset = GeomDrugsDataset(root=DATAROOT, split="test", remove_h=False)
+    print(dataset)
+    dataset = GeomDrugsDataset(root=DATAROOT, split="train", remove_h=False)
+    print(dataset)
+    print(dataset[0])
+    print(dataset[0].edge_attr)

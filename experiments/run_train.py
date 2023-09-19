@@ -50,7 +50,7 @@ if __name__ == "__main__":
         if hparams.use_adaptive_loader:
             print("Using adaptive dataloader")
             non_adaptive = False
-            if hparams.guidance_training in ["energy", "forces"]:
+            if hparams.energy_training:
                 from experiments.data.geom.geom_dataset_energy import (
                     GeomDataModule as DataModule,
                 )
@@ -103,15 +103,26 @@ if __name__ == "__main__":
             from experiments.data.pubchem.pubchem_dataset_nonadaptive import (
                 PubChemDataModule as DataModule,
             )
-    elif hparams.dataset == "cross_docked":
+    elif hparams.dataset == "crossdocked":
+        dataset = "crossdocked"
         from experiments.data.ligand.ligand_dataset_nonadaptive import (
             LigandPocketDataModule as DataModule,
         )
+    elif hparams.dataset == "pepconf":
+        dataset = "pepconf"
+        if hparams.use_adaptive_loader:
+            print("Using adaptive dataloader")
+            non_adaptive = False
+            from experiments.data.pepconf.pepconf_dataset_adaptive import (
+                PepconfDataModule as DataModule,
+            )
+        else:
+            print("Using non-adaptive dataloader")
+            from experiments.data.pepconf.pepconf_dataset_nonadaptive import (
+                PepConfDataModule as DataModule,
+            )
 
     datamodule = DataModule(hparams)
-    if non_adaptive:
-        datamodule.prepare_data()
-        datamodule.setup("fit")
 
     from experiments.data.data_info import GeneralInfos as DataInfos
 
@@ -121,8 +132,6 @@ if __name__ == "__main__":
         )
 
         datamodule_aqm = DataModule(hparams)
-        if non_adaptive:
-            datamodule_aqm.prepare_data()
         dataset_info = DataInfos(datamodule_aqm, hparams)
         del datamodule_aqm
     else:
@@ -143,7 +152,7 @@ if __name__ == "__main__":
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
 
-    if hparams.guidance_training not in ["energy", "forces"]:
+    if not hparams.energy_training:
         if hparams.continuous:
             print("Using continuous diffusion")
             if hparams.diffusion_pretraining:
@@ -158,12 +167,8 @@ if __name__ == "__main__":
             print("Starting property prediction model via discrete diffusion")
             from experiments.diffusion_discrete import Trainer
         elif hparams.latent_dim:
-            if not hparams.latent_reduced:
-                print("Using latent diffusion")
-                from experiments.diffusion_latent_discrete import Trainer
-            else:
-                print("Using reduced latent diffusion")
-                from experiments.diffusion_latent_discrete_reduced import Trainer
+            print("Using latent diffusion")
+            from experiments.diffusion_latent_discrete import Trainer
         else:
             print("Using discrete diffusion")
             if hparams.diffusion_pretraining:
@@ -175,17 +180,22 @@ if __name__ == "__main__":
                 else:
                     from experiments.diffusion_pretrain_discrete import Trainer
             elif hparams.additional_feats:
-                print("Using additional features")
-                from experiments.diffusion_discrete_moreFeats import Trainer
+                if dataset == "crossdocked":
+                    print("Ligand-pocket training using additional features")
+                    from experiments.diffusion_discrete_moreFeats_ligand import Trainer
+                else:
+                    print("Using additional features")
+                    from experiments.diffusion_discrete_moreFeats import Trainer
             else:
-                from experiments.diffusion_discrete import Trainer
-    elif hparams.guidance_training == "energy":
+                if dataset == "crossdocked":
+                    print("Ligand-pocket training")
+                    from experiments.diffusion_discrete_ligand import Trainer
+                else:
+                    from experiments.diffusion_discrete import Trainer
+    else:
         print("Running energy training")
         from experiments.energy_training import Trainer
-        assert hparams.dataset == "drugs"
-    elif hparams.guidance_training == "forces":
-        print("Running pseudo-force training")
-        from experiments.force_training import Trainer
+
         assert hparams.dataset == "drugs"
 
     model = Trainer(
@@ -229,25 +239,9 @@ if __name__ == "__main__":
     )
 
     pl.seed_everything(seed=hparams.seed, workers=hparams.gpus > 1)
-    
-    #if hparams.load_ckpt:
-    #    model = Trainer.load_from_checkpoint(hparams.load_ckpt,
-    #                                         hparams=hparams.__dict__, 
-    #                                         learning_rate=hparams.lr,
-    #                                         dataset_info=dataset_info,
-    #                                         smiles_list=train_smiles,
-    #                                         prop_dist=prop_dist,
-    #                                         prop_norm=prop_norm)
-    #else:
-    model = Trainer(
-        hparams=hparams.__dict__,
-        dataset_info=dataset_info,
-        smiles_list=train_smiles,
-        prop_dist=prop_dist,
-        prop_norm=prop_norm,
-    )
+
     trainer.fit(
         model=model,
         datamodule=datamodule,
-        ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
+        # ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
     )

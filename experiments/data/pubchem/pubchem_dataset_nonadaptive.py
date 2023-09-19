@@ -39,43 +39,61 @@ class PubChemLMDBDataset(Dataset):
     def __init__(
         self,
         root: str,
+        remove_hs: bool = False,
         **kwargs,
     ):
         """
         Constructor
         """
         self.data_file = root
-        self._num_graphs = 95173200  # 94980241 for noH!!
+        self._num_graphs = 95173200 if remove_hs else 95173300  # 94980241 for noH!!
+        if remove_hs:
+            assert "_noh" in root
+            self.stats_dir = (
+                "/hpfs/userws/cremej01/projects/data/pubchem/database_noh/processed"
+            )
+        else:
+            assert "_h" in root
+            self.stats_dir = (
+                "/hpfs/userws/cremej01/projects/data/pubchem/database_h/processed"
+            )
         super().__init__(root)
 
-        self.remove_h = False
+        self.remove_hs = remove_hs
         self.statistics = dataset_utils.Statistics(
-            num_nodes=load_pickle(os.path.join(GEOM_DATADIR, self.processed_files[0])),
+            num_nodes=load_pickle(
+                os.path.join(self.stats_dir, self.processed_files[0])
+            ),
             atom_types=torch.from_numpy(
-                np.load(os.path.join(GEOM_DATADIR, self.processed_files[1]))
+                np.load(os.path.join(self.stats_dir, self.processed_files[1]))
             ),
             bond_types=torch.from_numpy(
-                np.load(os.path.join(GEOM_DATADIR, self.processed_files[2]))
+                np.load(os.path.join(self.stats_dir, self.processed_files[2]))
             ),
             charge_types=torch.from_numpy(
-                np.load(os.path.join(GEOM_DATADIR, self.processed_files[3]))
+                np.load(os.path.join(self.stats_dir, self.processed_files[3]))
             ),
-            valencies=load_pickle(os.path.join(GEOM_DATADIR, self.processed_files[4])),
+            valencies=load_pickle(
+                os.path.join(self.stats_dir, self.processed_files[4])
+            ),
             bond_lengths=load_pickle(
-                os.path.join(GEOM_DATADIR, self.processed_files[5])
+                os.path.join(self.stats_dir, self.processed_files[5])
             ),
             bond_angles=torch.from_numpy(
-                np.load(os.path.join(GEOM_DATADIR, self.processed_files[6]))
+                np.load(os.path.join(self.stats_dir, self.processed_files[6]))
             ),
             is_aromatic=torch.from_numpy(
-                np.load(os.path.join(GEOM_DATADIR, self.processed_files[7]))
+                np.load(os.path.join(self.stats_dir, self.processed_files[7]))
             ).float(),
             is_in_ring=torch.from_numpy(
-                np.load(os.path.join(GEOM_DATADIR, self.processed_files[8]))
+                np.load(os.path.join(self.stats_dir, self.processed_files[8]))
             ).float(),
             hybridization=torch.from_numpy(
-                np.load(os.path.join(GEOM_DATADIR, self.processed_files[9]))
+                np.load(os.path.join(self.stats_dir, self.processed_files[9]))
             ).float(),
+        )
+        self.smiles = load_pickle(
+            os.path.join(self.stats_dir, self.processed_files[10])
         )
 
     def _init_db(self):
@@ -112,7 +130,7 @@ class PubChemLMDBDataset(Dataset):
 
     @property
     def processed_files(self):
-        h = "noh" if self.remove_h else "h"
+        h = "noh" if self.remove_hs else "h"
         return [
             f"train_n_{h}.pickle",
             f"train_atom_types_{h}.npy",
@@ -133,9 +151,9 @@ class PubChemDataModule(LightningDataModule):
         self.save_hyperparameters(hparams)
         self.datadir = hparams.dataset_root
         self.pin_memory = True
-        self.remove_h = False
+        self.remove_hs = hparams.remove_hs
 
-        self.dataset = PubChemLMDBDataset(root=self.datadir)
+        self.dataset = PubChemLMDBDataset(root=self.datadir, remove_hs=self.remove_hs)
         self.idx_train, self.idx_val, self.idx_test = make_splits(
             len(self.dataset),
             train_size=hparams.train_size,

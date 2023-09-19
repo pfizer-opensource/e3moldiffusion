@@ -12,7 +12,7 @@ from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.data.abstract_dataset import AbstractDatasetInfos
-
+from experiments.utils import pos_mean
 from experiments.utils import coalesce_edges, zero_mean, dropout_node
 from experiments.losses import DiffusionLoss
 
@@ -43,14 +43,24 @@ class Trainer(pl.LightningModule):
 
         self.num_atom_types_geom = 16
         atom_types_distribution = dataset_info.atom_types.float()
+        charge_types_distribution = dataset_info.charges_marginals.float()
+
         if self.hparams.dataset == "pubchem":
             pubchem_ids = [0, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13]
             geom_only = [
                 i for i in range(self.num_atom_types_geom) if i not in pubchem_ids
             ]
         atom_types_distribution[geom_only] = 0.0
+        if self.hparams.atom_type_masking:
+            mask_token = torch.tensor([0.0])
+            atom_types_distribution = torch.cat([atom_types_distribution, mask_token])
+        elif self.hparams.use_absorbing_state:
+            atom_types_distribution = torch.zeros((17,), dtype=torch.float32)
+            atom_types_distribution[-1] = 1.0
+            charge_types_distribution = torch.zeros((6,), dtype=torch.float32)
+            charge_types_distribution[-1] = 1.0
+
         bond_types_distribution = dataset_info.edge_types.float()
-        charge_types_distribution = dataset_info.charges_marginals.float()
 
         self.register_buffer("atoms_prior", atom_types_distribution.clone())
         self.register_buffer("bonds_prior", bond_types_distribution.clone())
@@ -58,6 +68,11 @@ class Trainer(pl.LightningModule):
 
         self.hparams.num_atom_types = dataset_info.input_dims.X
         self.num_charge_classes = dataset_info.input_dims.C
+        if self.hparams.atom_type_masking:
+            self.hparams.num_atom_types += 1
+        elif self.hparams.use_absorbing_state:
+            self.hparams.num_atom_types += 1
+            self.num_charge_classes += 1
         self.num_atom_types = self.hparams.num_atom_types
         self.num_atom_features = self.num_atom_types + self.num_charge_classes
         self.num_bond_classes = 5
@@ -121,6 +136,8 @@ class Trainer(pl.LightningModule):
         self.cat_atoms = CategoricalDiffusionKernel(
             terminal_distribution=atom_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_charge_types=self.num_charge_classes,
         )
         self.cat_bonds = CategoricalDiffusionKernel(
             terminal_distribution=bond_types_distribution,
@@ -129,6 +146,8 @@ class Trainer(pl.LightningModule):
         self.cat_charges = CategoricalDiffusionKernel(
             terminal_distribution=charge_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_charge_types=self.num_charge_classes,
         )
 
         self.diffusion_loss = DiffusionLoss(
@@ -153,7 +172,10 @@ class Trainer(pl.LightningModule):
 
         out_dict, t, node_mask, batch_size = self(batch=batch)
         data_batch = (
-            batch.batch[node_mask] if self.hparams.dropout_prob > 0 else batch.batch
+            batch.batch[node_mask]
+            if self.hparams.dropout_prob > 0
+            and not (self.hparams.atom_type_masking or self.hparams.masked_diffusion)
+            else batch.batch
         )
 
         if self.hparams.loss_weighting == "snr_s_t":
@@ -180,11 +202,21 @@ class Trainer(pl.LightningModule):
             "charges": out_dict["charges_true"],
             "bonds": out_dict["bonds_true"],
         }
+        true_data_mask = (
+            {
+                "coords": out_dict["pos_mask_label"],
+                "atoms": out_dict["atom_types_mask_label"],
+                "charges": out_dict["charges_mask_label"],
+                "bonds": out_dict["edge_attr_global_mask_label"],
+            }
+            if self.hparams.masked_diffusion
+            else None
+        )
 
         coords_pred = out_dict["coords_pred"]
         atoms_pred = out_dict["atoms_pred"]
         atoms_pred, charges_pred = atoms_pred.split(
-            [self.num_atom_types_geom, self.num_charge_classes], dim=-1
+            [self.num_atom_types, self.num_charge_classes], dim=-1
         )
         edges_pred = out_dict["bonds_pred"]
 
@@ -201,6 +233,7 @@ class Trainer(pl.LightningModule):
             batch=data_batch,
             bond_aggregation_index=out_dict["bond_aggregation_index"],
             weights=weights,
+            true_data_mask=true_data_mask,
         )
 
         final_loss = (
@@ -281,10 +314,10 @@ class Trainer(pl.LightningModule):
             t, pos_centered, data_batch
         )
 
-        atom_types = torch.tensor(
-            [self.dataset_info.atom_idx_mapping[int(atom)] for atom in atom_types],
-            device="cuda",
-        ).long()
+        # atom_types = torch.tensor(
+        #     [self.dataset_info.atom_idx_mapping[int(atom)] for atom in atom_types],
+        #     device="cuda",
+        # ).long()
         atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
             t, atom_types, data_batch, self.dataset_info, type="atoms"
         )
@@ -307,30 +340,59 @@ class Trainer(pl.LightningModule):
                 p=self.hparams.dropout_prob,
                 batch=data_batch,
                 num_nodes=n,
+                return_unperturbed_index=self.hparams.atom_type_masking
+                or self.hparams.masked_diffusion,
             )
-            edge_attr_global_perturbed = edge_attr_global_perturbed[edge_mask]
-            pos_perturbed = pos_perturbed[node_mask]
-            atom_types_perturbed = atom_types_perturbed[node_mask]
-            charges_perturbed = charges_perturbed[node_mask]
+            if not self.hparams.atom_type_masking:
+                if self.hparams.masked_diffusion:
+                    edge_attr_global_mask_label = edge_attr_global_perturbed
+                    pos_mask_label = pos_perturbed
+                    atom_types_mask_label = atom_types_perturbed
+                    charges_mask_label = charges_perturbed
+                    edge_attr_global_perturbed = (
+                        edge_attr_global_perturbed * edge_mask.unsqueeze(1)
+                    )
+                    pos_perturbed = pos_perturbed * node_mask.unsqueeze(1)
+                    pos_mask = torch.zeros_like(pos_perturbed[~node_mask])
+                    pos_mask = pos_mean(
+                        pos_perturbed, data_batch, dim_size=batch_size, dim=0
+                    )
+                    pos_perturbed[~node_mask] = pos_mask
+                    atom_types_perturbed = atom_types_perturbed * node_mask.unsqueeze(1)
+                    charges_perturbed = charges_perturbed * node_mask.unsqueeze(1)
+                else:
+                    edge_attr_global_perturbed = edge_attr_global_perturbed[edge_mask]
+                    pos_perturbed = pos_perturbed[node_mask]
+                    atom_types_perturbed = atom_types_perturbed[node_mask]
+                    charges_perturbed = charges_perturbed[node_mask]
 
-            batch_edge_global = data_batch[edge_index_global[0]]
-            data_batch = data_batch[node_mask]
-            batch_size = int(sum(batch_mask))
+                    batch_edge_global = data_batch[edge_index_global[0]]
+                    data_batch = data_batch[node_mask]
+                    batch_size = int(sum(batch_mask))
 
-            edge_index_global = (
-                torch.eq(data_batch.unsqueeze(0), data_batch.unsqueeze(-1))
-                .int()
-                .fill_diagonal_(0)
-            )
-            edge_index_global, _ = dense_to_sparse(edge_index_global)
-            edge_index_global, edge_attr_global_perturbed = sort_edge_index(
-                edge_index=edge_index_global,
-                edge_attr=edge_attr_global_perturbed,
-                sort_by_row=False,
-            )
+                    edge_index_global = (
+                        torch.eq(data_batch.unsqueeze(0), data_batch.unsqueeze(-1))
+                        .int()
+                        .fill_diagonal_(0)
+                    )
+                    edge_index_global, _ = dense_to_sparse(edge_index_global)
+                    edge_index_global, edge_attr_global_perturbed = sort_edge_index(
+                        edge_index=edge_index_global,
+                        edge_attr=edge_attr_global_perturbed,
+                        sort_by_row=False,
+                    )
+            else:
+                mask = torch.zeros_like(atom_types_perturbed[~node_mask])
+                mask[:, -1] = 1
+                atom_types_perturbed[~node_mask] = mask
 
         # TIME EMBEDDING
-        t = t[batch_mask] if self.hparams.dropout_prob > 0 else t
+        t = (
+            t[batch_mask]
+            if self.hparams.dropout_prob > 0
+            and not (self.hparams.atom_type_masking or self.hparams.masked_diffusion)
+            else t
+        )
         temb = t.float() / self.hparams.timesteps
         temb = temb.clamp(min=self.hparams.eps_min)
         temb = temb.unsqueeze(dim=1)
@@ -355,12 +417,28 @@ class Trainer(pl.LightningModule):
         out["charges_perturbed"] = charges_perturbed
         out["bonds_perturbed"] = edge_attr_global_perturbed
 
-        if self.hparams.dropout_prob > 0:
+        if self.hparams.dropout_prob > 0 and not self.hparams.atom_type_masking:
             # MASKING LABELS
-            edge_attr_global = edge_attr_global[edge_mask]
-            pos_centered = pos_centered[node_mask]
-            atom_types = atom_types[node_mask]
-            charges = charges[node_mask]
+            if self.hparams.masked_diffusion:
+                out["edge_attr_global_mask_label"] = (
+                    edge_attr_global_mask_label * (~edge_mask.unsqueeze(1))
+                ).argmax(-1)
+                out["pos_mask_label"] = pos_mask_label * (~node_mask.unsqueeze(1))
+                out["atom_types_mask_label"] = (
+                    atom_types_mask_label * (~node_mask.unsqueeze(1))
+                ).argmax(dim=-1)
+                out["charges_mask_label"] = (
+                    charges_mask_label * (~node_mask.unsqueeze(1))
+                ).argmax(dim=-1)
+                edge_attr_global = edge_attr_global * edge_mask
+                pos_centered = pos_centered * node_mask.unsqueeze(1)
+                atom_types = atom_types * node_mask.unsqueeze(1)
+                charges = charges * node_mask.unsqueeze(1)
+            else:
+                edge_attr_global = edge_attr_global[edge_mask]
+                pos_centered = pos_centered[node_mask]
+                atom_types = atom_types[node_mask]
+                charges = charges[node_mask]
 
         out["coords_true"] = pos_centered
         out["atoms_true"] = atom_types.argmax(dim=-1)
