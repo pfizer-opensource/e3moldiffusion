@@ -42,6 +42,23 @@ class DistributionNodes:
         log_p = torch.log(probas + 1e-10)
         return log_p.to(batch_n_nodes.device)
 
+PROP_TO_IDX_GEOMQM = {
+    "dipole_norm": 0,
+    "total_energy": 1,
+    "gradient_norm": 2,
+    "HOMO_LUMO_gap": 3,
+    "HOMO_orbital_eigv": 4,
+    "LUMO_orbital_eigv": 5,
+    "SCC_energy": 6,
+    "isotropic_ES": 7,
+    "anisotropic_ES": 8,
+    "anisotropic_XC": 9,
+    "dispersion": 10,
+    "repulsion_energy": 11,
+    "atomisation_energy": 12,
+}
+
+PROP_TO_IDX_GEOMQM = {v: k for k, v in PROP_TO_IDX_GEOMQM.items()}
 
 PROP_TO_IDX_AQM = {
     "DIP": 0,
@@ -239,6 +256,8 @@ def prepare_context(properties_list, properties_norm, batch, dataset="aqm"):
         prop_to_idx = PROP_TO_IDX_AQM_QM7X
     elif dataset == "qm9":
         prop_to_idx = PROP_TO_IDX_QM9
+    elif dataset == "geom_qm":
+        prop_to_idx = PROP_TO_IDX_GEOMQM
     for key in properties_list:
         mean = properties_norm[key]["mean"].to(device)
         std = properties_norm[key]["mad"].to(device)
