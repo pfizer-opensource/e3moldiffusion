@@ -20,6 +20,7 @@ from experiments.utils import (
     get_list_of_edge_adjs,
     load_model,
     zero_mean,
+    effective_batch_size,
 )
 from torch import Tensor
 from torch_geometric.data import Batch
@@ -27,7 +28,11 @@ from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from tqdm import tqdm
 
-from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork, EQGATEnergyNetwork, EQGATForceNetwork
+from e3moldiffusion.coordsatomsbonds import (
+    DenoisingEdgeNetwork,
+    EQGATEnergyNetwork,
+    EQGATForceNetwork,
+)
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
@@ -36,7 +41,7 @@ from experiments.diffusion.utils import (
     initialize_edge_attrs_reverse,
     bond_guidance,
     energy_guidance,
-    force_guidance
+    force_guidance,
 )
 from experiments.molecule_utils import Molecule
 from experiments.utils import (
@@ -116,6 +121,9 @@ class Trainer(pl.LightningModule):
             # for i, param in enumerate(self.model.parameters()):
             #     if i < num_params // 2:
             #         param.requires_grad = False
+        elif self.hparams.load_ckpt:
+            print("Loading from model checkpoint...")
+            self.model = load_model(self.hparams.load_ckpt, self.num_atom_features)
         else:
             self.model = DenoisingEdgeNetwork(
                 hn_dim=(hparams["sdim"], hparams["vdim"]),
@@ -508,19 +516,36 @@ class Trainer(pl.LightningModule):
         guidance_model=None,
         guidance_start=None,
     ):
+        batch_num_nodes = torch.multinomial(
+            input=empirical_distribution_num_nodes,
+            num_samples=num_graphs,
+            replacement=True,
+        ).to(device)
+        batch_num_nodes = batch_num_nodes.clamp(min=1)
+
+        batch = torch.arange(num_graphs, device=device).repeat_interleave(
+            batch_num_nodes, dim=0
+        )
+        bs = int(batch.max()) + 1
+
+        # sample context condition
+        context = None
+        if self.prop_dist is not None:
+            context = self.prop_dist.sample_batch(batch_num_nodes).to(self.device)[
+                batch
+            ]
         (
             pos,
             atom_types,
             charge_types,
             edge_types,
             edge_index_global,
-            batch_num_nodes,
             trajs,
             context,
         ) = self.reverse_sampling(
-            num_graphs=num_graphs,
+            batch=batch,
+            bs=bs,
             device=device,
-            empirical_distribution_num_nodes=empirical_distribution_num_nodes,
             verbose=verbose,
             save_traj=save_traj,
             ddpm=ddpm,
@@ -528,7 +553,8 @@ class Trainer(pl.LightningModule):
             every_k_step=every_k_step,
             guidance_scale=guidance_scale,
             guidance_model=guidance_model,
-            guidance_start=guidance_start
+            guidance_start=guidance_start,
+            context=context,
         )
 
         if torch.any(pos.isnan()):
@@ -582,15 +608,19 @@ class Trainer(pl.LightningModule):
         ckpt_guidance_model: str = None,
         device: str = "cpu",
         guidance_start=None,
-        guidance_model_type: str = "energy"
+        guidance_model_type: str = "energy",
     ):
         guidance_model = None
         if use_guidance:
             if guidance_model_type == "energy":
-                guidance_model = load_energy_model(ckpt_guidance_model, self.num_atom_features)
+                guidance_model = load_energy_model(
+                    ckpt_guidance_model, self.num_atom_features
+                )
             elif guidance_model_type == "forces":
-                guidance_model = load_force_model(ckpt_guidance_model, self.num_atom_features)
-                
+                guidance_model = load_force_model(
+                    ckpt_guidance_model, self.num_atom_features
+                )
+
             # for param in self.energy_model.parameters():
             #    param.requires_grad = False
             guidance_model.to(self.device)
@@ -628,7 +658,7 @@ class Trainer(pl.LightningModule):
                 every_k_step=every_k_step,
                 guidance_scale=guidance_scale,
                 guidance_model=guidance_model,
-                guidance_start=guidance_start
+                guidance_start=guidance_start,
             )
             n = batch_num_nodes.sum().item()
             edge_attrs_dense = torch.zeros(
@@ -729,8 +759,8 @@ class Trainer(pl.LightningModule):
 
     def reverse_sampling(
         self,
-        num_graphs: int,
-        empirical_distribution_num_nodes: Tensor,
+        batch: Tensor,
+        bs: int,
         device: torch.device,
         verbose: bool = False,
         save_traj: bool = False,
@@ -739,26 +769,9 @@ class Trainer(pl.LightningModule):
         every_k_step: int = 1,
         guidance_scale: float = 1.0e-4,
         guidance_model=None,
-        guidance_start=None
+        guidance_start=None,
+        context=None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
-        batch_num_nodes = torch.multinomial(
-            input=empirical_distribution_num_nodes,
-            num_samples=num_graphs,
-            replacement=True,
-        ).to(device)
-        batch_num_nodes = batch_num_nodes.clamp(min=1)
-        batch = torch.arange(num_graphs, device=device).repeat_interleave(
-            batch_num_nodes, dim=0
-        )
-        bs = int(batch.max()) + 1
-
-        # sample context condition
-        context = None
-        if self.prop_dist is not None:
-            context = self.prop_dist.sample_batch(batch_num_nodes).to(self.device)[
-                batch
-            ]
-
         # initialiaze the 0-mean point cloud from N(0, I)
         pos = torch.randn(len(batch), 3, device=device, dtype=torch.get_default_dtype())
         pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
@@ -928,7 +941,7 @@ class Trainer(pl.LightningModule):
                             guidance_model,
                             batch,
                             guidance_scale=guidance_scale,
-                            cutoff=self.hparams.cutoff_local
+                            cutoff=self.hparams.cutoff_local,
                         )
             if save_traj:
                 pos_traj.append(pos.detach())
@@ -941,7 +954,6 @@ class Trainer(pl.LightningModule):
             charge_types,
             edge_attr_global,
             edge_index_global,
-            batch_num_nodes,
             [pos_traj, atom_type_traj, charge_type_traj, edge_type_traj],
             context,
         )

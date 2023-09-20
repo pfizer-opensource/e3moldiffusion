@@ -556,3 +556,72 @@ def dropout_node(
     )
 
     return edge_index, edge_mask, node_mask, batch_mask
+
+
+def load_force_model(filepath, num_atom_features, device="cpu"):
+    import re
+
+    ckpt = torch.load(filepath, map_location="cpu")
+    args = ckpt["hyper_parameters"]
+    model = create_force_model(args, num_atom_features)
+
+    state_dict = ckpt["state_dict"]
+    state_dict = {
+        re.sub(r"^model\.", "", k): v
+        for k, v in ckpt["state_dict"].items()
+        if k.startswith("model")
+    }
+    state_dict = {
+        k: v
+        for k, v in state_dict.items()
+        if not any(x in k for x in ["prior", "sde", "cat"])
+    }
+    model.load_state_dict(state_dict)
+    return model.to(device)
+
+
+def create_force_model(hparams, num_atom_features):
+    from e3moldiffusion.coordsatomsbonds import EQGATForceNetwork
+
+    model = EQGATForceNetwork(
+        hn_dim=(hparams["sdim"], hparams["vdim"]),
+        num_layers=hparams["num_layers"],
+        num_rbfs=hparams["rbf_dim"],
+        use_cross_product=hparams["use_cross_product"],
+        num_atom_features=num_atom_features,
+        cutoff_local=hparams["cutoff_local"],
+        vector_aggr=hparams["vector_aggr"],
+    )
+    return model
+
+
+def effective_batch_size(
+    max_size, reference_batch_size, reference_size=20, sampling=False
+):
+    x = reference_batch_size * (reference_size / max_size) ** 2
+    return math.floor(1.8 * x) if sampling else math.floor(x)
+
+
+def get_edges(
+    batch_mask_lig, batch_mask_pocket, pos_lig, pos_pocket, cutoff_p, cutoff_lp
+):
+    adj_ligand = batch_mask_lig[:, None] == batch_mask_lig[None, :]
+    adj_pocket = batch_mask_pocket[:, None] == batch_mask_pocket[None, :]
+    adj_cross = batch_mask_lig[:, None] == batch_mask_pocket[None, :]
+
+    if cutoff_p is not None:
+        adj_pocket = adj_pocket & (torch.cdist(pos_pocket, pos_pocket) <= cutoff_p)
+
+    if cutoff_lp is not None:
+        adj_cross = adj_cross & (torch.cdist(pos_lig, pos_pocket) <= cutoff_lp)
+
+    adj = torch.cat(
+        (
+            torch.cat((adj_ligand, adj_cross), dim=1),
+            torch.cat((adj_cross.T, adj_pocket), dim=1),
+        ),
+        dim=0,
+    )
+    edges = torch.stack(torch.where(adj), dim=0)
+
+    return edges

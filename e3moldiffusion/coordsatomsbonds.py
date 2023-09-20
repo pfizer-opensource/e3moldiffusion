@@ -835,6 +835,7 @@ class EQGATEnergyNetwork(nn.Module):
         out = {"energy_pred": energy_molecule}
         return out
 
+
 class EQGATForceNetwork(nn.Module):
     def __init__(
         self,
@@ -852,7 +853,7 @@ class EQGATForceNetwork(nn.Module):
         self.sdim, self.vdim = hn_dim
 
         self.atom_mapping = DenseLayer(num_atom_features, hn_dim[0])
-        
+
         if edge_dim:
             self.bond_mapping = DenseLayer(5, edge_dim)
         else:
@@ -867,9 +868,7 @@ class EQGATForceNetwork(nn.Module):
             use_cross_product=use_cross_product,
             vector_aggr=vector_aggr,
         )
-        self.force_head = GatedEquivBlock(
-            in_dims=hn_dim, out_dims=(1, 1), use_mlp=True
-        )
+        self.force_head = GatedEquivBlock(in_dims=hn_dim, out_dims=(1, 1), use_mlp=True)
 
     def calculate_edge_attrs(self, edge_index: Tensor, pos: Tensor, edge_attr=None):
         source, target = edge_index
@@ -882,18 +881,22 @@ class EQGATForceNetwork(nn.Module):
         return edge_attr
 
     def forward(
-        self, x: Tensor, pos: Tensor, edge_index: Tensor, edge_attr: Tensor, batch: OptTensor = None,
+        self,
+        x: Tensor,
+        pos: Tensor,
+        edge_index: Tensor,
+        edge_attr: Tensor,
+        batch: OptTensor = None,
     ) -> Dict:
-                 
         s = self.atom_mapping(x)
         v = torch.zeros(
             size=(x.size(0), 3, self.vdim), device=x.device, dtype=pos.dtype
         )
 
-        bs = len(batch.unique())        
+        bs = len(batch.unique())
         if self.bond_mapping:
             edge_attr = self.bond_mapping(edge_attr)
-            
+
         edge_attr = self.calculate_edge_attrs(edge_index, pos, edge_attr)
         s, v = self.gnn(
             s=s, v=v, edge_index=edge_index, edge_attr=edge_attr, batch=batch
@@ -902,9 +905,13 @@ class EQGATForceNetwork(nn.Module):
         force_atoms = force_atoms.squeeze(-1)
         assert force_atoms.size(1) == 3
         force_atoms = force_atoms + torch.sum(scalar_atoms * 0.0)
-        force_atoms = force_atoms - scatter_mean(force_atoms, index=batch, dim=0, dim_size=bs)[batch]
+        force_atoms = (
+            force_atoms
+            - scatter_mean(force_atoms, index=batch, dim=0, dim_size=bs)[batch]
+        )
         out = {"pseudo_forces_pred": force_atoms}
         return out
-    
+
+
 if __name__ == "__main__":
     pass

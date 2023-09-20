@@ -41,6 +41,7 @@ def evaluate(
     hparams["diffusion_pretraining"] = False
     hparams = dotdict(hparams)
 
+    hparams.dataset_root = "/hpfs/userws/cremej01/projects/data/geom"
     hparams.load_ckpt_from_pretrained = None
     hparams.gpus = 1
     print(hparams)
@@ -125,7 +126,10 @@ def evaluate(
             print("Using additional features")
             from experiments.diffusion_discrete_moreFeats import Trainer
         else:
-            from experiments.diffusion_discrete import Trainer
+            if hparams.use_adaptive_loader:
+                from experiments.diffusion_discrete_adaptive import Trainer
+            else:
+                from experiments.diffusion_discrete import Trainer
 
     # if you want bond_model_guidance, flag this here in the Trainer
     device = "cuda"
@@ -151,6 +155,7 @@ def evaluate(
         dataset_info=model.dataset_info,
         ngraphs=ngraphs,
         bs=batch_size,
+        inference_bs=350,
         return_molecules=True,
         verbose=True,
         inner_verbose=True,
