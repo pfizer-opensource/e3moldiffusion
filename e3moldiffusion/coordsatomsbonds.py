@@ -54,7 +54,14 @@ class PredictionHeadEdge(nn.Module):
         self.bonds_lin_0.reset_parameters()
         self.bonds_lin_1.reset_parameters()
 
-    def forward(self, x: Dict, batch: Tensor, edge_index_global: Tensor) -> Dict:
+    def forward(
+        self,
+        x: Dict,
+        batch: Tensor,
+        edge_index_global: Tensor,
+        batch_lig: Tensor = None,
+        pocket_mask: Tensor = None,
+    ) -> Dict:
         s, v, p, e = x["s"], x["v"], x["p"], x["e"]
         s = self.shared_mapping(s)
         j, i = edge_index_global
@@ -64,7 +71,16 @@ class PredictionHeadEdge(nn.Module):
 
         atoms_pred = self.atoms_lin(s)
 
-        if self.coords_param == "data":
+        if batch_lig is not None and pocket_mask is not None:
+            p = p * pocket_mask
+            coords_pred = coords_pred * pocket_mask
+            n_nodes_lig = batch_lig.bincount()
+            lig_mean = scatter_add(coords_pred, index=batch, dim=0)
+            lig_mean = lig_mean / n_nodes_lig
+            coords_pred = coords_pred - lig_mean[batch]
+            d = (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)
+
+        elif self.coords_param == "data":
             coords_pred = p + coords_pred
             coords_pred = (
                 coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
@@ -309,8 +325,11 @@ class DenoisingEdgeNetwork(nn.Module):
         batch_edge_global: OptTensor = None,
         z: OptTensor = None,
         context: OptTensor = None,
+        batch_lig: OptTensor = None,
+        pocket_mask: OptTensor = None,
     ) -> Dict:
-        pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
+        if pocket_mask is None:
+            pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
         # t: (batch_size,)
         ta = self.time_mapping_atom(t)
         tb = self.time_mapping_bond(t)
@@ -379,7 +398,11 @@ class DenoisingEdgeNetwork(nn.Module):
         )
 
         out = self.prediction_head(
-            x=out, batch=batch, edge_index_global=edge_index_global
+            x=out,
+            batch=batch,
+            edge_index_global=edge_index_global,
+            batch_lig=batch_lig,
+            pocket_mask=pocket_mask,
         )
 
         # out['coords_perturbed'] = pos

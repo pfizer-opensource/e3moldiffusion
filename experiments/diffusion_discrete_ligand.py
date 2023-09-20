@@ -26,7 +26,7 @@ from experiments.utils import (
 from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.nn import radius_graph
-from torch_geometric.utils import dense_to_sparse, sort_edge_index
+from torch_geometric.utils import dense_to_sparse, sort_edge_index, remove_self_loops
 from tqdm import tqdm
 
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
@@ -385,6 +385,16 @@ class Trainer(pl.LightningModule):
             + self.hparams.lc_charges * loss["charges"]
         )
 
+        if self.training:
+            final_loss.backward()
+            names = []
+            for name, param in self.model.named_parameters():
+                if param.grad is None:
+                    names.append(name)
+            import pdb
+
+            pdb.set_trace()
+
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
             print(f"Detected NaNs. Terminating training at epoch {self.current_epoch}")
@@ -482,7 +492,7 @@ class Trainer(pl.LightningModule):
             edge_attr=edge_attr_global_lig,
             sort_by_row=False,
         )
-        edge_attr_global_perturbed = (
+        edge_attr_global_perturbed_lig = (
             self.cat_bonds.sample_edges_categorical(
                 t,
                 edge_index_global_lig,
@@ -494,28 +504,28 @@ class Trainer(pl.LightningModule):
             else None
         )
         edge_index_global = get_edges(
-            batch.lig_mask, batch.pocket_mask, pos, pos_pocket, cutoff_p=7, cutoff_lp=7
+            data_batch, data_batch_pocket, pos, pos_pocket, cutoff_p=5, cutoff_lp=5
         )
         edge_index_global = sort_edge_index(
             edge_index=edge_index_global, sort_by_row=False
         )
-        edge_attr_global = torch.zeros(
+        edge_index_global, _ = remove_self_loops(edge_index_global)
+
+        edge_attr_global_perturbed = torch.zeros(
             (edge_index_global.size(1), self.num_bond_classes),
-            dtype=float,
+            dtype=torch.float32,
             device=self.device,
         )
-        edge_attr_global[
-            (edge_index_global[0] < len(batch.lig_mask))
-            & (edge_index_global[1] < len(batch.lig_mask))
-        ] = edge_attr_global_perturbed
-        edge_attr_global[
-            (edge_index_global[0] >= len(batch.lig_mask))
-            & (edge_index_global[1] >= len(batch.lig_mask))
-        ] = 0
 
-        import pdb
+        edge_mask = (edge_index_global[0] < len(data_batch)) & (
+            edge_index_global[1] < len(data_batch)
+        )
+        edge_mask_pocket = (edge_index_global[0] >= len(data_batch)) & (
+            edge_index_global[1] >= len(data_batch)
+        )
+        edge_attr_global_perturbed[edge_mask] = edge_attr_global_perturbed_lig
+        edge_attr_global_perturbed[edge_mask_pocket] = 0.0
 
-        pdb.set_trace()
         # Local interaction Ligand-Pocket
         # batch_full = torch.cat([data_batch, data_batch_pocket])
         # edge_index_rg = radius_graph(
@@ -544,6 +554,7 @@ class Trainer(pl.LightningModule):
         #     edge_attr_global_perturbed, num_classes=self.num_bond_classes
         # ).float() * (~edge_mask).unsqueeze(1)
 
+        batch_full = torch.cat([data_batch, data_batch_pocket])
         batch_edge_global = batch_full[edge_index_global[0]]  #
         pocket_mask = (
             torch.zeros_like(batch_full, dtype=torch.float32)
@@ -565,6 +576,7 @@ class Trainer(pl.LightningModule):
             batch_edge_global=batch_edge_global,
             context=context,
             pocket_mask=pocket_mask,
+            batch_lig=data_batch,
         )
 
         # Prediction masking
@@ -572,18 +584,10 @@ class Trainer(pl.LightningModule):
         out["coords_pred"] = out["coords_pred"][: pos.shape[0]]
         out["atoms_pred"] = out["atoms_pred"] * pocket_mask
         out["atoms_pred"] = out["atoms_pred"][: pos.shape[0]]
-        out["bonds_pred"] = out["bonds_pred"] * (~edge_mask).unsqueeze(1)
-        edge_mask_j = j < pos.shape[0]
-        edge_mask_i = i < pos.shape[0]
-        edge_mask = edge_mask_j * edge_mask_i
+        out["bonds_pred"] = out["bonds_pred"] * edge_mask.unsqueeze(1)
         out["bonds_pred"] = out["bonds_pred"][edge_mask]
 
         # Ground truth masking
-        out["coords_perturbed"] = pos_perturbed[: pos.shape[0]]
-        out["atoms_perturbed"] = atom_types_perturbed[: pos.shape[0]]
-        out["charges_perturbed"] = charges_perturbed[: pos.shape[0]]
-        out["bonds_perturbed"] = edge_attr_global_perturbed[edge_mask]
-
         out["coords_true"] = pos_centered[: pos.shape[0]]
         out["coords_noise_true"] = noise_coords_true
         out["atoms_true"] = atom_types[: pos.shape[0]].argmax(dim=-1)

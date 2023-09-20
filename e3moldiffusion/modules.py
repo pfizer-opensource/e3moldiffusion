@@ -246,8 +246,11 @@ class SE3Norm(nn.Module):
     def reset_parameters(self) -> None:
         torch.nn.init.ones_(self.weight)
 
-    def forward(self, pos: Tensor, batch: Tensor):
-        norm = torch.norm(pos, dim=-1, keepdim=True)  # n, 1
+    def forward(self, pos: Tensor, batch: Tensor, node_mask: Tensor = None):
+        if node_mask is not None:
+            norm = torch.norm(pos, dim=-1, keepdim=True) * node_mask  # n, 1
+        else:
+            norm = torch.norm(pos, dim=-1, keepdim=True)
         batch_size = int(batch.max()) + 1
         mean_norm = scatter_mean(norm, batch, dim=0, dim_size=batch_size)
         new_pos = self.weight * pos / (mean_norm[batch] + self.eps)

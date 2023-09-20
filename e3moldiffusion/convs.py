@@ -124,10 +124,13 @@ class EQGATConv(MessagePassing):
         )
         self.cutoff_fnc = PolynomialCutoff(cutoff, p=6)
         self.edge_dim = edge_dim if edge_dim else 0
-        
+
         self.edge_net = nn.Sequential(
             DenseLayer(
-                2 * self.si + self.num_rbfs + self.edge_dim, self.si, bias=True, activation=nn.SiLU()
+                2 * self.si + self.num_rbfs + self.edge_dim,
+                self.si,
+                bias=True,
+                activation=nn.SiLU(),
             ),
             DenseLayer(self.si, self.v_mul * self.vi + self.si, bias=True),
         )
@@ -443,6 +446,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         edge_index: Tensor,
         edge_attr: Tuple[Tensor, Tensor, Tensor, Tensor],
         batch: Tensor,
+        pocket_mask: Tensor = None,
     ):
         s, v, p = x
         d, a, r, e = edge_attr
@@ -468,7 +472,13 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         s = ms + s
         v = mv + v
         if self.posnorm:
-            p = self.posnorm(mp, batch) + p
+            p = (
+                p + self.posnorm(mp, batch, pocket_mask) * pocket_mask
+                if pocket_mask is not None
+                else self.posnorm(mp, batch) + p
+            )
+        else:
+            p = p + mp * pocket_mask if pocket_mask is not None else mp + p
         e = F.silu(me + e)
         e = self.edge_post(e)
 
