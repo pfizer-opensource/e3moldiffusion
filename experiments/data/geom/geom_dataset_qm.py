@@ -124,7 +124,7 @@ class GeomQMDataset(InMemoryDataset):
                 if data.has_isolated_nodes():
                     warnings.warn("Found disconnected graph, skipping data point.")
                     continue
-                data.y = [properties[pname] for pname in PROPS]
+                data.y = torch.tensor([properties[pname] for pname in PROPS]).unsqueeze(0)
                 if self.pre_filter is not None and not self.pre_filter(data):
                     continue
                 if self.pre_transform is not None:
