@@ -31,24 +31,9 @@ full_atom_encoder = {
 atom_decoder = {v: k for k, v in full_atom_encoder.items()}
 
 
-SKIP_PROPS = [
-    "atoms",
-    "coords",
-    "cpu_time",
-    "wall_time",
-    "normal_termination",
-    "add. restraining",
-    "programm_version",
-    "programm_call",
-    "dipole_vec",
-    "quadrupole_mat",
-    "total charge",
-]
-
 PROPS = [
     "dipole_norm",
     "total_energy",
-    "gradient_norm",
     "HOMO_LUMO_gap",
     "HOMO_orbital_eigv",
     "LUMO_orbital_eigv",
@@ -62,7 +47,7 @@ PROPS = [
 ]
 
 
-class GeomDrugsQMDataset(InMemoryDataset):
+class GeomQMDataset(InMemoryDataset):
     def __init__(
         self,
         split,
@@ -135,12 +120,7 @@ class GeomDrugsQMDataset(InMemoryDataset):
                     smiles,
                     remove_hydrogens=self.remove_h,
                 )
-                for prop, value in properties.items():
-                    if prop not in SKIP_PROPS:
-                        prop_name = (
-                            prop.strip().strip(".").replace(" ", "_").replace("-", "_")
-                        )
-                        data.__setattr__(prop_name, value)
+                data.y = [properties[pname] for pname in PROPS]
                 if self.pre_filter is not None and not self.pre_filter(data):
                     continue
                 if self.pre_transform is not None:
@@ -224,13 +204,11 @@ class GeomQMDataModule(AbstractAdaptiveDataModule):
         root_path = cfg.dataset_root
         self.pin_memory = True
 
-        train_dataset = GeomDrugsQMDataset(
+        train_dataset = GeomQMDataset(
             split="train", root=root_path, remove_h=cfg.remove_hs
         )
-        val_dataset = GeomDrugsQMDataset(
-            split="val", root=root_path, remove_h=cfg.remove_hs
-        )
-        test_dataset = GeomDrugsQMDataset(
+        val_dataset = GeomQMDataset(split="val", root=root_path, remove_h=cfg.remove_hs)
+        test_dataset = GeomQMDataset(
             split="test", root=root_path, remove_h=cfg.remove_hs
         )
 
@@ -290,7 +268,11 @@ class GeomQMDataModule(AbstractAdaptiveDataModule):
         return dataloader
 
     def compute_mean_mad(self, properties_list):
-        if self.cfg.dataset == "qm9" or self.cfg.dataset == "drugs":
+        if (
+            self.cfg.dataset == "qm9"
+            or self.cfg.dataset == "drugs"
+            or self.cfg.dataset == "geomqm"
+        ):
             dataloader = self.get_dataloader(self.train_dataset, "val")
             return self.compute_mean_mad_from_dataloader(dataloader, properties_list)
         elif self.cfg.dataset == "qm9_1half" or self.cfg.dataset == "qm9_2half":
@@ -346,8 +328,7 @@ if __name__ == "__main__":
     N_CONFS = 5
     for set_name in ["test", "val", "train"]:
         print(f"Creating {set_name} dataset...")
-        dataset = GeomDrugsQMDataset(
+        dataset = GeomQMDataset(
             root=DATAROOT, split=set_name, remove_h=False, n_confs=N_CONFS
         )
         print(dataset)
-        print(dataset.statistics)
