@@ -3,6 +3,7 @@ from os.path import join
 import experiments.data.utils as dataset_utils
 import numpy as np
 import torch
+import warnings
 from experiments.data.abstract_dataset import AbstractAdaptiveDataModule
 from experiments.data.metrics import compute_all_statistics
 from experiments.data.utils import load_pickle, save_pickle, train_subset
@@ -120,6 +121,9 @@ class GeomQMDataset(InMemoryDataset):
                     smiles,
                     remove_hydrogens=self.remove_h,
                 )
+                if data.has_isolated_nodes():
+                    warnings.warn("Found disconnected graph, skipping data point.")
+                    continue
                 data.y = [properties[pname] for pname in PROPS]
                 if self.pre_filter is not None and not self.pre_filter(data):
                     continue

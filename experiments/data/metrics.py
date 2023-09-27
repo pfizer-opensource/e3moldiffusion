@@ -243,9 +243,11 @@ def bond_lengths_counts(data_list, num_bond_types=5, normalize=True):
 
 
 def bond_angles(data_list, atom_encoder, normalize=True):
+    """Calculate all angles between all bonds. Only works for fully connected graph."""
     print("Computing bond angles...")
     all_bond_angles = torch.zeros((len(atom_encoder.keys()), 180 * 10 + 1), dtype=int)
     for data in data_list:
+        assert not data.has_isolated_nodes(), "Only works for fully conencted graphs."
         # Calculate all vectors between atom pairs
         vecs = data.pos - data.pos.unsqueeze(1)
         # Remove non bonded
