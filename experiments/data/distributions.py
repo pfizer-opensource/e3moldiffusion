@@ -45,17 +45,16 @@ class DistributionNodes:
 PROP_TO_IDX_GEOMQM = {
     "dipole_norm": 0,
     "total_energy": 1,
-    "gradient_norm": 2,
-    "HOMO_LUMO_gap": 3,
-    "HOMO_orbital_eigv": 4,
-    "LUMO_orbital_eigv": 5,
-    "SCC_energy": 6,
-    "isotropic_ES": 7,
-    "anisotropic_ES": 8,
-    "anisotropic_XC": 9,
-    "dispersion": 10,
-    "repulsion_energy": 11,
-    "atomisation_energy": 12,
+    "HOMO_LUMO_gap": 2,
+    "HOMO_orbital_eigv": 3,
+    "LUMO_orbital_eigv": 4,
+    "SCC_energy": 5,
+    "isotropic_ES": 6,
+    "anisotropic_ES": 7,
+    "anisotropic_XC": 8,
+    "dispersion": 9,
+    "repulsion_energy": 10,
+    "atomisation_energy": 11,
 }
 
 PROP_TO_IDX_GEOMQM = {v: k for k, v in PROP_TO_IDX_GEOMQM.items()}
@@ -256,7 +255,7 @@ def prepare_context(properties_list, properties_norm, batch, dataset="aqm"):
         prop_to_idx = PROP_TO_IDX_AQM_QM7X
     elif dataset == "qm9":
         prop_to_idx = PROP_TO_IDX_QM9
-    elif dataset == "geom_qm":
+    elif dataset == "geomqm":
         prop_to_idx = PROP_TO_IDX_GEOMQM
     for key in properties_list:
         mean = properties_norm[key]["mean"].to(device)
