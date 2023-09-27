@@ -7,6 +7,7 @@ from experiments.data.utils import Statistics
 from experiments.molecule_utils import Molecule
 from rdkit import Chem
 from torch_geometric.data import Data
+from torch_geometric.utils import to_dense_adj
 from torchmetrics import (
     KLDivergence,
     MeanAbsoluteError,
@@ -242,31 +243,39 @@ def bond_lengths_counts(data_list, num_bond_types=5, normalize=True):
 
 
 def bond_angles(data_list, atom_encoder, normalize=True):
-    atom_decoder = {v: k for k, v in atom_encoder.items()}
     print("Computing bond angles...")
-    all_bond_angles = np.zeros((len(atom_encoder.keys()), 180 * 10 + 1))
+    all_bond_angles = torch.zeros((len(atom_encoder.keys()), 180 * 10 + 1), dtype=int)
     for data in data_list:
-        assert not torch.isnan(data.pos).any()
-        for i in range(data.num_nodes):
-            neighbors = data.edge_index[1][data.edge_index[0] == i]
-            for j in neighbors:
-                for k in neighbors:
-                    if j == k:
-                        continue
-                    assert i != j and i != k and j != k, "i, j, k: {}, {}, {}".format(
-                        i, j, k
-                    )
-                    a = data.pos[j] - data.pos[i]
-                    b = data.pos[k] - data.pos[i]
-
-                    # print(a, b, torch.norm(a) * torch.norm(b))
-                    angle = torch.acos(
-                        torch.dot(a, b) / (torch.norm(a) * torch.norm(b) + 1e-6)
-                    )
-                    angle = angle * 180 / math.pi
-
-                    bin = int(torch.round(angle, decimals=1) * 10)
-                    all_bond_angles[data.x[i].item(), bin] += 1
+        # Calculate all vectors between atom pairs
+        vecs = data.pos - data.pos.unsqueeze(1)
+        # Remove non bonded
+        vecs[~to_dense_adj(data.edge_index).squeeze().bool()] = torch.nan
+        # Calculate angles from dot product
+        vecs /= torch.norm(vecs, p=2, dim=-1, keepdim=True)
+        costheta = torch.einsum("bij,bkj->bik", vecs, vecs)
+        angles = torch.arccos(costheta) * 180 / torch.pi
+        # Mask out diagonals, self angles and non bonded
+        mask_diagonal = torch.stack(
+            [~torch.eye(angles.shape[0]).bool()] * angles.shape[0]
+        )
+        mask_notnan = ~angles.isnan()
+        # Get indices for histogram
+        relevant_angles = angles[mask_diagonal & mask_notnan]
+        bins = (torch.round(relevant_angles, decimals=1) * 10).int()
+        atom_types = (torch.ones_like(angles) * data.x.unsqueeze(-1).unsqueeze(-1))[
+            mask_diagonal & mask_notnan
+        ].int()
+        # Increment bins
+        stacked = torch.stack([atom_types, bins])
+        counts, _ = torch.histogramdd(
+            stacked.T.float(),
+            [
+                torch.arange(0, len(atom_encoder) + 1).float(),
+                torch.arange(0, 1802).float(),
+            ],
+        )
+        all_bond_angles += counts.int()
+        # all_bond_angles[atom_types, bins] += 1 # does not work bc count increases only by one even if it sample appears more than once
 
     if normalize:
         # Normalizing the angles
