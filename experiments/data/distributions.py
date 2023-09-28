@@ -57,7 +57,7 @@ PROP_TO_IDX_GEOMQM = {
     "atomisation_energy": 11,
 }
 
-PROP_TO_IDX_GEOMQM = {v: k for k, v in PROP_TO_IDX_GEOMQM.items()}
+IDX_TO_PROP_GEOMQM = {v: k for k, v in PROP_TO_IDX_GEOMQM.items()}
 
 PROP_TO_IDX_AQM = {
     "DIP": 0,
