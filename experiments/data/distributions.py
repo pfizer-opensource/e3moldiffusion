@@ -45,16 +45,10 @@ class DistributionNodes:
 PROP_TO_IDX_GEOMQM = {
     "dipole_norm": 0,
     "total_energy": 1,
-    "HOMO_LUMO_gap": 2,
-    "HOMO_orbital_eigv": 3,
-    "LUMO_orbital_eigv": 4,
-    "SCC_energy": 5,
-    "isotropic_ES": 6,
-    "anisotropic_ES": 7,
-    "anisotropic_XC": 8,
-    "dispersion": 9,
-    "repulsion_energy": 10,
-    "atomisation_energy": 11,
+    "HOMO-LUMO_gap": 2,
+    "dispersion": 3,
+    "atomisation_energy": 4,
+    "polarizability": 5
 }
 
 IDX_TO_PROP_GEOMQM = {v: k for k, v in PROP_TO_IDX_GEOMQM.items()}
