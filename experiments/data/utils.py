@@ -28,7 +28,7 @@ x_map = {
 }
 
 
-def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = False):
+def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = False, **kwargs):
     if remove_hydrogens:
         # mol = Chem.RemoveAllHs(mol)
         mol = Chem.RemoveHs(
@@ -68,6 +68,14 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = F
     is_in_ring = torch.Tensor(is_in_ring).long()
     hybridization = torch.Tensor(sp_hybridization).long()
 
+    additional = {}
+    if "wbo" in kwargs:
+        wbo = torch.Tensor(kwargs["wbo"])[edge_index[0], edge_index[1]].float()
+        additional["wbo"] = wbo
+    if "mulliken" in kwargs:
+        mulliken = torch.Tensor(kwargs["mulliken"]).float()
+        additional["mulliken"] = mulliken
+
     data = Data(
         x=atom_types,
         edge_index=edge_index,
@@ -79,6 +87,7 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = F
         is_in_ring=is_in_ring,
         hybridization=hybridization,
         mol=mol,
+        **additional
     )
 
     return data

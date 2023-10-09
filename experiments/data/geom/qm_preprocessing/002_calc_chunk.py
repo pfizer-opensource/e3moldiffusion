@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 NUM_WORKERS = 24
 XTB_EXE = "xtb"
-XTB_OPTIONS = {}
+XTB_OPTIONS = {'wbo': True, 'pop': True}
 GLOBAL_SCR = "/scratch1/seumej/tmp"
 SAVE_DIR = Path("/scratch1/seumej/geom_qm/qm")
 
@@ -58,9 +58,10 @@ def run_chunk(filename):
 
     new_data = []
     for d in tqdm(data):
-        _, mols = d
+        smiles, mols, _ = d
         results = run_list_of_mols(mols, num_workers=NUM_WORKERS)
-        d += (results,)
+        # d += (results,)
+        d = (smiles, mols, results)
         new_data.append(d)
 
     outfile = SAVE_DIR / (filename.stem + "_qm" + filename.suffix)

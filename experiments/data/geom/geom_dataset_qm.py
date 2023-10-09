@@ -35,15 +35,8 @@ atom_decoder = {v: k for k, v in full_atom_encoder.items()}
 PROPS = [
     "dipole_norm",
     "total_energy",
-    "HOMO_LUMO_gap",
-    "HOMO_orbital_eigv",
-    "LUMO_orbital_eigv",
-    "SCC_energy",
-    "isotropic_ES",
-    "anisotropic_ES",
-    "anisotropic_XC",
+    "HOMO-LUMO_gap",
     "dispersion",
-    "repulsion_energy",
     "atomisation_energy",
 ]
 
@@ -120,6 +113,8 @@ class GeomQMDataset(InMemoryDataset):
                     self.atom_encoder,
                     smiles,
                     remove_hydrogens=self.remove_h,
+                    wbo=properties["wbo"],
+                    mulliken=properties["mulliken"],
                 )
                 if data.has_isolated_nodes():
                     warnings.warn("Found disconnected graph, skipping data point.")
@@ -209,11 +204,11 @@ class GeomQMDataModule(AbstractAdaptiveDataModule):
         self.pin_memory = True
 
         train_dataset = GeomQMDataset(
-            split="train", root=root_path, remove_h=cfg.remove_hs
+            split="train", root=root_path, remove_h=cfg.remove_hs, n_confs=cfg.max_num_conformers
         )
-        val_dataset = GeomQMDataset(split="val", root=root_path, remove_h=cfg.remove_hs)
+        val_dataset = GeomQMDataset(split="val", root=root_path, remove_h=cfg.remove_hs, n_confs=cfg.max_num_conformers)
         test_dataset = GeomQMDataset(
-            split="test", root=root_path, remove_h=cfg.remove_hs
+            split="test", root=root_path, remove_h=cfg.remove_hs, n_confs=cfg.max_num_conformers
         )
 
         self.statistics = {
@@ -327,12 +322,24 @@ class GeomQMDataModule(AbstractAdaptiveDataModule):
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-n", "--names", nargs='*', type = str, 
+                        help = "Names of datasets, separated by spaces.",
+                        default = ['test', 'val', 'train'])
+    parser.add_argument("-c", "--conformers", type=int, default=5)
+    parser.add_argument("-rhs", "--rm-hydrogens", type=bool, default=False)
+    args = parser.parse_args()
+
     # Creating the Pytorch Geometric InMemoryDatasets
     DATAROOT = "/scratch1/seumej/geom_qm/"
-    N_CONFS = 5
-    for set_name in ["test", "val", "train"]:
-        print(f"Creating {set_name} dataset...")
+    for set_name in args.names:
+        print(f'Creating {set_name} dataset with options:')
+        print(f'\tremove_h = {args.rm_hydrogens}')
+        print(f'\tn_confs = {args.conformers}\n')
+
         dataset = GeomQMDataset(
-            root=DATAROOT, split=set_name, remove_h=False, n_confs=N_CONFS
+            root=DATAROOT, split=set_name, remove_h=args.rm_hydrogens, n_confs=args.conformers
         )
         print(dataset)

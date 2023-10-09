@@ -74,6 +74,14 @@ def xtb_calculate(
     results = read_xtb_results(lines)
     if "hess" in options:
         results.update(read_thermodynamics(lines))
+    if "grad" in options:
+        with open(tmp_scr / "mol.engrad", "r") as f:
+            grad_lines = f.readlines()
+        results["grad"] = read_gradients(grad_lines)
+    if "wbo" in options:
+        results["wbo"] = read_wbo(tmp_scr / "wbo", len(atoms))
+    if "pop" in options:
+        results["mulliken"] = read_mulliken(tmp_scr / "charges")
     results["atoms"] = atoms
     results["coords"] = coords
     if "opt" in options:
@@ -174,8 +182,12 @@ def read_opt_structure(lines: List[str]):
     return atoms, coords
 
 
+def _sanitize_name(prop_name: str):
+        return prop_name.replace('_', '-').replace(' ', '_').replace('.', '').strip()
+
 def read_thermodynamics(lines: List[str]):
     """Read thermodynamics output of frequency calculation."""
+
     thermo_idx = np.nan
     thermo_properties = {}
     for i, line in enumerate(lines):
@@ -189,8 +201,41 @@ def read_thermodynamics(lines: List[str]):
                 continue
             else:
                 tmp = line.strip(":").strip().strip("->").split()[:-1]
-                thermo_properties["_".join(tmp[:-1])] = float(tmp[-1])
+                thermo_properties[_sanitize_name(" ".join(tmp[:-1]))] = float(tmp[-1])
     return thermo_properties
+
+
+def read_gradients(lines: List[str]):
+    """Read gradients from engrad file."""
+    gradients = []
+    gradient_idx = np.nan
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if "gradient" in line:
+            gradient_idx = i
+        if i > (gradient_idx + 1):
+            if line.startswith("#"):
+                gradient_idx = np.nan
+                break
+            gradients.append(float(line))
+    gradients = np.asarray(gradients)
+    return gradients.reshape(-1, 3)
+
+
+def read_wbo(wbo_file, n_atoms):
+    """Read Wiberg bond order from wbo file."""
+    data = np.loadtxt(wbo_file)
+    wbo = np.zeros((n_atoms, n_atoms))
+    for i, j, o in data:
+        i = i.astype(int) - 1
+        j = j.astype(int) - 1
+        wbo[i, j] = wbo[j, i] = o
+    return wbo
+
+
+def read_mulliken(charges_file):
+    """Read Mulliken charges from charges file."""
+    return np.loadtxt(charges_file)
 
 
 def read_xtb_results(lines: List[str]):
@@ -207,7 +252,8 @@ def read_xtb_results(lines: List[str]):
         )
         return total_seconds
 
-    property_start_idx, dipole_idx, quadrupole_idx, runtime_idx = (
+    property_start_idx, dipole_idx, quadrupole_idx, runtime_idx, polarizability_idx = (
+        np.nan,
         np.nan,
         np.nan,
         np.nan,
@@ -228,6 +274,8 @@ def read_xtb_results(lines: List[str]):
             quadrupole_idx = i
         elif "total:" in line:
             runtime_idx = i
+        elif "Mol. α(0) /au" in line:
+            polarizability_idx = i
 
         # read property table
         if i > (property_start_idx + 1):
@@ -236,15 +284,12 @@ def read_xtb_results(lines: List[str]):
             elif 20 * "." in line:
                 continue
             else:
-                tmp = line.strip(":").strip().strip("->").split()[:-1]
-                name = (
-                    "_".join(tmp[:-1])
-                    .strip()
-                    .replace(".", "")
-                    .replace(" ", "_")
-                    .replace("-", "_")
-                )
-                properties[name] = float(tmp[-1])
+                tmp = line.strip(":").strip().strip("->").strip('.').split()[:-1]
+                properties[_sanitize_name(" ".join(tmp[:-1]))] = float(tmp[-1])
+
+        # read polarizability
+        if i == polarizability_idx:
+            polarizability = float(line.split()[-1])
 
         # read dipole moment
         if i > (dipole_idx + 2):
@@ -280,6 +325,7 @@ def read_xtb_results(lines: List[str]):
         "programm_version": xtb_version,
         "wall_time": wall_time,
         "cpu_time": cpu_time,
+        "polarizability": polarizability,
         "dipole_vec": dipole_vec,
         "dipole_norm": dip_norm,
         "quadrupole_mat": quadrupole_mat,
@@ -330,7 +376,7 @@ if __name__ == "__main__":
         [2.44627963506354, -0.62656052376019, 0.69196732726456],
     ]
 
-    options = {"opt": True, "alpb": "methanol"}
+    options = {"opt": True, "alpb": "methanol", "wbo": True, "pop": True}
     results = xtb_calculate(atoms=atoms, coords=coords, charge=1, options=options)
 
     for key, value in results.items():
