@@ -121,6 +121,13 @@ if __name__ == "__main__":
             from experiments.data.pepconf.pepconf_dataset_nonadaptive import (
                 PepConfDataModule as DataModule,
             )
+    elif hparams.dataset == "geomqm":
+        dataset = "geomqm"
+        from experiments.data.geom.geom_dataset_qm import (
+                    GeomQMDataModule as DataModule,
+                )
+    else:
+        raise ValueError(f'Unknown dataset: {hparams.dataset}')
 
     datamodule = DataModule(hparams)
 
