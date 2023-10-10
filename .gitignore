@@ -22,7 +22,6 @@ sample_data/*
 .vscode/
 
 scripts/
-configs/
 
 # scripts/experiment*.sl
 
