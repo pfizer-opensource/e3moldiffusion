@@ -38,6 +38,7 @@ PROPS = [
     "HOMO-LUMO_gap",
     "dispersion",
     "atomisation_energy",
+    "polarizability"
 ]
 
 
@@ -116,6 +117,9 @@ class GeomQMDataset(InMemoryDataset):
                     wbo=properties["wbo"],
                     mulliken=properties["mulliken"],
                 )
+                if not properties["normal_termination"]:
+                    warnings.warn("Abnormal termination of xtb, skipping data point.")
+                    continue
                 if data.has_isolated_nodes():
                     warnings.warn("Found disconnected graph, skipping data point.")
                     continue
