@@ -371,6 +371,120 @@ def angle_distance(
         / (torch.sum(atom_types_probabilities * valency_weight) + 1e-5)
     ).item(), w1_per_type
 
+def dihedral_distance(
+    molecules,
+    target_dihedrals,
+    bond_types_probabilities,
+    save_histogram,
+):
+    def calculate_dihedral_angles(mol):
+        
+        def find_dihedrals(mol):
+            torsionSmarts = "[!$(*#*)&!D1]~[!$(*#*)&!D1]"
+            torsionQuery = Chem.MolFromSmarts(torsionSmarts)
+            matches = mol.GetSubstructMatches(torsionQuery)
+            torsionList = []
+            btype = []
+            for match in matches:
+                idx2 = match[0]
+                idx3 = match[1]
+                bond = mol.GetBondBetweenAtoms(idx2, idx3)
+                jAtom = mol.GetAtomWithIdx(idx2)
+                kAtom = mol.GetAtomWithIdx(idx3)
+                if (
+                    (jAtom.GetHybridization() != Chem.HybridizationType.SP2)
+                    and (jAtom.GetHybridization() != Chem.HybridizationType.SP3)
+                ) or (
+                    (kAtom.GetHybridization() != Chem.HybridizationType.SP2)
+                    and (kAtom.GetHybridization() != Chem.HybridizationType.SP3)
+                ):
+                    continue
+                for b1 in jAtom.GetBonds():
+                    if b1.GetIdx() == bond.GetIdx():
+                        continue
+                    idx1 = b1.GetOtherAtomIdx(idx2)
+                    for b2 in kAtom.GetBonds():
+                        if (b2.GetIdx() == bond.GetIdx()) or (b2.GetIdx() == b1.GetIdx()):
+                            continue
+                        idx4 = b2.GetOtherAtomIdx(idx3)
+                        # skip 3-membered rings
+                        if idx4 == idx1:
+                            continue
+                        bt = bond.GetBondTypeAsDouble()
+                        # bt = str(bond.GetBondType())
+                        # if bond.IsInRing():
+                        #     bt += '_R'
+                        btype.append(bt)
+                        torsionList.append((idx1, idx2, idx3, idx4))
+            return np.asarray(torsionList), np.asarray(btype)
+        
+        dihedral_idx, dihedral_types = find_dihedrals(mol)
+        
+        coords = mol.GetConformer().GetPositions()
+        t_angles = []
+        for t in dihedral_idx:
+            u1, u2, u3, u4 = coords[torch.tensor(t)]
+
+            a1 = u2 - u1
+            a2 = u3 - u2
+            a3 = u4 - u3
+
+            v1 = np.cross(a1, a2)
+            v1 = v1 / (v1 * v1).sum(-1) ** 0.5
+            v2 = np.cross(a2, a3)
+            v2 = v2 / (v2 * v2).sum(-1) ** 0.5
+            porm = np.sign((v1 * a3).sum(-1))
+            rad = np.arccos(
+                (v1 * v2).sum(-1) / ((v1**2).sum(-1) * (v2**2).sum(-1) + 1e-9) ** 0.5 
+            )
+            if not porm == 0:
+                rad = rad * porm
+            t_angles.append(rad * 180 / torch.pi)
+
+        return np.asarray(t_angles), dihedral_types
+
+    
+    # forget about none and tripple bonds
+    bond_types_probabilities[torch.tensor([0,3])] = 0
+    bond_types_probabilities /= bond_types_probabilities.sum()
+
+    num_bond_types = len(bond_types_probabilities)
+    generated_dihedrals = torch.zeros(num_bond_types, 180 * 10 + 1)
+    for mol in molecules:
+        mol = mol.rdkit_mol
+        try:
+            Chem.SanitizeMol(mol)
+        except:
+            continue
+        angles, types = calculate_dihedral_angles(mol)
+        # transform types to idx
+        types[types==1.5] = 4
+        types = types.astype(int)
+        for a, t in zip(np.abs(angles), types):
+            if np.isnan(a):
+                continue
+            generated_dihedrals[t, int(np.round(a, decimals=1) * 10)] += 1
+
+    # normalize
+    s = generated_dihedrals.sum(axis=1, keepdims=True)
+    s[s==0] = 1
+    generated_dihedrals =  generated_dihedrals.float() / s
+
+    if save_histogram:
+        np.save("generated_dihedrals_historgram.npy", generated_dihedrals.numpy())
+
+    if type(target_dihedrals) in [np.array, np.ndarray]:
+        target_dihedrals = torch.from_numpy(target_dihedrals).float()
+
+    cs_generated = torch.cumsum(generated_dihedrals, dim=1)
+    cs_target = torch.cumsum(target_dihedrals, dim=1)
+
+    w1_per_type = torch.sum(torch.abs(cs_generated - cs_target), dim=1) / 10
+
+    weighted = w1_per_type * bond_types_probabilities
+
+    return torch.sum(weighted).item(), w1_per_type
+
 
 def node_counts(data_list):
     print("Computing node counts...")

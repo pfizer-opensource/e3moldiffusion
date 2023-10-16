@@ -47,6 +47,7 @@ class BasicMolecularMetrics(object):
         self.valency_w1 = MeanMetric().to(device)
         self.bond_lengths_w1 = MeanMetric().to(device)
         self.angles_w1 = MeanMetric().to(device)
+        self.dihedrals_w1 = MeanMetric().to(device)
 
         self.pc_descriptor_subset = [
             "BertzCT",
@@ -76,6 +77,7 @@ class BasicMolecularMetrics(object):
             self.valency_w1,
             self.bond_lengths_w1,
             self.angles_w1,
+            self.dihedrals_w1,
         ]:
             metric.reset()
 
@@ -319,6 +321,15 @@ class BasicMolecularMetrics(object):
                 save_histogram=self.test,
             )
         self.angles_w1(angles_w1)
+
+        dihedrals_w1, dihedrals_w1_per_type = dihedral_distance(
+            molecules,
+            stat.dihedrals,
+            stat.bond_types,
+            save_histogram=self.test
+        )
+        self.dihedrals_w1(dihedrals_w1)
+
         statistics_log = {
             "sampling/NumNodesW1": self.num_nodes_w1.compute().item(),
             "sampling/AtomTypesTV": self.atom_types_tv.compute().item(),
@@ -327,6 +338,7 @@ class BasicMolecularMetrics(object):
             "sampling/ValencyW1": self.valency_w1.compute().item(),
             "sampling/BondLengthsW1": self.bond_lengths_w1.compute().item(),
             "sampling/AnglesW1": self.angles_w1.compute().item(),
+            "sampling/DihedralsW1": self.dihedrals_w1.compute().item()
         }
         # if local_rank == 0:
         #     print(

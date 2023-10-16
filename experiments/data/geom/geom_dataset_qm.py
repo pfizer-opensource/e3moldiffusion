@@ -76,11 +76,12 @@ class GeomQMDataset(InMemoryDataset):
             valencies=load_pickle(self.processed_paths[5]),
             bond_lengths=load_pickle(self.processed_paths[6]),
             bond_angles=torch.from_numpy(np.load(self.processed_paths[7])),
-            is_aromatic=torch.from_numpy(np.load(self.processed_paths[8])).float(),
-            is_in_ring=torch.from_numpy(np.load(self.processed_paths[9])).float(),
-            hybridization=torch.from_numpy(np.load(self.processed_paths[10])).float(),
+            dihedrals=torch.from_numpy(np.load(self.processed_paths[8])).float(),
+            is_aromatic=torch.from_numpy(np.load(self.processed_paths[9])).float(),
+            is_in_ring=torch.from_numpy(np.load(self.processed_paths[10])).float(),
+            hybridization=torch.from_numpy(np.load(self.processed_paths[11])).float(),
         )
-        self.smiles = load_pickle(self.processed_paths[11])
+        self.smiles = load_pickle(self.processed_paths[12])
 
     @property
     def raw_file_names(self):
@@ -145,10 +146,11 @@ class GeomQMDataset(InMemoryDataset):
         save_pickle(statistics.valencies, self.processed_paths[5])
         save_pickle(statistics.bond_lengths, self.processed_paths[6])
         np.save(self.processed_paths[7], statistics.bond_angles)
-        np.save(self.processed_paths[8], statistics.is_aromatic)
-        np.save(self.processed_paths[9], statistics.is_in_ring)
-        np.save(self.processed_paths[10], statistics.hybridization)
-        save_pickle(set(all_smiles), self.processed_paths[11])
+        np.save(self.processed_paths[8], statistics.dihedrals)
+        np.save(self.processed_paths[9], statistics.is_aromatic)
+        np.save(self.processed_paths[10], statistics.is_in_ring)
+        np.save(self.processed_paths[11], statistics.hybridization)
+        save_pickle(set(all_smiles), self.processed_paths[12])
 
     @property
     def processed_file_names(self):
@@ -164,6 +166,7 @@ class GeomQMDataset(InMemoryDataset):
                 f"train_valency_{h}_{confs}.pickle",
                 f"train_bond_lengths_{h}_{confs}.pickle",
                 f"train_angles_{h}_{confs}.npy",
+                f"train_dihedrals_{h}_{confs}.npy",
                 f"train_is_aromatic_{h}_{confs}.npy",
                 f"train_is_in_ring_{h}_{confs}.npy",
                 f"train_hybridization_{h}_{confs}.npy",
@@ -179,6 +182,7 @@ class GeomQMDataset(InMemoryDataset):
                 f"val_valency_{h}_{confs}.pickle",
                 f"val_bond_lengths_{h}_{confs}.pickle",
                 f"val_angles_{h}_{confs}.npy",
+                f"val_dihedrals_{h}_{confs}.npy",
                 f"val_is_aromatic_{h}_{confs}.npy",
                 f"val_is_in_ring_{h}_{confs}.npy",
                 f"val_hybridization_{h}_{confs}.npy",
@@ -194,6 +198,7 @@ class GeomQMDataset(InMemoryDataset):
                 f"test_valency_{h}_{confs}.pickle",
                 f"test_bond_lengths_{h}_{confs}.pickle",
                 f"test_angles_{h}_{confs}.npy",
+                f"test_dihedrals_{h}_{confs}.npy",
                 f"test_is_aromatic_{h}_{confs}.npy",
                 f"test_is_in_ring_{h}_{confs}.npy",
                 f"test_hybridization_{h}_{confs}.npy",
