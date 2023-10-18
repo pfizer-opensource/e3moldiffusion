@@ -81,42 +81,66 @@ class BasicMolecularMetrics(object):
         ]:
             metric.reset()
 
-    def compute_validity(self, generated, local_rank=0):
-        """generated: list of couples (positions, atom_types)"""
+    def compute_validity(self, generated, local_rank=0, strict=True):
+        """generated: list of couples (positions, atom_types)
+        strict (bool, default=True): Weather a change in bond order by sanitization
+                                     or open shell systems should be considered an error.
+                                     If training data is sanitized and closed shell systems
+                                     only, this should throw an error."""
         valid = []
         valid_ids = []
+        valid_mols = []
         num_components = []
         error_message = Counter()
         for i, mol in enumerate(generated):
             rdmol = mol.rdkit_mol
             if rdmol is not None:
+                initial_adj = Chem.GetAdjacencyMatrix(rdmol, useBO=True, force=True)
                 try:
                     mol_frags = Chem.rdmolops.GetMolFrags(
                         rdmol, asMols=True, sanitizeFrags=False
                     )
                     num_components.append(len(mol_frags))
                     if len(mol_frags) > 1:
-                        error_message[4] += 1
-                    largest_mol = max(
-                        mol_frags, default=mol, key=lambda m: m.GetNumAtoms()
-                    )
-                    Chem.SanitizeMol(largest_mol)
-                    smiles = Chem.MolToSmiles(largest_mol)
+                        error_message["disconnected"] += 1
+                        continue
+                    rdmol = mol_frags[0]
+                    Chem.SanitizeMol(rdmol)
+                    if sum([a.GetNumImplicitHs() for a in rdmol.GetAtoms()]) > 0:
+                        error_message["implicit_hydrogens"] += 1
+                        continue
+                    if strict:
+                        # sanitization changes bond order without throwing exceptions for certain cases
+                        # https://github.com/rdkit/rdkit/blob/master/Docs/Book/RDKit_Book.rst#molecular-sanitization
+                        if not (Chem.GetAdjacencyMatrix(rdmol, useBO=True, force=True) == initial_adj).all():
+                            error_message["wrong_bo"] += 1
+                            continue
+                        # atom valencies are only correct when unpaired electrons are added
+                        # when training data does not contain open shell systems, this should be considered an error
+                        if sum([a.GetNumRadicalElectrons() for a in rdmol.GetAtoms()]) > 0:
+                            error_message["radicals"] += 1
+                            continue
+                    smiles = Chem.MolToSmiles(rdmol)
                     valid.append(smiles)
                     valid_ids.append(i)
-                    error_message[-1] += 1
+                    valid_mols.append(mol)
+                    error_message["passed"] += 1
                 except Chem.rdchem.AtomValenceException:
-                    error_message[1] += 1
+                    error_message["wrong_atom_valence"] += 1
                     # print("Valence error in GetmolFrags")
                 except Chem.rdchem.KekulizeException:
-                    error_message[2] += 1
+                    error_message["kekulization"] += 1
                     # print("Can't kekulize molecule")
-                except Chem.rdchem.AtomKekulizeException or ValueError:
-                    error_message[3] += 1
+                except ValueError:
+                    error_message["other"] += 1
         if local_rank == 0:
             print(
-                f"Error messages: AtomValence {error_message[1]}, Kekulize {error_message[2]}, other {error_message[3]}, "
-                f" -- No error {error_message[-1]}"
+                "Error messages:\n"
+                f"Disconnected {error_message['disconnected']}, Kekulize {error_message['kekulization']}, "
+                f"AtomValence {error_message['wrong_atom_valence']}, Implicit Hydrogens {error_message['implicit_hydrogens']},\n"
+                f"Radicals {error_message['radicals']}, Wrong Bond Order {error_message['wrong_bo']}, "
+                f"Other {error_message['other']},\n"
+                f" -- No error {error_message['passed']}"
             )
         self.validity_metric.update(
             value=len(valid) / len(generated), weight=len(generated)
@@ -126,12 +150,12 @@ class BasicMolecularMetrics(object):
         )
         self.mean_components.update(num_components)
         self.max_components.update(num_components)
-        not_connected = 100.0 * error_message[4] / len(generated)
+        not_connected = 100.0 * error_message["disconnected"] / len(generated)
         connected_components = 100.0 - not_connected
 
         valid = canonicalize_list(valid)
 
-        return valid, connected_components, error_message
+        return valid_mols, valid, connected_components, error_message
 
     def compute_uniqueness(self, valid):
         """valid: list of SMILES strings."""
@@ -153,7 +177,7 @@ class BasicMolecularMetrics(object):
         """generated: list of pairs (positions: n x 3, atom_types: n [int])
         the positions and atom types should already be masked."""
         # Validity
-        valid_smiles, connected_components, error_message = self.compute_validity(
+        valid_mols, valid_smiles, connected_components, error_message = self.compute_validity(
             generated, local_rank=local_rank
         )
 
@@ -192,7 +216,7 @@ class BasicMolecularMetrics(object):
                 f"{connected_components:.2f}"
             )
 
-        return valid_smiles, validity, novelty, uniqueness, connected_components
+        return valid_mols, valid_smiles, validity, novelty, uniqueness, connected_components
 
     def __call__(self, molecules: list, local_rank=0, return_molecules=False):
         # Atom and molecule stability
@@ -212,6 +236,7 @@ class BasicMolecularMetrics(object):
         }
         # Validity, uniqueness, novelty
         (
+            valid_molecules,
             all_generated_smiles,
             validity,
             novelty,
@@ -229,7 +254,7 @@ class BasicMolecularMetrics(object):
             "uniqueness": uniqueness,
         }
 
-        statistics_dict = self.compute_statistics(molecules, local_rank)
+        statistics_dict = self.compute_statistics(valid_molecules, local_rank)
         statistics_dict["connected_components"] = connected_components
 
         self.number_samples = len(all_generated_smiles)
@@ -264,13 +289,13 @@ class BasicMolecularMetrics(object):
 
         if not return_molecules:
             all_generated_smiles = None
-            stable_molecules = None
+            valid_molecules = None
         return (
             stability_dict,
             validity_dict,
             statistics_dict,
             all_generated_smiles,
-            stable_molecules,
+            valid_molecules,
         )
 
     def compute_statistics(self, molecules, local_rank):
