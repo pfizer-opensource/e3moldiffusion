@@ -112,7 +112,9 @@ class BasicMolecularMetrics(object):
                     if strict:
                         # sanitization changes bond order without throwing exceptions for certain cases
                         # https://github.com/rdkit/rdkit/blob/master/Docs/Book/RDKit_Book.rst#molecular-sanitization
-                        if not (Chem.GetAdjacencyMatrix(rdmol, useBO=True, force=True) == initial_adj).all():
+                        # only consider change in BO to be wrong when difference is > 0.5 (not just kekulization difference)
+                        adj2 = Chem.GetAdjacencyMatrix(rdmol, useBO=True, force=True)
+                        if not np.all(np.abs(initial_adj - adj2) < 1):
                             error_message["wrong_bo"] += 1
                             continue
                         # atom valencies are only correct when unpaired electrons are added
