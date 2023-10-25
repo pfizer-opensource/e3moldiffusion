@@ -205,7 +205,12 @@ if __name__ == "__main__":
                     print("Ligand-pocket training")
                     from experiments.diffusion_discrete_pocket import Trainer
                 elif dataset == "geomqm":
-                    from experiments.diffusion_discrete_qm import Trainer
+                    if hparams.use_qm_props:
+                        print("Using additional QM features")
+                        from experiments.diffusion_discrete_qm import Trainer
+                    else:
+                        print("Using no additional QM features")
+                        from experiments.diffusion_discrete import Trainer
                 else:
                     from experiments.diffusion_discrete import Trainer
     else:

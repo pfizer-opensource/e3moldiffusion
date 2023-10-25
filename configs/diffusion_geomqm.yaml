@@ -37,6 +37,7 @@ max_num_conformers: 5
 
 # DIFFUSION
 additional_feats: false
+use_qm_props: true
 continuous: false
 noise_scheduler: adaptive
 eps_min: 1.e-3
