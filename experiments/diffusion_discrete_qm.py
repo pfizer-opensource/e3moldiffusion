@@ -730,7 +730,6 @@ class Trainer(pl.LightningModule):
             statistics_dict,
             all_generated_smiles,
             stable_molecules,
-            valid_molecules,
         ) = analyze_stability_for_molecules(
             molecule_list=molecule_list,
             dataset_info=dataset_info,
