@@ -114,9 +114,6 @@ def evaluate(
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
-    import pdb
-
-    pdb.set_trace()
 
     if hparams.continuous:
         print("Using continuous diffusion")
