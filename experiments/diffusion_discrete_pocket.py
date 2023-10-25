@@ -219,7 +219,10 @@ class Trainer(pl.LightningModule):
         pass
 
     def on_test_epoch_end(self):
-        print(f"Running test sampling...")
+        if self.hparams.use_ligand_dataset_sizes:
+            print(f"Running test sampling. Ligand sizes are taken from the data.")
+        else:
+            print(f"Running test sampling. Ligand sizes are sampled.")
         results_dict, generated_smiles, valid_molecules = self.run_evaluation(
             step=0,
             dataset_info=self.dataset_info,
@@ -726,7 +729,7 @@ class Trainer(pl.LightningModule):
             l.append(ngraphs - sum(l))
         assert sum(l) == ngraphs
 
-        dataloader = (
+        dataloader = iter(
             self.trainer.datamodule.val_dataloader()
             if not run_test_eval
             else self.trainer.datamodule.test_dataloader()
@@ -737,7 +740,7 @@ class Trainer(pl.LightningModule):
             if self.local_rank == 0:
                 print(f"Creating {ngraphs} graphs in {l} batches")
         for _, num_graphs in enumerate(l):
-            pocket_data = next(iter(dataloader))
+            pocket_data = next(dataloader)
             if use_ligand_dataset_sizes:
                 num_nodes_lig = pocket_data.batch.bincount()
             else:
@@ -762,18 +765,20 @@ class Trainer(pl.LightningModule):
                 guidance_scale=guidance_scale,
                 energy_model=energy_model,
             )
-            molecule_list = get_molecules(
-                out_dict,
-                data_batch,
-                edge_index_global,
-                self.num_atom_types,
-                self.num_charge_classes,
-                self.dataset_info,
-                data_batch_pocket=data_batch_pocket,
-                device=self.device,
-                mol_device=device,
-                context=context,
-                while_train=False,
+            molecule_list.extend(
+                get_molecules(
+                    out_dict,
+                    data_batch,
+                    edge_index_global,
+                    self.num_atom_types,
+                    self.num_charge_classes,
+                    self.dataset_info,
+                    data_batch_pocket=data_batch_pocket,
+                    device=self.device,
+                    mol_device=device,
+                    context=context,
+                    while_train=False,
+                )
             )
         (
             stability_dict,
@@ -911,7 +916,7 @@ class Trainer(pl.LightningModule):
         x_pocket = pocket_data.x_pocket.to(self.device)
 
         if num_nodes_lig is not None:
-            batch_num_nodes = num_nodes_lig
+            batch_num_nodes = num_nodes_lig.to(self.device)
         else:
             batch_num_nodes = torch.multinomial(
                 input=empirical_distribution_num_nodes,
@@ -1161,8 +1166,8 @@ class Trainer(pl.LightningModule):
                 edge_type_traj.append(edge_attr_global_lig.detach())
                 charge_type_traj.append(charge_types.detach())
 
-        # Move generated molecule back to the original pocket position
-        # pos += pocket_cog_batch
+        # Move generated molecule back to the original pocket position for docking
+        pos += pocket_cog_batch
 
         out_dict = {
             "coords_pred": pos,

@@ -4,7 +4,7 @@ import numpy as np
 
 from rmsd import kabsch_rmsd
 from experiments.xtb_wrapper import xtb_calculate
-
+import os
 import concurrent.futures
 
 
@@ -132,7 +132,7 @@ def change_internal_coordinates(
 
     rmsd = kabsch_rmsd(coords, opt_coords, translate=True)
     if energy_diff:
-        diff_e = results_sp["total energy"] - results["total energy"]
+        diff_e = results_sp["total_energy"] - results["total_energy"]
     else:
         diff_e = np.nan
 
@@ -191,7 +191,7 @@ if __name__ == "__main__":
     with open(filename, "rb") as f:
         data = pickle.load(f)
 
-    mols = [d.rdkit_mol for d in data[:6]]
+    mols = [d.rdkit_mol for d in data]
     for i, mol in enumerate(mols):
         try:
             Chem.SanitizeMol(mol)
@@ -202,24 +202,25 @@ if __name__ == "__main__":
         mols, N_CORES, SAVE_XYZ_FILES
     )
 
-    stem = Path(filename).stem
-    np.savetxt(f"{stem}_eval_diff_b_lengths", diff_b_lengths)
-    np.savetxt(f"{stem}_eval_diff_b_angles", diff_b_angles)
-    np.savetxt(f"{stem}_eval_diff_d_angles", diff_d_angles)
-    np.savetxt(f"{stem}_eval_rmsds", rmsds)
-    np.savetxt(f"{stem}_eval_diff_energies", diff_es)
+    save_dir = os.path.dirname(filename)
+
+    np.savetxt(os.path.join(save_dir, "eval_diff_b_lengths"), diff_b_lengths)
+    np.savetxt(os.path.join(save_dir, "eval_diff_b_angles"), diff_b_angles)
+    np.savetxt(os.path.join(save_dir, "eval_diff_d_angles"), diff_d_angles)
+    np.savetxt(os.path.join(save_dir, "eval_rmsds"), rmsds)
+    np.savetxt(os.path.join(save_dir, "eval_diff_energies"), diff_es)
 
     fig, ax = plt.subplots()
     ax.hist(diff_b_lengths, rwidth=0.9, bins=25)
     ax.set_xlabel("Δ Bond Length [Å]")
     ax.set_ylabel("Count")
-    fig.savefig(f"{stem}_diff_b_lengths.png")
+    fig.savefig(os.path.join(save_dir, "diff_b_lengths.png"))
 
     fig, ax = plt.subplots()
     ax.hist(diff_b_angles, rwidth=0.9, bins=25)
     ax.set_xlabel("Δ Bond Angles [°]")
     ax.set_ylabel("Count")
-    fig.savefig(f"{stem}_diff_b_angles.png")
+    fig.savefig(os.path.join(save_dir, "diff_b_angles.png"))
 
     fig, ax = plt.subplots()
     diff_d_angles = np.abs(diff_d_angles)
@@ -227,16 +228,16 @@ if __name__ == "__main__":
     ax.hist(diff_d_angles, rwidth=0.9, bins=25)
     ax.set_xlabel("Δ Dihedral Angles [°]")
     ax.set_ylabel("Count")
-    fig.savefig(f"{stem}_diff_d_angles.png")
+    fig.savefig(os.path.join(save_dir, "diff_d_angles.png"))
 
     fig, ax = plt.subplots()
     ax.hist(rmsds, rwidth=0.9, bins=25)
     ax.set_xlabel("RMSD [Å]")
     ax.set_ylabel("Count")
-    fig.savefig(f"{stem}_rmsds.png")
+    fig.savefig(os.path.join(save_dir, "rmsds.png"))
 
     fig, ax = plt.subplots()
     ax.hist(np.array(diff_es) * 627.509, rwidth=0.9, bins=25)
     ax.set_xlabel("Δ Energy [kcal/mol]")
     ax.set_ylabel("Count")
-    fig.savefig(f"{stem}_energies.png")
+    fig.savefig(os.path.join(save_dir, "energies.png"))

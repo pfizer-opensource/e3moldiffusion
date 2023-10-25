@@ -189,6 +189,7 @@ if __name__ == "__main__":
         save_xyz=args.save_xyz,
         calculate_energy=args.calculate_energy,
         use_energy_guidance=args.use_energy_guidance,
+        use_ligand_dataset_sizes=args.use_ligand_dataset_sizes,
         ckpt_energy_model=args.ckpt_energy_model,
         guidance_scale=args.guidance_scale,
     )

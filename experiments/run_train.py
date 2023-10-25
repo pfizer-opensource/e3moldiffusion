@@ -204,13 +204,9 @@ if __name__ == "__main__":
                 if dataset == "crossdocked":
                     print("Ligand-pocket training")
                     from experiments.diffusion_discrete_pocket import Trainer
-                elif dataset == "geomqm":
-                    if hparams.use_qm_props:
-                        print("Using additional QM features")
-                        from experiments.diffusion_discrete_qm import Trainer
-                    else:
-                        print("Using no additional QM features")
-                        from experiments.diffusion_discrete import Trainer
+                elif dataset == "geomqm" and hparams.use_qm_props:
+                    print("Using additional QM features")
+                    from experiments.diffusion_discrete_qm import Trainer
                 else:
                     from experiments.diffusion_discrete import Trainer
     else:

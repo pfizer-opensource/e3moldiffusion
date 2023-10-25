@@ -45,7 +45,6 @@ def evaluate(
 
     hparams.load_ckpt_from_pretrained = None
     hparams.gpus = 1
-    print(hparams)
 
     print(f"Loading {hparams.dataset} Datamodule.")
     non_adaptive = True
@@ -92,7 +91,7 @@ def evaluate(
             )
     elif hparams.dataset == "geomqm":
         dataset = "geomqm"
-        from experiments.data.geom.geom_dataset_qm import (
+        from experiments.data.geom.geom_dataset_adaptive_qm import (
             GeomQMDataModule as DataModule,
         )
 
@@ -115,6 +114,9 @@ def evaluate(
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
+    import pdb
+
+    pdb.set_trace()
 
     if hparams.continuous:
         print("Using continuous diffusion")
@@ -127,10 +129,15 @@ def evaluate(
         # from experiments.diffusion_latent_discrete import Trainer #need refactor
         raise NotImplementedError
     else:
+        hparams.use_qm_props = True
+
         print("Using discrete diffusion")
         if hparams.additional_feats:
             print("Using additional features")
             from experiments.diffusion_discrete_moreFeats import Trainer
+        elif dataset == "geomqm" and hparams.use_qm_props:
+            print("Using additional QM features")
+            from experiments.diffusion_discrete_qm import Trainer
         else:
             from experiments.diffusion_discrete import Trainer
 
@@ -166,19 +173,26 @@ def evaluate(
         eta_ddim=eta_ddim,
         run_test_eval=True,
         guidance_scale=guidance_scale,
-        use_guidance=use_guidance,
-        ckpt_guidance_model=ckpt_guidance_model,
+        use_energy_guidance=use_guidance,
         device="cpu",
-        guidance_start=guidance_start,
-        guidance_model_type="forces",  # "energy"
     )
 
     atom_decoder = stable_molecules[0].dataset_info.atom_decoder
 
     if calculate_props:
-        print('Calculating properties...')
-        for mol in tqdm(stable_molecules):
+        sm = stable_molecules.copy()
+        stable_molecules = []
+        print("Calculating properties...")
+        for mol in tqdm(sm):
             atom_types = [atom_decoder[int(a)] for a in mol.atom_types]
+
+            for j, key in enumerate(hparams.properties_list):
+                mean, mad = (
+                    prop_dist.normalizer[key]["mean"],
+                    prop_dist.normalizer[key]["mad"],
+                )
+                prop = mol.context[j] * mad + mean
+                mol.context = float(prop)
             try:
                 charge = mol.charges.sum().item()
                 results = xtb_calculate(
@@ -189,6 +203,9 @@ def evaluate(
                 )
                 for key, value in results.items():
                     mol.__setattr__(key, value)
+
+                stable_molecules.append(mol)
+
             except Exception as e:
                 print(e)
                 continue
@@ -240,7 +257,7 @@ def get_args():
                         help='Whether or not to calculate xTB properties')
     parser.add_argument('--ngraphs', default=80, type=int,
                             help='How many graphs to sample. Defaults to 5000')
-    parser.add_argument('--batch-size', default=40, type=int,
+    parser.add_argument('--batch-size', default=70, type=int,
                             help='Batch-size to generate the selected ngraphs. Defaults to 80.')
     parser.add_argument('--ddim', default=False, action="store_true",
                         help='If DDIM sampling should be used. Defaults to False')

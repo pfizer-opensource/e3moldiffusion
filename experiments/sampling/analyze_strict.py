@@ -11,6 +11,7 @@ from multiprocessing import Pool
 from rdkit import Chem
 from rdkit.DataStructs import TanimotoSimilarity, BulkTanimotoSimilarity
 from rdkit.Chem.QED import qed
+from experiments.sampling.utils import dihedral_distance
 
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
