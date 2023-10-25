@@ -27,11 +27,11 @@ atom_dict = dataset_info["atom_encoder"]
 atom_decoder = dataset_info["atom_decoder"]
 
 
-def process_ligand_and_pocket(pdbfile, sdffile, atom_dict, dist_cutoff, ca_only):
+def process_ligand_and_pocket(pdbfile, sdffile, atom_dict, dist_cutoff, ca_only, no_H):
     pdb_struct = PDBParser(QUIET=True).get_structure("", pdbfile)
 
     try:
-        ligand = Chem.SDMolSupplier(str(sdffile), removeHs=False)[0]
+        ligand = Chem.SDMolSupplier(str(sdffile), removeHs=no_H)[0]
     except:
         raise Exception(f"cannot read sdf mol ({sdffile})")
 
@@ -107,6 +107,7 @@ def process_ligand_and_pocket(pdbfile, sdffile, atom_dict, dist_cutoff, ca_only)
             ],
             axis=0,
         )
+
         full_coords = np.concatenate(
             [
                 np.array([atom.coord for atom in res.get_atoms()])
@@ -114,6 +115,15 @@ def process_ligand_and_pocket(pdbfile, sdffile, atom_dict, dist_cutoff, ca_only)
             ],
             axis=0,
         )
+
+        if no_H:
+            indices_H = np.where(full_atoms == "H")
+            if indices_H[0].size > 0:
+                mask = np.ones(full_atoms.size, dtype=bool)
+                mask[indices_H] = False
+                full_atoms = full_atoms[mask]
+                full_coords = full_coords[mask]
+
         try:
             pocket_one_hot = []
             for a in full_atoms:
@@ -311,8 +321,9 @@ if __name__ == "__main__":
 
     # Make output directory
     if args.outdir is None:
-        suffix = "_crossdock" if "H" in atom_dict else "_crossdock_noH"
+        suffix = "_crossdock_noH" if args.no_H else "_crossdock_H"
         suffix += "_ca_only_temp" if args.ca_only else "_full_temp"
+        suffix += f"_cutoff{args.dist_cutoff}"
         processed_dir = Path(args.basedir, f"processed{suffix}")
     else:
         processed_dir = args.outdir
@@ -379,6 +390,7 @@ if __name__ == "__main__":
                     atom_dict=atom_dict,
                     dist_cutoff=args.dist_cutoff,
                     ca_only=args.ca_only,
+                    no_H=args.no_H,
                 )
             except (
                 KeyError,

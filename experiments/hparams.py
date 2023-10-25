@@ -22,11 +22,13 @@ def add_arguments(parser):
     )  # keep first
 
     # Load from checkpoint
-    parser.add_argument("--load-ckpt", default="", type=str)
+    parser.add_argument("--load-ckpt", default=None, type=str)
     parser.add_argument("--load-ckpt-from-pretrained", default=None, type=str)
 
     # DATA and FILES
     parser.add_argument("-s", "--save-dir", default=DEFAULT_SAVE_DIR, type=str)
+    parser.add_argument("--test-save-dir", default=DEFAULT_SAVE_DIR, type=str)
+
     parser.add_argument(
         "--dataset",
         default="drugs",
@@ -92,12 +94,7 @@ def add_arguments(parser):
     parser.add_argument("--cutoff-global", default=10.0, type=float)
     parser.add_argument("--energy-training", default=False, action="store_true")
     parser.add_argument("--energy-loss", default="l2", type=str, choices=["l2", "l1"])
-    parser.add_argument("--atom-type-masking", default=False, action="store_true")
-    parser.add_argument("--masked-diffusion", default=False, action="store_true")
-    parser.add_argument("--use-absorbing-state", default=False, action="store_true")
-    parser.add_argument(
-        "--guidance-training", default=None, choices=[None, "energy", "forces"]
-    )
+    parser.add_argument("--use-pos-norm", default=False, action="store_true")
 
     # For Discrete: Include more features: (is_aromatic, is_in_ring, hybridization)
     parser.add_argument("--additional-feats", default=False, action="store_true")
@@ -123,6 +120,13 @@ def add_arguments(parser):
     parser.add_argument("--lc-atoms", default=0.4, type=float)
     parser.add_argument("--lc-bonds", default=2.0, type=float)
     parser.add_argument("--lc-charges", default=1.0, type=float)
+    parser.add_argument("--lc-mulliken", default=1.0, type=float)
+    parser.add_argument("--lc-wbo", default=2.0, type=float)
+
+    parser.add_argument("--pocket-noise-std", default=0.1, type=float)
+    parser.add_argument(
+        "--use-ligand-dataset-sizes", default=False, action="store_true"
+    )
 
     parser.add_argument(
         "--loss-weighting",
@@ -136,6 +140,9 @@ def add_arguments(parser):
     parser.add_argument(
         "--continuous-param", default="data", type=str, choices=["data", "noise"]
     )
+    parser.add_argument("--atoms-categorical", default=False, action="store_true")
+    parser.add_argument("--bonds-categorical", default=False, action="store_true")
+
     # BOND PREDICTION AND GUIDANCE:
     parser.add_argument("--bond-guidance-model", default=False, action="store_true")
     parser.add_argument("--bond-prediction", default=False, action="store_true")
@@ -176,7 +183,7 @@ def add_arguments(parser):
     parser.add_argument("--num-workers", default=4, type=int)
     parser.add_argument(
         "--max-num-conformers",
-        default=30,
+        default=5,
         type=int,
         help="Maximum number of conformers per molecule. \
                             Defaults to 30. Set to -1 for all conformers available in database",
@@ -186,7 +193,11 @@ def add_arguments(parser):
     parser.add_argument("--ema-decay", default=0.9999, type=float)
     parser.add_argument("--weight-decay", default=0.9999, type=float)
     parser.add_argument("--seed", default=42, type=int)
-
     parser.add_argument("--backprop-local", default=False, action="store_true")
+
+    # SAMPLING
+    parser.add_argument("--num-test-graphs", default=10000, type=int)
+    parser.add_argument("--calculate-energy", default=False, action="store_true")
+    parser.add_argument("--save-xyz", default=False, action="store_true")
 
     return parser

@@ -1,9 +1,9 @@
 import torch
 import torch.nn.functional as F
-from torch_geometric.utils import dense_to_sparse, sort_edge_index
+from torch_geometric.utils import dense_to_sparse, sort_edge_index, remove_self_loops
 from typing import Optional, List
 from torch_scatter import scatter_mean
-from torch_geometric.nn import radius_graph
+from experiments.utils import get_edges
 
 
 def initialize_edge_attrs_reverse(
@@ -40,6 +40,48 @@ def initialize_edge_attrs_reverse(
     edge_attr_global = F.one_hot(edge_attr_global, num_bond_classes).float()
 
     return edge_attr_global, edge_index_global, mask, mask_i
+
+
+def get_joint_edge_attrs(
+    pos,
+    pos_pocket,
+    batch,
+    batch_pocket,
+    edge_attr_global_lig,
+    num_bond_classes,
+    device,
+):
+    edge_index_global = get_edges(
+        batch, batch_pocket, pos, pos_pocket, cutoff_p=5, cutoff_lp=5
+    )
+    edge_index_global = sort_edge_index(edge_index=edge_index_global, sort_by_row=False)
+    edge_index_global, _ = remove_self_loops(edge_index_global)
+    edge_attr_global = torch.zeros(
+        (edge_index_global.size(1), num_bond_classes),
+        dtype=torch.float32,
+        device=device,
+    )
+    edge_mask = (edge_index_global[0] < len(batch)) & (
+        edge_index_global[1] < len(batch)
+    )
+    edge_mask_pocket = (edge_index_global[0] >= len(batch)) & (
+        edge_index_global[1] >= len(batch)
+    )
+    edge_attr_global[edge_mask] = edge_attr_global_lig
+    edge_attr_global[edge_mask_pocket] = (
+        torch.tensor([0, 0, 0, 0, 1]).float().to(edge_attr_global.device)
+    )
+    # edge_attr_global[edge_mask_pocket] = 0.0
+
+    batch_full = torch.cat([batch, batch_pocket])
+    batch_edge_global = batch_full[edge_index_global[0]]  #
+
+    return (
+        edge_index_global,
+        edge_attr_global,
+        batch_edge_global,
+        edge_mask,
+    )
 
 
 def bond_guidance(
@@ -106,12 +148,13 @@ def energy_guidance(
     with torch.enable_grad():
         node_feats_in = node_feats_in.detach()
         pos = pos.detach().requires_grad_(True)
-        energy_prediction = energy_model(
+        out = energy_model(
             x=node_feats_in,
             t=temb,
             pos=pos,
             batch=batch,
-        )["energy_pred"]
+        )
+        energy_prediction = out["energy_pred"]
 
         grad_outputs: List[Optional[torch.Tensor]] = [
             torch.ones_like(energy_prediction)
@@ -125,26 +168,3 @@ def energy_guidance(
         )[0]
 
     return pos + guidance_scale * pos_shift
-
-
-def force_guidance(
-    pos, node_feats_in, force_model, batch, guidance_scale=0.005, cutoff=7.5
-):
-    edge_index_local = radius_graph(
-        x=pos,
-        r=cutoff,
-        batch=batch,
-        max_num_neighbors=128,
-        flow="source_to_target",
-    )
-
-    out = force_model(
-        x=node_feats_in,
-        pos=pos,
-        batch=batch,
-        edge_index=edge_index_local,
-        edge_attr=None,
-    )["pseudo_forces_pred"]
-
-    pos = pos + guidance_scale * out
-    return pos

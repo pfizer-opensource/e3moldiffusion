@@ -1,6 +1,6 @@
 
-load_ckpt: /hpfs/userws/cremej01/projects/logs/pepconf/x0_retraining_0_snr_bs400/run0/last.ckpt
-#load_ckpt_from_pretrained: /hpfs/userws/cremej01/projects/logs/pubchem/x0_pretraining_0_snr_t_bs300/run0/last.ckpt 
+load_ckpt: /scratch1/e3moldiffusion/logs/pepconf/x0_snr/run0/last-v1.ckpt
+#load_ckpt_from_pretrained: /hpfs/userws/cremej01/projects/logs/pubchem/x0_pretraining_0_snr_t_weighting_random_atom/run0/last.ckpt 
 #/hpfs/userws/cremej01/projects/logs/pubchem/pretrain_x0_3_adaptive/run0/last.ckpt
 # ckpt_bond_model: /hpfs/userws/cremej01/projects/logs/geom/bond_pred_seed1/run0/last.ckpt
 bond_model_guidance: false
@@ -10,8 +10,8 @@ bond_prediction: false
 seed: 42
 
 # batch_size 40 without adaptive, and 200 with adaptive
-batch_size: 12
-inference_batch_size: 24
+batch_size: 10
+inference_batch_size: 20
 ema_decay: 0.999
 grad_clip_val: 10
 accum_batch: 1
@@ -37,7 +37,7 @@ vector_aggr: mean
 
 #DATA
 dataset: pepconf
-dataset_root: /hpfs/userws/cremej01/projects/data/pepconf
+dataset_root: /scratch1/cremej01/data/pepconf
 # dataset_root: /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/data
 
 # DIFFUSION
@@ -48,7 +48,7 @@ eps_min: 1.e-3
 beta_min: 1.e-4
 beta_max: 2.e-2
 timesteps: 500
-max_time: 06:00:00:00
+max_time: 10:00:00:00
 
 #LOGGING
 save_dir: /hpfs/userws/cremej01/projects/logs/geom/pretrain_x0

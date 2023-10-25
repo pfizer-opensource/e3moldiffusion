@@ -78,8 +78,12 @@ class Trainer(pl.LightningModule):
             cutoff_local=hparams["cutoff_local"],
             vector_aggr=hparams["vector_aggr"],
         )
-        self.energy_loss = torch.nn.MSELoss(reduce=False, reduction="none")
-     
+
+        if hparams["energy_loss"] == "l2":
+            self.energy_loss = torch.nn.MSELoss(reduce=False, reduction="none")
+        else:
+            self.energy_loss = torch.nn.L1Loss(reduce=False, reduction="none")
+
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
 

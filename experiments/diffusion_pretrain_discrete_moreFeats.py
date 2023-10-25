@@ -528,7 +528,7 @@ class Trainer(pl.LightningModule):
         )
 
         # TIME EMBEDDING
-        t = t[batch_mask] if self.hparams.dropout_prob > 0 else t
+        t = t[data_batch] if self.hparams.dropout_prob > 0 else t
         temb = t.float() / self.hparams.timesteps
         temb = temb.clamp(min=self.hparams.eps_min)
         temb = temb.unsqueeze(dim=1)

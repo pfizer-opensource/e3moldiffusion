@@ -103,6 +103,9 @@ class Trainer(pl.LightningModule):
             # for i, param in enumerate(self.model.parameters()):
             #     if i < num_params // 2:
             #         param.requires_grad = False
+        elif self.hparams.load_ckpt:
+            print("Loading from model checkpoint...")
+            self.model = load_model(self.hparams.load_ckpt, self.num_atom_features)
         else:
             self.model = DenoisingEdgeNetwork(
                 hn_dim=(hparams["sdim"], hparams["vdim"]),
@@ -682,6 +685,7 @@ class Trainer(pl.LightningModule):
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
         run_test_eval: bool = False,
+        save_traj: bool = False,
         device: str = "cpu",
         **kwargs,
     ):
@@ -706,14 +710,14 @@ class Trainer(pl.LightningModule):
                 edge_types,
                 edge_index_global,
                 batch_num_nodes,
-                _,
+                trajs,
                 context_split,
             ) = self.generate_graphs(
                 num_graphs=num_graphs,
                 verbose=inner_verbose,
                 device=self.device,
                 empirical_distribution_num_nodes=self.empirical_num_nodes,
-                save_traj=False,
+                save_traj=save_traj,
                 ddpm=ddpm,
                 eta_ddim=eta_ddim,
                 every_k_step=every_k_step,
@@ -815,7 +819,7 @@ class Trainer(pl.LightningModule):
             pass
 
         if return_molecules:
-            return total_res, all_generated_smiles, stable_molecules
+            return total_res, all_generated_smiles, stable_molecules, trajs
         else:
             return total_res
 
@@ -1069,10 +1073,10 @@ class Trainer(pl.LightningModule):
                 )
 
             if save_traj:
-                pos_traj.append(pos.detach())
-                atom_type_traj.append(atom_types.detach())
-                edge_type_traj.append(edge_attr_global.detach())
-                charge_type_traj.append(charge_types.detach())
+                pos_traj.append(pos.detach().cpu())
+                atom_type_traj.append(atom_types.argmax(-1).detach().cpu())
+                edge_type_traj.append(edge_attr_global.detach().cpu())
+                charge_type_traj.append(charge_types.detach().cpu())
 
         return (
             pos,

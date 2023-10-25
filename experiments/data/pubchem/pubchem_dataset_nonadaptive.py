@@ -31,16 +31,15 @@ full_atom_encoder = {
     "Hg": 14,
     "Bi": 15,
 }
-GEOM_DATADIR = "/hpfs/userws/cremej01/projects/data/geom/processed"
-# GEOM_DATADIR = "/scratch1/cremej01/data/geom/processed"
+GEOM_DATADIR = "/scratch1/cremej01/data/geom/processed"
 
 
 class PubChemLMDBDataset(Dataset):
     def __init__(
         self,
         root: str,
-        remove_hs: bool = False,
-        **kwargs,
+        remove_hs: bool,
+        evaluation: bool = False,
     ):
         """
         Constructor
@@ -50,12 +49,16 @@ class PubChemLMDBDataset(Dataset):
         if remove_hs:
             assert "_noh" in root
             self.stats_dir = (
-                "/hpfs/userws/cremej01/projects/data/pubchem/database_noh/processed"
+                "/scratch1/cremej01/data/pubchem/dataset_noh/processed"
+                if not evaluation
+                else GEOM_DATADIR
             )
         else:
             assert "_h" in root
             self.stats_dir = (
-                "/hpfs/userws/cremej01/projects/data/pubchem/database_h/processed"
+                "/scratch1/cremej01/data/pubchem/dataset_h/processed"
+                if not evaluation
+                else GEOM_DATADIR
             )
         super().__init__(root)
 
@@ -142,18 +145,26 @@ class PubChemLMDBDataset(Dataset):
             f"train_is_aromatic_{h}.npy",
             f"train_is_in_ring_{h}.npy",
             f"train_hybridization_{h}.npy",
+            "train_smiles.pickle",
         ]
 
 
 class PubChemDataModule(LightningDataModule):
-    def __init__(self, hparams):
+    def __init__(self, hparams, evaluation):
         super(PubChemDataModule, self).__init__()
         self.save_hyperparameters(hparams)
         self.datadir = hparams.dataset_root
         self.pin_memory = True
-        self.remove_hs = hparams.remove_hs
 
-        self.dataset = PubChemLMDBDataset(root=self.datadir, remove_hs=self.remove_hs)
+        self.remove_hs = hparams.remove_hs
+        if self.remove_hs:
+            print("Pre-Training on dataset with implicit hydrogens")
+        self.dataset = PubChemLMDBDataset(
+            root=self.datadir, remove_hs=self.remove_hs, evaluation=evaluation
+        )
+
+        self.train_smiles = self.dataset.smiles
+
         self.idx_train, self.idx_val, self.idx_test = make_splits(
             len(self.dataset),
             train_size=hparams.train_size,

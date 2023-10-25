@@ -18,6 +18,7 @@ from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.data.abstract_dataset import AbstractDatasetInfos
 from experiments.data.distributions import prepare_context
+from experiments.diffusion.categorical import CategoricalDiffusionKernel
 
 from experiments.molecule_utils import Molecule
 from experiments.utils import (
@@ -71,7 +72,7 @@ class Trainer(pl.LightningModule):
 
         self.remove_hs = hparams.get("remove_hs")
         if self.remove_hs:
-            print("Model without modelling explicit hydrogens") 
+            print("Model without modelling explicit hydrogens")
 
         self.smiles_list = smiles_list
 
@@ -108,7 +109,7 @@ class Trainer(pl.LightningModule):
                 num_context_features=hparams["num_context_features"],
                 bond_prediction=hparams["bond_prediction"],
                 property_prediction=hparams["property_prediction"],
-                coords_param=hparams["continuous_param"]
+                coords_param=hparams["continuous_param"],
             )
 
         self.sde_pos = DiscreteDDPM(
@@ -117,7 +118,7 @@ class Trainer(pl.LightningModule):
             N=hparams["timesteps"],
             scaled_reverse_posterior_sigma=True,
             schedule=self.hparams.noise_scheduler,
-            nu=1,
+            nu=2.5,
             enforce_zero_terminal_snr=False,
             T=self.hparams.timesteps,
             clamp_alpha_min=0.05,
@@ -139,17 +140,43 @@ class Trainer(pl.LightningModule):
             N=hparams["timesteps"],
             scaled_reverse_posterior_sigma=True,
             schedule=self.hparams.noise_scheduler,
-            nu=1,
+            nu=1.0,
             enforce_zero_terminal_snr=False,
             param=self.hparams.continuous_param,
         )
+
+        if self.hparams.atoms_categorical:
+            self.cat_atoms = CategoricalDiffusionKernel(
+                terminal_distribution=atom_types_distribution,
+                alphas=self.sde_atom_charge.alphas.clone(),
+                num_atom_types=self.num_atom_types,
+                num_bond_types=self.num_bond_classes,
+                num_charge_types=self.num_charge_classes,
+            )
+            self.cat_charges = CategoricalDiffusionKernel(
+                terminal_distribution=charge_types_distribution,
+                alphas=self.sde_atom_charge.alphas.clone(),
+                num_atom_types=self.num_atom_types,
+                num_bond_types=self.num_bond_classes,
+                num_charge_types=self.num_charge_classes,
+            )
+        if self.hparams.bonds_categorical:
+            self.cat_bonds = CategoricalDiffusionKernel(
+                terminal_distribution=bond_types_distribution,
+                alphas=self.sde_bonds.alphas.clone(),
+                num_atom_types=self.num_atom_types,
+                num_bond_types=self.num_bond_classes,
+                num_charge_types=self.num_charge_classes,
+            )
+
         self.diffusion_loss = DiffusionLoss(
             modalities=["coords", "atoms", "charges", "bonds"],
-            param=[self.hparams.continuous_param,
-                   self.hparams.continuous_param,
-                   self.hparams.continuous_param,
-                   self.hparams.continuous_param
-                   ]
+            param=[
+                self.hparams.continuous_param,
+                self.hparams.continuous_param,
+                self.hparams.continuous_param,
+                self.hparams.continuous_param,
+            ],
         )
 
     def training_step(self, batch, batch_idx):
@@ -163,7 +190,7 @@ class Trainer(pl.LightningModule):
             print(f"Running evaluation in epoch {self.current_epoch + 1}")
             final_res = self.run_evaluation(
                 step=self.i,
-                device = "cuda" if self.hparams.gpus > 1 else "cpu",
+                device="cuda" if self.hparams.gpus > 1 else "cpu",
                 dataset_info=self.dataset_info,
                 ngraphs=1000,
                 bs=self.hparams.inference_batch_size,
@@ -187,7 +214,6 @@ class Trainer(pl.LightningModule):
             )
 
     def step_fnc(self, batch, batch_idx, stage: str):
-        
         batch_size = int(batch.batch.max()) + 1
         t = torch.randint(
             low=1,
@@ -196,7 +222,7 @@ class Trainer(pl.LightningModule):
             dtype=torch.long,
             device=batch.x.device,
         )
-    
+
         if self.hparams.loss_weighting == "snr_s_t":
             weights = self.sde_atom_charge.snr_s_t_weighting(
                 s=t - 1, t=t, device=self.device, clamp_min=0.05, clamp_max=1.5
@@ -214,7 +240,7 @@ class Trainer(pl.LightningModule):
             weights = self.sde_atom_charge.exp_t_half_weighting(t=t, device=self.device)
         elif self.hparams.loss_weighting == "uniform":
             weights = None
-            
+
         if self.hparams.context_mapping:
             context = prepare_context(
                 self.hparams["properties_list"],
@@ -223,22 +249,19 @@ class Trainer(pl.LightningModule):
                 self.hparams.dataset,
             )
             batch.context = context
-            
+
         out_dict = self(batch=batch, t=t)
 
         true_data = {
             "coords": out_dict["coords_true"]
             if self.hparams.continuous_param == "data"
             else out_dict["coords_noise_true"],
-            
-            "atoms": out_dict["atoms_true"] 
+            "atoms": out_dict["atoms_true"]
             if self.hparams.continuous_param == "data"
             else out_dict["atoms_noise_true"],
-            
             "charges": out_dict["charges_true"]
             if self.hparams.continuous_param == "data"
             else out_dict["charges_noise_true"],
-            
             "bonds": out_dict["bonds_true"]
             if self.hparams.continuous_param == "data"
             else out_dict["bonds_noise_true"],
@@ -305,7 +328,7 @@ class Trainer(pl.LightningModule):
         temb = t.float() / self.hparams.timesteps
         temb = temb.clamp(min=self.hparams.eps_min)
         temb = temb.unsqueeze(dim=1)
-        
+
         bond_edge_index, bond_edge_attr = sort_edge_index(
             edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
         )
@@ -332,38 +355,8 @@ class Trainer(pl.LightningModule):
             edge_index=edge_index_global, edge_attr=edge_attr_global, sort_by_row=False
         )
 
-        # create block diagonal matrix
-        dense_edge = torch.zeros(n, n, device=pos.device, dtype=torch.long)
-        # populate entries with integer features
-        dense_edge[edge_index_global[0, :], edge_index_global[1, :]] = edge_attr_global
-        dense_edge_ohe = (
-            F.one_hot(dense_edge.view(-1, 1), num_classes=BOND_FEATURE_DIMS + 1)
-            .view(n, n, -1)
-            .float()
-        )
-
-        assert (
-            torch.norm(dense_edge_ohe - dense_edge_ohe.permute(1, 0, 2)).item() == 0.0
-        )
-
-        # create symmetric noise for edge-attributes
-        noise_edges = torch.randn_like(dense_edge_ohe)
-        noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
-        assert torch.norm(noise_edges - noise_edges.permute(1, 0, 2)).item() == 0.0
-
-        signal = self.sde_bonds.sqrt_alphas_cumprod[t]
-        std = self.sde_bonds.sqrt_1m_alphas_cumprod[t]
-
-        signal_b = signal[data_batch].unsqueeze(-1).unsqueeze(-1)
-        std_b = std[data_batch].unsqueeze(-1).unsqueeze(-1)
-        dense_edge_ohe_perturbed = dense_edge_ohe * signal_b + noise_edges * std_b
-
-        # retrieve as edge-attributes in PyG Format
-        edge_attr_global_perturbed = dense_edge_ohe_perturbed[
-            edge_index_global[0, :], edge_index_global[1, :], :
-        ]
-        edge_attr_global_noise = noise_edges[edge_index_global[0, :], edge_index_global[1, :], :]
-
+        ############NOISING############
+        # POSITIONS
         # Coords: point cloud in R^3
         # sample noise for coords and recenter
         noise_coords_true = torch.randn_like(pos)
@@ -379,28 +372,83 @@ class Trainer(pl.LightningModule):
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
 
-        # Atom-types
-        atom_types = F.one_hot(atom_types, num_classes=self.num_atom_types).float()
-        if self.hparams.continuous_param == "noise":
-            atom_types = 0.25 * atom_types
-            
-        # sample noise for OHEs in {0, 1}^NUM_CLASSES
-        noise_atom_types = torch.randn_like(atom_types)
-        mean_ohes, std_ohes = self.sde_atom_charge.marginal_prob(
-            x=atom_types, t=t[data_batch]
-        )
-        # perturb OHEs
-        atom_types_perturbed = mean_ohes + std_ohes * noise_atom_types
+        # EDGES
+        if not self.hparams.bonds_categorical:
+            # create block diagonal matrix
+            dense_edge = torch.zeros(n, n, device=pos.device, dtype=torch.long)
+            # populate entries with integer features
+            dense_edge[
+                edge_index_global[0, :], edge_index_global[1, :]
+            ] = edge_attr_global
+            dense_edge_ohe = (
+                F.one_hot(dense_edge.view(-1, 1), num_classes=BOND_FEATURE_DIMS + 1)
+                .view(n, n, -1)
+                .float()
+            )
 
-        # Charges
-        charges = self.dataset_info.one_hot_charges(charges).float()
-        # sample noise for OHEs in {0, 1}^NUM_CLASSES
-        noise_charges = torch.randn_like(charges)
-        mean_ohes, std_ohes = self.sde_atom_charge.marginal_prob(
-            x=charges, t=t[data_batch]
-        )
-        # perturb OHEs
-        charges_perturbed = mean_ohes + std_ohes * noise_charges
+            assert (
+                torch.norm(dense_edge_ohe - dense_edge_ohe.permute(1, 0, 2)).item()
+                == 0.0
+            )
+
+            # create symmetric noise for edge-attributes
+            noise_edges = torch.randn_like(dense_edge_ohe)
+            noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
+            assert torch.norm(noise_edges - noise_edges.permute(1, 0, 2)).item() == 0.0
+
+            signal = self.sde_bonds.sqrt_alphas_cumprod[t]
+            std = self.sde_bonds.sqrt_1m_alphas_cumprod[t]
+
+            signal_b = signal[data_batch].unsqueeze(-1).unsqueeze(-1)
+            std_b = std[data_batch].unsqueeze(-1).unsqueeze(-1)
+            dense_edge_ohe_perturbed = dense_edge_ohe * signal_b + noise_edges * std_b
+
+            # retrieve as edge-attributes in PyG Format
+            edge_attr_global_perturbed = dense_edge_ohe_perturbed[
+                edge_index_global[0, :], edge_index_global[1, :], :
+            ]
+            edge_attr_global_noise = noise_edges[
+                edge_index_global[0, :], edge_index_global[1, :], :
+            ]
+        else:
+            edge_attr_global_perturbed = (
+                self.cat_bonds.sample_edges_categorical(
+                    t, edge_index_global, edge_attr_global, data_batch
+                )
+                if not self.hparams.bond_prediction
+                else None
+            )
+
+        # ATOM-TYPES
+        if not self.hparams.atoms_categorical:
+            atom_types = F.one_hot(atom_types, num_classes=self.num_atom_types).float()
+            if self.hparams.continuous_param == "noise":
+                atom_types = 0.25 * atom_types
+
+            # sample noise for OHEs in {0, 1}^NUM_CLASSES
+            noise_atom_types = torch.randn_like(atom_types)
+            mean_ohes, std_ohes = self.sde_atom_charge.marginal_prob(
+                x=atom_types, t=t[data_batch]
+            )
+            # perturb OHEs
+            atom_types_perturbed = mean_ohes + std_ohes * noise_atom_types
+
+            # Charges
+            charges = self.dataset_info.one_hot_charges(charges).float()
+            # sample noise for OHEs in {0, 1}^NUM_CLASSES
+            noise_charges = torch.randn_like(charges)
+            mean_ohes, std_ohes = self.sde_atom_charge.marginal_prob(
+                x=charges, t=t[data_batch]
+            )
+            # perturb OHEs
+            charges_perturbed = mean_ohes + std_ohes * noise_charges
+        else:
+            atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
+                t, atom_types, data_batch, self.dataset_info, type="atoms"
+            )
+            charges, charges_perturbed = self.cat_charges.sample_categorical(
+                t, charges, data_batch, self.dataset_info, type="charges"
+            )
 
         if not self.hparams.fully_connected:
             edge_index_local = radius_graph(
@@ -435,11 +483,13 @@ class Trainer(pl.LightningModule):
         out["atoms_perturbed"] = atom_types_perturbed
         out["charges_perturbed"] = charges_perturbed
         out["bonds_perturbed"] = edge_attr_global_perturbed
-        
+
         out["coords_noise_true"] = noise_coords_true
-        out["atoms_noise_true"] = noise_atom_types
-        out["charges_noise_true"] = noise_charges
-        out["bonds_noise_true"] = edge_attr_global_noise
+        if not self.hparams.atoms_categorical:
+            out["atoms_noise_true"] = noise_atom_types
+            out["charges_noise_true"] = noise_charges
+        if not self.hparams.bonds_categorical:
+            out["bonds_noise_true"] = edge_attr_global_noise
 
         out["coords_true"] = pos_centered
         out["atoms_true"] = atom_types.argmax(dim=-1)
@@ -523,7 +573,7 @@ class Trainer(pl.LightningModule):
         guidance_scale: float = 1.0e-4,
         use_energy_guidance: bool = False,
         ckpt_energy_model: str = None,
-        **kwargs
+        **kwargs,
     ):
         b = ngraphs // bs
         l = [bs] * b
@@ -718,7 +768,7 @@ class Trainer(pl.LightningModule):
             chain = range(0, self.hparams.timesteps)
         elif self.hparams.continuous_param == "noise":
             chain = range(0, self.hparams.timesteps - 1)
-            
+
         chain = chain[::every_k_step]
 
         iterator = (
@@ -749,7 +799,7 @@ class Trainer(pl.LightningModule):
                 [self.num_atom_types, self.num_charge_classes], dim=-1
             )
             edges_pred = out["bonds_pred"]
-            
+
             if self.hparams.continuous_param == "data":
                 atoms_pred = atoms_pred.softmax(dim=-1)
                 # N x a_0
@@ -820,26 +870,13 @@ class Trainer(pl.LightningModule):
                     )
             else:
                 pos = self.sde_pos.sample_reverse_ddim(
-                        t,
-                        pos,
-                        coords_pred,
-                        batch,
-                        cog_proj=True,
-                        eta_ddim=eta_ddim
-                    )
+                    t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
+                )
                 atom_types = self.sde_atom_charge.sample_reverse_ddim(
-                    t,
-                    atom_types,
-                    atoms_pred,
-                    batch,
-                    eta_ddim=eta_ddim
+                    t, atom_types, atoms_pred, batch, eta_ddim=eta_ddim
                 )
                 charge_types = self.sde_atom_charge.sample_reverse_ddim(
-                    t,
-                    charge_types,
-                    charges_pred,
-                    batch,
-                    eta_ddim=eta_ddim
+                    t, charge_types, charges_pred, batch, eta_ddim=eta_ddim
                 )
                 edge_attr_global = self.sde_bonds.sample_reverse_ddim(
                     t,
@@ -847,7 +884,7 @@ class Trainer(pl.LightningModule):
                     edges_pred,
                     batch_edge_global,
                     edge_index_global=edge_index_global,
-                    eta_ddim=eta_ddim
+                    eta_ddim=eta_ddim,
                 )
 
             if not self.hparams.fully_connected:

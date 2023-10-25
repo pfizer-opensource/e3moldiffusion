@@ -7,7 +7,6 @@ from experiments.data.utils import Statistics
 from experiments.molecule_utils import Molecule
 from rdkit import Chem
 from torch_geometric.data import Data
-from torch_geometric.utils import to_dense_adj
 from torchmetrics import (
     KLDivergence,
     MeanAbsoluteError,
@@ -54,29 +53,22 @@ def compute_all_statistics(
     atom_encoder,
     charges_dic,
     additional_feats: bool = True,
-    normalize: bool = True,
 ):
     num_nodes = node_counts(data_list)
-    atom_types = atom_type_counts(
-        data_list, num_classes=len(atom_encoder), normalize=normalize
-    )
+    atom_types = atom_type_counts(data_list, num_classes=len(atom_encoder))
     print(f"Atom types: {atom_types}")
-    bond_types = edge_counts(data_list, normalize=normalize)
+    bond_types = edge_counts(data_list)
     print(f"Bond types: {bond_types}")
     charge_types = charge_counts(
-        data_list,
-        num_classes=len(atom_encoder),
-        charges_dic=charges_dic,
-        normalize=normalize,
+        data_list, num_classes=len(atom_encoder), charges_dic=charges_dic
     )
     print(f"Charge types: {charge_types}")
-    valency = valency_count(data_list, atom_encoder, normalize=normalize)
+    valency = valency_count(data_list, atom_encoder)
     print("Valency: ", valency)
 
-    bond_lengths = bond_lengths_counts(data_list, normalize=normalize)
+    bond_lengths = bond_lengths_counts(data_list)
     print("Bond lengths: ", bond_lengths)
-    angles = bond_angles(data_list, atom_encoder, normalize=normalize)
-    dihedrals = dihedral_angles(data_list, normalize=normalize)
+    angles = bond_angles(data_list, atom_encoder)
 
     if additional_feats:
         feats = additional_feat_counts(data_list=data_list)
@@ -89,7 +81,6 @@ def compute_all_statistics(
             valencies=valency,
             bond_lengths=bond_lengths,
             bond_angles=angles,
-            dihedrals=dihedrals,
             **feats,
         )
     else:
@@ -101,7 +92,6 @@ def compute_all_statistics(
             valencies=valency,
             bond_lengths=bond_lengths,
             bond_angles=angles,
-            dihedrals=dihedrals,
         )
 
 
@@ -122,13 +112,13 @@ def additional_feat_counts(
     for i in range(len(counts_list)):
         counts_list[i] = counts_list[i] / counts_list[i].sum()
     print("Done")
-
+    
     results = dict()
     for key, count in zip(keys, counts_list):
         results[key] = count
 
     print(results)
-
+    
     return results
 
 
@@ -142,19 +132,19 @@ def node_counts(data_list):
     return all_node_counts
 
 
-def atom_type_counts(data_list, num_classes, normalize=True):
+def atom_type_counts(data_list, num_classes):
     print("Computing node types distribution...")
     counts = np.zeros(num_classes)
     for data in data_list:
         x = torch.nn.functional.one_hot(data.x, num_classes=num_classes)
         counts += x.sum(dim=0).numpy()
 
-    counts = counts / counts.sum() if normalize else counts
+    counts = counts / counts.sum()
     print("Done.")
     return counts
 
 
-def edge_counts(data_list, num_bond_types=5, normalize=True):
+def edge_counts(data_list, num_bond_types=5):
     print("Computing edge counts...")
     d = np.zeros(num_bond_types)
 
@@ -175,11 +165,11 @@ def edge_counts(data_list, num_bond_types=5, normalize=True):
         d[0] += num_non_edges
         d[1:] += edge_types
 
-    d = d / d.sum() if normalize else d
+    d = d / d.sum()
     return d
 
 
-def charge_counts(data_list, num_classes, charges_dic, normalize=True):
+def charge_counts(data_list, num_classes, charges_dic):
     print("Computing charge counts...")
     d = np.zeros((num_classes, len(charges_dic)))
 
@@ -188,15 +178,14 @@ def charge_counts(data_list, num_classes, charges_dic, normalize=True):
             assert charge in [-2, -1, 0, 1, 2, 3]
             d[atom.item(), charges_dic[charge.item()]] += 1
 
-    if normalize:
-        s = np.sum(d, axis=1, keepdims=True)
-        s[s == 0] = 1
-        d = d / s
+    s = np.sum(d, axis=1, keepdims=True)
+    s[s == 0] = 1
+    d = d / s
     print("Done.")
     return d
 
 
-def valency_count(data_list, atom_encoder, normalize=True):
+def valency_count(data_list, atom_encoder):
     atom_decoder = {v: k for k, v in atom_encoder.items()}
     print("Computing valency counts...")
     valencies = {atom_type: Counter() for atom_type in atom_encoder.keys()}
@@ -212,16 +201,15 @@ def valency_count(data_list, atom_encoder, normalize=True):
             valencies[atom_decoder[data.x[atom].item()]][valency.item()] += 1
 
     # Normalizing the valency counts
-    if normalize:
-        for atom_type in valencies.keys():
-            s = sum(valencies[atom_type].values())
-            for valency, count in valencies[atom_type].items():
-                valencies[atom_type][valency] = count / s
+    for atom_type in valencies.keys():
+        s = sum(valencies[atom_type].values())
+        for valency, count in valencies[atom_type].items():
+            valencies[atom_type][valency] = count / s
     print("Done.")
     return valencies
 
 
-def bond_lengths_counts(data_list, num_bond_types=5, normalize=True):
+def bond_lengths_counts(data_list, num_bond_types=5):
     """Compute the bond lenghts separetely for each bond type."""
     print("Computing bond lengths...")
     all_bond_lenghts = {1: Counter(), 2: Counter(), 3: Counter(), 4: Counter()}
@@ -235,150 +223,48 @@ def bond_lengths_counts(data_list, num_bond_types=5, normalize=True):
             for d in distances_to_consider:
                 all_bond_lenghts[bond_type][d.item()] += 1
 
-    if normalize:
-        # Normalizing the bond lenghts
-        for bond_type in range(1, num_bond_types):
-            s = sum(all_bond_lenghts[bond_type].values())
-            for d, count in all_bond_lenghts[bond_type].items():
-                all_bond_lenghts[bond_type][d] = count / s
+    # Normalizing the bond lenghts
+    for bond_type in range(1, num_bond_types):
+        s = sum(all_bond_lenghts[bond_type].values())
+        for d, count in all_bond_lenghts[bond_type].items():
+            all_bond_lenghts[bond_type][d] = count / s
     print("Done.")
     return all_bond_lenghts
 
 
-def bond_angles(data_list, atom_encoder, normalize=True):
-    """Calculate all angles between all bonds. Only works for fully connected graph."""
+def bond_angles(data_list, atom_encoder):
+    atom_decoder = {v: k for k, v in atom_encoder.items()}
     print("Computing bond angles...")
-    all_bond_angles = torch.zeros((len(atom_encoder.keys()), 180 * 10 + 1), dtype=int)
+    all_bond_angles = np.zeros((len(atom_encoder.keys()), 180 * 10 + 1))
     for data in data_list:
-        assert not data.has_isolated_nodes(), "Only works for fully conencted graphs."
-        # Calculate all vectors between atom pairs
-        vecs = data.pos - data.pos.unsqueeze(1)
-        # Remove non bonded
-        vecs[~to_dense_adj(data.edge_index).squeeze().bool()] = torch.nan
-        # Calculate angles from dot product
-        vecs /= torch.norm(vecs, p=2, dim=-1, keepdim=True)
-        costheta = torch.einsum("bij,bkj->bik", vecs, vecs)
-        angles = torch.arccos(costheta) * 180 / torch.pi
-        # Mask out diagonals, self angles and non bonded
-        mask_diagonal = torch.stack(
-            [~torch.eye(angles.shape[0]).bool()] * angles.shape[0]
-        )
-        mask_notnan = ~angles.isnan()
-        # Get indices for histogram
-        relevant_angles = angles[mask_diagonal & mask_notnan]
-        bins = (torch.round(relevant_angles, decimals=1) * 10).int()
-        atom_types = (torch.ones_like(angles) * data.x.unsqueeze(-1).unsqueeze(-1))[
-            mask_diagonal & mask_notnan
-        ].int()
-        # Increment bins
-        stacked = torch.stack([atom_types, bins])
-        counts, _ = torch.histogramdd(
-            stacked.T.float(),
-            [
-                torch.arange(0, len(atom_encoder) + 1).float(),
-                torch.arange(0, 1802).float(),
-            ],
-        )
-        all_bond_angles += counts.int()
-        # all_bond_angles[atom_types, bins] += 1 # does not work bc count increases only by one even if it sample appears more than once
+        assert not torch.isnan(data.pos).any()
+        for i in range(data.num_nodes):
+            neighbors = data.edge_index[1][data.edge_index[0] == i]
+            for j in neighbors:
+                for k in neighbors:
+                    if j == k:
+                        continue
+                    assert i != j and i != k and j != k, "i, j, k: {}, {}, {}".format(
+                        i, j, k
+                    )
+                    a = data.pos[j] - data.pos[i]
+                    b = data.pos[k] - data.pos[i]
 
-    if normalize:
-        # Normalizing the angles
-        s = all_bond_angles.sum(axis=1, keepdims=True)
-        s[s == 0] = 1
-        all_bond_angles = all_bond_angles / s
+                    # print(a, b, torch.norm(a) * torch.norm(b))
+                    angle = torch.acos(
+                        torch.dot(a, b) / (torch.norm(a) * torch.norm(b) + 1e-6)
+                    )
+                    angle = angle * 180 / math.pi
+
+                    bin = int(torch.round(angle, decimals=1) * 10)
+                    all_bond_angles[data.x[i].item(), bin] += 1
+
+    # Normalizing the angles
+    s = all_bond_angles.sum(axis=1, keepdims=True)
+    s[s == 0] = 1
+    all_bond_angles = all_bond_angles / s
     print("Done.")
     return all_bond_angles
-
-
-def dihedral_angles(data_list, normalize=True):
-    def calculate_dihedral_angles(mol):
-        def find_dihedrals(mol):
-            torsionSmarts = "[!$(*#*)&!D1]~[!$(*#*)&!D1]"
-            torsionQuery = Chem.MolFromSmarts(torsionSmarts)
-            matches = mol.GetSubstructMatches(torsionQuery)
-            torsionList = []
-            btype = []
-            for match in matches:
-                idx2 = match[0]
-                idx3 = match[1]
-                bond = mol.GetBondBetweenAtoms(idx2, idx3)
-                jAtom = mol.GetAtomWithIdx(idx2)
-                kAtom = mol.GetAtomWithIdx(idx3)
-                if (
-                    (jAtom.GetHybridization() != Chem.HybridizationType.SP2)
-                    and (jAtom.GetHybridization() != Chem.HybridizationType.SP3)
-                ) or (
-                    (kAtom.GetHybridization() != Chem.HybridizationType.SP2)
-                    and (kAtom.GetHybridization() != Chem.HybridizationType.SP3)
-                ):
-                    continue
-                for b1 in jAtom.GetBonds():
-                    if b1.GetIdx() == bond.GetIdx():
-                        continue
-                    idx1 = b1.GetOtherAtomIdx(idx2)
-                    for b2 in kAtom.GetBonds():
-                        if (b2.GetIdx() == bond.GetIdx()) or (
-                            b2.GetIdx() == b1.GetIdx()
-                        ):
-                            continue
-                        idx4 = b2.GetOtherAtomIdx(idx3)
-                        # skip 3-membered rings
-                        if idx4 == idx1:
-                            continue
-                        bt = bond.GetBondTypeAsDouble()
-                        # bt = str(bond.GetBondType())
-                        # if bond.IsInRing():
-                        #     bt += '_R'
-                        btype.append(bt)
-                        torsionList.append((idx1, idx2, idx3, idx4))
-            return np.asarray(torsionList), np.asarray(btype)
-
-        dihedral_idx, dihedral_types = find_dihedrals(mol)
-
-        coords = mol.GetConformer().GetPositions()
-        t_angles = []
-        for t in dihedral_idx:
-            u1, u2, u3, u4 = coords[torch.tensor(t)]
-
-            a1 = u2 - u1
-            a2 = u3 - u2
-            a3 = u4 - u3
-
-            v1 = np.cross(a1, a2)
-            v1 = v1 / (v1 * v1).sum(-1) ** 0.5
-            v2 = np.cross(a2, a3)
-            v2 = v2 / (v2 * v2).sum(-1) ** 0.5
-            porm = np.sign((v1 * a3).sum(-1))
-            rad = np.arccos(
-                (v1 * v2).sum(-1)
-                / ((v1**2).sum(-1) * (v2**2).sum(-1) + 1e-9) ** 0.5
-            )
-            if not porm == 0:
-                rad = rad * porm
-            t_angles.append(rad * 180 / torch.pi)
-
-        return np.asarray(t_angles), dihedral_types
-
-    generated_dihedrals = torch.zeros(5, 180 * 10 + 1)
-    for d in data_list:
-        mol = d.mol
-        angles, types = calculate_dihedral_angles(mol)
-        # transform types to idx
-        types[types == 1.5] = 4
-        types = types.astype(int)
-        for a, t in zip(np.abs(angles), types):
-            if np.isnan(a):
-                continue
-            generated_dihedrals[t, int(np.round(a, decimals=1) * 10)] += 1
-
-    if normalize:
-        s = generated_dihedrals.sum(axis=1, keepdims=True)
-        s[s == 0] = 1
-        generated_dihedrals = generated_dihedrals.float() / s
-
-    return generated_dihedrals
-
 
 
 def counter_to_tensor(c: Counter):

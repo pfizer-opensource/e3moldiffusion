@@ -7,7 +7,9 @@ from tqdm import tqdm
 from os.path import join
 from experiments.data.utils import train_subset
 from torch.utils.data import Subset
-from experiments.data.abstract_dataset import AbstractDataModule
+from experiments.data.abstract_dataset import (
+    AbstractDataModule,
+)
 
 full_atom_encoder = {
     "H": 0,
@@ -31,8 +33,6 @@ full_atom_encoder = {
 
 class GeomDataModule(AbstractDataModule):
     def __init__(self, cfg):
-        super().__init__()
-
         self.datadir = cfg.dataset_root
         root_path = cfg.dataset_root
         self.cfg = cfg
@@ -48,11 +48,6 @@ class GeomDataModule(AbstractDataModule):
         test_dataset = GeomDrugsDataset(
             split="test", root=root_path, remove_h=cfg.remove_hs
         )
-        self.statistics = {
-            "train": train_dataset.statistics,
-            "val": val_dataset.statistics,
-            "test": test_dataset.statistics,
-        }
         if cfg.select_train_subset:
             self.idx_train = train_subset(
                 dset_len=len(train_dataset),
@@ -60,12 +55,31 @@ class GeomDataModule(AbstractDataModule):
                 seed=cfg.seed,
                 filename=join(cfg.save_dir, "splits.npz"),
             )
-            self.train_smiles = train_dataset.smiles
             train_dataset = Subset(train_dataset, self.idx_train)
 
         self.remove_h = cfg.remove_hs
-
+        self.statistics = {
+            "train": train_dataset.statistics,
+            "val": val_dataset.statistics,
+            "test": test_dataset.statistics,
+        }
         super().__init__(cfg, train_dataset, val_dataset, test_dataset)
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        train_dataset = GeomDrugsDataset(
+            root=self.cfg.dataset_root, split="train", remove_h=self.cfg.remove_hs
+        )
+        val_dataset = GeomDrugsDataset(
+            root=self.cfg.dataset_root, split="val", remove_h=self.cfg.remove_hs
+        )
+        test_dataset = GeomDrugsDataset(
+            root=self.cfg.dataset_root, split="test", remove_h=self.cfg.remove_hs
+        )
+
+        if stage == "fit" or stage is None:
+            self.train_dataset = train_dataset
+            self.val_dataset = val_dataset
+            self.test_dataset = test_dataset
 
     def train_dataloader(self, shuffle=True):
         dataloader = DataLoader(

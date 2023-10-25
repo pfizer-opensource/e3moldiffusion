@@ -14,7 +14,7 @@ from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.losses import DiffusionLoss
 from experiments.molecule_utils import Molecule
-from experiments.sampling.analyze import analyze_stability_for_molecules
+from experiments.sampling.analyze_strict import analyze_stability_for_molecules
 from experiments.utils import (
     coalesce_edges,
     get_list_of_edge_adjs,
@@ -46,7 +46,6 @@ from experiments.utils import (
     load_bond_model,
     load_energy_model,
 )
-from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.losses import DiffusionLoss
 
 logging.getLogger("lightning").setLevel(logging.WARNING)

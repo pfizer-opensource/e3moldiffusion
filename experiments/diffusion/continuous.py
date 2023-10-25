@@ -450,21 +450,31 @@ class DiscreteDDPM(nn.Module):
 
         return xt_m1
 
-    def sample_pos(self, t, pos, data_batch):
+    def sample_pos(self, t, pos, data_batch, remove_mean=True):
         # Coords: point cloud in R^3
         # sample noise for coords and recenter
         bs = int(data_batch.max()) + 1
 
         noise_coords_true = torch.randn_like(pos)
-        noise_coords_true = zero_mean(
-            noise_coords_true, batch=data_batch, dim_size=bs, dim=0
-        )
+        if remove_mean:
+            noise_coords_true = zero_mean(
+                noise_coords_true, batch=data_batch, dim_size=bs, dim=0
+            )
         # get signal and noise coefficients for coords
         mean_coords, std_coords = self.marginal_prob(x=pos, t=t[data_batch])
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
 
         return noise_coords_true, pos_perturbed
+
+    def sample(self, t, feature, data_batch):
+        noise_coords_true = torch.randn_like(feature)
+
+        # get signal and noise coefficients for coords
+        mean_coords, std_coords = self.marginal_prob(x=feature, t=t[data_batch])
+        feature_perturbed = mean_coords + std_coords * noise_coords_true
+
+        return noise_coords_true, feature_perturbed
 
     def sample_reverse_adaptive(
         self,

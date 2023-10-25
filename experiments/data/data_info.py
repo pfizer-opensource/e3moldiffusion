@@ -34,26 +34,12 @@ class GeneralInfos(AbstractDatasetInfos):
         self.statistics = datamodule.statistics
         self.name = "drugs"
         self.atom_encoder = full_atom_encoder
-        # for debugging, to do some inference on trained model
-        #if self.remove_h:
-        #    self.atom_encoder = {
-        #        k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
-        #    } 
         self.charge_offset = 2
         self.collapse_charges = torch.Tensor([-2, -1, 0, 1, 2, 3]).int()
-        self.atom_idx_mapping = {
-            0: 0,
-            1: 2,
-            2: 3,
-            3: 4,
-            4: 5,
-            5: 7,
-            6: 8,
-            7: 9,
-            8: 10,
-            9: 12,
-            10: 13,
-        }
+        # if self.remove_h:
+        #     self.atom_encoder = {
+        #         k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
+        #     }
 
         super().complete_infos(datamodule.statistics, self.atom_encoder)
 
@@ -101,13 +87,13 @@ class GEOMInfos(AbstractDatasetInfos):
         self.statistics = datamodule.statistics
         self.name = "drugs"
         self.atom_encoder = full_atom_encoder_drugs
-        # for debugging, to do some inference on trained model
-        #if self.remove_h:
-        #    self.atom_encoder = {
-        #        k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
-        #    } 
         self.charge_offset = 2
         self.collapse_charges = torch.Tensor([-2, -1, 0, 1, 2, 3]).int()
+        if self.remove_h:
+            self.atom_encoder = {
+                k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
+            }
+
         super().complete_infos(datamodule.statistics, self.atom_encoder)
 
         self.input_dims = PlaceHolder(X=self.num_atom_types, C=6, E=5, y=1, pos=3)
@@ -169,6 +155,11 @@ class PubChemInfos(AbstractDatasetInfos):
         }
         self.charge_offset = 2
         self.collapse_charges = torch.Tensor([-2, -1, 0, 1, 2, 3]).int()
+        if self.remove_h:
+            self.atom_encoder = {
+                k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
+            }
+
         super().complete_infos(datamodule.statistics, self.atom_encoder)
 
         self.input_dims = PlaceHolder(X=len(self.atom_encoder), C=6, E=5, y=1, pos=3)
@@ -197,6 +188,10 @@ class QM9Infos(AbstractDatasetInfos):
         self.atom_encoder = full_atom_encoder_qm9
         self.charge_offset = 1
         self.collapse_charges = torch.Tensor([-1, 0, 1]).int()
+        if self.remove_h:
+            self.atom_encoder = {
+                k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
+            }
         super().complete_infos(datamodule.statistics, self.atom_encoder)
         self.input_dims = PlaceHolder(X=self.num_atom_types, C=3, E=5, y=1, pos=3)
         self.output_dims = PlaceHolder(X=self.num_atom_types, C=3, E=5, y=0, pos=3)

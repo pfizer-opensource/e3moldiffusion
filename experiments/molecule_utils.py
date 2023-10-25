@@ -27,11 +27,11 @@ class Molecule:
         positions,
         charges,
         dataset_info,
+        atom_types_pocket=None,
+        positions_pocket=None,
         context=None,
         is_aromatic=None,
         hybridization=None,
-        energy=None,
-        forces_norm=None,
     ):
         """atom_types: n      LongTensor
         charges: n         LongTensor
@@ -58,10 +58,10 @@ class Molecule:
         self.atom_types = atom_types.long()
         self.bond_types = bond_types.long()
         self.positions = positions
+        self.positions_pocket = positions_pocket
+        self.atom_types_pocket = atom_types_pocket
         self.charges = charges
         self.context = context
-        self.energy = energy
-        self.forces_norm = forces_norm
 
         if isinstance(is_aromatic, torch.Tensor):
             assert len(is_aromatic.shape) == 1

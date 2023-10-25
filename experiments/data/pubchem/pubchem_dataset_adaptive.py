@@ -16,6 +16,8 @@ from experiments.data.abstract_dataset import (
     AbstractAdaptiveDataModule,
 )
 
+GEOM_DATADIR = "/scratch1/cremej01/data/geom/processed"
+
 full_atom_encoder = {
     "H": 0,
     "B": 1,
@@ -34,7 +36,6 @@ full_atom_encoder = {
     "Hg": 14,
     "Bi": 15,
 }
-GEOM_DATADIR = "/hpfs/userws/cremej01/projects/data/geom/processed"
 
 
 class PubChemLMDBDataset(Dataset):
@@ -53,17 +54,18 @@ class PubChemLMDBDataset(Dataset):
         if remove_hs:
             assert "_noh" in root
             self.stats_dir = (
-                "/hpfs/userws/cremej01/projects/data/pubchem/database_noh/processed"
+                "/scratch1/cremej01/data/pubchem/dataset_noh/processed"
                 if not evaluation
                 else GEOM_DATADIR
             )
         else:
             assert "_h" in root
             self.stats_dir = (
-                "/hpfs/userws/cremej01/projects/data/pubchem/database_h/processed"
+                "/scratch1/cremej01/data/pubchem/dataset_h/processed"
                 if not evaluation
                 else GEOM_DATADIR
             )
+
         super().__init__(root)
 
         self.remove_hs = remove_hs

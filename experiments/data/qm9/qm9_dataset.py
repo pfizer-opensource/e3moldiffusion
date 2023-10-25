@@ -83,6 +83,11 @@ class QM9Dataset(InMemoryDataset):
         self.remove_h = remove_h
 
         self.atom_encoder = full_atom_encoder
+        if remove_h:
+            self.atom_encoder = {
+                k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
+            }
+
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
 
@@ -225,7 +230,11 @@ class QM9Dataset(InMemoryDataset):
                 num_errors += 1
             else:
                 all_smiles.append(smiles)
-            data = mol_to_torch_geometric(mol, full_atom_encoder, smiles, remove_hydrogens=self.remove_h)
+
+            data = mol_to_torch_geometric(mol, full_atom_encoder, smiles)
+            if self.remove_h:
+                data = remove_hydrogens(data)
+
             if self.pre_filter is not None and not self.pre_filter(data):
                 continue
             if self.pre_transform is not None:

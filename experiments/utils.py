@@ -10,10 +10,15 @@ from torch_sparse import coalesce
 from e3moldiffusion.molfeat import atom_type_config
 from torch_scatter import scatter_mean, scatter_add
 import math
+import torch.nn.functional as F
+from experiments.molecule_utils import Molecule
 from typing import Tuple
 from torch_geometric.utils.num_nodes import maybe_num_nodes
 from torch_geometric.utils.sort_edge_index import sort_edge_index
 from torch_geometric.utils.subgraph import subgraph
+from torch_geometric.nn import radius_graph
+from torch_geometric.utils import dense_to_sparse, sort_edge_index
+from torch_geometric.data import Data
 
 # fmt: off
 # Atomic masses are based on:
@@ -263,6 +268,87 @@ def coalesce_edges(edge_index, bond_edge_index, bond_edge_attr, n):
     return edge_index, edge_attr
 
 
+def get_global_ligand_pocket_index(
+    pos_perturbed,
+    batch,
+    batch_pocket,
+    batch_full,
+    edge_index_global_lig,
+    edge_attr_global_perturbed_lig,
+    cutoff=5,
+    max_num_neighbors=128,
+    num_bond_classes=5,
+    device="cuda",
+):
+    # Global interaction Ligand-Pocket
+    edge_index_global = (
+        torch.eq(batch_full.unsqueeze(0), batch_full.unsqueeze(-1))
+        .int()
+        .fill_diagonal_(0)
+    )
+    edge_index_global, _ = dense_to_sparse(edge_index_global)
+    edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
+    edge_index_global, edge_attr_global_perturbed = coalesce_edges(
+        edge_index=edge_index_global,
+        bond_edge_index=edge_index_global_lig,
+        bond_edge_attr=edge_attr_global_perturbed_lig,
+        n=batch_full.size(0),
+    )
+    edge_index_global, edge_attr_global_perturbed = sort_edge_index(
+        edge_index=edge_index_global,
+        edge_attr=edge_attr_global_perturbed,
+        sort_by_row=False,
+    )
+    # Local interaction Ligand-Pocket
+    edge_index_local = radius_graph(
+        x=pos_perturbed,
+        r=cutoff,
+        batch=batch_full,
+        max_num_neighbors=max_num_neighbors,
+    )
+    edge_index_global, _ = coalesce_edges(
+        edge_index=edge_index_global,
+        bond_edge_index=edge_index_local,
+        bond_edge_attr=torch.zeros_like(edge_index_local[0]),
+        n=batch_full.size(0),
+    )
+    edge_index_global, _ = sort_edge_index(
+        edge_index=edge_index_global,
+        edge_attr=edge_attr_global_perturbed,
+        sort_by_row=False,
+    )
+    lig_n = batch.bincount()
+    pocket_n = batch_pocket.bincount()
+    lig_ids = torch.cat(
+        [
+            torch.arange(
+                lig_n[:i].sum() + pocket_n[:i].sum(),
+                lig_n[:i].sum() + pocket_n[:i].sum() + lig_n[i],
+            )
+            for i in range(len(lig_n))
+        ]
+    ).to(device)
+    i = (
+        torch.tensor([1 if i in lig_ids else 0 for i in edge_index_global[0]])
+        .bool()
+        .to(device)
+    )
+    j = (
+        torch.tensor([1 if j in lig_ids else 0 for j in edge_index_global[1]])
+        .bool()
+        .to(device)
+    )
+    edge_mask = i & j
+
+    edge_attr_global_perturbed = F.one_hot(
+        edge_attr_global_perturbed, num_classes=num_bond_classes
+    ).float() * (edge_mask).unsqueeze(1)
+
+    batch_edge_global = batch_full[edge_index_global[0]]
+
+    return batch_edge_global, edge_index_global, edge_attr_global_perturbed, edge_mask
+
+
 def get_empirical_num_nodes(dataset_info):
     num_nodes_dict = dataset_info.get("n_nodes")
     max_num_nodes = max(num_nodes_dict.keys())
@@ -306,13 +392,55 @@ def zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0):
     return out
 
 
-def remove_mean_pocket(x_lig, x_pocket, batch, batch_pocket):
+def remove_mean_ligand(x_lig, x_pocket, batch, batch_pocket):
     # Just subtract the center of mass of the sampled part
     mean = scatter_mean(x_lig, batch, dim=0)
 
     x_lig = x_lig - mean[batch]
     x_pocket = x_pocket - mean[batch_pocket]
     return x_lig, x_pocket
+
+
+def remove_mean_pocket(pos_lig, pos_pocket, batch, batch_pocket):
+    mean = scatter_mean(pos_pocket, batch_pocket, dim=0)
+    pos_lig = pos_lig - mean[batch]
+    pos_pocket = pos_pocket - mean[batch_pocket]
+    return pos_lig, pos_pocket
+
+
+def concat_ligand_pocket(
+    pos_lig,
+    pos_pocket,
+    x_lig,
+    x_pocket,
+    c_lig,
+    c_pocket,
+    batch_lig,
+    batch_pocket,
+    sorting=False,
+):
+    batch_ctx = torch.cat([batch_lig, batch_pocket], dim=0)
+
+    mask_ligand = torch.cat(
+        [
+            torch.ones([batch_lig.size(0)], device=batch_lig.device).bool(),
+            torch.zeros([batch_pocket.size(0)], device=batch_pocket.device).bool(),
+        ],
+        dim=0,
+    )
+    pos_ctx = torch.cat([pos_lig, pos_pocket], dim=0)
+    x_ctx = torch.cat([x_lig, x_pocket], dim=0)
+    c_ctx = torch.cat([c_lig, c_pocket], dim=0)
+
+    if sorting:
+        sort_idx = torch.sort(batch_ctx, stable=True).indices
+        mask_ligand = mask_ligand[sort_idx]
+        batch_ctx = batch_ctx[sort_idx]
+        pos_ctx = pos_ctx[sort_idx]
+        x_ctx = x_ctx[sort_idx]
+        c_ctx = c_ctx[sort_idx]
+
+    return pos_ctx, x_ctx, c_ctx, batch_ctx, mask_ligand
 
 
 def assert_zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0, eps: float = 1e-6):
@@ -325,6 +453,9 @@ def load_model(filepath, num_atom_features, device="cpu", **kwargs):
 
     ckpt = torch.load(filepath, map_location="cpu")
     args = ckpt["hyper_parameters"]
+
+    args["use_pos_norm"] = True
+
     model = create_model(args, num_atom_features)
 
     state_dict = ckpt["state_dict"]
@@ -337,6 +468,31 @@ def load_model(filepath, num_atom_features, device="cpu", **kwargs):
         k: v
         for k, v in state_dict.items()
         if not any(x in k for x in ["prior", "sde", "cat"])
+    }
+    model.load_state_dict(state_dict)
+    return model.to(device)
+
+
+def load_model_ligand(filepath, num_atom_features, device="cpu", **kwargs):
+    import re
+
+    ckpt = torch.load(filepath, map_location="cpu")
+    args = ckpt["hyper_parameters"]
+
+    args["use_pos_norm"] = False
+
+    model = create_model(args, num_atom_features)
+
+    state_dict = ckpt["state_dict"]
+    state_dict = {
+        re.sub(r"^model\.", "", k): v
+        for k, v in ckpt["state_dict"].items()
+        if k.startswith("model")
+    }
+    state_dict = {
+        k: v
+        for k, v in state_dict.items()
+        if not any(x in k for x in ["prior", "sde", "cat", "posnorm"])
     }
     model.load_state_dict(state_dict)
     return model.to(device)
@@ -365,6 +521,7 @@ def create_model(hparams, num_atom_features):
         bond_prediction=hparams["bond_prediction"],
         property_prediction=hparams["property_prediction"],
         coords_param=hparams["continuous_param"],
+        use_pos_norm=hparams["use_pos_norm"],
     )
     return model
 
@@ -625,3 +782,210 @@ def get_edges(
     edges = torch.stack(torch.where(adj), dim=0)
 
     return edges
+
+
+def get_molecules(
+    out,
+    data_batch,
+    edge_index_global_lig,
+    num_atom_types,
+    num_charge_classes,
+    dataset_info,
+    device,
+    data_batch_pocket=None,
+    mol_device="cpu",
+    context=None,
+    while_train=False,
+):
+    if while_train:
+        atoms_pred = out["atoms_pred"]
+        atoms_pred, charges_pred = atoms_pred.split(
+            [num_atom_types, num_charge_classes], dim=-1
+        )
+    else:
+        atoms_pred = out["atoms_pred"]
+        charges_pred = out["charges_pred"]
+
+    n = data_batch.bincount().sum().item()
+    edge_attrs_dense = torch.zeros(size=(n, n, 5), device=device).float()
+    edge_attrs_dense[edge_index_global_lig[0, :], edge_index_global_lig[1, :], :] = out[
+        "bonds_pred"
+    ]
+    edge_attrs_dense = edge_attrs_dense.argmax(-1)
+    edge_attrs_splits = get_list_of_edge_adjs(edge_attrs_dense, data_batch.bincount())
+
+    pos_splits = (
+        out["coords_pred"].detach().split(data_batch.bincount().cpu().tolist(), dim=0)
+    )
+    if data_batch_pocket is not None:
+        pos_pocket_splits = (
+            out["coords_pocket"]
+            .detach()
+            .split(data_batch_pocket.bincount().cpu().tolist(), dim=0)
+        )
+        atom_types_integer_pocket = torch.argmax(out["atoms_pocket"], dim=-1)
+        atom_types_integer_split_pocket = atom_types_integer_pocket.detach().split(
+            data_batch_pocket.bincount().cpu().tolist(), dim=0
+        )
+
+    atom_types_integer = torch.argmax(atoms_pred, dim=-1)
+    atom_types_integer_split = atom_types_integer.detach().split(
+        data_batch.bincount().cpu().tolist(), dim=0
+    )
+    charge_types_integer = torch.argmax(charges_pred, dim=-1)
+    # offset back
+    charge_types_integer = charge_types_integer - dataset_info.charge_offset
+    charge_types_integer_split = charge_types_integer.detach().split(
+        data_batch.bincount().cpu().tolist(), dim=0
+    )
+    context_split = (
+        context.split(data_batch.bincount().cpu().tolist(), dim=0)
+        if context is not None
+        else None
+    )
+
+    molecule_list = []
+    for i, (positions, atom_types, charges, edges) in enumerate(
+        zip(
+            pos_splits,
+            atom_types_integer_split,
+            charge_types_integer_split,
+            edge_attrs_splits,
+        )
+    ):
+        molecule = Molecule(
+            atom_types=atom_types.detach().to(mol_device),
+            positions=positions.detach().to(mol_device),
+            charges=charges.detach().to(mol_device),
+            bond_types=edges.detach().to(mol_device),
+            positions_pocket=pos_pocket_splits[i].detach().to(mol_device)
+            if data_batch_pocket is not None
+            else None,
+            atom_types_pocket=atom_types_integer_split_pocket[i].detach().to(mol_device)
+            if data_batch_pocket is not None
+            else None,
+            context=context_split[i][0].detach().to(mol_device)
+            if context_split is not None
+            else None,
+            dataset_info=dataset_info,
+        )
+        molecule_list.append(molecule)
+
+    return molecule_list
+
+
+def get_inp_molecules(
+    inp,
+    data_batch,
+    edge_index_global_lig,
+    dataset_info,
+    device,
+    mol_device="cpu",
+    context=None,
+):
+    atoms = inp["atoms"]
+    charges = inp["charges"]
+
+    n = data_batch.bincount().sum().item()
+    edge_attrs_dense = torch.zeros(size=(n, n), device=device).long()
+    edge_attrs_dense[edge_index_global_lig[0, :], edge_index_global_lig[1, :]] = inp[
+        "edges"
+    ]
+    edge_attrs_splits = get_list_of_edge_adjs(edge_attrs_dense, data_batch.bincount())
+
+    pos_splits = (
+        inp["coords"].detach().split(data_batch.bincount().cpu().tolist(), dim=0)
+    )
+    atom_types_integer = torch.argmax(atoms, dim=-1)
+    atom_types_integer_split = atom_types_integer.detach().split(
+        data_batch.bincount().cpu().tolist(), dim=0
+    )
+    charge_types_integer = torch.argmax(charges, dim=-1)
+    # offset back
+    charge_types_integer = charge_types_integer - dataset_info.charge_offset
+    charge_types_integer_split = charge_types_integer.detach().split(
+        data_batch.bincount().cpu().tolist(), dim=0
+    )
+    context_split = (
+        context.split(data_batch.bincount().cpu().tolist(), dim=0)
+        if context is not None
+        else None
+    )
+
+    molecule_list = []
+    for i, (positions, atom_types, charges, edges) in enumerate(
+        zip(
+            pos_splits,
+            atom_types_integer_split,
+            charge_types_integer_split,
+            edge_attrs_splits,
+        )
+    ):
+        molecule = Molecule(
+            atom_types=atom_types.detach().to(mol_device),
+            positions=positions.detach().to(mol_device),
+            charges=charges.detach().to(mol_device),
+            bond_types=edges.detach().to(mol_device),
+            context=context_split[i][0].detach().to(mol_device)
+            if context_split is not None
+            else None,
+            dataset_info=dataset_info,
+        )
+        molecule_list.append(molecule)
+
+    return molecule_list
+
+
+def write_sdf_file(sdf_path, molecules):
+    # NOTE Changed to be compatitble with more versions of rdkit
+    # with Chem.SDWriter(str(sdf_path)) as w:
+    #    for mol in molecules:
+    #        w.write(mol)
+
+    w = Chem.SDWriter(str(sdf_path))
+    w.SetKekulize(False)
+    for m in molecules:
+        if m.rdkit_mol is not None:
+            w.write(m.rdkit_mol)
+
+    # print(f'Wrote SDF file to {sdf_path}')
+
+
+def prepare_pocket(
+    biopython_residues, full_atom_encoder, no_H=True, repeats=1, device="cuda"
+):
+    pocket_atoms = [
+        a
+        for res in biopython_residues
+        for a in res.get_atoms()
+        if (a.element.capitalize() in full_atom_encoder)
+    ]
+
+    pocket_coord = torch.tensor(
+        np.array([a.get_coord() for a in pocket_atoms]),
+        device=device,
+        dtype=torch.float32,
+    )
+    pocket_atoms = [a.element.capitalize() for a in pocket_atoms]
+    if no_H:
+        indices_H = np.where(pocket_atoms == "H")
+        if indices_H[0].size > 0:
+            mask = np.ones(pocket_atoms.size, dtype=bool)
+            mask[indices_H] = False
+            pocket_atoms = pocket_atoms[mask]
+            pocket_coord = pocket_coord[mask]
+
+    pocket_types = (
+        torch.tensor([full_atom_encoder[a] for a in pocket_atoms]).long().to(device)
+    )
+    pocket_mask = torch.repeat_interleave(
+        torch.arange(repeats, device=device), len(pocket_coord)
+    ).long()
+
+    pocket = Data(
+        x_pocket=pocket_types,
+        pos_pocket=pocket_coord,
+        pos_pocket_batch=pocket_mask,
+    )
+
+    return pocket

@@ -76,6 +76,11 @@ class AQMQM7XDataset(InMemoryDataset):
         self.remove_h = remove_h
 
         self.atom_encoder = full_atom_encoder
+        if remove_h:
+            self.atom_encoder = {
+                k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
+            }
+
         self.label2idx = {k: i for i, k in enumerate(mol_properties)}
 
         super().__init__(root, transform, pre_transform, pre_filter)
@@ -269,12 +274,12 @@ class AQMQM7XDataModule(LightningDataModule):
         return dataloader
 
     def compute_mean_mad(self, properties_list):
-        if self.hparams["dataset"] == "aqm_qm7x":
+        if self.hparams["dataset"] == "aqm":
             dataloader = self.get_dataloader(self.train_dataset, "val")
             return self.compute_mean_mad_from_dataloader(dataloader, properties_list)
         elif (
-            self.hparams["dataset"] == "aqm_qm7x_half"
-            or self.hparams["dataset"] == "aqm_qm7x_2half"
+            self.hparams["dataset"] == "aqm_half"
+            or self.hparams["dataset"] == "aqm_2half"
         ):
             dataloader = self.get_dataloader(self.val_dataset, "val")
             return self.compute_mean_mad_from_dataloader(dataloader, properties_list)

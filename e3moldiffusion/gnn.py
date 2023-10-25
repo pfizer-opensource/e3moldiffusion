@@ -20,7 +20,6 @@ class EQGATEnergyGNN(nn.Module):
         cutoff: float = 5.0,
         num_layers: int = 5,
         num_rbfs: int = 20,
-        edge_dim=None,
         use_cross_product: bool = False,
         vector_aggr: str = "mean",
     ):
@@ -37,7 +36,6 @@ class EQGATEnergyGNN(nn.Module):
                     in_dims=hn_dim,
                     out_dims=hn_dim,
                     num_rbfs=num_rbfs,
-                    edge_dim=edge_dim,
                     cutoff=cutoff,
                     has_v_in=i > 0,
                     use_mlp_update=i < (num_layers - 1),
@@ -55,7 +53,7 @@ class EQGATEnergyGNN(nn.Module):
         s: Tensor,
         v: Tensor,
         edge_index: Tensor,
-        edge_attr: Tuple[Tensor, Tensor, OptTensor],
+        edge_attr: Tuple[Tensor, Tensor],
         batch: Tensor = None,
     ) -> Dict:
         # edge_attr_xyz (distances, relative_positions)
@@ -192,6 +190,7 @@ class EQGATEdgeGNN(nn.Module):
         z: OptTensor = None,
         batch: Tensor = None,
         context: OptTensor = None,
+        batch_lig: OptTensor = None,
         pocket_mask: OptTensor = None,
     ) -> Dict:
         # edge_attr_xyz (distances, cosines, relative_positions, edge_features)
@@ -209,6 +208,7 @@ class EQGATEdgeGNN(nn.Module):
                 batch=batch,
                 edge_index=edge_index_in,
                 edge_attr=edge_attr_in,
+                batch_lig=batch_lig,
                 pocket_mask=pocket_mask,
             )
 

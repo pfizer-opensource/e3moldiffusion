@@ -59,28 +59,32 @@ class PredictionHeadEdge(nn.Module):
         x: Dict,
         batch: Tensor,
         edge_index_global: Tensor,
+        edge_index_global_lig: Tensor = None,
         batch_lig: Tensor = None,
         pocket_mask: Tensor = None,
+        edge_mask: Tensor = None,
     ) -> Dict:
         s, v, p, e = x["s"], x["v"], x["p"], x["e"]
         s = self.shared_mapping(s)
-        j, i = edge_index_global
-        n = s.size(0)
 
         coords_pred = self.coords_lin(v).squeeze()
-
         atoms_pred = self.atoms_lin(s)
 
         if batch_lig is not None and pocket_mask is not None:
-            p = p * pocket_mask
-            coords_pred = coords_pred * pocket_mask
-            n_nodes_lig = batch_lig.bincount()
-            lig_mean = scatter_add(coords_pred, index=batch, dim=0)
-            lig_mean = lig_mean / n_nodes_lig
-            coords_pred = coords_pred - lig_mean[batch]
+            s = (s * pocket_mask)[pocket_mask.squeeze(), :]
+            j, i = edge_index_global_lig
+            atoms_pred = (atoms_pred * pocket_mask)[pocket_mask.squeeze(), :]
+            coords_pred = (coords_pred * pocket_mask)[pocket_mask.squeeze(), :]
+            p = p[pocket_mask.squeeze(), :]
+            # coords_pred = (
+            #    coords_pred
+            #    - scatter_mean(coords_pred, index=batch_lig, dim=0)[batch_lig]
+            # )
             d = (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)
 
         elif self.coords_param == "data":
+            j, i = edge_index_global
+            n = s.size(0)
             coords_pred = p + coords_pred
             coords_pred = (
                 coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
@@ -89,15 +93,25 @@ class PredictionHeadEdge(nn.Module):
                 (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)
             )  # .sqrt()
         else:
+            j, i = edge_index_global
+            n = s.size(0)
             d = (p[i] - p[j]).pow(2).sum(-1, keepdim=True)  # .sqrt()
             coords_pred = (
                 coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
             )
 
-        e_dense = torch.zeros(n, n, e.size(-1), device=e.device)
-        e_dense[edge_index_global[0], edge_index_global[1], :] = e
-        e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
-        e = e_dense[edge_index_global[0], edge_index_global[1], :]
+        if edge_mask is not None and edge_index_global_lig is not None:
+            n = len(batch_lig)
+            e = (e * edge_mask.unsqueeze(1))[edge_mask]
+            e_dense = torch.zeros(n, n, e.size(-1), device=e.device)
+            e_dense[edge_index_global_lig[0], edge_index_global_lig[1], :] = e
+            e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
+            e = e_dense[edge_index_global_lig[0], edge_index_global_lig[1], :]
+        else:
+            e_dense = torch.zeros(n, n, e.size(-1), device=e.device)
+            e_dense[edge_index_global[0], edge_index_global[1], :] = e
+            e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
+            e = e_dense[edge_index_global[0], edge_index_global[1], :]
 
         f = s[i] + s[j] + self.bond_mapping(e)
         edge = torch.cat([f, d], dim=-1)
@@ -320,13 +334,15 @@ class DenoisingEdgeNetwork(nn.Module):
         pos: Tensor,
         edge_index_local: Tensor,
         edge_index_global: Tensor,
-        edge_attr_global: OptTensor,
+        edge_index_global_lig: OptTensor = None,
+        edge_attr_global: OptTensor = None,
         batch: OptTensor = None,
         batch_edge_global: OptTensor = None,
         z: OptTensor = None,
         context: OptTensor = None,
         batch_lig: OptTensor = None,
         pocket_mask: OptTensor = None,
+        edge_mask: OptTensor = None,
     ) -> Dict:
         if pocket_mask is None:
             pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
@@ -395,14 +411,18 @@ class DenoisingEdgeNetwork(nn.Module):
             edge_attr_global=edge_attr_global_transformed,
             batch=batch,
             context=cemb,
+            batch_lig=batch_lig,
+            pocket_mask=pocket_mask,
         )
 
         out = self.prediction_head(
             x=out,
             batch=batch,
             edge_index_global=edge_index_global,
+            edge_index_global_lig=edge_index_global_lig,
             batch_lig=batch_lig,
             pocket_mask=pocket_mask,
+            edge_mask=edge_mask,
         )
 
         # out['coords_perturbed'] = pos
@@ -798,7 +818,6 @@ class EQGATEnergyNetwork(nn.Module):
         cutoff_local: float = 5.0,
         num_layers: int = 5,
         use_cross_product: bool = False,
-        edge_dim=None,
         vector_aggr: str = "mean",
     ) -> None:
         super().__init__()
@@ -813,7 +832,6 @@ class EQGATEnergyNetwork(nn.Module):
             hn_dim=hn_dim,
             cutoff=cutoff_local,
             num_rbfs=num_rbfs,
-            edge_dim=edge_dim,
             num_layers=num_layers,
             use_cross_product=use_cross_product,
             vector_aggr=vector_aggr,
@@ -822,18 +840,18 @@ class EQGATEnergyNetwork(nn.Module):
             in_dims=hn_dim, out_dims=(1, None), use_mlp=True
         )
 
-    def calculate_edge_attrs(self, edge_index: Tensor, pos: Tensor, edge_attr=None):
+    def calculate_edge_attrs(self, edge_index: Tensor, pos: Tensor):
         source, target = edge_index
         r = pos[target] - pos[source]
         d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6)
         d = d.sqrt()
         # r_norm = torch.div(r, (1.0 + d.unsqueeze(-1)))
         r_norm = torch.div(r, (d.unsqueeze(-1)))
-        edge_attr = (d, r_norm, edge_attr)
+        edge_attr = (d, r_norm)
         return edge_attr
 
     def forward(
-        self, x: Tensor, pos: Tensor, t: Tensor, batch: OptTensor = None, edge_attr=None
+        self, x: Tensor, pos: Tensor, t: Tensor, batch: OptTensor = None
     ) -> Dict:
         edge_index = radius_graph(
             x=pos, r=self.cutoff, batch=batch, max_num_neighbors=128
@@ -846,7 +864,7 @@ class EQGATEnergyNetwork(nn.Module):
             size=(x.size(0), 3, self.vdim), device=x.device, dtype=pos.dtype
         )
 
-        edge_attr = self.calculate_edge_attrs(edge_index, pos, edge_attr)
+        edge_attr = self.calculate_edge_attrs(edge_index, pos)
         s, v = self.gnn(
             s=s, v=v, edge_index=edge_index, edge_attr=edge_attr, batch=batch
         )
@@ -856,83 +874,6 @@ class EQGATEnergyNetwork(nn.Module):
         energy_molecule = scatter_add(energy_atoms, index=batch, dim=0, dim_size=bs)
         assert energy_molecule.size(1) == 1
         out = {"energy_pred": energy_molecule}
-        return out
-
-
-class EQGATForceNetwork(nn.Module):
-    def __init__(
-        self,
-        num_atom_features: int,
-        hn_dim: Tuple[int, int] = (256, 64),
-        num_rbfs: int = 20,
-        cutoff_local: float = 5.0,
-        num_layers: int = 5,
-        edge_dim=None,
-        use_cross_product: bool = False,
-        vector_aggr: str = "mean",
-    ) -> None:
-        super().__init__()
-        self.cutoff = cutoff_local
-        self.sdim, self.vdim = hn_dim
-
-        self.atom_mapping = DenseLayer(num_atom_features, hn_dim[0])
-
-        if edge_dim:
-            self.bond_mapping = DenseLayer(5, edge_dim)
-        else:
-            self.bond_mapping = None
-
-        self.gnn = EQGATEnergyGNN(
-            hn_dim=hn_dim,
-            cutoff=cutoff_local,
-            num_rbfs=num_rbfs,
-            edge_dim=edge_dim,
-            num_layers=num_layers,
-            use_cross_product=use_cross_product,
-            vector_aggr=vector_aggr,
-        )
-        self.force_head = GatedEquivBlock(in_dims=hn_dim, out_dims=(1, 1), use_mlp=True)
-
-    def calculate_edge_attrs(self, edge_index: Tensor, pos: Tensor, edge_attr=None):
-        source, target = edge_index
-        r = pos[target] - pos[source]
-        d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6)
-        d = d.sqrt()
-        # r_norm = torch.div(r, (1.0 + d.unsqueeze(-1)))
-        r_norm = torch.div(r, (d.unsqueeze(-1)))
-        edge_attr = (d, r_norm, edge_attr)
-        return edge_attr
-
-    def forward(
-        self,
-        x: Tensor,
-        pos: Tensor,
-        edge_index: Tensor,
-        edge_attr: Tensor,
-        batch: OptTensor = None,
-    ) -> Dict:
-        s = self.atom_mapping(x)
-        v = torch.zeros(
-            size=(x.size(0), 3, self.vdim), device=x.device, dtype=pos.dtype
-        )
-
-        bs = len(batch.unique())
-        if self.bond_mapping:
-            edge_attr = self.bond_mapping(edge_attr)
-
-        edge_attr = self.calculate_edge_attrs(edge_index, pos, edge_attr)
-        s, v = self.gnn(
-            s=s, v=v, edge_index=edge_index, edge_attr=edge_attr, batch=batch
-        )
-        scalar_atoms, force_atoms = self.force_head((s, v))
-        force_atoms = force_atoms.squeeze(-1)
-        assert force_atoms.size(1) == 3
-        force_atoms = force_atoms + torch.sum(scalar_atoms * 0.0)
-        force_atoms = (
-            force_atoms
-            - scatter_mean(force_atoms, index=batch, dim=0, dim_size=bs)[batch]
-        )
-        out = {"pseudo_forces_pred": force_atoms}
         return out
 
 

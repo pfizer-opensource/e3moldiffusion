@@ -1,12 +1,9 @@
 from typing import Optional
 
-from experiments.data.pcqm4mv2.pcqm4mv2_dataset_adaptive import PCQM4Mv2Dataset, PCQM4MV2LMDBDataset
+from experiments.data.pcqm4mv2.pcqm4mv2_dataset_adaptive import PCQM4Mv2Dataset
 from pytorch_lightning import LightningDataModule
 from torch_geometric.data import DataLoader
 from tqdm import tqdm
-from experiments.data.utils import train_subset
-from os.path import join
-from torch.utils.data import Subset
 
 full_atom_encoder = {
     "H": 0,
@@ -27,6 +24,7 @@ full_atom_encoder = {
     "Bi": 15,
 }
 
+
 class PCQM4Mv2DataModule(LightningDataModule):
     def __init__(self, cfg):
         super().__init__()
@@ -37,25 +35,15 @@ class PCQM4Mv2DataModule(LightningDataModule):
         self.pin_memory = True
         self.persistent_workers = False
 
-        self.lmdb = True
-        if not self.lmdb:
-            train_dataset = PCQM4Mv2Dataset(
-                split="train", root=root_path, remove_h=cfg.remove_hs
-            )
-            val_dataset = PCQM4Mv2Dataset(
-                split="val", root=root_path, remove_h=cfg.remove_hs
-            )
-            test_dataset = PCQM4Mv2Dataset(
-                split="test", root=root_path, remove_h=cfg.remove_hs
-            )
-        else:
-            train_dataset = PCQM4MV2LMDBDataset(root=root_path, split="train", remove_h=cfg.remove_hs)
-            train_dataset._init_db()
-            val_dataset = PCQM4MV2LMDBDataset(root=root_path, split="val", remove_h=cfg.remove_hs)
-            val_dataset._init_db()
-            test_dataset = PCQM4MV2LMDBDataset(root=root_path, split="test", remove_h=cfg.remove_hs)
-            test_dataset._init_db()
-            
+        train_dataset = PCQM4Mv2Dataset(
+            split="train", root=root_path, remove_h=cfg.remove_hs
+        )
+        val_dataset = PCQM4Mv2Dataset(
+            split="val", root=root_path, remove_h=cfg.remove_hs
+        )
+        test_dataset = PCQM4Mv2Dataset(
+            split="test", root=root_path, remove_h=cfg.remove_hs
+        )
         self.remove_h = cfg.remove_hs
         self.statistics = {
             "train": train_dataset.statistics,
@@ -64,33 +52,15 @@ class PCQM4Mv2DataModule(LightningDataModule):
         }
 
     def setup(self, stage: Optional[str] = None) -> None:
-        if not self.lmdb:
-            train_dataset = PCQM4Mv2Dataset(
-                split="train", root=self.datadir, remove_h=self.cfg.remove_hs
-            )
-            val_dataset = PCQM4Mv2Dataset(
-                split="val", root=self.datadir, remove_h=self.cfg.remove_hs
-            )
-            test_dataset = PCQM4Mv2Dataset(
-                split="test", root=self.datadir, remove_h=self.cfg.remove_hs
-            )
-        else:
-            train_dataset = PCQM4MV2LMDBDataset(root=self.datadir, split="train", remove_h=self.cfg.remove_hs)
-            train_dataset._init_db()
-            val_dataset = PCQM4MV2LMDBDataset(root=self.datadir, split="val", remove_h=self.cfg.remove_hs)
-            val_dataset._init_db()
-            test_dataset = PCQM4MV2LMDBDataset(root=self.datadir, split="test", remove_h=self.cfg.remove_hs)
-            test_dataset._init_db()
-            
-        if self.cfg.select_train_subset:
-            self.idx_train = train_subset(
-                dset_len=len(train_dataset),
-                train_size=self.cfg.train_size,
-                seed=self.cfg.seed,
-                filename=join(self.cfg.save_dir, "splits.npz"),
-            )
-            self.train_smiles = train_dataset.smiles
-            train_dataset = Subset(train_dataset, self.idx_train)
+        train_dataset = PCQM4Mv2Dataset(
+            root=self.cfg.dataset_root, split="train", remove_h=self.cfg.remove_hs
+        )
+        val_dataset = PCQM4Mv2Dataset(
+            root=self.cfg.dataset_root, split="val", remove_h=self.cfg.remove_hs
+        )
+        test_dataset = PCQM4Mv2Dataset(
+            root=self.cfg.dataset_root, split="test", remove_h=self.cfg.remove_hs
+        )
 
         if stage == "fit" or stage is None:
             self.train_dataset = train_dataset

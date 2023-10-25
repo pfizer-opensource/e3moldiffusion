@@ -34,9 +34,8 @@ full_atom_encoder = {
 }
 atom_decoder = {v: k for k, v in full_atom_encoder.items()}
 
-
-# GEOM_DATADIR = "/hpfs/userws/cremej01/projects/data/geom/processed"
 GEOM_DATADIR = "/scratch1/cremej01/data/geom/processed"
+
 
 class GeomDrugsDataset(InMemoryDataset):
     def __init__(
@@ -47,17 +46,14 @@ class GeomDrugsDataset(InMemoryDataset):
         self.remove_h = remove_h
 
         self.atom_encoder = full_atom_encoder
+
+        if remove_h:
+            self.atom_encoder = {
+                k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
+            }
+
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
-
-        # normalize energy, as of now use z-score normalization.
-        mean = self.data.energy.mean(dim=0, keepdim=True)
-        std = self.data.energy.std(dim=0, keepdim=True)
-        self.data.energy = (self.data.energy - mean) / std
-        # could also try mean absolute deviation normalization, less sensitive to outliers, scaling is smaller, i.e. values are larger after.
-        # mad = torch.abs(self.data.energy - mean)
-        # self.data.energy = (self.data.energy - mean) / mad
-
         self.statistics = dataset_utils.Statistics(
             num_nodes=load_pickle(os.path.join(GEOM_DATADIR, self.processed_names[0])),
             atom_types=torch.from_numpy(
@@ -86,7 +82,7 @@ class GeomDrugsDataset(InMemoryDataset):
                 np.load(os.path.join(GEOM_DATADIR, self.processed_names[9]))
             ).float(),
         )
-        self.smiles = load_pickle(os.path.join(GEOM_DATADIR, self.processed_names[10]))
+        self.smiles = load_pickle(self.processed_names[10])
 
     @property
     def raw_file_names(self):
@@ -100,15 +96,15 @@ class GeomDrugsDataset(InMemoryDataset):
     def processed_file_names(self):
         if self.split == "train":
             return [
-                f"train_data_energy.pt",
+                f"train_energy.pt",
             ]
         elif self.split == "val":
             return [
-                f"val_data_energy.pt",
+                f"val_energy.pt",
             ]
         else:
             return [
-                f"test_data_energy.pt",
+                f"test_energy.pt",
             ]
 
     def download(self):
@@ -131,9 +127,9 @@ class GeomDrugsDataset(InMemoryDataset):
                     break
                 data = dataset_utils.mol_to_torch_geometric(
                     conformer,
-                    self.atom_encoder,
+                    full_atom_encoder,
                     smiles,
-                    remove_hydrogens=self.remove_h,
+                    remove_hydrogens=self.remove_h,  # need to give full atom encoder since hydrogens might still be available if Chem.RemoveHs is called
                 )
                 try:
                     atom_types = [atom_decoder[int(a)] for a in data.x]
@@ -142,6 +138,12 @@ class GeomDrugsDataset(InMemoryDataset):
                 except:
                     print(f"Molecule with id {i} and conformer id {j} failed...")
                     continue
+                # even when calling Chem.RemoveHs, hydrogens might be present
+                if self.remove_h:
+                    data = dataset_utils.remove_hydrogens(
+                        data
+                    )  # remove through masking
+
                 if self.pre_filter is not None and not self.pre_filter(data):
                     continue
                 if self.pre_transform is not None:
@@ -151,7 +153,6 @@ class GeomDrugsDataset(InMemoryDataset):
 
         torch.save(self.collate(data_list), self.processed_paths[0])
 
-    @property
     def processed_names(self):
         h = "noh" if self.remove_h else "h"
         if self.split == "train":

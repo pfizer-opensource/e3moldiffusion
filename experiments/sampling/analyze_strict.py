@@ -47,6 +47,7 @@ class BasicMolecularMetrics(object):
         self.valency_w1 = MeanMetric().to(device)
         self.bond_lengths_w1 = MeanMetric().to(device)
         self.angles_w1 = MeanMetric().to(device)
+        self.dihedrals_w1 = MeanMetric().to(device)
 
         self.pc_descriptor_subset = [
             "BertzCT",
@@ -76,48 +77,75 @@ class BasicMolecularMetrics(object):
             self.valency_w1,
             self.bond_lengths_w1,
             self.angles_w1,
+            self.dihedrals_w1,
         ]:
             metric.reset()
 
-    def compute_validity(self, generated, local_rank=0):
-        """generated: list of couples (positions, atom_types)"""
+    def compute_validity(self, generated, local_rank=0, strict=True):
+        """generated: list of couples (positions, atom_types)
+        strict (bool, default=True): Weather a change in bond order by sanitization
+                                     or open shell systems should be considered an error.
+                                     If training data is sanitized and closed shell systems
+                                     only, this should throw an error."""
         valid = []
         valid_ids = []
-        valid_molecules = []
+        valid_mols = []
         num_components = []
         error_message = Counter()
         for i, mol in enumerate(generated):
             rdmol = mol.rdkit_mol
             if rdmol is not None:
+                initial_adj = Chem.GetAdjacencyMatrix(rdmol, useBO=True, force=True)
                 try:
                     mol_frags = Chem.rdmolops.GetMolFrags(
                         rdmol, asMols=True, sanitizeFrags=False
                     )
                     num_components.append(len(mol_frags))
                     if len(mol_frags) > 1:
-                        error_message[4] += 1
-                    else:
-                        valid_molecules.append(generated[i])
-                    largest_mol = max(
-                        mol_frags, default=mol, key=lambda m: m.GetNumAtoms()
-                    )
-                    Chem.SanitizeMol(largest_mol)
-                    smiles = Chem.MolToSmiles(largest_mol)
+                        error_message["disconnected"] += 1
+                        continue
+                    rdmol = mol_frags[0]
+                    Chem.SanitizeMol(rdmol)
+                    if sum([a.GetNumImplicitHs() for a in rdmol.GetAtoms()]) > 0:
+                        error_message["implicit_hydrogens"] += 1
+                        continue
+                    if strict:
+                        # sanitization changes bond order without throwing exceptions for certain cases
+                        # https://github.com/rdkit/rdkit/blob/master/Docs/Book/RDKit_Book.rst#molecular-sanitization
+                        # only consider change in BO to be wrong when difference is > 0.5 (not just kekulization difference)
+                        adj2 = Chem.GetAdjacencyMatrix(rdmol, useBO=True, force=True)
+                        if not np.all(np.abs(initial_adj - adj2) < 1):
+                            error_message["wrong_bo"] += 1
+                            continue
+                        # atom valencies are only correct when unpaired electrons are added
+                        # when training data does not contain open shell systems, this should be considered an error
+                        if (
+                            sum([a.GetNumRadicalElectrons() for a in rdmol.GetAtoms()])
+                            > 0
+                        ):
+                            error_message["radicals"] += 1
+                            continue
+                    smiles = Chem.MolToSmiles(rdmol)
                     valid.append(smiles)
                     valid_ids.append(i)
-                    error_message[-1] += 1
+                    valid_mols.append(mol)
+                    error_message["passed"] += 1
                 except Chem.rdchem.AtomValenceException:
-                    error_message[1] += 1
+                    error_message["wrong_atom_valence"] += 1
                     # print("Valence error in GetmolFrags")
                 except Chem.rdchem.KekulizeException:
-                    error_message[2] += 1
+                    error_message["kekulization"] += 1
                     # print("Can't kekulize molecule")
-                except Chem.rdchem.AtomKekulizeException or ValueError:
-                    error_message[3] += 1
+                except ValueError:
+                    error_message["other"] += 1
         if local_rank == 0:
             print(
-                f"Error messages: AtomValence {error_message[1]}, Kekulize {error_message[2]}, other {error_message[3]}, "
-                f" -- No error {error_message[-1]}"
+                "Error messages:\n"
+                f"Disconnected {error_message['disconnected']}, Kekulize {error_message['kekulization']}, "
+                f"AtomValence {error_message['wrong_atom_valence']}, Implicit Hydrogens {error_message['implicit_hydrogens']},\n"
+                f"Radicals {error_message['radicals']}, Wrong Bond Order {error_message['wrong_bo']}, "
+                f"Other {error_message['other']},\n"
+                f" -- No error {error_message['passed']}"
             )
         self.validity_metric.update(
             value=len(valid) / len(generated), weight=len(generated)
@@ -127,12 +155,12 @@ class BasicMolecularMetrics(object):
         )
         self.mean_components.update(num_components)
         self.max_components.update(num_components)
-        not_connected = 100.0 * error_message[4] / len(generated)
+        not_connected = 100.0 * error_message["disconnected"] / len(generated)
         connected_components = 100.0 - not_connected
 
         valid = canonicalize_list(valid)
 
-        return valid, valid_molecules, connected_components, error_message
+        return valid_mols, valid, connected_components, error_message
 
     def compute_uniqueness(self, valid):
         """valid: list of SMILES strings."""
@@ -155,8 +183,8 @@ class BasicMolecularMetrics(object):
         the positions and atom types should already be masked."""
         # Validity
         (
+            valid_mols,
             valid_smiles,
-            valid_molecules,
             connected_components,
             error_message,
         ) = self.compute_validity(generated, local_rank=local_rank)
@@ -197,43 +225,34 @@ class BasicMolecularMetrics(object):
             )
 
         return (
+            valid_mols,
             valid_smiles,
-            valid_molecules,
             validity,
             novelty,
             uniqueness,
             connected_components,
         )
 
-    def __call__(
-        self, molecules: list, local_rank=0, remove_hs=False, return_molecules=False
-    ):
+    def __call__(self, molecules: list, local_rank=0, return_molecules=False):
+        # Atom and molecule stability
         stable_molecules = []
-        if not remove_hs:
-            # Atom and molecule stability
-            if local_rank == 0:
-                print(f"Analyzing molecule stability")
-            for i, mol in enumerate(molecules):
-                mol_stable, at_stable, num_bonds = check_stability(
-                    mol, self.dataset_info
-                )
-                self.mol_stable.update(value=mol_stable)
-                self.atom_stable.update(value=at_stable / num_bonds, weight=num_bonds)
-                if mol_stable:
-                    stable_molecules.append(mol)
-            stability_dict = {
-                "mol_stable": self.mol_stable.compute().item(),
-                "atm_stable": self.atom_stable.compute().item(),
-            }
-        else:
-            stability_dict = {}
-            if local_rank == 0:
-                print(f"No explicit hydrogens - skipping molecule stability metric")
+        if local_rank == 0:
+            print(f"Analyzing molecule stability on ...")
+        for i, mol in enumerate(molecules):
+            mol_stable, at_stable, num_bonds = check_stability(mol, self.dataset_info)
+            self.mol_stable.update(value=mol_stable)
+            self.atom_stable.update(value=at_stable / num_bonds, weight=num_bonds)
+            if mol_stable:
+                stable_molecules.append(mol)
 
+        stability_dict = {
+            "mol_stable": self.mol_stable.compute().item(),
+            "atm_stable": self.atom_stable.compute().item(),
+        }
         # Validity, uniqueness, novelty
         (
-            all_generated_smiles,
             valid_molecules,
+            all_generated_smiles,
             validity,
             novelty,
             uniqueness,
@@ -250,7 +269,7 @@ class BasicMolecularMetrics(object):
             "uniqueness": uniqueness,
         }
 
-        statistics_dict = self.compute_statistics(molecules, local_rank)
+        statistics_dict = self.compute_statistics(valid_molecules, local_rank)
         statistics_dict["connected_components"] = connected_components
 
         self.number_samples = len(all_generated_smiles)
@@ -285,14 +304,12 @@ class BasicMolecularMetrics(object):
 
         if not return_molecules:
             all_generated_smiles = None
-            stable_molecules = None
             valid_molecules = None
         return (
             stability_dict,
             validity_dict,
             statistics_dict,
             all_generated_smiles,
-            stable_molecules,
             valid_molecules,
         )
 
@@ -344,6 +361,12 @@ class BasicMolecularMetrics(object):
                 save_histogram=self.test,
             )
         self.angles_w1(angles_w1)
+
+        dihedrals_w1, dihedrals_w1_per_type = dihedral_distance(
+            molecules, stat.dihedrals, stat.bond_types, save_histogram=self.test
+        )
+        self.dihedrals_w1(dihedrals_w1)
+
         statistics_log = {
             "sampling/NumNodesW1": self.num_nodes_w1.compute().item(),
             "sampling/AtomTypesTV": self.atom_types_tv.compute().item(),
@@ -352,6 +375,7 @@ class BasicMolecularMetrics(object):
             "sampling/ValencyW1": self.valency_w1.compute().item(),
             "sampling/BondLengthsW1": self.bond_lengths_w1.compute().item(),
             "sampling/AnglesW1": self.angles_w1.compute().item(),
+            "sampling/DihedralsW1": self.dihedrals_w1.compute().item(),
         }
         # if local_rank == 0:
         #     print(
@@ -491,7 +515,6 @@ def analyze_stability_for_molecules(
     smiles_train,
     local_rank,
     return_molecules=False,
-    remove_hs=False,
     device="cpu",
 ):
     metrics = BasicMolecularMetrics(
@@ -503,18 +526,11 @@ def analyze_stability_for_molecules(
         statistics_dict,
         sampled_smiles,
         stable_molecules,
-        valid_molecules,
-    ) = metrics(
-        molecule_list,
-        local_rank=local_rank,
-        remove_hs=remove_hs,
-        return_molecules=return_molecules,
-    )
+    ) = metrics(molecule_list, local_rank=local_rank, return_molecules=return_molecules)
     return (
         stability_dict,
         validity_dict,
         statistics_dict,
         sampled_smiles,
         stable_molecules,
-        valid_molecules,
     )

@@ -25,15 +25,15 @@ def evaluate(
     save_dir,
     save_xyz=False,
     calculate_energy=False,
-    use_guidance=False,
-    ckpt_guidance_model=None,
+    use_energy_guidance=False,
+    ckpt_energy_model=None,
     guidance_scale=1.0e-4,
     ngraphs=5000,
+    save_traj=False,
     batch_size=80,
     step=0,
     ddpm=True,
     eta_ddim=1.0,
-    guidance_start=None,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -41,10 +41,9 @@ def evaluate(
     hparams["diffusion_pretraining"] = False
     hparams = dotdict(hparams)
 
-    hparams.dataset_root = "/hpfs/userws/cremej01/projects/data/geom"
     hparams.load_ckpt_from_pretrained = None
+    hparams.load_ckpt = None
     hparams.gpus = 1
-    print(hparams)
 
     print(f"Loading {hparams.dataset} Datamodule.")
     non_adaptive = True
@@ -126,10 +125,7 @@ def evaluate(
             print("Using additional features")
             from experiments.diffusion_discrete_moreFeats import Trainer
         else:
-            if hparams.use_adaptive_loader:
-                from experiments.diffusion_discrete_adaptive import Trainer
-            else:
-                from experiments.diffusion_discrete import Trainer
+            from experiments.diffusion_discrete import Trainer
 
     # if you want bond_model_guidance, flag this here in the Trainer
     device = "cuda"
@@ -140,6 +136,7 @@ def evaluate(
         prop_norm=prop_norm,
         prop_dist=prop_dist,
         load_ckpt_from_pretrained=None,
+        load_ckpt=None,
         # energy_model_guidance=True if use_energy_guidance else False,
         # ckpt_energy_model=ckpt_energy_model,
         run_evaluation=True,
@@ -150,12 +147,11 @@ def evaluate(
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    results_dict, generated_smiles, stable_molecules = model.run_evaluation(
+    results_dict, generated_smiles, stable_molecules, trajs = model.run_evaluation(
         step=step,
         dataset_info=model.dataset_info,
         ngraphs=ngraphs,
         bs=batch_size,
-        inference_bs=350,
         return_molecules=True,
         verbose=True,
         inner_verbose=True,
@@ -163,16 +159,19 @@ def evaluate(
         ddpm=ddpm,
         eta_ddim=eta_ddim,
         run_test_eval=True,
+        save_traj=save_traj,
         guidance_scale=guidance_scale,
-        use_guidance=use_guidance,
-        ckpt_guidance_model=ckpt_guidance_model,
+        use_energy_guidance=use_energy_guidance,
+        ckpt_energy_model=ckpt_energy_model,
         device="cpu",
-        guidance_start=guidance_start,
-        guidance_model_type="forces",  # "energy"
     )
 
     atom_decoder = stable_molecules[0].dataset_info.atom_decoder
 
+    if save_traj:
+        for i in range(len(trajs[0])):
+            pos = trajs[0]
+            atoms = trajs[1]
     energies = []
     forces_norms = []
     if calculate_energy:
@@ -226,9 +225,8 @@ def get_args():
     parser = argparse.ArgumentParser(description='Data generation')
     parser.add_argument('--model-path', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol/best_mol_stab.ckpt", type=str,
                         help='Path to trained model')
-    parser.add_argument("--use-guidance", default=False, action="store_true")
-    parser.add_argument("--ckpt-guidance-model", default=None, type=str)
-    parser.add_argument("--guidance-start", default=None, type=int)
+    parser.add_argument("--use-energy-guidance", default=False, action="store_true")
+    parser.add_argument("--ckpt-energy-model", default=None, type=str)
     parser.add_argument('--guidance-scale', default=1.0e-4, type=float,
                         help='How to scale the guidance shift')
     parser.add_argument('--save-dir', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol", type=str,
@@ -237,6 +235,8 @@ def get_args():
                         help='Whether or not to store generated molecules in xyz files')
     parser.add_argument('--calculate-energy', default=False, action="store_true",
                         help='Whether or not to calculate xTB energies and forces')
+    parser.add_argument('--save-traj', default=False, action="store_true",
+                        help='Whether or not to save whole trajectory')
     parser.add_argument('--ngraphs', default=5000, type=int,
                             help='How many graphs to sample. Defaults to 5000')
     parser.add_argument('--batch-size', default=80, type=int,
@@ -262,9 +262,9 @@ if __name__ == "__main__":
         ddpm=not args.ddim,
         eta_ddim=args.eta_ddim,
         save_xyz=args.save_xyz,
+        save_traj=args.save_traj,
         calculate_energy=args.calculate_energy,
-        use_guidance=args.use_guidance,
-        ckpt_guidance_model=args.ckpt_guidance_model,
+        use_energy_guidance=args.use_energy_guidance,
+        ckpt_energy_model=args.ckpt_energy_model,
         guidance_scale=args.guidance_scale,
-        guidance_start=args.guidance_start,
     )

@@ -42,13 +42,14 @@ class DistributionNodes:
         log_p = torch.log(probas + 1e-10)
         return log_p.to(batch_n_nodes.device)
 
+
 PROP_TO_IDX_GEOMQM = {
     "dipole_norm": 0,
     "total_energy": 1,
     "HOMO-LUMO_gap": 2,
     "dispersion": 3,
     "atomisation_energy": 4,
-    "polarizability": 5
+    "polarizability": 5,
 }
 
 IDX_TO_PROP_GEOMQM = {v: k for k, v in PROP_TO_IDX_GEOMQM.items()}

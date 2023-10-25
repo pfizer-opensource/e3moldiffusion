@@ -18,7 +18,7 @@ def chunks(lst, n):
         yield lst[i : i + n]
 
 
-DATA_PATH = "/hpfs/userws/cremej01/projects/data/pubchem"
+DATA_PATH = "/scratch1/cremej01/data/pubchem"
 FULL_ATOM_ENCODER = {
     "H": 0,
     "B": 1,
@@ -40,7 +40,7 @@ FULL_ATOM_ENCODER = {
 
 
 def process_files(
-    processes: int = 18, chunk_size: int = 1024, subchunk: int = 128, removeHs=False
+    processes: int = 36, chunk_size: int = 1024, subchunk: int = 128, removeHs=False
 ):
     """
     :param dataset:
@@ -53,6 +53,8 @@ def process_files(
 
     data_list = glob(os.path.join(DATA_PATH, "raw/*.gz"))
     h = "noh" if removeHs else "h"
+    print(f"Process without hydrogens: {removeHs}")
+
     save_path = os.path.join(DATA_PATH, f"database_{h}")
     if os.path.exists(save_path):
         print("FYI: Output directory has been created already.")

@@ -38,7 +38,7 @@ PROPS = [
     "HOMO-LUMO_gap",
     "dispersion",
     "atomisation_energy",
-    "polarizability"
+    "polarizability",
 ]
 
 
@@ -124,7 +124,9 @@ class GeomQMDataset(InMemoryDataset):
                 if data.has_isolated_nodes():
                     warnings.warn("Found disconnected graph, skipping data point.")
                     continue
-                data.y = torch.tensor([properties[pname] for pname in PROPS]).unsqueeze(0)
+                data.y = torch.tensor([properties[pname] for pname in PROPS]).unsqueeze(
+                    0
+                )
                 if self.pre_filter is not None and not self.pre_filter(data):
                     continue
                 if self.pre_transform is not None:
@@ -213,11 +215,22 @@ class GeomQMDataModule(AbstractAdaptiveDataModule):
         self.pin_memory = True
 
         train_dataset = GeomQMDataset(
-            split="train", root=root_path, remove_h=cfg.remove_hs, n_confs=cfg.max_num_conformers
+            split="train",
+            root=root_path,
+            remove_h=cfg.remove_hs,
+            n_confs=cfg.max_num_conformers,
         )
-        val_dataset = GeomQMDataset(split="val", root=root_path, remove_h=cfg.remove_hs, n_confs=cfg.max_num_conformers)
+        val_dataset = GeomQMDataset(
+            split="val",
+            root=root_path,
+            remove_h=cfg.remove_hs,
+            n_confs=cfg.max_num_conformers,
+        )
         test_dataset = GeomQMDataset(
-            split="test", root=root_path, remove_h=cfg.remove_hs, n_confs=cfg.max_num_conformers
+            split="test",
+            root=root_path,
+            remove_h=cfg.remove_hs,
+            n_confs=cfg.max_num_conformers,
         )
 
         self.statistics = {
@@ -334,9 +347,14 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("-n", "--names", nargs='*', type = str, 
-                        help = "Names of datasets, separated by spaces.",
-                        default = ['test', 'val', 'train'])
+    parser.add_argument(
+        "-n",
+        "--names",
+        nargs="*",
+        type=str,
+        help="Names of datasets, separated by spaces.",
+        default=["test", "val", "train"],
+    )
     parser.add_argument("-c", "--conformers", type=int, default=5)
     parser.add_argument("-rhs", "--rm-hydrogens", type=bool, default=False)
     args = parser.parse_args()
@@ -344,11 +362,14 @@ if __name__ == "__main__":
     # Creating the Pytorch Geometric InMemoryDatasets
     DATAROOT = "/scratch1/seumej/geom_qm/"
     for set_name in args.names:
-        print(f'Creating {set_name} dataset with options:')
-        print(f'\tremove_h = {args.rm_hydrogens}')
-        print(f'\tn_confs = {args.conformers}\n')
+        print(f"Creating {set_name} dataset with options:")
+        print(f"\tremove_h = {args.rm_hydrogens}")
+        print(f"\tn_confs = {args.conformers}\n")
 
         dataset = GeomQMDataset(
-            root=DATAROOT, split=set_name, remove_h=args.rm_hydrogens, n_confs=args.conformers
+            root=DATAROOT,
+            split=set_name,
+            remove_h=args.rm_hydrogens,
+            n_confs=args.conformers,
         )
         print(dataset)

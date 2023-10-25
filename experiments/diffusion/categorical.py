@@ -231,7 +231,12 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         return edge_attr_global, edge_index_global, mask, mask_i
 
     def sample_edges_categorical(
-        self, t, edge_index_global, edge_attr_global, data_batch
+        self,
+        t,
+        edge_index_global,
+        edge_attr_global,
+        data_batch,
+        return_one_hot=True,
     ):
         j, i = edge_index_global
         mask = j < i
@@ -258,9 +263,13 @@ class CategoricalDiffusionKernel(torch.nn.Module):
             sort_by_row=False,
         )
 
-        edge_attr_global_perturbed = F.one_hot(
-            edge_attr_global_perturbed, num_classes=self.num_bond_types
-        ).float()
+        edge_attr_global_perturbed = (
+            F.one_hot(
+                edge_attr_global_perturbed, num_classes=self.num_bond_types
+            ).float()
+            if return_one_hot
+            else edge_attr_global_perturbed
+        )
 
         return edge_attr_global_perturbed
 

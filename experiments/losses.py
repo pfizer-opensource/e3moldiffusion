@@ -36,9 +36,11 @@ class DiffusionLoss(nn.Module):
         batch: Tensor,
         bond_aggregation_index: Tensor,
         weights: Optional[Tensor] = None,
-        batch_reduce: bool = True,
     ) -> Dict:
         batch_size = int(batch.max()) + 1
+
+        mulliken_loss = None
+        wbo_loss = None
 
         if weights is not None:
             assert len(weights) == batch_size
@@ -49,9 +51,39 @@ class DiffusionLoss(nn.Module):
                 reduction="none",
             ).mean(-1)
             regr_loss = scatter_mean(regr_loss, index=batch, dim=0, dim_size=batch_size)
-            # regr_loss = self.loss_non_nans(regr_loss, self.regression_key)
+            regr_loss = self.loss_non_nans(regr_loss, self.regression_key)
             regr_loss *= weights
             regr_loss = torch.sum(regr_loss, dim=0)
+
+            if "mulliken" in true_data:
+                mulliken_loss = F.mse_loss(
+                    pred_data["mulliken"],
+                    true_data["mulliken"],
+                    reduction="none",
+                ).mean(-1)
+                mulliken_loss = scatter_mean(
+                    mulliken_loss, index=batch, dim=0, dim_size=batch_size
+                )
+                mulliken_loss *= weights
+                mulliken_loss = torch.sum(mulliken_loss, dim=0)
+
+            if "wbo" in true_data:
+                wbo_loss = F.mse_loss(
+                    pred_data["wbo"],
+                    true_data["wbo"],
+                    reduction="none",
+                ).mean(-1)
+                wbo_loss = 0.5 * scatter_mean(
+                    wbo_loss,
+                    index=bond_aggregation_index,
+                    dim=0,
+                    dim_size=true_data["atoms"].size(0),
+                )
+                wbo_loss = scatter_mean(
+                    wbo_loss, index=batch, dim=0, dim_size=batch_size
+                )
+                wbo_loss *= weights
+                wbo_loss = torch.sum(wbo_loss, dim=0)
 
             if self.param[self.modalities.index("atoms")] == "data":
                 fnc = F.cross_entropy
@@ -66,11 +98,9 @@ class DiffusionLoss(nn.Module):
             atoms_loss = scatter_mean(
                 atoms_loss, index=batch, dim=0, dim_size=batch_size
             )
-            # atoms_loss = self.loss_non_nans(atoms_loss, "atoms")
+            atoms_loss = self.loss_non_nans(atoms_loss, "atoms")
             atoms_loss *= weights
-
-            if batch_reduce:
-                atoms_loss = torch.sum(atoms_loss, dim=0)
+            atoms_loss = torch.sum(atoms_loss, dim=0)
 
             if self.param[self.modalities.index("charges")] == "data":
                 fnc = F.cross_entropy
@@ -87,10 +117,9 @@ class DiffusionLoss(nn.Module):
             charges_loss = scatter_mean(
                 charges_loss, index=batch, dim=0, dim_size=batch_size
             )
-            # charges_loss = self.loss_non_nans(charges_loss, "charges")
+            charges_loss = self.loss_non_nans(charges_loss, "charges")
             charges_loss *= weights
-            if batch_reduce:
-                charges_loss = torch.sum(charges_loss, dim=0)
+            charges_loss = torch.sum(charges_loss, dim=0)
 
             if self.param[self.modalities.index("bonds")] == "data":
                 fnc = F.cross_entropy
@@ -111,10 +140,9 @@ class DiffusionLoss(nn.Module):
             bonds_loss = scatter_mean(
                 bonds_loss, index=batch, dim=0, dim_size=batch_size
             )
-            # bonds_loss = self.loss_non_nans(bonds_loss, "bonds")
+            bonds_loss = self.loss_non_nans(bonds_loss, "bonds")
             bonds_loss *= weights
-            if batch_reduce:
-                bonds_loss = bonds_loss.sum(dim=0)
+            bonds_loss = bonds_loss.sum(dim=0)
 
             if "ring" in self.modalities:
                 ring_loss = F.cross_entropy(
@@ -214,6 +242,8 @@ class DiffusionLoss(nn.Module):
             "ring": ring_loss,
             "aromatic": aromatic_loss,
             "hybridization": hybridization_loss,
+            "mulliken": mulliken_loss,
+            "wbo": wbo_loss,
         }
 
         return loss

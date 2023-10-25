@@ -43,11 +43,11 @@ def process(dataset, split):
             GeomDrugsDataset as DataModule,
         )
 
-        root_path = "/hpfs/userws/cremej01/projects/data/geom"
+        root_path = "/scratch1/cremej01/data/geom"
     elif dataset == "qm9":
         from experiments.data.qm9.qm9_dataset import GeomDrugsDataset as DataModule
 
-        root_path = "/hpfs/userws/cremej01/projects/data/qm9"
+        root_path = "/scratch1/cremej01/data/qm9"
     else:
         raise ValueError("Dataset not found")
 
@@ -73,7 +73,9 @@ def process(dataset, split):
     data, slices = _collate(mols)
 
     print(f"Saving the data...")
-    torch.save((data, slices), (os.path.join(root_path, f"raw/{split}_data_energy.pt")))
+    torch.save(
+        (data, slices), (os.path.join(root_path, f"processed/{split}_data_energy.pt"))
+    )
 
     with open(os.path.join(root_path, f"failed_ids_{split}.pickle"), "wb") as f:
         pickle.dump(failed_ids, f)

@@ -45,7 +45,12 @@ class GeomDrugsDataset(InMemoryDataset):
         self.compute_bond_distance_angles = True
 
         self.atom_encoder = full_atom_encoder
-        
+
+        if remove_h:
+            self.atom_encoder = {
+                k: v - 1 for k, v in self.atom_encoder.items() if k != "H"
+            }
+
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
         self.statistics = dataset_utils.Statistics(
@@ -139,12 +144,16 @@ class GeomDrugsDataset(InMemoryDataset):
                     break
                 data = dataset_utils.mol_to_torch_geometric(
                     conformer,
-                    self.atom_encoder,
+                    full_atom_encoder,
                     smiles,
-                    remove_hydrogens=self.remove_h,
+                    remove_hydrogens=self.remove_h,  # need to give full atom encoder since hydrogens might still be available if Chem.RemoveHs is called
                 )
-                if data is None:
-                    continue
+                # even when calling Chem.RemoveHs, hydrogens might be present
+                if self.remove_h:
+                    data = dataset_utils.remove_hydrogens(
+                        data
+                    )  # remove through masking
+
                 if self.pre_filter is not None and not self.pre_filter(data):
                     continue
                 if self.pre_transform is not None:
@@ -190,11 +199,13 @@ class GeomDataModule(AbstractAdaptiveDataModule):
         test_dataset = GeomDrugsDataset(
             split="test", root=root_path, remove_h=cfg.remove_hs
         )
+
         self.statistics = {
             "train": train_dataset.statistics,
             "val": val_dataset.statistics,
             "test": test_dataset.statistics,
         }
+
         if cfg.select_train_subset:
             self.idx_train = train_subset(
                 dset_len=len(train_dataset),
@@ -297,16 +308,16 @@ if __name__ == "__main__":
     # Creating the Pytorch Geometric InMemoryDatasets
 
     # ff = "/hpfs/userws/"
-    ff = "/sharedhome/"
-    DATAROOT = f"{ff}let55/projects/e3moldiffusion_experiments/data/geom/data_noH_k"
-    #DATAROOT = (
-    #    "/home/let55/workspace/projects/e3moldiffusion_experiments/data/geom/data_noH"
-    #)
-    dataset = GeomDrugsDataset(root=DATAROOT, split="val", remove_h=True)
+    # ff = "/sharedhome/"
+    # DATAROOT = f"{ff}let55/projects/e3moldiffusion_experiments/data/geom/data"
+    DATAROOT = (
+        "/home/let55/workspace/projects/e3moldiffusion_experiments/data/geom/data"
+    )
+    dataset = GeomDrugsDataset(root=DATAROOT, split="val", remove_h=False)
     print(dataset)
-    dataset = GeomDrugsDataset(root=DATAROOT, split="test", remove_h=True)
+    dataset = GeomDrugsDataset(root=DATAROOT, split="test", remove_h=False)
     print(dataset)
-    dataset = GeomDrugsDataset(root=DATAROOT, split="train", remove_h=True)
+    dataset = GeomDrugsDataset(root=DATAROOT, split="train", remove_h=False)
     print(dataset)
     print(dataset[0])
     print(dataset[0].edge_attr)

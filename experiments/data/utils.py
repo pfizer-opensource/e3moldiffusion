@@ -28,7 +28,9 @@ x_map = {
 }
 
 
-def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = False, **kwargs):
+def mol_to_torch_geometric(
+    mol, atom_encoder, smiles, remove_hydrogens: bool = False, **kwargs
+):
     if remove_hydrogens:
         # mol = Chem.RemoveAllHs(mol)
         mol = Chem.RemoveHs(
@@ -87,7 +89,7 @@ def mol_to_torch_geometric(mol, atom_encoder, smiles, remove_hydrogens: bool = F
         is_in_ring=is_in_ring,
         hybridization=hybridization,
         mol=mol,
-        **additional
+        **additional,
     )
 
     return data
@@ -271,7 +273,6 @@ class Statistics:
         valencies,
         bond_lengths,
         bond_angles,
-        dihedrals,
         is_in_ring=None,
         is_aromatic=None,
         hybridization=None,
@@ -284,7 +285,6 @@ class Statistics:
         self.valencies = valencies
         self.bond_lengths = bond_lengths
         self.bond_angles = bond_angles
-        self.dihedrals = dihedrals
         self.is_in_ring = is_in_ring
         self.is_aromatic = is_aromatic
         self.hybridization = hybridization

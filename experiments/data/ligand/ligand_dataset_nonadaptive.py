@@ -208,11 +208,14 @@ class LigandPocketDataset(InMemoryDataset):
                     mol_lig,
                     full_atom_encoder,
                     smiles_lig,
-                    remove_hydrogens=self.remove_hs,  # already removed by default
+                    remove_hydrogens=self.remove_hs,
+                    cog_proj=False,
                 )
             except:
                 print(f"Ligand {i} failed")
                 continue
+            data.pos_lig = coords_lig
+            data.x_lig = atoms_lig
             data.pos_pocket = coords_pocket
             data.x_pocket = atoms_pocket
             data.lig_mask = mask_lig
@@ -221,7 +224,7 @@ class LigandPocketDataset(InMemoryDataset):
             all_smiles.append(smiles_lig)
             data_list_lig.append(data)
 
-        center = True
+        center = False
         if center:
             for i in range(len(data_list_lig)):
                 mean = (

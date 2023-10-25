@@ -1,22 +1,22 @@
 
-#load_ckpt: /hpfs/userws/cremej01/projects/logs/pubchem/x0_pretraining_h_3_snr_diffmask_bs400/run0/last.ckpt
+# load_ckpt: /hpfs/userws/cremej01/projects/logs/geom/adaptive/run0/last-v1.ckpt
 # load_ckpt_from_pretrained: /hpfs/userws/cremej01/projects/logs/geom/pretrain_x0/run0/epoch=254-step=373830.ckpt
 
+additional_feats: false
 diffusion_pretraining: true
-dropout_prob: 0.0
 
-batch_size: 100
+batch_size: 200
 inference_batch_size: 70
 ema_decay: 0.999
 grad_clip_val: 10
 accum_batch: 1
 gamma: 0.99
 
-use_adaptive_loader: false
+use_adaptive_loader: true
 remove_hs: false
 
-gpus: 4
-num_epochs: 10
+gpus: 8
+num_epochs: 3000
 test_interval: 20
 
 #EQGAT
@@ -32,21 +32,20 @@ vector_aggr: mean
 
 #DATA
 dataset: pubchem
-dataset_root: /hpfs/userws/cremej01/projects/data/pubchem/database_h
+dataset_root: /scratch1/cremej01/data/pubchem/database_h
 
 # DIFFUSION
 continuous: false
-continuous_param: data
 noise_scheduler: adaptive
 eps_min: 1.e-3
 beta_min: 1.e-4
 beta_max: 2.e-2
 timesteps: 500
 max_time: 06:00:00:00
-loss_weighting: snr_t
+loss_weighting: uniform
 
 #LOGGING
-save_dir: /sharedhome/let55/projects/e3moldiffusion_experiments/logs/pretrain/snr_t_drop_015_bs100_nonadaptive_lr2e4
+save_dir: /hpfs/userws/cremej01/projects/logs/pubchem/pretrain_x0_5_adaptive
 
 #LEARNING
 lr_scheduler: reduce_on_plateau

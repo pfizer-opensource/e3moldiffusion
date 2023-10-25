@@ -124,6 +124,21 @@ class AbstractDataModule(Mixin, LightningDataset):
         self.cfg = cfg
 
 
+class AbstractDataModuleLigand(Mixin, LightningDataset):
+    def __init__(self, cfg, train_dataset, val_dataset, test_dataset):
+        super().__init__(
+            train_dataset,
+            val_dataset,
+            test_dataset,
+            batch_size=cfg.batch_size,
+            follow_batch=["pos", "pos_pocket"],
+            num_workers=cfg.num_workers,
+            shuffle=True,
+            pin_memory=getattr(cfg.dataset, "pin_memory", False),
+        )
+        self.cfg = cfg
+
+
 class AbstractAdaptiveDataModule(Mixin, AdaptiveLightningDataset):
     def __init__(self, cfg, train_dataset, val_dataset, test_dataset):
         super().__init__(
@@ -131,6 +146,22 @@ class AbstractAdaptiveDataModule(Mixin, AdaptiveLightningDataset):
             val_dataset,
             test_dataset,
             batch_size=cfg.batch_size,
+            reference_batch_size=cfg.inference_batch_size,
+            num_workers=cfg.num_workers,
+            shuffle=True,
+            pin_memory=getattr(cfg.dataset, "pin_memory", False),
+        )
+        self.cfg = cfg
+
+
+class AbstractAdaptiveDataModuleLigand(Mixin, AdaptiveLightningDataset):
+    def __init__(self, cfg, train_dataset, val_dataset, test_dataset):
+        super().__init__(
+            train_dataset,
+            val_dataset,
+            test_dataset,
+            batch_size=cfg.batch_size,
+            follow_batch=["pos", "pos_pocket"],
             reference_batch_size=cfg.inference_batch_size,
             num_workers=cfg.num_workers,
             shuffle=True,
