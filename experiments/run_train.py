@@ -105,9 +105,16 @@ if __name__ == "__main__":
             )
     elif hparams.dataset == "crossdocked":
         dataset = "crossdocked"
-        from experiments.data.ligand.ligand_dataset_nonadaptive import (
-            LigandPocketDataModule as DataModule,
-        )
+        if hparams.use_adaptive_loader:
+            print("Using adaptive dataloader")
+            from experiments.data.ligand.ligand_dataset_adaptive import (
+                LigandPocketDataModule as DataModule,
+            )
+        else:
+            print("Using non-adaptive dataloader")
+            from experiments.data.ligand.ligand_dataset_nonadaptive import (
+                LigandPocketDataModule as DataModule,
+            )
     elif hparams.dataset == "pepconf":
         dataset = "pepconf"
         if hparams.use_adaptive_loader:
@@ -123,11 +130,11 @@ if __name__ == "__main__":
             )
     elif hparams.dataset == "geomqm":
         dataset = "geomqm"
-        from experiments.data.geom.geom_dataset_qm import (
-                    GeomQMDataModule as DataModule,
-                )
+        from experiments.data.geom.geom_dataset_adaptive_qm import (
+            GeomQMDataModule as DataModule,
+        )
     else:
-        raise ValueError(f'Unknown dataset: {hparams.dataset}')
+        raise ValueError(f"Unknown dataset: {hparams.dataset}")
 
     datamodule = DataModule(hparams)
 
@@ -196,7 +203,9 @@ if __name__ == "__main__":
             else:
                 if dataset == "crossdocked":
                     print("Ligand-pocket training")
-                    from experiments.diffusion_discrete_ligand import Trainer
+                    from experiments.diffusion_discrete_pocket import Trainer
+                elif dataset == "geomqm":
+                    from experiments.diffusion_discrete_qm import Trainer
                 else:
                     from experiments.diffusion_discrete import Trainer
     else:
@@ -247,8 +256,28 @@ if __name__ == "__main__":
 
     pl.seed_everything(seed=hparams.seed, workers=hparams.gpus > 1)
 
+    ckpt_path = None
+    if hparams.load_ckpt is not None:
+        print("Loading from checkpoint ...")
+        import torch
+
+        ckpt_path = hparams.load_ckpt
+        ckpt = torch.load(ckpt_path)
+        if ckpt["optimizer_states"][0]["param_groups"][0]["lr"] != hparams.lr:
+            print("Changing learning rate ...")
+            ckpt["optimizer_states"][0]["param_groups"][0]["lr"] = hparams.lr
+            ckpt["optimizer_states"][0]["param_groups"][0]["initial_lr"] = hparams.lr
+            ckpt_path = (
+                "lr" + "_" + str(hparams.lr) + "_" + os.path.basename(hparams.load_ckpt)
+            )
+            ckpt_path = os.path.join(
+                os.path.dirname(hparams.load_ckpt),
+                f"retraining_with_lr{hparams.lr}.ckpt",
+            )
+            if not os.path.exists(ckpt_path):
+                torch.save(ckpt, ckpt_path)
     trainer.fit(
         model=model,
         datamodule=datamodule,
-        # ckpt_path=hparams.load_ckpt if hparams.load_ckpt != "" else None,
+        ckpt_path=ckpt_path if hparams.load_ckpt is not None else None,
     )
