@@ -6,10 +6,11 @@ from time import time
 import torch
 from rdkit import Chem
 from tqdm import tqdm
-
+import pandas as pd
 from experiments.utils import prepare_pocket, write_sdf_file
 from Bio.PDB import PDBParser
 from experiments.data.distributions import DistributionProperty
+from experiments.docking import calculate_qvina2_score
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
@@ -35,6 +36,9 @@ def evaluate(
     batch_size,
     ddpm,
     eta_ddim,
+    write_dict,
+    write_csv,
+    pdbqt_dir,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -85,7 +89,6 @@ def evaluate(
         prop_dist=prop_dist,
         load_ckpt_from_pretrained=None,
         load_ckpt=None,
-        vdim=256,
         # energy_model_guidance=True if use_energy_guidance else False,
         # ckpt_energy_model=ckpt_energy_model,
         run_evaluation=True,
@@ -113,6 +116,9 @@ def evaluate(
     time_per_pocket = {}
 
     all_molecules = []
+    sdf_files = []
+
+    print("Starting sampling...")
     for sdf_file in pbar:
         ligand_name = sdf_file.stem
 
@@ -142,7 +148,7 @@ def evaluate(
         if fix_n_nodes:
             # some ligands (e.g. 6JWS_bio1_PT1:A:801) could not be read with sanitize=True
             suppl = Chem.SDMolSupplier(str(sdf_file), sanitize=False)
-            num_nodes_lig = suppl[0].GetNumAtoms()
+            num_nodes_lig = torch.tensor(suppl[0].GetNumAtoms()).long()
 
         pdb_struct = PDBParser(QUIET=True).get_structure("", pdb_file)[0]
         if resi_list is not None:
@@ -167,6 +173,7 @@ def evaluate(
         )
         all_molecules.extend(molecules)
         write_sdf_file(sdf_out_file_raw, molecules)
+        sdf_files.append(sdf_out_file_raw)
 
         # Time the sampling process
         time_per_pocket[str(sdf_file)] = time() - t_pocket_start
@@ -188,6 +195,58 @@ def evaluate(
         f"Time per pocket: {times_arr.mean():.3f} \pm "
         f"{times_arr.std(unbiased=False):.2f}"
     )
+    print("Sampling finished.")
+
+    # DOCKING
+    print("Starting docking...")
+    results = {"receptor": [], "ligand": [], "scores": []}
+    results_dict = {}
+
+    pbar = tqdm(sdf_files)
+    for sdf_file in pbar:
+        pbar.set_description(f"Processing {sdf_file.name}")
+
+        if dataset == "moad":
+            """
+            Ligand file names should be of the following form:
+            <receptor-name>_<pocket-id>_<some-suffix>.sdf
+            where <receptor-name> and <pocket-id> cannot contain any
+            underscores, e.g.: 1abc-bio1_pocket0_gen.sdf
+            """
+            ligand_name = sdf_file.stem
+            receptor_name, pocket_id, *suffix = ligand_name.split("_")
+            suffix = "_".join(suffix)
+            receptor_file = Path(pdbqt_dir, receptor_name + ".pdbqt")
+        elif dataset == "crossdocked":
+            ligand_name = sdf_file.stem
+            receptor_name = ligand_name[:-4]
+            receptor_file = Path(pdbqt_dir, receptor_name + ".pdbqt")
+
+        # try:
+        scores, rdmols = calculate_qvina2_score(
+            receptor_file, sdf_file, save_dir, return_rdmol=True
+        )
+        # except AttributeError as e:
+        #     print(e)
+        #     continue
+        results["receptor"].append(str(receptor_file))
+        results["ligand"].append(str(sdf_file))
+        results["scores"].append(scores)
+
+        if write_dict:
+            results_dict[ligand_name] = {
+                "receptor": str(receptor_file),
+                "ligand": str(sdf_file),
+                "scores": scores,
+                "rmdols": rdmols,
+            }
+
+    if write_csv:
+        df = pd.DataFrame.from_dict(results)
+        df.to_csv(Path(save_dir, "qvina2_scores.csv"))
+
+    if write_dict:
+        torch.save(results_dict, Path(save_dir, "qvina2_scores.pt"))
 
 
 def get_args():
@@ -218,6 +277,9 @@ def get_args():
     parser.add_argument("--save-dir", type=Path)
     parser.add_argument("--fix-n-nodes", action="store_true")
     parser.add_argument("--skip-existing", action="store_true")
+    parser.add_argument("--write-csv", action="store_true")
+    parser.add_argument("--write-dict", action="store_true")
+    parser.add_argument("--pdbqt-dir", type=Path, help="Receptor files in pdbqt format")
     args = parser.parse_args()
     return args
 
@@ -236,4 +298,7 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         ddpm=not args.ddim,
         eta_ddim=args.eta_ddim,
+        write_dict=args.write_dict,
+        write_csv=args.write_csv,
+        pdbqt_dir=args.pdbqt_dir,
     )

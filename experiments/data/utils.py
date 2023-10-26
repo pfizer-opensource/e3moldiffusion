@@ -273,7 +273,7 @@ class Statistics:
         valencies,
         bond_lengths,
         bond_angles,
-        dihedrals,
+        dihedrals=None,
         is_in_ring=None,
         is_aromatic=None,
         hybridization=None,
