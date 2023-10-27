@@ -208,7 +208,7 @@ if __name__ == "__main__":
                     else:
                         print("Ligand-pocket training with latent protein encoding")
                         from experiments.diffusion_discrete_latent_pocket import Trainer
-                elif dataset == "geomqm" and hparams.use_qm_props:
+                elif dataset == "geomqm":
                     from experiments.diffusion_discrete_qm import Trainer
                 else:
                     from experiments.diffusion_discrete import Trainer

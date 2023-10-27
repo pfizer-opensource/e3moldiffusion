@@ -12,6 +12,8 @@ use_ligand_dataset_sizes: false
 test_save_dir: /scratch1/e3moldiffusion/logs/crossdocked/test
 
 ligand_pocket_interaction: true
+use_pos_norm: false
+
 
 bond_model_guidance: false
 bond_prediction: false
