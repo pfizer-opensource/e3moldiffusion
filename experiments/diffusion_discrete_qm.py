@@ -94,8 +94,10 @@ class Trainer(pl.LightningModule):
         self.num_atom_types = self.hparams.num_atom_types
         self.num_atom_features = (
             self.num_atom_types + self.num_charge_classes + 1
+            if self.hparams.use_qm_props
+            else self.num_atom_types + self.num_charge_classes
         )  # + mulliken
-        self.num_bond_classes = 6  # + wbo
+        self.num_bond_classes = 6 if self.hparams.use_qm_props else 5  # + wbo
 
         self.smiles_list = smiles_list
 
@@ -149,24 +151,25 @@ class Trainer(pl.LightningModule):
             T=self.hparams.timesteps,
             param=self.hparams.continuous_param,
         )
-        self.sde_mulliken = DiscreteDDPM(
-            beta_min=hparams["beta_min"],
-            beta_max=hparams["beta_max"],
-            N=hparams["timesteps"],
-            scaled_reverse_posterior_sigma=True,
-            schedule=self.hparams.noise_scheduler,
-            nu=1,
-            enforce_zero_terminal_snr=False,
-        )
-        self.sde_wbo = DiscreteDDPM(
-            beta_min=hparams["beta_min"],
-            beta_max=hparams["beta_max"],
-            N=hparams["timesteps"],
-            scaled_reverse_posterior_sigma=True,
-            schedule=self.hparams.noise_scheduler,
-            nu=1,
-            enforce_zero_terminal_snr=False,
-        )
+        if self.hparams.use_qm_props:
+            self.sde_mulliken = DiscreteDDPM(
+                beta_min=hparams["beta_min"],
+                beta_max=hparams["beta_max"],
+                N=hparams["timesteps"],
+                scaled_reverse_posterior_sigma=True,
+                schedule=self.hparams.noise_scheduler,
+                nu=1,
+                enforce_zero_terminal_snr=False,
+            )
+            self.sde_wbo = DiscreteDDPM(
+                beta_min=hparams["beta_min"],
+                beta_max=hparams["beta_max"],
+                N=hparams["timesteps"],
+                scaled_reverse_posterior_sigma=True,
+                schedule=self.hparams.noise_scheduler,
+                nu=1,
+                enforce_zero_terminal_snr=False,
+            )
         self.sde_atom_charge = DiscreteDDPM(
             beta_min=hparams["beta_min"],
             beta_max=hparams["beta_max"],
@@ -190,28 +193,40 @@ class Trainer(pl.LightningModule):
             terminal_distribution=atom_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
             num_atom_types=self.num_atom_types,
-            num_bond_types=self.num_bond_classes - 1,
+            num_bond_types=self.num_bond_classes - 1
+            if self.hparams.use_qm_props
+            else self.num_bond_classes,
             num_charge_types=self.num_charge_classes,
         )
         self.cat_bonds = CategoricalDiffusionKernel(
             terminal_distribution=bond_types_distribution,
             alphas=self.sde_bonds.alphas.clone(),
             num_atom_types=self.num_atom_types,
-            num_bond_types=self.num_bond_classes - 1,
+            num_bond_types=self.num_bond_classes - 1
+            if self.hparams.use_qm_props
+            else self.num_bond_classes,
             num_charge_types=self.num_charge_classes,
         )
         self.cat_charges = CategoricalDiffusionKernel(
             terminal_distribution=charge_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
             num_atom_types=self.num_atom_types,
-            num_bond_types=self.num_bond_classes - 1,
+            num_bond_types=self.num_bond_classes - 1
+            if self.hparams.use_qm_props
+            else self.num_bond_classes,
             num_charge_types=self.num_charge_classes,
         )
 
-        self.diffusion_loss = DiffusionLoss(
-            modalities=["coords", "atoms", "charges", "bonds", "mulliken", "wbo"],
-            param=["data", "data", "data", "data", "data", "data"],
-        )
+        if self.hparams.use_qm_props:
+            self.diffusion_loss = DiffusionLoss(
+                modalities=["coords", "atoms", "charges", "bonds", "mulliken", "wbo"],
+                param=["data", "data", "data", "data", "data", "data"],
+            )
+        else:
+            self.diffusion_loss = DiffusionLoss(
+                modalities=["coords", "atoms", "charges", "bonds"],
+                param=["data", "data", "data", "data"],
+            )
 
         if self.hparams.bond_model_guidance:
             print("Using bond model guidance...")
@@ -397,26 +412,35 @@ class Trainer(pl.LightningModule):
             "atoms": out_dict["atoms_true"],
             "charges": out_dict["charges_true"],
             "bonds": out_dict["bonds_true"],
-            "mulliken": out_dict["mulliken_true"].unsqueeze(1),
-            "wbo": out_dict["wbo_true"].unsqueeze(1),
         }
 
         coords_pred = out_dict["coords_pred"]
         atoms_pred = out_dict["atoms_pred"]
-        atoms_pred, charges_pred, mulliken_pred = atoms_pred.split(
-            [self.num_atom_types, self.num_charge_classes, 1], dim=-1
-        )
         edges_pred = out_dict["bonds_pred"]
-        edges_pred, wbo_pred = edges_pred.split([self.num_bond_classes - 1, 1], dim=-1)
+
+        if self.hparams.use_qm_props:
+            true_data["mulliken"] = out_dict["mulliken_true"].unsqueeze(1)
+            true_data["wbo"] = out_dict["wbo_true"].unsqueeze(1)
+            edges_pred, wbo_pred = edges_pred.split(
+                [self.num_bond_classes - 1, 1], dim=-1
+            )
+            atoms_pred, charges_pred, mulliken_pred = atoms_pred.split(
+                [self.num_atom_types, self.num_charge_classes, 1], dim=-1
+            )
+        else:
+            atoms_pred, charges_pred = atoms_pred.split(
+                [self.num_atom_types, self.num_charge_classes], dim=-1
+            )
 
         pred_data = {
             "coords": coords_pred,
             "atoms": atoms_pred,
             "charges": charges_pred,
             "bonds": edges_pred,
-            "mulliken": mulliken_pred,
-            "wbo": wbo_pred,
         }
+        if self.hparams.use_qm_props:
+            pred_data["mulliken"] = mulliken_pred
+            pred_data["wbo"] = wbo_pred
 
         loss = self.diffusion_loss(
             true_data=true_data,
@@ -458,8 +482,9 @@ class Trainer(pl.LightningModule):
         atom_types: Tensor = batch.x
         pos: Tensor = batch.pos
         charges: Tensor = batch.charges
-        mulliken: Tensor = batch.mulliken
-        wbo: Tensor = batch.wbo
+        if self.hparams.use_qm_props:
+            mulliken: Tensor = batch.mulliken
+            wbo: Tensor = batch.wbo
         data_batch: Tensor = batch.batch
         bond_edge_index = batch.edge_index
         bond_edge_attr = batch.edge_attr
@@ -498,16 +523,11 @@ class Trainer(pl.LightningModule):
             edge_index=edge_index_global, edge_attr=edge_attr_global, sort_by_row=False
         )
         batch_edge_global = data_batch[edge_index_global[0]]
-        wbo = wbo[edge_index_global[1]]
 
         # SAMPLING
         noise_coords_true, pos_perturbed = self.sde_pos.sample_pos(
             t, pos_centered, data_batch
         )
-        noise_mulliken_true, mulliken_perturbed = self.sde_mulliken.sample(
-            t, mulliken, data_batch
-        )
-        noise_wbo_true, wbo_perturbed = self.sde_wbo.sample(t, wbo, batch_edge_global)
         atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
             t, atom_types, data_batch, self.dataset_info, type="atoms"
         )
@@ -522,13 +542,30 @@ class Trainer(pl.LightningModule):
             else None
         )
 
-        atom_feats_in_perturbed = torch.cat(
-            [atom_types_perturbed, charges_perturbed, mulliken_perturbed.unsqueeze(1)],
-            dim=-1,
-        )
-        edge_attr_global_perturbed = torch.cat(
-            [edge_attr_global_perturbed, wbo_perturbed.unsqueeze(1)], dim=-1
-        )
+        if self.hparams.use_qm_props:
+            wbo = wbo[edge_index_global[1]]
+            noise_mulliken_true, mulliken_perturbed = self.sde_mulliken.sample(
+                t, mulliken, data_batch
+            )
+            noise_wbo_true, wbo_perturbed = self.sde_wbo.sample(
+                t, wbo, batch_edge_global
+            )
+            atom_feats_in_perturbed = torch.cat(
+                [
+                    atom_types_perturbed,
+                    charges_perturbed,
+                    mulliken_perturbed.unsqueeze(1),
+                ],
+                dim=-1,
+            )
+            edge_attr_global_perturbed = torch.cat(
+                [edge_attr_global_perturbed, wbo_perturbed.unsqueeze(1)], dim=-1
+            )
+        else:
+            atom_feats_in_perturbed = torch.cat(
+                [atom_types_perturbed, charges_perturbed],
+                dim=-1,
+            )
         out = self.model(
             x=atom_feats_in_perturbed,
             t=temb,
@@ -547,18 +584,20 @@ class Trainer(pl.LightningModule):
         out["atoms_perturbed"] = atom_types_perturbed
         out["charges_perturbed"] = charges_perturbed
         out["bonds_perturbed"] = edge_attr_global_perturbed
-        out["mulliken_perturbed"] = mulliken_perturbed
-        out["wbo_perturbed"] = wbo_perturbed
+        if self.hparams.use_qm_props:
+            out["mulliken_perturbed"] = mulliken_perturbed
+            out["wbo_perturbed"] = wbo_perturbed
 
         out["coords_true"] = pos_centered
         out["coords_noise_true"] = noise_coords_true
         out["atoms_true"] = atom_types.argmax(dim=-1)
         out["bonds_true"] = edge_attr_global
         out["charges_true"] = charges.argmax(dim=-1)
-        out["mulliken_true"] = mulliken
-        out["wbo_true"] = wbo
-        out["mulliken_noise_true"] = noise_mulliken_true
-        out["wbo_noise_true"] = noise_wbo_true
+        if self.hparams.use_qm_props:
+            out["mulliken_true"] = mulliken
+            out["wbo_true"] = wbo
+            out["mulliken_noise_true"] = noise_mulliken_true
+            out["wbo_noise_true"] = noise_wbo_true
 
         out["bond_aggregation_index"] = edge_index_global[1]
 
@@ -569,7 +608,6 @@ class Trainer(pl.LightningModule):
         self,
         num_graphs: int,
         empirical_distribution_num_nodes: torch.Tensor,
-        device: torch.device,
         verbose=False,
         save_traj=False,
         ddpm: bool = True,
@@ -589,7 +627,6 @@ class Trainer(pl.LightningModule):
             context,
         ) = self.reverse_sampling(
             num_graphs=num_graphs,
-            device=device,
             empirical_distribution_num_nodes=empirical_distribution_num_nodes,
             verbose=verbose,
             save_traj=save_traj,
@@ -683,7 +720,6 @@ class Trainer(pl.LightningModule):
             ) = self.generate_graphs(
                 num_graphs=num_graphs,
                 verbose=inner_verbose,
-                device=self.device,
                 empirical_distribution_num_nodes=self.empirical_num_nodes,
                 save_traj=False,
                 ddpm=ddpm,
@@ -797,7 +833,6 @@ class Trainer(pl.LightningModule):
         self,
         num_graphs: int,
         empirical_distribution_num_nodes: Tensor,
-        device: torch.device,
         verbose: bool = False,
         save_traj: bool = False,
         ddpm: bool = True,
@@ -810,9 +845,9 @@ class Trainer(pl.LightningModule):
             input=empirical_distribution_num_nodes,
             num_samples=num_graphs,
             replacement=True,
-        ).to(device)
+        ).to(self.device)
         batch_num_nodes = batch_num_nodes.clamp(min=1)
-        batch = torch.arange(num_graphs, device=device).repeat_interleave(
+        batch = torch.arange(num_graphs, device=self.device).repeat_interleave(
             batch_num_nodes, dim=0
         )
         bs = int(batch.max()) + 1
@@ -825,12 +860,10 @@ class Trainer(pl.LightningModule):
             ]
 
         # initialiaze the 0-mean point cloud from N(0, I)
-        pos = torch.randn(len(batch), 3, device=device, dtype=torch.get_default_dtype())
-        pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
-
-        mulliken = torch.randn(
-            len(batch), 1, device=device, dtype=torch.get_default_dtype()
+        pos = torch.randn(
+            len(batch), 3, device=self.device, dtype=torch.get_default_dtype()
         )
+        pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
 
         n = len(pos)
 
@@ -839,7 +872,6 @@ class Trainer(pl.LightningModule):
             self.atoms_prior, num_samples=n, replacement=True
         )
         atom_types = F.one_hot(atom_types, self.num_atom_types).float()
-
         charge_types = torch.multinomial(
             self.charges_prior, num_samples=n, replacement=True
         )
@@ -865,16 +897,25 @@ class Trainer(pl.LightningModule):
                 edge_index_global,
                 n,
                 self.bonds_prior,
-                self.num_bond_classes - 1,
-                device,
+                self.num_bond_classes - 1
+                if self.hparams.use_qm_props
+                else self.num_bond_classes,
+                self.device,
             )
         else:
             edge_attr_global = None
         batch_edge_global = batch[edge_index_global[0]]
 
-        wbo = torch.randn(
-            len(batch_edge_global), 1, device=device, dtype=torch.get_default_dtype()
-        )
+        if self.hparams.use_qm_props:
+            mulliken = torch.randn(
+                len(batch), 1, device=self.device, dtype=torch.get_default_dtype()
+            )
+            wbo = torch.randn(
+                len(batch_edge_global),
+                1,
+                device=self.device,
+                dtype=torch.get_default_dtype(),
+            )
 
         pos_traj = []
         atom_type_traj = []
@@ -901,8 +942,11 @@ class Trainer(pl.LightningModule):
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
 
-            node_feats_in = torch.cat([atom_types, charge_types, mulliken], dim=-1)
-            edge_attr_global_wbo = torch.cat([edge_attr_global, wbo], dim=-1)
+            if self.hparams.use_qm_props:
+                node_feats_in = torch.cat([atom_types, charge_types, mulliken], dim=-1)
+                edge_attr_global_wbo = torch.cat([edge_attr_global, wbo], dim=-1)
+            else:
+                node_feats_in = torch.cat([atom_types, charge_types], dim=-1)
             out = self.model(
                 x=node_feats_in,
                 t=temb,
@@ -916,15 +960,21 @@ class Trainer(pl.LightningModule):
             )
 
             coords_pred = out["coords_pred"].squeeze()
-            atoms_pred, charges_pred, mulliken_pred = out["atoms_pred"].split(
-                [self.num_atom_types, self.num_charge_classes, 1], dim=-1
-            )
-            atoms_pred = atoms_pred.softmax(dim=-1)
             # N x a_0
             edges_pred = out["bonds_pred"]
-            edges_pred, wbo_pred = out["bonds_pred"].split(
-                [self.num_bond_classes - 1, 1], dim=-1
-            )
+            if self.hparams.use_qm_props:
+                atoms_pred, charges_pred, mulliken_pred = out["atoms_pred"].split(
+                    [self.num_atom_types, self.num_charge_classes, 1], dim=-1
+                )
+                edges_pred, wbo_pred = out["bonds_pred"].split(
+                    [self.num_bond_classes - 1, 1], dim=-1
+                )
+            else:
+                atoms_pred, charges_pred, mulliken_pred = out["atoms_pred"].split(
+                    [self.num_atom_types, self.num_charge_classes], dim=-1
+                )
+
+            atoms_pred = atoms_pred.softmax(dim=-1)
             edges_pred = edges_pred.softmax(dim=-1)
             # E x b_0
             charges_pred = charges_pred.softmax(dim=-1)
@@ -935,22 +985,23 @@ class Trainer(pl.LightningModule):
                     pos = self.sde_pos.sample_reverse_adaptive(
                         s, t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
                     )
-                    mulliken = self.sde_mulliken.sample_reverse_adaptive(
-                        s,
-                        t,
-                        mulliken,
-                        mulliken_pred,
-                        batch,
-                        cog_proj=False,
-                    )
-                    wbo = self.sde_wbo.sample_reverse_adaptive(
-                        s,
-                        t,
-                        wbo,
-                        wbo_pred,
-                        batch_edge_global,
-                        cog_proj=False,
-                    )
+                    if self.hparams.use_qm_props:
+                        mulliken = self.sde_mulliken.sample_reverse_adaptive(
+                            s,
+                            t,
+                            mulliken,
+                            mulliken_pred,
+                            batch,
+                            cog_proj=False,
+                        )
+                        wbo = self.sde_wbo.sample_reverse_adaptive(
+                            s,
+                            t,
+                            wbo,
+                            wbo_pred,
+                            batch_edge_global,
+                            cog_proj=False,
+                        )
                 else:
                     # positions
                     pos = self.sde_pos.sample_reverse(
@@ -990,7 +1041,9 @@ class Trainer(pl.LightningModule):
                     mask_i,
                     batch=batch,
                     edge_index_global=edge_index_global,
-                    num_classes=self.num_bond_classes - 1,
+                    num_classes=self.num_bond_classes - 1
+                    if self.hparams.use_qm_props
+                    else self.num_bond_classes,
                 )
             else:
                 edge_attr_global = edges_pred

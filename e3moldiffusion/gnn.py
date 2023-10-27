@@ -10,7 +10,7 @@ from e3moldiffusion.convs import (
     TopoEdgeConvLayer,
     EQGATConv,
 )
-from e3moldiffusion.modules import LayerNorm, AdaptiveLayerNorm
+from e3moldiffusion.modules import LayerNorm, AdaptiveLayerNorm, SE3Norm
 
 
 class EQGATEnergyGNN(nn.Module):
@@ -93,6 +93,7 @@ class EQGATEdgeGNN(nn.Module):
         edge_mp: bool = False,
         p1: bool = True,
         use_pos_norm: bool = True,
+        ligand_pocket_interaction: bool = False,
     ):
         super(EQGATEdgeGNN, self).__init__()
 
@@ -106,6 +107,10 @@ class EQGATEdgeGNN(nn.Module):
         self.recompute_radius_graph = recompute_radius_graph
         self.recompute_edge_attributes = recompute_edge_attributes
         self.p1 = p1
+        self.ligand_pocket_interaction = ligand_pocket_interaction
+
+        if self.ligand_pocket_interaction:
+            self.se3norm = SE3Norm()
 
         self.sdim, self.vdim = hn_dim
         self.edge_dim = edge_dim
@@ -151,16 +156,25 @@ class EQGATEdgeGNN(nn.Module):
             norm.reset_parameters()
 
     def calculate_edge_attrs(
-        self, edge_index: Tensor, edge_attr: OptTensor, pos: Tensor, sqrt: bool = True
+        self,
+        edge_index: Tensor,
+        edge_attr: OptTensor,
+        pos: Tensor,
+        sqrt: bool = True,
+        batch: Tensor = None,
     ):
         source, target = edge_index
         r = pos[target] - pos[source]
-        a = pos[target] * pos[source]
+        if self.ligand_pocket_interaction:
+            normed_pos = self.se3norm(pos, batch)
+            a = normed_pos[target] * normed_pos[source]
+        else:
+            a = pos[target] * pos[source]
         a = a.sum(-1)
         d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6)
         if sqrt:
             d = d.sqrt()
-        r_norm = torch.div(r, (1.0 + d.unsqueeze(-1) if self.p1 else d.unsqueeze(-1)))
+        r_norm = torch.div(r, (1.0 + d.unsqueeze(-1)))
         edge_attr = (d, a, r_norm, edge_attr)
         return edge_attr
 
@@ -216,7 +230,11 @@ class EQGATEdgeGNN(nn.Module):
             # p = p - scatter_mean(p, batch, dim=0)[batch]
             if self.recompute_edge_attributes:
                 edge_attr_global = self.calculate_edge_attrs(
-                    edge_index=edge_index_global, pos=p, edge_attr=e, sqrt=True
+                    edge_index=edge_index_global,
+                    pos=p,
+                    edge_attr=e,
+                    sqrt=True,
+                    batch=batch if self.ligand_pocket_interaction else None,
                 )
 
             e = edge_attr_global[-1]
@@ -241,7 +259,7 @@ class EQGATLocalGNN(nn.Module):
         num_layers: int = 5,
         use_cross_product: bool = False,
         vector_aggr: str = "mean",
-        intermediate_outs: bool = False
+        intermediate_outs: bool = False,
     ):
         super(EQGATLocalGNN, self).__init__()
 
@@ -295,7 +313,7 @@ class EQGATLocalGNN(nn.Module):
             results = []
         else:
             results = None
-            
+
         for i in range(len(self.convs)):
             edge_index_in = edge_index_local
             edge_attr_in = edge_attr_local
@@ -309,16 +327,17 @@ class EQGATLocalGNN(nn.Module):
                 edge_attr=edge_attr_in,
             )
             s, v = out["s"], out["v"]
-            
+
             if self.intermediate_outs:
                 results.append(s)
 
         out = {"s": s, "v": v}
-        
+
         if self.intermediate_outs:
             return out, results
         else:
             return out
+
 
 class TopoEdgeGNN(nn.Module):
     def __init__(

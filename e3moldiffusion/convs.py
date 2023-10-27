@@ -295,10 +295,13 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
 
         self.edge_pre = DenseLayer(edge_dim, edge_dim)
         self.edge_dim = edge_dim
+        input_edge_dim = (
+            2 * self.si + edge_dim + 2 + 2
+            if self.use_pos_norm
+            else 2 * self.si + edge_dim + 2
+        )
         self.edge_net = nn.Sequential(
-            DenseLayer(
-                2 * self.si + edge_dim + 2 + 2, self.si, bias=True, activation=nn.SiLU()
-            ),
+            DenseLayer(input_edge_dim, self.si, bias=True, activation=nn.SiLU()),
             DenseLayer(
                 self.si, self.v_mul * self.vi + self.si + 1 + edge_dim, bias=True
             ),
@@ -519,11 +522,16 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         de0 = d.view(-1, 1)
         a0 = a.view(-1, 1)
 
-        d_i, d_j = (
-            torch.pow(p_i, 2).sum(-1, keepdim=True).clamp(min=1e-6).sqrt(),
-            torch.pow(p_j, 2).sum(-1, keepdim=True).clamp(min=1e-6).sqrt(),
-        )
-        aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e, d_i, d_j], dim=-1)
+        if self.use_pos_norm:
+            d_i, d_j = (
+                torch.pow(p_i, 2).sum(-1, keepdim=True).clamp(min=1e-6).sqrt(),
+                torch.pow(p_j, 2).sum(-1, keepdim=True).clamp(min=1e-6).sqrt(),
+            )
+            aij = torch.cat(
+                [torch.cat([sa_i, sa_j], dim=-1), de0, a0, e, d_i, d_j], dim=-1
+            )
+        else:
+            aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e], dim=-1)
         aij = self.edge_net(aij)
 
         fdim = aij.shape[-1]

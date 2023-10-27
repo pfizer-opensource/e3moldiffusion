@@ -11,6 +11,8 @@ inference_batch_size: 2
 use_ligand_dataset_sizes: false
 test_save_dir: /scratch1/e3moldiffusion/logs/crossdocked/test
 
+ligand_pocket_interaction: true
+
 bond_model_guidance: false
 bond_prediction: false
 
@@ -49,6 +51,7 @@ dataset_root: /scratch1/cremej01/data/crossdocked_noH_cutoff5
 additional_feats: false
 continuous: false
 noise_scheduler: adaptive
+loss_weighting: snr_t
 eps_min: 1.e-3
 beta_min: 1.e-4
 beta_max: 2.e-2

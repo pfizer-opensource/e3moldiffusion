@@ -49,7 +49,12 @@ beta_min: 1.e-4
 beta_max: 2.e-2
 timesteps: 500
 max_time: 06:00:00:00
-loss_weighting: uniform
+loss_weighting: snr_t
+
+#CONTEXT
+context_mapping: false
+num_context_features: 0
+properties_list: [] #["dipole_norm","total_energy","HOMO-LUMO_gap","dispersion","atomisation_energy","polarizability"]
 
 #LOGGING
 save_dir: /hpfs/userws/cremej01/projects/logs/geom/pretrain_x0

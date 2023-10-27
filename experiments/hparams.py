@@ -121,7 +121,7 @@ def add_arguments(parser):
     parser.add_argument("--lc-atoms", default=0.4, type=float)
     parser.add_argument("--lc-bonds", default=2.0, type=float)
     parser.add_argument("--lc-charges", default=1.0, type=float)
-    parser.add_argument("--lc-mulliken", default=1.0, type=float)
+    parser.add_argument("--lc-mulliken", default=1.5, type=float)
     parser.add_argument("--lc-wbo", default=2.0, type=float)
 
     parser.add_argument("--pocket-noise-std", default=0.1, type=float)
@@ -131,12 +131,15 @@ def add_arguments(parser):
 
     parser.add_argument(
         "--loss-weighting",
-        default="uniform",
+        default="snr_t",
         choices=["snr_s_t", "snr_t", "exp_t", "expt_t_half", "uniform"],
     )
     parser.add_argument("--snr-clamp-min", default=0.05, type=float)
     parser.add_argument("--snr-clamp-max", default=1.50, type=float)
 
+    parser.add_argument(
+        "--ligand-pocket-interaction", default=False, action="store_true"
+    )
     parser.add_argument("--diffusion-pretraining", default=False, action="store_true")
     parser.add_argument(
         "--continuous-param", default="data", type=str, choices=["data", "noise"]

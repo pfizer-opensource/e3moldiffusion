@@ -818,6 +818,7 @@ class Trainer(pl.LightningModule):
         if save_cond:
             self.validity = validity_dict["validity"]
             self.connected_components = statistics_dict["connected_components"]
+            self.qed = statistics_dict["QED"]
             save_path = os.path.join(self.hparams.save_dir, "best_valid.ckpt")
             self.trainer.save_checkpoint(save_path)
 

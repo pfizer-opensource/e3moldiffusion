@@ -10,7 +10,12 @@ from torch_geometric.nn import radius_graph
 from torch_scatter import scatter_mean, scatter_add
 
 from e3moldiffusion.gnn import EQGATEdgeGNN, EQGATLocalGNN, EQGATEnergyGNN
-from e3moldiffusion.modules import DenseLayer, GatedEquivariantBlock, GatedEquivBlock
+from e3moldiffusion.modules import (
+    DenseLayer,
+    GatedEquivariantBlock,
+    GatedEquivBlock,
+    SE3Norm,
+)
 
 
 class PredictionHeadEdge(nn.Module):
@@ -213,12 +218,18 @@ class DenoisingEdgeNetwork(nn.Module):
         property_prediction: bool = False,
         bond_prediction: bool = False,
         coords_param: str = "data",
+        ligand_pocket_interaction: bool = False,
     ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
         self.property_prediction = property_prediction
         self.bond_prediction = bond_prediction
         self.num_bond_types = num_bond_types
+
+        self.ligand_pocket_interaction = ligand_pocket_interaction
+
+        if self.ligand_pocket_interaction:
+            self.se3norm = SE3Norm()
 
         self.time_mapping_atom = DenseLayer(1, hn_dim[0])
         self.time_mapping_bond = DenseLayer(1, edge_dim)
@@ -276,6 +287,7 @@ class DenoisingEdgeNetwork(nn.Module):
             edge_mp=edge_mp,
             p1=p1,
             use_pos_norm=use_pos_norm,
+            ligand_pocket_interaction=ligand_pocket_interaction,
         )
 
         if self.property_prediction:
@@ -314,11 +326,20 @@ class DenoisingEdgeNetwork(nn.Module):
             self.prediction_head.reset_parameters()
 
     def calculate_edge_attrs(
-        self, edge_index: Tensor, edge_attr: OptTensor, pos: Tensor, sqrt: bool = True
+        self,
+        edge_index: Tensor,
+        edge_attr: OptTensor,
+        pos: Tensor,
+        sqrt: bool = True,
+        batch: Tensor = None,
     ):
         source, target = edge_index
         r = pos[target] - pos[source]
-        a = pos[target] * pos[source]
+        if self.ligand_pocket_interaction:
+            normed_pos = self.se3norm(pos, batch)
+            a = normed_pos[target] * normed_pos[source]
+        else:
+            a = pos[target] * pos[source]
         a = a.sum(-1)
         d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6)
         if sqrt:
@@ -396,6 +417,7 @@ class DenoisingEdgeNetwork(nn.Module):
             edge_attr=edge_attr_global_transformed,
             pos=pos,
             sqrt=True,
+            batch=batch if self.ligand_pocket_interaction else None,
         )
 
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
@@ -445,7 +467,7 @@ class LatentEncoderNetwork(nn.Module):
         vector_aggr: str = "mean",
         atom_mapping: bool = True,
         bond_mapping: bool = True,
-        intermediate_outs: bool = False
+        intermediate_outs: bool = False,
     ) -> None:
         super(LatentEncoderNetwork, self).__init__()
 
@@ -468,9 +490,9 @@ class LatentEncoderNetwork(nn.Module):
             num_layers=num_layers,
             use_cross_product=use_cross_product,
             vector_aggr=vector_aggr,
-            intermediate_outs=intermediate_outs
+            intermediate_outs=intermediate_outs,
         )
-        
+
         self.intermediate_outs = intermediate_outs
 
         self.reset_parameters()
@@ -545,7 +567,8 @@ class LatentEncoderNetwork(nn.Module):
                 batch=batch,
             )
             return out, scalars
-            
+
+
 class SoftMaxAttentionAggregation(nn.Module):
     """
     Softmax Attention Pooling as proposed "Graph Matching Networks
