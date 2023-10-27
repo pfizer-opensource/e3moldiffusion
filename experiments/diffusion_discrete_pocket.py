@@ -80,6 +80,7 @@ class Trainer(pl.LightningModule):
         self.i = 0
         self.validity = 0.0
         self.connected_components = 0.0
+        self.qed = 0.0
 
         self.dataset_info = dataset_info
         self.prop_norm = prop_norm
@@ -730,7 +731,7 @@ class Trainer(pl.LightningModule):
         assert sum(l) == ngraphs
 
         dataloader = (
-            self.trainer.datamodule.val_dataloader() 
+            self.trainer.datamodule.val_dataloader()
             if not run_test_eval
             else self.trainer.datamodule.test_dataloader()
         )
@@ -741,13 +742,12 @@ class Trainer(pl.LightningModule):
                 print(f"Creating {ngraphs} graphs in {l} batches")
         iterable = iter(dataloader)
         for _, num_graphs in enumerate(l):
-            
             try:
                 pocket_data = next(iterable)
             except StopIteration:
                 iterable = iter(dataloader)
                 pocket_data = next(iterable)
-                
+
             if use_ligand_dataset_sizes:
                 num_nodes_lig = pocket_data.batch.bincount()
             else:
@@ -808,6 +808,10 @@ class Trainer(pl.LightningModule):
             save_cond = (
                 self.validity < validity_dict["validity"]
                 and self.connected_components < statistics_dict["connected_components"]
+            ) or (
+                self.validity <= validity_dict["validity"]
+                and self.connected_components <= statistics_dict["connected_components"]
+                and self.qed < statistics_dict["QED"]
             )
         else:
             save_cond = False

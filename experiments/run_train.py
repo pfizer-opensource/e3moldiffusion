@@ -180,7 +180,7 @@ if __name__ == "__main__":
         elif hparams.property_prediction:
             print("Starting property prediction model via discrete diffusion")
             from experiments.diffusion_discrete import Trainer
-        elif hparams.latent_dim and hparams.dataset != 'crossdocked':
+        elif hparams.latent_dim and hparams.dataset != "crossdocked":
             print("Using latent diffusion")
             from experiments.diffusion_latent_discrete import Trainer
         else:
@@ -208,7 +208,7 @@ if __name__ == "__main__":
                     else:
                         print("Ligand-pocket training with latent protein encoding")
                         from experiments.diffusion_discrete_latent_pocket import Trainer
-                elif dataset == "geomqm":
+                elif dataset == "geomqm" and hparams.use_qm_props:
                     from experiments.diffusion_discrete_qm import Trainer
                 else:
                     from experiments.diffusion_discrete import Trainer
