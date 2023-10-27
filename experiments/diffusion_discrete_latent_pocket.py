@@ -12,6 +12,7 @@ import torch
 import torch.nn.functional as F
 from torch_scatter import scatter_mean
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
+from e3moldiffusion.modules import DenseLayer, GatedEquivBlock
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.data.abstract_dataset import AbstractDatasetInfos
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
@@ -32,7 +33,11 @@ from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index, remove_self_loops
 from tqdm import tqdm
 
-from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
+from e3moldiffusion.coordsatomsbonds import (
+    DenoisingEdgeNetwork,
+    LatentEncoderNetwork,
+    SoftMaxAttentionAggregation,
+)
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
@@ -122,7 +127,7 @@ class Trainer(pl.LightningModule):
             self.model = DenoisingEdgeNetwork(
                 hn_dim=(hparams["sdim"], hparams["vdim"]),
                 num_layers=hparams["num_layers"],
-                latent_dim=None,
+                latent_dim=hparams["latent_dim"],
                 use_cross_product=hparams["use_cross_product"],
                 num_atom_features=self.num_atom_features,
                 num_bond_types=self.num_bond_classes,
@@ -141,7 +146,26 @@ class Trainer(pl.LightningModule):
                 coords_param=hparams["continuous_param"],
                 use_pos_norm=hparams["use_pos_norm"],
             )
-
+            
+        self.encoder = LatentEncoderNetwork(
+            num_atom_features=self.num_atom_types,
+            num_bond_types=self.num_bond_classes,
+            atom_mapping=True, bond_mapping=False,
+            edge_dim=hparams["edim_latent"],
+            cutoff_local=hparams["cutoff_local"],
+            hn_dim=(hparams["sdim_latent"], hparams["vdim_latent"]),
+            num_layers=hparams["num_layers_latent"],
+            vector_aggr=hparams["vector_aggr"],
+            intermediate_outs=True
+        )
+        
+        self.latent_jk_lin = DenseLayer(hparams["num_layers_latent"] * hparams["sdim_latent"],
+                                        hparams["latent_dim"])
+        self.latent_final_lin = GatedEquivBlock(
+            in_dims=(hparams["sdim_latent"], hparams["vdim_latent"]),
+            out_dims=(hparams["latent_dim"], None),
+        )
+        
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
             beta_max=hparams["beta_max"],
@@ -219,10 +243,7 @@ class Trainer(pl.LightningModule):
         pass
 
     def on_test_epoch_end(self):
-        if self.hparams.use_ligand_dataset_sizes:
-            print(f"Running test sampling. Ligand sizes are taken from the data.")
-        else:
-            print(f"Running test sampling. Ligand sizes are sampled.")
+        print(f"Running test sampling...")
         results_dict, generated_smiles, valid_molecules = self.run_evaluation(
             step=0,
             dataset_info=self.dataset_info,
@@ -330,7 +351,7 @@ class Trainer(pl.LightningModule):
             final_res = self.run_evaluation(
                 step=self.i,
                 dataset_info=self.dataset_info,
-                ngraphs=600,
+                ngraphs=100,
                 bs=self.hparams.batch_size,
                 verbose=True,
                 inner_verbose=False,
@@ -488,11 +509,12 @@ class Trainer(pl.LightningModule):
         # if self.training:
         #     final_loss.backward()
         #     names = []
-        #     for name, param in self.model.named_parameters():
+        #     for name, param in self.named_parameters():
         #         if param.grad is None:
         #             names.append(name)
         #     import pdb
-
+        #     if len(names) > 0:
+        #         print(names)
         #     pdb.set_trace()
 
         if torch.any(final_loss.isnan()):
@@ -511,7 +533,39 @@ class Trainer(pl.LightningModule):
         )
 
         return final_loss
-
+    
+    def encode_pocket(self, atom_types_pocket, pos_pocket, data_batch_pocket):
+        pos_pocket_centered = pos_pocket - scatter_mean(pos_pocket,
+                                                        index=data_batch_pocket,
+                                                        dim=0)[data_batch_pocket]        
+        edge_index_local_protein = radius_graph(
+            x=pos_pocket_centered,
+            r=self.hparams.cutoff_local,
+            batch=data_batch_pocket,
+            max_num_neighbors=128,
+            flow="source_to_target",
+        )
+        edge_attr_local_protein = torch.zeros(size=(edge_index_local_protein.size(1), self.hparams.edim_latent),
+                                              device=pos_pocket.device,
+                                              dtype=torch.float32)
+        atom_types_pocket = F.one_hot(
+            atom_types_pocket.squeeze().long(), num_classes=self.num_atom_types
+        ).float()
+        pocket_latents, intermediate_embeddings = self.encoder(
+            x=atom_types_pocket,
+            pos=pos_pocket_centered,
+            edge_index_local=edge_index_local_protein,
+            edge_attr_local=edge_attr_local_protein,
+            batch=data_batch_pocket,
+        )
+        pocket_latents, _ = self.latent_final_lin(x=(pocket_latents["s"], pocket_latents["v"]))
+        pocket_latents = scatter_mean(pocket_latents, index=data_batch_pocket, dim=0)
+        intermediate_embeddings = torch.concat(intermediate_embeddings, dim=-1)
+        intermediate_latents = scatter_mean(intermediate_embeddings, index=data_batch_pocket, dim=0)
+        intermediate_latents = self.latent_jk_lin(intermediate_latents)
+        z = pocket_latents + intermediate_latents
+        return z
+        
     def forward(self, batch: Batch, t: Tensor):
         atom_types: Tensor = batch.x
         atom_types_pocket: Tensor = batch.x_pocket
@@ -532,13 +586,18 @@ class Trainer(pl.LightningModule):
         temb = temb.clamp(min=self.hparams.eps_min)
         temb = temb.unsqueeze(dim=1)
 
-        pocket_noise = torch.randn_like(pos_pocket) * self.hparams.pocket_noise_std
-        pos_pocket = pos_pocket + pocket_noise
-
-        pos_centered, pos_centered_pocket = remove_mean_pocket(
+        z = self.encode_pocket(atom_types_pocket=atom_types_pocket, 
+                               pos_pocket=pos_pocket,
+                               data_batch_pocket=data_batch_pocket
+                               )
+        
+        # pos_centered = pos - scatter_mean(pos, index=data_batch, dim=0)[data_batch] 
+        
+        pos_centered, _ = remove_mean_pocket(
             pos, pos_pocket, data_batch, data_batch_pocket
         )
-
+             
+             
         # SAMPLING
         noise_coords_true, pos_perturbed = self.sde_pos.sample_pos(
             t,
@@ -549,16 +608,10 @@ class Trainer(pl.LightningModule):
         atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
             t, atom_types, data_batch, self.dataset_info, type="atoms"
         )
-        atom_types_pocket = F.one_hot(
-            atom_types_pocket.squeeze().long(), num_classes=self.num_atom_types
-        ).float()
         charges, charges_perturbed = self.cat_charges.sample_categorical(
             t, charges, data_batch, self.dataset_info, type="charges"
         )
-        charges_pocket = torch.zeros(
-            pos_pocket.shape[0], charges_perturbed.shape[1], dtype=torch.float32
-        ).to(self.device)
-
+       
         # EDGES
         # Fully-connected ligand
         edge_index_global_lig = (
@@ -592,97 +645,28 @@ class Trainer(pl.LightningModule):
             if not self.hparams.bond_prediction
             else None
         )
-        (
-            edge_index_global,
-            edge_attr_global_perturbed,
-            batch_edge_global,
-            edge_mask,
-        ) = get_joint_edge_attrs(
-            pos_perturbed,
-            pos_centered_pocket,
-            data_batch,
-            data_batch_pocket,
-            edge_attr_global_perturbed_lig,
-            self.num_bond_classes,
-            self.device,
-        )
-        # Concatenate Ligand-Pocket
-        (
-            pos_perturbed,
-            atom_types_perturbed,
-            charges_perturbed,
-            batch_full,
-            pocket_mask,
-        ) = concat_ligand_pocket(
-            pos_perturbed,
-            pos_centered_pocket,
-            atom_types_perturbed,
-            atom_types_pocket,
-            charges_perturbed,
-            charges_pocket,
-            data_batch,
-            data_batch_pocket,
-            sorting=False,
-        )
+        batch_edge_global = data_batch[edge_index_global_lig[0]]
 
-        # Concatenate all node features
         atom_feats_in_perturbed = torch.cat(
             [atom_types_perturbed, charges_perturbed], dim=-1
         )
-
+        
         out = self.model(
             x=atom_feats_in_perturbed,
+            z=z,
             t=temb,
             pos=pos_perturbed,
             edge_index_local=None,
-            edge_index_global=edge_index_global,
-            edge_index_global_lig=edge_index_global_lig,
-            edge_attr_global=edge_attr_global_perturbed
+            edge_index_global=edge_index_global_lig,
+            edge_attr_global=edge_attr_global_perturbed_lig
             if not self.hparams.bond_prediction
             else None,
-            batch=batch_full,
+            batch=data_batch,
             batch_edge_global=batch_edge_global,
-            context=context,
-            pocket_mask=pocket_mask.unsqueeze(1),
-            edge_mask=edge_mask,
-            batch_lig=data_batch,
+            context=context
         )
 
-        # if self.training and self.trainer.current_epoch > 40:
-        #     inp = {
-        #         "coords": pos_centered,
-        #         "atoms": atom_types,
-        #         "charges": charges,
-        #         "edges": edge_attr_global_lig,
-        #     }
-        #     molecules = get_inp_molecules(
-        #         inp,
-        #         data_batch,
-        #         edge_index_global_lig,
-        #         self.dataset_info,
-        #         device=self.device,
-        #         mol_device="cpu",
-        #         context=context,
-        #     )
-        #     molecules_sampled = get_molecules(
-        #         out,
-        #         data_batch,
-        #         edge_index_global_lig,
-        #         self.num_atom_types,
-        #         self.num_charge_classes,
-        #         self.dataset_info,
-        #         device=self.device,
-        #         mol_device="cpu",
-        #         context=context,
-        #         while_train=True,
-        #     )
-        #     torch.save(molecules, "/scratch1/tmp/molecules.pt")
-        #     torch.save(molecules_sampled, "/scratch1/tmp/molecules_sampled.pt")
-        #     if self.local_rank == 0:
-        #         import pdb
-
-        #         pdb.set_trace()
-
+       
         # Ground truth masking
         out["coords_true"] = pos_centered
         out["coords_noise_true"] = noise_coords_true
@@ -730,7 +714,7 @@ class Trainer(pl.LightningModule):
         assert sum(l) == ngraphs
 
         dataloader = (
-            self.trainer.datamodule.val_dataloader() 
+            self.trainer.datamodule.val_dataloader()
             if not run_test_eval
             else self.trainer.datamodule.test_dataloader()
         )
@@ -739,9 +723,9 @@ class Trainer(pl.LightningModule):
         if verbose:
             if self.local_rank == 0:
                 print(f"Creating {ngraphs} graphs in {l} batches")
+        
         iterable = iter(dataloader)
         for _, num_graphs in enumerate(l):
-            
             try:
                 pocket_data = next(iterable)
             except StopIteration:
@@ -772,28 +756,34 @@ class Trainer(pl.LightningModule):
                 guidance_scale=guidance_scale,
                 energy_model=energy_model,
             )
-            molecule_list.extend(
-                get_molecules(
-                    out_dict,
-                    data_batch,
-                    edge_index_global,
-                    self.num_atom_types,
-                    self.num_charge_classes,
-                    self.dataset_info,
-                    data_batch_pocket=data_batch_pocket,
-                    device=self.device,
-                    mol_device=device,
-                    context=context,
-                    while_train=False,
-                )
+            mol_list = get_molecules(
+                out_dict,
+                data_batch,
+                edge_index_global,
+                self.num_atom_types,
+                self.num_charge_classes,
+                self.dataset_info,
+                data_batch_pocket=None,
+                device=self.device,
+                mol_device=device,
+                context=context,
+                while_train=False,
             )
-        (
-            stability_dict,
-            validity_dict,
-            statistics_dict,
-            all_generated_smiles,
-            stable_molecules,
-            valid_molecules,
+            
+            molecule_list.append(mol_list)
+            
+        
+        molecule_list = [item for sublist in molecule_list for item in sublist]
+
+        #import pdb
+        #pdb.set_trace()
+        
+        (stability_dict,
+        validity_dict,
+        statistics_dict,
+        all_generated_smiles,
+        stable_molecules,
+        valid_molecules
         ) = analyze_stability_for_molecules(
             molecule_list=molecule_list,
             dataset_info=dataset_info,
@@ -896,7 +886,7 @@ class Trainer(pl.LightningModule):
             self.num_atom_types,
             self.num_charge_classes,
             self.dataset_info,
-            data_batch_pocket=data_batch_pocket,
+            data_batch_pocket=None,
             device=self.device,
             mol_device=mol_device,
             context=context,
@@ -918,12 +908,17 @@ class Trainer(pl.LightningModule):
         guidance_scale: float = 1.0e-4,
         energy_model=None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
+        
         pos_pocket = pocket_data.pos_pocket.to(self.device)
         batch_pocket = pocket_data.pos_pocket_batch.to(self.device)
         x_pocket = pocket_data.x_pocket.to(self.device)
-
+        # encode protein pocket
+        z = self.encode_pocket(atom_types_pocket=x_pocket,
+                               pos_pocket=pos_pocket,
+                               data_batch_pocket=batch_pocket
+                               )
         if num_nodes_lig is not None:
-            batch_num_nodes = num_nodes_lig.to(self.device)
+            batch_num_nodes = num_nodes_lig
         else:
             batch_num_nodes = torch.multinomial(
                 input=empirical_distribution_num_nodes,
@@ -945,38 +940,22 @@ class Trainer(pl.LightningModule):
             ]
 
         # initialize the 0-mean point cloud from N(0, I) centered in the pocket
-        pocket_cog = scatter_mean(pos_pocket, batch_pocket, dim=0)
-        pocket_cog_batch = pocket_cog[batch]
-        pos = pocket_cog_batch + torch.randn_like(pocket_cog_batch)
-        # pos = pocket_data.pos.to(self.device)
-        # batch = pocket_data.batch.to(self.device)
-
-        # # project to COM-free subspace
-        pos, pos_pocket = remove_mean_pocket(pos, pos_pocket, batch, batch_pocket)
-
+        pos = torch.randn(len(batch), 3, device=self.device, dtype=torch.get_default_dtype())
+        # pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
         n = len(pos)
+        # CoM Protein
+        pocket_mean = scatter_mean(pos_pocket, batch_pocket, dim=0)
+        
 
         # initialize the atom-types
         atom_types = torch.multinomial(
             self.atoms_prior, num_samples=n, replacement=True
         )
         atom_types = F.one_hot(atom_types, self.num_atom_types).float()
-        atom_types_pocket = F.one_hot(
-            x_pocket.squeeze().long(), num_classes=self.num_atom_types
-        ).float()
-
         charge_types = torch.multinomial(
             self.charges_prior, num_samples=n, replacement=True
         )
         charge_types = F.one_hot(charge_types, self.num_charge_classes).float()
-        charges_pocket = torch.zeros(
-            pos_pocket.shape[0], charge_types.shape[1], dtype=torch.float32
-        ).to(self.device)
-
-        # edge_index_local = radius_graph(x=pos,
-        #                                r=self.hparams.cutoff_local,
-        #                                batch=batch,
-        #                                max_num_neighbors=self.hparams.max_num_neighbors)
         edge_index_local = None
         edge_index_global = (
             torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
@@ -985,8 +964,8 @@ class Trainer(pl.LightningModule):
         edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
         if not self.hparams.bond_prediction:
             (
-                edge_attr_global_lig,
-                edge_index_global_lig,
+                edge_attr_global,
+                edge_index_global,
                 mask,
                 mask_i,
             ) = initialize_edge_attrs_reverse(
@@ -999,38 +978,7 @@ class Trainer(pl.LightningModule):
         else:
             edge_attr_global = None
 
-        (
-            edge_index_global,
-            edge_attr_global,
-            batch_edge_global,
-            edge_mask,
-        ) = get_joint_edge_attrs(
-            pos,
-            pos_pocket,
-            batch,
-            batch_pocket,
-            edge_attr_global_lig,
-            self.num_bond_classes,
-            self.device,
-        )
-
-        (
-            pos_joint,
-            atom_types_joint,
-            charge_types_joint,
-            batch_full,
-            pocket_mask,
-        ) = concat_ligand_pocket(
-            pos,
-            pos_pocket,
-            atom_types,
-            atom_types_pocket,
-            charge_types,
-            charges_pocket,
-            batch,
-            batch_pocket,
-            sorting=False,
-        )
+        batch_edge_global = batch[edge_index_global[0]]
 
         pos_traj = []
         atom_type_traj = []
@@ -1056,21 +1004,18 @@ class Trainer(pl.LightningModule):
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
 
-            node_feats_in = torch.cat([atom_types_joint, charge_types_joint], dim=-1)
+            node_feats_in = torch.cat([atom_types, charge_types], dim=-1)
             out = self.model(
                 x=node_feats_in,
+                z=z,
                 t=temb,
-                pos=pos_joint,
+                pos=pos,
                 edge_index_local=edge_index_local,
                 edge_index_global=edge_index_global,
-                edge_index_global_lig=edge_index_global_lig,
                 edge_attr_global=edge_attr_global,
-                batch=batch_full,
+                batch=batch,
                 batch_edge_global=batch_edge_global,
                 context=context,
-                pocket_mask=pocket_mask.unsqueeze(1),
-                edge_mask=edge_mask,
-                batch_lig=batch,
             )
 
             coords_pred = out["coords_pred"].squeeze()
@@ -1116,94 +1061,68 @@ class Trainer(pl.LightningModule):
             # edges
             if not self.hparams.bond_prediction:
                 (
-                    edge_attr_global_lig,
-                    edge_index_global_lig,
+                    edge_attr_global,
+                    edge_index_global,
                     mask,
                     mask_i,
                 ) = self.cat_bonds.sample_reverse_edges_categorical(
-                    edge_attr_global_lig,
+                    edge_attr_global,
                     edges_pred,
                     t,
                     mask,
                     mask_i,
                     batch=batch,
-                    edge_index_global=edge_index_global_lig,
+                    edge_index_global=edge_index_global,
                     num_classes=self.num_bond_classes,
                 )
             else:
-                edge_attr_global_lig = edges_pred
-
-            (
-                edge_index_global,
-                edge_attr_global,
-                batch_edge_global,
-                edge_mask,
-            ) = get_joint_edge_attrs(
-                pos,
-                pos_pocket,
-                batch,
-                batch_pocket,
-                edge_attr_global_lig,
-                self.num_bond_classes,
-                self.device,
-            )
-            # pos, pos_pocket = remove_mean_pocket(pos, pos_pocket, batch, batch_pocket)
-            (
-                pos_joint,
-                atom_types_joint,
-                charge_types_joint,
-                batch_full,
-                pocket_mask,
-            ) = concat_ligand_pocket(
-                pos,
-                pos_pocket,
-                atom_types,
-                atom_types_pocket,
-                charge_types,
-                charges_pocket,
-                batch,
-                batch_pocket,
-                sorting=False,
-            )
+                edge_attr_global = edges_pred
 
             if save_traj:
                 pos_ = pos
                 pos_traj.append(pos_.detach())
                 atom_type_traj.append(atom_types.detach())
-                edge_type_traj.append(edge_attr_global_lig.detach())
+                edge_type_traj.append(edge_attr_global.detach())
                 charge_type_traj.append(charge_types.detach())
 
-        # Move generated molecule back to the original pocket position for docking
-        pos += pocket_cog_batch
-
+        #import pdb
+        #pdb.set_trace()
+        # Move generated molecule back to the original pocket position
+        pos = pos + pocket_mean[batch]
+    
         out_dict = {
             "coords_pred": pos,
             "coords_pocket": pos_pocket,
             "atoms_pred": atom_types,
-            "atoms_pocket": atom_types_pocket,
             "charges_pred": charge_types,
-            "bonds_pred": edge_attr_global_lig,
+            "bonds_pred": edge_attr_global,
         }
         return (
             out_dict,
             batch,
             batch_pocket,
-            edge_index_global_lig,
+            edge_index_global,
             [pos_traj, atom_type_traj, charge_type_traj, edge_type_traj],
             context,
         )
 
     def configure_optimizers(self):
+        all_params = (
+            list(self.model.parameters())
+            + list(self.encoder.parameters())
+            + list(self.latent_final_lin.parameters())
+            + list(self.latent_jk_lin.parameters())
+        )
         if self.hparams.optimizer == "adam":
             optimizer = torch.optim.AdamW(
-                self.model.parameters(),
+                all_params,
                 lr=self.hparams["lr"],
                 amsgrad=True,
                 weight_decay=1.0e-12,
             )
         elif self.hparams.optimizer == "sgd":
             optimizer = torch.optim.SGD(
-                self.model.parameters(),
+                all_params,
                 lr=self.hparams["lr"],
                 momentum=0.9,
                 nesterov=True,

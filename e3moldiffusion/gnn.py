@@ -241,6 +241,7 @@ class EQGATLocalGNN(nn.Module):
         num_layers: int = 5,
         use_cross_product: bool = False,
         vector_aggr: str = "mean",
+        intermediate_outs: bool = False
     ):
         super(EQGATLocalGNN, self).__init__()
 
@@ -251,6 +252,7 @@ class EQGATLocalGNN(nn.Module):
         self.edge_dim = edge_dim
 
         convs = []
+        self.intermediate_outs = intermediate_outs
 
         for i in range(num_layers):
             convs.append(
@@ -289,6 +291,11 @@ class EQGATLocalGNN(nn.Module):
         # edge_attr_xyz (distances, cosines, relative_positions, edge_features)
         # (E, E, E x 3, E x F)
 
+        if self.intermediate_outs:
+            results = []
+        else:
+            results = None
+            
         for i in range(len(self.convs)):
             edge_index_in = edge_index_local
             edge_attr_in = edge_attr_local
@@ -302,11 +309,16 @@ class EQGATLocalGNN(nn.Module):
                 edge_attr=edge_attr_in,
             )
             s, v = out["s"], out["v"]
+            
+            if self.intermediate_outs:
+                results.append(s)
 
         out = {"s": s, "v": v}
-
-        return out
-
+        
+        if self.intermediate_outs:
+            return out, results
+        else:
+            return out
 
 class TopoEdgeGNN(nn.Module):
     def __init__(

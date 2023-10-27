@@ -445,6 +445,7 @@ class LatentEncoderNetwork(nn.Module):
         vector_aggr: str = "mean",
         atom_mapping: bool = True,
         bond_mapping: bool = True,
+        intermediate_outs: bool = False
     ) -> None:
         super(LatentEncoderNetwork, self).__init__()
 
@@ -467,7 +468,10 @@ class LatentEncoderNetwork(nn.Module):
             num_layers=num_layers,
             use_cross_product=use_cross_product,
             vector_aggr=vector_aggr,
+            intermediate_outs=intermediate_outs
         )
+        
+        self.intermediate_outs = intermediate_outs
 
         self.reset_parameters()
 
@@ -517,20 +521,31 @@ class LatentEncoderNetwork(nn.Module):
 
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
 
-        out = self.gnn(
-            s=s,
-            v=v,
-            p=pos,
-            edge_index_local=edge_index_local,
-            edge_attr_local=edge_attr_local_transformed,
-            edge_index_global=None,
-            edge_attr_global=None,
-            batch=batch,
-        )
-
-        return out
-
-
+        if not self.intermediate_outs:
+            out = self.gnn(
+                s=s,
+                v=v,
+                p=pos,
+                edge_index_local=edge_index_local,
+                edge_attr_local=edge_attr_local_transformed,
+                edge_index_global=None,
+                edge_attr_global=None,
+                batch=batch,
+            )
+            return out
+        else:
+            out, scalars = self.gnn(
+                s=s,
+                v=v,
+                p=pos,
+                edge_index_local=edge_index_local,
+                edge_attr_local=edge_attr_local_transformed,
+                edge_index_global=None,
+                edge_attr_global=None,
+                batch=batch,
+            )
+            return out, scalars
+            
 class SoftMaxAttentionAggregation(nn.Module):
     """
     Softmax Attention Pooling as proposed "Graph Matching Networks
