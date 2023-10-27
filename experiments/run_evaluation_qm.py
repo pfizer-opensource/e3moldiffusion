@@ -36,6 +36,7 @@ def evaluate(
     ddpm=True,
     eta_ddim=1.0,
     guidance_start=None,
+    calculate_relax_change=True,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -235,6 +236,77 @@ def evaluate(
     with open(os.path.join(save_dir, "stable_molecules.pickle"), "wb") as f:
         pickle.dump(stable_molecules, f)
 
+    with open(os.path.join(save_dir, "results_dict.pickle"), "wb") as f:
+        pickle.dump(results_dict, f)
+
+    if calculate_relax_change:
+        N_CORES = 8
+        SAVE_XYZ_FILES = False
+
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from experiments.evaluate_geom_change import calc_diff_mols
+
+        print(f"Calculating change of internal coordinates...")
+
+        mols = [d.rdkit_mol for d in stable_molecules]
+        for i, mol in enumerate(mols):
+            try:
+                Chem.SanitizeMol(mol)
+            except Exception as e:
+                print(f"Skipping molecule {i} because of sanitization error: {e}")
+
+        diff_b_lengths, diff_b_angles, diff_d_angles, rmsds, diff_es = calc_diff_mols(
+            mols, N_CORES, SAVE_XYZ_FILES
+        )
+
+        results_dict["delta_bond_lenghts"] = diff_b_lengths
+        results_dict["delta_bond_angles"] = diff_b_angles
+        results_dict["delta_dihedrals"] = diff_d_angles
+        results_dict["rmsds"] = rmsds
+        results_dict["delta_energies"] = diff_es
+
+        with open(os.path.join(save_dir, "results_dict.pickle"), "wb") as f:
+            pickle.dump(results_dict, f)
+
+        np.savetxt(os.path.join(save_dir, "eval_diff_b_lengths"), diff_b_lengths)
+        np.savetxt(os.path.join(save_dir, "eval_diff_b_angles"), diff_b_angles)
+        np.savetxt(os.path.join(save_dir, "eval_diff_d_angles"), diff_d_angles)
+        np.savetxt(os.path.join(save_dir, "eval_rmsds"), rmsds)
+        np.savetxt(os.path.join(save_dir, "eval_diff_energies"), diff_es)
+
+        fig, ax = plt.subplots()
+        ax.hist(diff_b_lengths, rwidth=0.9, bins=25)
+        ax.set_xlabel("Δ Bond Length [Å]")
+        ax.set_ylabel("Count")
+        fig.savefig(os.path.join(save_dir, "diff_b_lengths.png"))
+
+        fig, ax = plt.subplots()
+        ax.hist(diff_b_angles, rwidth=0.9, bins=25)
+        ax.set_xlabel("Δ Bond Angles [°]")
+        ax.set_ylabel("Count")
+        fig.savefig(os.path.join(save_dir, "diff_b_angles.png"))
+
+        fig, ax = plt.subplots()
+        diff_d_angles = np.abs(diff_d_angles)
+        diff_d_angles[diff_d_angles >= 180.0] -= 180.0
+        ax.hist(diff_d_angles, rwidth=0.9, bins=25)
+        ax.set_xlabel("Δ Dihedral Angles [°]")
+        ax.set_ylabel("Count")
+        fig.savefig(os.path.join(save_dir, "diff_d_angles.png"))
+
+        fig, ax = plt.subplots()
+        ax.hist(rmsds, rwidth=0.9, bins=25)
+        ax.set_xlabel("RMSD [Å]")
+        ax.set_ylabel("Count")
+        fig.savefig(os.path.join(save_dir, "rmsds.png"))
+
+        fig, ax = plt.subplots()
+        ax.hist(np.array(diff_es) * 627.509, rwidth=0.9, bins=25)
+        ax.set_xlabel("Δ Energy [kcal/mol]")
+        ax.set_ylabel("Count")
+        fig.savefig(os.path.join(save_dir, "energies.png"))
+
 
 def get_args():
     # fmt: off
@@ -242,6 +314,7 @@ def get_args():
     parser.add_argument('--model-path', default="/sharedhome/seumej/logs/best_mol_stab.ckpt", type=str,
                         help='Path to trained model')
     parser.add_argument("--use-guidance", default=False, action="store_true")
+    parser.add_argument("--calculate-relax-change", default=True, action="store_true")
     parser.add_argument("--ckpt-guidance-model", default=None, type=str)
     parser.add_argument("--guidance-start", default=None, type=int)
     parser.add_argument('--guidance-scale', default=1.0e-4, type=float,
@@ -282,4 +355,5 @@ if __name__ == "__main__":
         ckpt_guidance_model=args.ckpt_guidance_model,
         guidance_scale=args.guidance_scale,
         guidance_start=args.guidance_start,
+        calculate_relax_change=args.calculate_relax_change,
     )
