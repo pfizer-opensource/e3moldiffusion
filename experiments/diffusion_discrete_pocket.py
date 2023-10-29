@@ -547,15 +547,26 @@ class Trainer(pl.LightningModule):
             data_batch,
             remove_mean=False,
         )
+
         atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
-            t, atom_types, data_batch, self.dataset_info, type="atoms"
+            t,
+            atom_types,
+            data_batch,
+            self.dataset_info,
+            num_classes=self.num_atom_types,
+            type="atoms",
+        )
+        charges, charges_perturbed = self.cat_charges.sample_categorical(
+            t,
+            charges,
+            data_batch,
+            self.dataset_info,
+            num_classes=self.num_charge_classes,
+            type="charges",
         )
         atom_types_pocket = F.one_hot(
             atom_types_pocket.squeeze().long(), num_classes=self.num_atom_types
         ).float()
-        charges, charges_perturbed = self.cat_charges.sample_categorical(
-            t, charges, data_batch, self.dataset_info, type="charges"
-        )
         charges_pocket = torch.zeros(
             pos_pocket.shape[0], charges_perturbed.shape[1], dtype=torch.float32
         ).to(self.device)

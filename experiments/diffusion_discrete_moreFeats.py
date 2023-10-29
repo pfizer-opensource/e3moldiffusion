@@ -103,9 +103,6 @@ class Trainer(pl.LightningModule):
             # for i, param in enumerate(self.model.parameters()):
             #     if i < num_params // 2:
             #         param.requires_grad = False
-        elif self.hparams.load_ckpt:
-            print("Loading from model checkpoint...")
-            self.model = load_model(self.hparams.load_ckpt, self.num_atom_features)
         else:
             self.model = DenoisingEdgeNetwork(
                 hn_dim=(hparams["sdim"], hparams["vdim"]),
