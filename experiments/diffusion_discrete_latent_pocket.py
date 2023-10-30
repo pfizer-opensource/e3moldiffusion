@@ -351,7 +351,7 @@ class Trainer(pl.LightningModule):
             final_res = self.run_evaluation(
                 step=self.i,
                 dataset_info=self.dataset_info,
-                ngraphs=100,
+                ngraphs=600,
                 bs=self.hparams.batch_size,
                 verbose=True,
                 inner_verbose=False,
@@ -381,7 +381,7 @@ class Trainer(pl.LightningModule):
             )
 
     def _log(
-        self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, batch_size, stage
+        self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, reg_loss, batch_size, stage
     ):
         self.log(
             f"{stage}/loss",
@@ -427,6 +427,16 @@ class Trainer(pl.LightningModule):
             prog_bar=(stage == "train"),
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
+
+        self.log(
+            f"{stage}/reg_loss",
+            reg_loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage == "train"),
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+        )
+        
 
     def step_fnc(self, batch, batch_idx, stage: str):
         batch.batch = batch.pos_batch
@@ -499,11 +509,14 @@ class Trainer(pl.LightningModule):
             weights=weights,
         )
 
+        reg_loss = out_dict['z'].pow(2).sum(-1).mean(0)
+        
         final_loss = (
             self.hparams.lc_coords * loss["coords"]
             + self.hparams.lc_atoms * loss["atoms"]
             + self.hparams.lc_bonds * loss["bonds"]
             + self.hparams.lc_charges * loss["charges"]
+            + 0.10 * reg_loss
         )
 
         # if self.training:
@@ -528,6 +541,7 @@ class Trainer(pl.LightningModule):
             loss["atoms"],
             loss["charges"],
             loss["bonds"],
+            reg_loss,
             batch_size,
             stage,
         )
@@ -675,6 +689,7 @@ class Trainer(pl.LightningModule):
         out["charges_true"] = charges.argmax(dim=-1)
 
         out["bond_aggregation_index"] = edge_index_global_lig[1]
+        out['z'] = z
         return out
 
     @torch.no_grad()
@@ -731,7 +746,7 @@ class Trainer(pl.LightningModule):
             except StopIteration:
                 iterable = iter(dataloader)
                 pocket_data = next(iterable)
-                
+            num_graphs = len(pocket_data.batch.bincount())
             if use_ligand_dataset_sizes:
                 num_nodes_lig = pocket_data.batch.bincount()
             else:
