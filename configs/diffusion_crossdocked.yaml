@@ -1,5 +1,5 @@
 # load_ckpt: /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_lr2_bs64/run0/last-v3.ckpt
-load_ckpt_from_pretrained: /sharedhome/cremej01/workspace/logs/pubchem/x0_pretraining_0_snr_t_weighting_bs400/run0/last.ckpt
+# load_ckpt_from_pretrained: /sharedhome/cremej01/workspace/logs/pubchem/x0_pretraining_0_snr_t_weighting_bs400/run0/last.ckpt
 #/hpfs/userws/cremej01/projects/logs/pubchem/pretrain_x0_3_adaptive/run0/last.ckpt
 # ckpt_bond_model: /hpfs/userws/cremej01/projects/logs/geom/bond_pred_seed1/run0/last.ckpt
 

@@ -2,7 +2,8 @@ import argparse
 import warnings
 from pathlib import Path
 from time import time
-
+import re
+import numpy as np
 import torch
 from rdkit import Chem
 from tqdm import tqdm
@@ -32,10 +33,12 @@ def evaluate(
     test_list,
     skip_existing,
     fix_n_nodes,
-    ngraphs,
-    batch_size,
+    num_ligands_per_pocket,
     ddpm,
     eta_ddim,
+    relax_mol,
+    max_relax_iter,
+    sanitize,
     write_dict,
     write_csv,
     pdbqt_dir,
@@ -145,11 +148,6 @@ def evaluate(
         with open(txt_file, "r") as f:
             resi_list = f.read().split()
 
-        if fix_n_nodes:
-            # some ligands (e.g. 6JWS_bio1_PT1:A:801) could not be read with sanitize=True
-            suppl = Chem.SDMolSupplier(str(sdf_file), sanitize=False)
-            num_nodes_lig = torch.tensor(suppl[0].GetNumAtoms()).long()
-
         pdb_struct = PDBParser(QUIET=True).get_structure("", pdb_file)[0]
         if resi_list is not None:
             # define pocket with list of residues
@@ -157,21 +155,37 @@ def evaluate(
                 pdb_struct[x.split(":")[0]][(" ", int(x.split(":")[1]), " ")]
                 for x in resi_list
             ]
+
         pocket_data = prepare_pocket(
-            residues, dataset_info.atom_encoder, no_H=True, repeats=1, device=device
+            residues,
+            dataset_info.atom_encoder,
+            no_H=True,
+            repeats=num_ligands_per_pocket,
+            device=device,
         )
+
+        if fix_n_nodes:
+            # some ligands (e.g. 6JWS_bio1_PT1:A:801) could not be read with sanitize=True
+            suppl = Chem.SDMolSupplier(str(sdf_file), sanitize=False)
+            num_nodes_lig = torch.tensor(suppl[0].GetNumAtoms()).long()
+        else:
+            num_nodes_lig = None
 
         molecules = model.generate_ligands(
             pocket_data,
-            num_graphs=1,
+            num_graphs=num_ligands_per_pocket,
             inner_verbose=False,
             save_traj=False,
             ddpm=ddpm,
             eta_ddim=eta_ddim,
             num_nodes_lig=num_nodes_lig,
+            relax_mol=relax_mol,
+            max_relax_iter=max_relax_iter,
+            sanitize=sanitize,
             mol_device="cpu",
         )
         all_molecules.extend(molecules)
+
         write_sdf_file(sdf_out_file_raw, molecules)
         sdf_files.append(sdf_out_file_raw)
 
@@ -197,7 +211,7 @@ def evaluate(
     )
     print("Sampling finished.")
 
-    # DOCKING
+    ############## DOCKING ##############
     print("Starting docking...")
     results = {"receptor": [], "ligand": [], "scores": []}
     results_dict = {}
@@ -248,6 +262,24 @@ def evaluate(
     if write_dict:
         torch.save(results_dict, Path(save_dir, "qvina2_scores.pt"))
 
+    pattern = "\d+\.\d+"
+    scores = list(results_dict["scores"])
+    scores_fl = [
+        float(re.findall(pattern, score)[0])
+        for score in scores
+        if len(re.findall(pattern, score)) == 1
+    ]
+
+    missing = len(scores) - len(scores_fl)
+    print(f"Number of dockings evaluated with NaN: {missing}")
+
+    mean_score = np.mean(scores_fl)
+    print(f"Mean score: {mean_score}")
+
+    scores_fl.sort(reverse=True)
+    mean_top10_score = np.mean(scores_fl[:10])
+    print(f"Top-10 mean score: {mean_top10_score}")
+
 
 def get_args():
     # fmt: off
@@ -262,16 +294,18 @@ def get_args():
                         help='Whether or not to store generated molecules in xyz files')
     parser.add_argument('--calculate-energy', default=False, action="store_true",
                         help='Whether or not to calculate xTB energies and forces')
-    parser.add_argument('--ngraphs', default=5000, type=int,
-                            help='How many graphs to sample. Defaults to 5000')
-    parser.add_argument('--batch-size', default=80, type=int,
-                            help='Batch-size to generate the selected ngraphs. Defaults to 80.')
+    parser.add_argument('--num-ligands-per-pocket', default=10, type=int,
+                            help='How many ligands per pocket to sample. Defaults to 10')
     parser.add_argument('--ddim', default=False, action="store_true",
                         help='If DDIM sampling should be used. Defaults to False')
     parser.add_argument('--eta-ddim', default=1.0, type=float,
                         help='How to scale the std of noise in the reverse posterior. \
                             Can also be used for DDPM to track a deterministic trajectory. \
                             Defaults to 1.0')
+    parser.add_argument("--relax-mol", default=False, action="store_true")
+    parser.add_argument("--sanitize", default=False, action="store_true")
+    parser.add_argument('--max-relax-iter', default=200, type=int,
+                            help='How many iteration steps for UFF optimization')
     parser.add_argument("--test-dir", type=Path)
     parser.add_argument("--test-list", type=Path, default=None)
     parser.add_argument("--save-dir", type=Path)
@@ -294,11 +328,13 @@ if __name__ == "__main__":
         save_dir=args.save_dir,
         skip_existing=args.skip_existing,
         fix_n_nodes=args.fix_n_nodes,
-        ngraphs=args.ngraphs,
-        batch_size=args.batch_size,
+        num_ligands_per_pocket=args.num_ligands_per_pocket,
         ddpm=not args.ddim,
         eta_ddim=args.eta_ddim,
         write_dict=args.write_dict,
         write_csv=args.write_csv,
         pdbqt_dir=args.pdbqt_dir,
+        relax_mol=args.relax_mol,
+        max_relax_iter=args.max_relax_iter,
+        sanitize=args.sanitize,
     )

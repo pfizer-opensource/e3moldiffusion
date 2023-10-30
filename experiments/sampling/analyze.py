@@ -11,6 +11,8 @@ from multiprocessing import Pool
 from rdkit import Chem
 from rdkit.DataStructs import TanimotoSimilarity, BulkTanimotoSimilarity
 from rdkit.Chem.QED import qed
+from rdkit.Chem import Descriptors, Crippen, Lipinski, QED
+from experiments.sampling.utils import calculateScore
 
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
@@ -81,7 +83,7 @@ class BasicMolecularMetrics(object):
 
     def compute_validity(self, generated, local_rank=0):
         """generated: list of couples (positions, atom_types)"""
-        valid = []
+        valid_smiles = []
         valid_ids = []
         valid_molecules = []
         num_components = []
@@ -97,15 +99,15 @@ class BasicMolecularMetrics(object):
                     if len(mol_frags) > 1:
                         error_message[4] += 1
                     else:
+                        largest_mol = max(
+                            mol_frags, default=mol, key=lambda m: m.GetNumAtoms()
+                        )
+                        Chem.SanitizeMol(largest_mol)
+                        smiles = Chem.MolToSmiles(largest_mol)
                         valid_molecules.append(generated[i])
-                    largest_mol = max(
-                        mol_frags, default=mol, key=lambda m: m.GetNumAtoms()
-                    )
-                    Chem.SanitizeMol(largest_mol)
-                    smiles = Chem.MolToSmiles(largest_mol)
-                    valid.append(smiles)
-                    valid_ids.append(i)
-                    error_message[-1] += 1
+                        valid_smiles.append(smiles)
+                        valid_ids.append(i)
+                        error_message[-1] += 1
                 except Chem.rdchem.AtomValenceException:
                     error_message[1] += 1
                     # print("Valence error in GetmolFrags")
@@ -120,7 +122,7 @@ class BasicMolecularMetrics(object):
                 f" -- No error {error_message[-1]}"
             )
         self.validity_metric.update(
-            value=len(valid) / len(generated), weight=len(generated)
+            value=len(valid_smiles) / len(generated), weight=len(generated)
         )
         num_components = torch.tensor(
             num_components, device=self.mean_components.device
@@ -130,9 +132,9 @@ class BasicMolecularMetrics(object):
         not_connected = 100.0 * error_message[4] / len(generated)
         connected_components = 100.0 - not_connected
 
-        valid = canonicalize_list(valid)
+        valid_smiles = canonicalize_list(valid_smiles)
 
-        return valid, valid_molecules, connected_components, error_message
+        return valid_smiles, valid_molecules, connected_components, error_message
 
     def compute_uniqueness(self, valid):
         """valid: list of SMILES strings."""
@@ -206,7 +208,12 @@ class BasicMolecularMetrics(object):
         )
 
     def __call__(
-        self, molecules: list, local_rank=0, remove_hs=False, return_molecules=False
+        self,
+        molecules: list,
+        local_rank=0,
+        remove_hs=False,
+        return_molecules=False,
+        return_stats_per_molecule=False,
     ):
         stable_molecules = []
         if not remove_hs:
@@ -232,7 +239,7 @@ class BasicMolecularMetrics(object):
 
         # Validity, uniqueness, novelty
         (
-            all_generated_smiles,
+            valid_smiles,
             valid_molecules,
             validity,
             novelty,
@@ -253,45 +260,60 @@ class BasicMolecularMetrics(object):
         statistics_dict = self.compute_statistics(molecules, local_rank)
         statistics_dict["connected_components"] = connected_components
 
-        self.number_samples = len(all_generated_smiles)
+        self.number_samples = len(valid_smiles)
 
         self.train_subset = (
             get_random_subset(self.train_smiles, self.number_samples, seed=42)
-            if len(all_generated_smiles) <= len(self.train_smiles)
+            if len(valid_smiles) <= len(self.train_smiles)
             else self.train_smiles
         )
-        similarity = self.get_bulk_similarity_with_train(all_generated_smiles)
-        diversity = self.get_bulk_diversity(all_generated_smiles)
-        if len(all_generated_smiles) > 0:
-            kl_score = self.get_kl_divergence(all_generated_smiles)
+        similarity = self.get_bulk_similarity_with_train(valid_smiles)
+        diversity = self.get_bulk_diversity(valid_smiles)
+        if len(valid_smiles) > 0:
+            kl_score = self.get_kl_divergence(valid_smiles)
         else:
             print("No valid smiles have been generated. Setting kl_score to -1")
             kl_score = -1.0
-        statistics_dict["similarity"] = similarity
-        statistics_dict["diversity"] = diversity
+        statistics_dict["bulk_similarity"] = similarity
+        statistics_dict["bulk_diversity"] = diversity
         statistics_dict["kl_score"] = kl_score
 
-        if len(all_generated_smiles) > 0:
-            mols = get_mols_list(all_generated_smiles)
+        if len(valid_smiles) > 0:
+            mols = get_mols_list(valid_smiles)
             # rings = np.mean([num_rings(mol) for mol in mols])
             # aromatic_rings = np.mean([num_aromatic_rings(mol) for mol in mols])
-            qeds = np.mean([qed(mol) for mol in mols])
+            qed, sa, logp, lipinski, diversity = self.evaluate_mean(mols)
         else:
-            print("No valid smiles have been generated. Setting qed_score to -1")
-            qeds = -1.0
-        statistics_dict["QED"] = qeds
+            print("No valid smiles have been generated. Setting scores to -1")
+            qed = -1.0
+            sa = -1.0
+            logp = -1.0
+            lipinski = -1.0
+            diversity = -1.0
+        statistics_dict["QED"] = qed
+        statistics_dict["SA"] = sa
+        statistics_dict["LogP"] = logp
+        statistics_dict["Lipinski"] = lipinski
+        statistics_dict["Diversity"] = diversity
+
+        if return_stats_per_molecule:
+            qed, sa, logp, lipinski = self.evaluate_per_mol(mols)
+            statistics_dict["QEDs"] = qed
+            statistics_dict["SAs"] = sa
+            statistics_dict["LogPs"] = logp
+            statistics_dict["Lipinskis"] = lipinski
 
         self.reset()
 
         if not return_molecules:
-            all_generated_smiles = None
+            valid_smiles = None
             stable_molecules = None
             valid_molecules = None
         return (
             stability_dict,
             validity_dict,
             statistics_dict,
-            all_generated_smiles,
+            valid_smiles,
             stable_molecules,
             valid_molecules,
         )
@@ -484,6 +506,88 @@ class BasicMolecularMetrics(object):
 
         return score
 
+    def calculate_qed(self, rdmol):
+        return QED.qed(rdmol)
+
+    def calculate_sa(self, rdmol):
+        sa = calculateScore(rdmol)
+        return round((10 - sa) / 9, 2)  # from pocket2mol
+
+    def calculate_logp(self, rdmol):
+        return Crippen.MolLogP(rdmol)
+
+    def calculate_lipinski(self, rdmol):
+        rule_1 = Descriptors.ExactMolWt(rdmol) < 500
+        rule_2 = Lipinski.NumHDonors(rdmol) <= 5
+        rule_3 = Lipinski.NumHAcceptors(rdmol) <= 10
+        rule_4 = (logp := Crippen.MolLogP(rdmol) >= -2) & (logp <= 5)
+        rule_5 = Chem.rdMolDescriptors.CalcNumRotatableBonds(rdmol) <= 10
+        return np.sum([int(a) for a in [rule_1, rule_2, rule_3, rule_4, rule_5]])
+
+    def calculate_diversity(self, pocket_mols):
+        if len(pocket_mols) < 2:
+            return 0.0
+
+        div = 0
+        total = 0
+        for i in range(len(pocket_mols)):
+            for j in range(i + 1, len(pocket_mols)):
+                div += 1 - self.similarity(pocket_mols[i], pocket_mols[j])
+                total += 1
+        return div / total
+
+    def similarity(self, mol_a, mol_b):
+        # fp1 = AllChem.GetMorganFingerprintAsBitVect(
+        #     mol_a, 2, nBits=2048, useChirality=False)
+        # fp2 = AllChem.GetMorganFingerprintAsBitVect(
+        #     mol_b, 2, nBits=2048, useChirality=False)
+        fp1 = Chem.RDKFingerprint(mol_a)
+        fp2 = Chem.RDKFingerprint(mol_b)
+        return DataStructs.TanimotoSimilarity(fp1, fp2)
+
+    def evaluate_mean(self, rdmols):
+        """
+        Run full evaluation and return mean of each property
+        Args:
+            rdmols: list of RDKit molecules
+        Returns:
+            QED, SA, LogP, Lipinski, and Diversity
+        """
+
+        if len(rdmols) < 1:
+            return 0.0, 0.0, 0.0, 0.0, 0.0
+
+        for mol in rdmols:
+            Chem.SanitizeMol(mol)
+            assert mol is not None, "only evaluate valid molecules"
+
+        qed = np.mean([self.calculate_qed(mol) for mol in rdmols])
+        sa = np.mean([self.calculate_sa(mol) for mol in rdmols])
+        logp = np.mean([self.calculate_logp(mol) for mol in rdmols])
+        lipinski = np.mean([self.calculate_lipinski(mol) for mol in rdmols])
+        diversity = self.calculate_diversity(rdmols)
+
+        return qed, sa, logp, lipinski, diversity
+
+    def evaluate_per_mol(self, rdmols):
+        """
+        Run full evaluation and return mean of each property
+        Args:
+            rdmols: list of RDKit molecules
+        Returns:
+            QED, SA, LogP, Lipinski, and Diversity
+        """
+
+        if len(rdmols) < 1:
+            return -1.0, -1.0, -1.0, -1.0
+
+        qed = [self.calculate_qed(mol) for mol in rdmols]
+        sa = [self.calculate_sa(mol) for mol in rdmols]
+        logp = [self.calculate_logp(mol) for mol in rdmols]
+        lipinski = [self.calculate_lipinski(mol) for mol in rdmols]
+
+        return qed, sa, logp, lipinski
+
 
 def analyze_stability_for_molecules(
     molecule_list,
@@ -491,11 +595,14 @@ def analyze_stability_for_molecules(
     smiles_train,
     local_rank,
     return_molecules=False,
+    return_stats_per_molecule=False,
     remove_hs=False,
     device="cpu",
 ):
     metrics = BasicMolecularMetrics(
-        dataset_info, smiles_train=smiles_train, device=device
+        dataset_info,
+        smiles_train=smiles_train,
+        device=device,
     )
     (
         stability_dict,
@@ -508,6 +615,7 @@ def analyze_stability_for_molecules(
         molecule_list,
         local_rank=local_rank,
         remove_hs=remove_hs,
+        return_stats_per_molecule=return_stats_per_molecule,
         return_molecules=return_molecules,
     )
     return (

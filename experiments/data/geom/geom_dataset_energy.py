@@ -38,6 +38,25 @@ GEOM_DATADIR = "/scratch1/cremej01/data/geom/processed"
 
 
 class GeomDrugsDataset(InMemoryDataset):
+    atom_reference = {
+        "H": -0.393482763936,
+        "B": -0.952436614164,
+        "C": -1.795110518041,
+        "N": -2.60945245463,
+        "O": -3.769421097051,
+        "F": -4.619339964238,
+        "Al": -0.905328611479,
+        "Si": -1.571424085131,
+        "P": -2.377807088084,
+        "S": -3.148271017078,
+        "Cl": -4.482525134961,
+        "As": -2.239425948594,
+        "Br": -4.048339371234,
+        "I": -3.77963026339,
+        "Hg": -0.848032246708,
+        "Bi": -2.26665341636,
+    }
+
     def __init__(
         self, split, root, remove_h, transform=None, pre_transform=None, pre_filter=None
     ):
@@ -54,6 +73,7 @@ class GeomDrugsDataset(InMemoryDataset):
 
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
+
         self.statistics = dataset_utils.Statistics(
             num_nodes=load_pickle(os.path.join(GEOM_DATADIR, self.processed_names[0])),
             atom_types=torch.from_numpy(
@@ -133,8 +153,11 @@ class GeomDrugsDataset(InMemoryDataset):
                 )
                 try:
                     atom_types = [atom_decoder[int(a)] for a in data.x]
+                    e_ref = np.sum([self.atom_reference[a] for a in atom_types])
                     e, _ = calculate_xtb_energy(data.pos, atom_types)
-                    data.energy = e
+                    data.energy = torch.from_numpy(
+                        e - e_ref, dtype=torch.float32
+                    ).unsqueeze(0)
                 except:
                     print(f"Molecule with id {i} and conformer id {j} failed...")
                     continue

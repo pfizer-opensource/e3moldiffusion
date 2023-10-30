@@ -876,6 +876,9 @@ class Trainer(pl.LightningModule):
         save_traj,
         ddpm,
         eta_ddim,
+        relax_mol=False,
+        max_relax_iter=200,
+        sanitize=False,
         every_k_step=1,
         num_nodes_lig=None,
         mol_device="cpu",
@@ -900,7 +903,7 @@ class Trainer(pl.LightningModule):
             guidance_scale=None,
             energy_model=None,
         )
-        molecule = get_molecules(
+        molecules = get_molecules(
             out_dict,
             data_batch,
             edge_index_global,
@@ -908,12 +911,46 @@ class Trainer(pl.LightningModule):
             self.num_charge_classes,
             self.dataset_info,
             data_batch_pocket=data_batch_pocket,
+            relax_mol=relax_mol,
+            max_relax_iter=max_relax_iter,
+            sanitize=sanitize,
             device=self.device,
             mol_device=mol_device,
             context=context,
             while_train=False,
         )
-        return molecule
+        if num_graphs > 1:
+            (
+                stability_dict,
+                validity_dict,
+                statistics_dict,
+                all_generated_smiles,
+                stable_molecules,
+                valid_molecules,
+            ) = analyze_stability_for_molecules(
+                molecule_list=molecules,
+                dataset_info=self.dataset_info,
+                smiles_train=self.smiles_list,
+                local_rank=self.local_rank,
+                return_molecules=True,
+                return_stats_per_molecule=True,
+                remove_hs=self.hparams.remove_hs,
+                device="cpu",
+            )
+
+            qed = 0
+            idx = 0
+
+            for i in range(len(valid_molecules)):
+                if qed > statistics_dict["QEDs"][i]:
+                    continue
+                else:
+                    qed = statistics_dict["QEDs"][i]
+                    idx = i
+
+            return [molecules[idx]]
+        else:
+            return molecules
 
     def reverse_sampling(
         self,

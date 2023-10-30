@@ -793,6 +793,9 @@ def get_molecules(
     dataset_info,
     device,
     data_batch_pocket=None,
+    relax_mol=False,
+    max_relax_iter=200,
+    sanitize=False,
     mol_device="cpu",
     context=None,
     while_train=False,
@@ -868,6 +871,9 @@ def get_molecules(
             if context_split is not None
             else None,
             dataset_info=dataset_info,
+            relax_mol=relax_mol,
+            max_relax_iter=max_relax_iter,
+            sanitize=sanitize,
         )
         molecule_list.append(molecule)
 
@@ -983,8 +989,8 @@ def prepare_pocket(
     ).long()
 
     pocket = Data(
-        x_pocket=pocket_types,
-        pos_pocket=pocket_coord,
+        x_pocket=pocket_types.repeat(repeats),
+        pos_pocket=pocket_coord.repeat(repeats, 1),
         pos_pocket_batch=pocket_mask,
     )
 

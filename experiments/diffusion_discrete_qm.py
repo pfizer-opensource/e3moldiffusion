@@ -1156,7 +1156,9 @@ class Trainer(pl.LightningModule):
                 node_feats_in += [ring_feat, aromatic_feat, hybridization_feat]
             if self.hparams.use_qm_props:
                 node_feats_in += [mulliken]
-                edge_attr_global_wbo = torch.cat([edge_attr_global, wbo], dim=-1)
+                edge_attr_global_full = torch.cat([edge_attr_global, wbo], dim=-1)
+            else:
+                edge_attr_global_full = edge_attr_global
             node_feats_in = torch.cat(node_feats_in, dim=-1)
             out = self.model(
                 x=node_feats_in,
@@ -1164,7 +1166,7 @@ class Trainer(pl.LightningModule):
                 pos=pos,
                 edge_index_local=edge_index_local,
                 edge_index_global=edge_index_global,
-                edge_attr_global=edge_attr_global_wbo,
+                edge_attr_global=edge_attr_global_full,
                 batch=batch,
                 batch_edge_global=batch_edge_global,
                 context=context,

@@ -193,10 +193,13 @@ if __name__ == "__main__":
                     )
                 else:
                     from experiments.diffusion_pretrain_discrete import Trainer
-            elif hparams.additional_feats and not hparams.use_qm_props:
-                if dataset == "crossdocked":
-                    print("Ligand-pocket training using additional features")
-                    from experiments.diffusion_discrete_moreFeats_ligand import Trainer
+            elif (
+                dataset == "crossdocked"
+                and hparams.additional_feats
+                and not hparams.use_qm_props
+            ):
+                print("Ligand-pocket training using additional features")
+                from experiments.diffusion_discrete_moreFeats_ligand import Trainer
             else:
                 if dataset == "crossdocked":
                     if hparams.latent_dim is None:
@@ -208,11 +211,16 @@ if __name__ == "__main__":
                 elif dataset == "geomqm":
                     if hparams.additional_feats and hparams.use_qm_props:
                         print("Using RDKit and QM props as additional features")
+                    elif hparams.additional_feats and not hparams.use_qm_props:
+                        print("Using RDKit props as additional features")
                     else:
                         print("Using QM props as additional features")
                     from experiments.diffusion_discrete_qm import Trainer
                 else:
-                    from experiments.diffusion_discrete import Trainer
+                    if hparams.additional_feats:
+                        from experiments.diffusion_discrete_qm import Trainer
+                    else:
+                        from experiments.diffusion_discrete import Trainer
     else:
         print("Running energy training")
         from experiments.energy_training import Trainer
