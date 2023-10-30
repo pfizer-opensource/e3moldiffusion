@@ -747,7 +747,7 @@ class Trainer(pl.LightningModule):
             except StopIteration:
                 iterable = iter(dataloader)
                 pocket_data = next(iterable)
-
+            num_graphs = len(pocket_data.batch.bincount())
             if use_ligand_dataset_sizes:
                 num_nodes_lig = pocket_data.batch.bincount()
             else:
