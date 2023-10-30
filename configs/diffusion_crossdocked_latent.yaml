@@ -16,7 +16,7 @@ bond_prediction: false
 
 seed: 42
 # batch_size 40 without adaptive, and 200 with adaptive
-batch_size: 4
+batch_size: 16
 ema_decay: 0.999
 grad_clip_val: 10
 accum_batch: 1
@@ -45,9 +45,9 @@ sdim_latent: 256
 vdim_latent: 128
 edim_latent: 1
 num_layers_latent: 8
-latent_dim: 256
+latent_dim: 128
 context_mapping: false 
-num_context_features: 256
+num_context_features: 128
 use_cross_product: false
 local_edge_attrs: false
 fully_connected: true
@@ -66,9 +66,10 @@ beta_min: 1.e-4
 beta_max: 2.e-2
 timesteps: 500
 max_time: 06:00:00:00
+loss_weighting: snr_t
 
 #LOGGING
-save_dir: /sharedhome/let55/projects/e3moldiffusion_experiments/logs_new/crossdocked/shape_enc_com_debug
+save_dir: /sharedhome/let55/projects/e3moldiffusion_experiments/logs_new/crossdocked/shape_latent_new_smallerDim
 id: 0
 
 #LEARNING
