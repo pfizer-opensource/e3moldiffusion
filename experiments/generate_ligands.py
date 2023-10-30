@@ -119,6 +119,7 @@ def evaluate(
     time_per_pocket = {}
 
     all_molecules = []
+    statistics_dict = {"QED": [], "SA": [], "Lipinski": [], "Diversity": []}
     sdf_files = []
 
     print("Starting sampling...")
@@ -171,7 +172,7 @@ def evaluate(
         else:
             num_nodes_lig = None
 
-        molecules = model.generate_ligands(
+        molecules, statistics = model.generate_ligands(
             pocket_data,
             num_graphs=num_ligands_per_pocket,
             inner_verbose=False,
@@ -185,6 +186,10 @@ def evaluate(
             mol_device="cpu",
         )
         all_molecules.extend(molecules)
+        statistics_dict["QED"].append(statistics[0])
+        statistics_dict["SA"].append(statistics[1])
+        statistics_dict["Lipinski"].append(statistics[2])
+        statistics_dict["Diversity"].append(statistics[3])
 
         write_sdf_file(sdf_out_file_raw, molecules)
         sdf_files.append(sdf_out_file_raw)
@@ -199,6 +204,13 @@ def evaluate(
             f"{(time() - t_pocket_start) / len(all_molecules):.2f} "
             f"sec/mol."
         )
+
+    statistics_dict["QED"] = np.mean(statistics_dict["QED"])
+    statistics_dict["SA"] = np.mean(statistics_dict["SA"])
+    statistics_dict["Lipinski"] = np.mean(statistics_dict["Lipinski"])
+    statistics_dict["Diversity"] = np.mean(statistics_dict["Diversity"])
+
+    print(f"Mean statistics across all sampled ligands: {statistics_dict}")
 
     with open(Path(save_dir, "pocket_times.txt"), "w") as f:
         for k, v in time_per_pocket.items():
@@ -262,15 +274,9 @@ def evaluate(
     if write_dict:
         torch.save(results_dict, Path(save_dir, "qvina2_scores.pt"))
 
-    pattern = "\d+\.\d+"
-    scores = list(results_dict["scores"])
-    scores_fl = [
-        float(re.findall(pattern, score)[0])
-        for score in scores
-        if len(re.findall(pattern, score)) == 1
-    ]
+    scores_fl = [r[0] for r in results["scores"] if len(r) >= 1]
 
-    missing = len(scores) - len(scores_fl)
+    missing = len(results["scores"]) - len(scores_fl)
     print(f"Number of dockings evaluated with NaN: {missing}")
 
     mean_score = np.mean(scores_fl)

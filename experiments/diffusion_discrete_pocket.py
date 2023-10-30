@@ -948,7 +948,13 @@ class Trainer(pl.LightningModule):
                     qed = statistics_dict["QEDs"][i]
                     idx = i
 
-            return [molecules[idx]]
+            sa = statistics_dict["SAs"][idx]
+            lipinski = statistics_dict["Lipinskis"][idx]
+            diversity = statistics_dict["Diversity"]
+            print(
+                f"Found valid molecule with QED: {qed}, SA: {sa} and Lipinski: {lipinski}"
+            )
+            return [molecules[idx]], (qed, sa, lipinski, diversity)
         else:
             return molecules
 
