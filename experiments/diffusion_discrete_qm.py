@@ -1171,39 +1171,6 @@ class Trainer(pl.LightningModule):
             )
 
             coords_pred = out["coords_pred"].squeeze()
-            if ddpm:
-                if self.hparams.noise_scheduler == "adaptive":
-                    # positions
-                    pos = self.sde_pos.sample_reverse_adaptive(
-                        s, t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
-                    )
-                    if self.hparams.use_qm_props:
-                        mulliken = self.sde_mulliken.sample_reverse_adaptive(
-                            s,
-                            t,
-                            mulliken,
-                            mulliken_pred,
-                            batch,
-                            cog_proj=False,
-                        )
-                        wbo = self.sde_wbo.sample_reverse_adaptive(
-                            s,
-                            t,
-                            wbo,
-                            wbo_pred,
-                            batch_edge_global,
-                            cog_proj=False,
-                        )
-                else:
-                    # positions
-                    pos = self.sde_pos.sample_reverse(
-                        t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
-                    )
-            else:
-                pos = self.sde_pos.sample_reverse_ddim(
-                    t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
-                )
-
             # N x a_0
             edges_pred = out["bonds_pred"]
 
@@ -1262,6 +1229,39 @@ class Trainer(pl.LightningModule):
                 ring_pred = ring_pred.softmax(dim=-1)
                 aromatic_pred = aromatic_pred.softmax(dim=-1)
                 hybridization_pred = hybridization_pred.softmax(dim=-1)
+
+            if ddpm:
+                if self.hparams.noise_scheduler == "adaptive":
+                    # positions
+                    pos = self.sde_pos.sample_reverse_adaptive(
+                        s, t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
+                    )
+                    if self.hparams.use_qm_props:
+                        mulliken = self.sde_mulliken.sample_reverse_adaptive(
+                            s,
+                            t,
+                            mulliken,
+                            mulliken_pred,
+                            batch,
+                            cog_proj=False,
+                        )
+                        wbo = self.sde_wbo.sample_reverse_adaptive(
+                            s,
+                            t,
+                            wbo,
+                            wbo_pred,
+                            batch_edge_global,
+                            cog_proj=False,
+                        )
+                else:
+                    # positions
+                    pos = self.sde_pos.sample_reverse(
+                        t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
+                    )
+            else:
+                pos = self.sde_pos.sample_reverse_ddim(
+                    t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
+                )
 
             # atoms
             atom_types = self.cat_atoms.sample_reverse_categorical(

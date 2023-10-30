@@ -492,7 +492,7 @@ def load_model_ligand(filepath, num_atom_features, device="cpu", **kwargs):
     state_dict = {
         k: v
         for k, v in state_dict.items()
-        if not any(x in k for x in ["prior", "sde", "cat", "posnorm"])
+        if not any(x in k for x in ["prior", "sde", "cat", "posnorm", "se3norm"])
     }
     model.load_state_dict(state_dict)
     return model.to(device)

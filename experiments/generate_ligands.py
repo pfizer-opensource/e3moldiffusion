@@ -219,7 +219,7 @@ def evaluate(
             receptor_file = Path(pdbqt_dir, receptor_name + ".pdbqt")
         elif dataset == "crossdocked":
             ligand_name = sdf_file.stem
-            receptor_name = ligand_name[:-4]
+            receptor_name = ligand_name.split("_")[0]
             receptor_file = Path(pdbqt_dir, receptor_name + ".pdbqt")
 
         # try:
