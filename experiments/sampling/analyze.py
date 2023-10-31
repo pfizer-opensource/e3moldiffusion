@@ -465,8 +465,8 @@ class BasicMolecularMetrics(object):
 
     def get_kl_divergence(self, generated_smiles):
         # canonicalize_list in order to remove stereo information (also removes duplicates and invalid molecules, but there shouldn't be any)
-        unique_molecules, _ = set(
-            canonicalize_list(generated_smiles, include_stereocenters=False)
+        unique_molecules = set(
+            canonicalize_list(generated_smiles, include_stereocenters=False)[0]
         )
 
         # first we calculate the descriptors, which are np.arrays of size n_samples x n_descriptors
