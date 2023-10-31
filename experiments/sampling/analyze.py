@@ -132,7 +132,8 @@ class BasicMolecularMetrics(object):
         not_connected = 100.0 * error_message[4] / len(generated)
         connected_components = 100.0 - not_connected
 
-        valid_smiles = canonicalize_list(valid_smiles)
+        valid_smiles, duplicate_ids = canonicalize_list(valid_smiles)
+        valid_molecules = [mol for i, mol in valid_molecules if i not in duplicate_ids]
 
         return valid_smiles, valid_molecules, connected_components, error_message
 

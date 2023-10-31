@@ -700,12 +700,15 @@ def canonicalize_list(
 def remove_duplicates(list_with_duplicates):
     unique_set = set()
     unique_list = []
-    for element in list_with_duplicates:
+    ids = []
+    for i, element in enumerate(list_with_duplicates):
         if element not in unique_set:
             unique_set.add(element)
             unique_list.append(element)
+        else:
+            ids.append(i)
 
-    return unique_list
+    return unique_list, ids
 
 
 def continuous_kldiv(X_baseline: np.ndarray, X_sampled: np.ndarray) -> float:

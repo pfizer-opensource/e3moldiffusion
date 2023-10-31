@@ -210,8 +210,6 @@ def evaluate(
     statistics_dict["Lipinski"] = np.mean(statistics_dict["Lipinski"])
     statistics_dict["Diversity"] = np.mean(statistics_dict["Diversity"])
 
-    print(f"Mean statistics across all sampled ligands: {statistics_dict}")
-
     with open(Path(save_dir, "pocket_times.txt"), "w") as f:
         for k, v in time_per_pocket.items():
             f.write(f"{k} {v}\n")
@@ -229,6 +227,7 @@ def evaluate(
     results_dict = {}
 
     pbar = tqdm(sdf_files)
+
     for sdf_file in pbar:
         pbar.set_description(f"Processing {sdf_file.name}")
 
@@ -275,6 +274,8 @@ def evaluate(
         torch.save(results_dict, Path(save_dir, "qvina2_scores.pt"))
 
     scores_fl = [r[0] for r in results["scores"] if len(r) >= 1]
+
+    print(f"Mean statistics across all sampled ligands: {statistics_dict}")
 
     missing = len(results["scores"]) - len(scores_fl)
     print(f"Number of dockings evaluated with NaN: {missing}")
