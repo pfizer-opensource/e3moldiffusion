@@ -42,3 +42,6 @@ notebooks/
 _old/
 
 *xlsx
+
+configs/*
+generate_ligands.sh
