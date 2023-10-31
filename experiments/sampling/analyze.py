@@ -28,7 +28,7 @@ class BasicMolecularMetrics(object):
         self.dataset_info = dataset_info
 
         self.number_samples = 0  # update based on unique generated smiles
-        self.train_smiles = canonicalize_list(smiles_train)
+        self.train_smiles, _ = canonicalize_list(smiles_train)
 
         self.train_fps = get_fingerprints_from_smileslist(self.train_smiles)
         self.test = test
@@ -465,7 +465,7 @@ class BasicMolecularMetrics(object):
 
     def get_kl_divergence(self, generated_smiles):
         # canonicalize_list in order to remove stereo information (also removes duplicates and invalid molecules, but there shouldn't be any)
-        unique_molecules = set(
+        unique_molecules, _ = set(
             canonicalize_list(generated_smiles, include_stereocenters=False)
         )
 
