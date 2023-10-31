@@ -742,16 +742,7 @@ class Trainer(pl.LightningModule):
         )
         molecule_list = []
         start = datetime.now()
-        if verbose:
-            if self.local_rank == 0:
-                print(f"Creating {ngraphs} graphs in {l} batches")
-        iterable = iter(dataloader)
-        for _, num_graphs in enumerate(l):
-            try:
-                pocket_data = next(iterable)
-            except StopIteration:
-                iterable = iter(dataloader)
-                pocket_data = next(iterable)
+        for _, pocket_data in enumerate(dataloader):
             num_graphs = len(pocket_data.batch.bincount())
             if use_ligand_dataset_sizes:
                 num_nodes_lig = pocket_data.batch.bincount()

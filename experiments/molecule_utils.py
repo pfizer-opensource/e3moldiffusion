@@ -173,14 +173,18 @@ class Molecule:
         mol.AddConformer(conf)
 
         if self.relax_mol:
+            mol_uff = mol
             try:
-                self.uff_relax(mol, self.max_relax_iter)
                 if self.sanitize:
-                    Chem.SanitizeMol(mol)
+                    Chem.SanitizeMol(mol_uff)
+                self.uff_relax(mol_uff, self.max_relax_iter)
+                if self.sanitize:
+                    Chem.SanitizeMol(mol_uff)
+                return mol_uff
             except (RuntimeError, ValueError) as e:
-                return None
-
-        return mol
+                return mol
+        else:
+            return mol
 
     def uff_relax(self, mol, max_iter=200):
         """

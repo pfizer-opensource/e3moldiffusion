@@ -5,6 +5,7 @@ import argparse
 from experiments.xtb_energy import calculate_xtb_energy
 from torch_geometric.data.collate import collate
 import torch
+import numpy as np
 
 
 def get_args():
@@ -35,6 +36,24 @@ atom_encoder = {
     "Bi": 15,
 }
 atom_decoder = {v: k for k, v in atom_encoder.items()}
+atom_reference = {
+    "H": -0.393482763936,
+    "B": -0.952436614164,
+    "C": -1.795110518041,
+    "N": -2.60945245463,
+    "O": -3.769421097051,
+    "F": -4.619339964238,
+    "Al": -0.905328611479,
+    "Si": -1.571424085131,
+    "P": -2.377807088084,
+    "S": -3.148271017078,
+    "Cl": -4.482525134961,
+    "As": -2.239425948594,
+    "Br": -4.048339371234,
+    "I": -3.77963026339,
+    "Hg": -0.848032246708,
+    "Bi": -2.26665341636,
+}
 
 
 def process(dataset, split):
@@ -60,7 +79,12 @@ def process(dataset, split):
     for i, mol in tqdm(enumerate(dataset)):
         atom_types = [atom_decoder[int(a)] for a in mol.x]
         try:
-            e, f = calculate_xtb_energy(mol.pos, atom_types)
+            e_ref = np.sum(
+                [atom_reference[a] for a in atom_types]
+            )  # * 27.2114 #Hartree to eV
+            e, _ = calculate_xtb_energy(data.pos, atom_types)
+            e *= 0.0367493  # eV to Hartree
+            data.energy = torch.tensor(e - e_ref, dtype=torch.float32).unsqueeze(0)
         except:
             print(f"Molecule with id {i} failed...")
             failed_ids.append(i)

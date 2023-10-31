@@ -153,11 +153,15 @@ class GeomDrugsDataset(InMemoryDataset):
                 )
                 try:
                     atom_types = [atom_decoder[int(a)] for a in data.x]
-                    e_ref = np.sum([self.atom_reference[a] for a in atom_types])
+                    e_ref = np.sum(
+                        [self.atom_reference[a] for a in atom_types]
+                    )  # * 27.2114 #Hartree to eV
                     e, _ = calculate_xtb_energy(data.pos, atom_types)
-                    data.energy = torch.from_numpy(
+                    e *= 0.0367493  # eV to Hartree
+                    data.energy = torch.tensor(
                         e - e_ref, dtype=torch.float32
                     ).unsqueeze(0)
+
                 except:
                     print(f"Molecule with id {i} and conformer id {j} failed...")
                     continue

@@ -281,7 +281,9 @@ def evaluate(
     print(f"Number of dockings evaluated with NaN: {missing}")
 
     mean_score = np.mean(scores_fl)
+    std_score = np.std(scores_fl)
     print(f"Mean score: {mean_score}")
+    print(f"Standard deviation: {std_score}")
 
     scores_fl.sort(reverse=True)
     mean_top10_score = np.mean(scores_fl[:10])

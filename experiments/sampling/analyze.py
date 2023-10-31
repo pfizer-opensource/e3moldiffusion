@@ -273,7 +273,11 @@ class BasicMolecularMetrics(object):
         similarity = self.get_bulk_similarity_with_train(valid_smiles)
         diversity = self.get_bulk_diversity(valid_smiles)
         if len(valid_smiles) > 0:
-            kl_score = self.get_kl_divergence(valid_smiles)
+            try:
+                kl_score = self.get_kl_divergence(valid_smiles)
+            except:
+                print("kl_score could not be calculated. Setting kl_score to -1")
+                kl_score = -1.0
         else:
             print("No valid smiles have been generated. Setting kl_score to -1")
             kl_score = -1.0

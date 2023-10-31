@@ -49,7 +49,7 @@ beta_min: 1.e-4
 beta_max: 2.e-2
 timesteps: 500
 max_time: 06:00:00:00
-loss_weighting: uniform
+loss_weighting: snr_t
 
 #LOGGING
 save_dir: /hpfs/userws/cremej01/projects/logs/geom/pretrain_x0
