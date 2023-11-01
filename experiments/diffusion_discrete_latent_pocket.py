@@ -798,7 +798,7 @@ class Trainer(pl.LightningModule):
                     self.num_atom_types,
                     self.num_charge_classes,
                     self.dataset_info,
-                    data_batch_pocket=data_batch_pocket,
+                    data_batch_pocket=None,
                     device=self.device,
                     mol_device=device,
                     context=context,
