@@ -267,8 +267,6 @@ class Trainer(pl.LightningModule):
         results_dict, generated_smiles, valid_molecules = self.run_evaluation(
             step=0,
             dataset_info=self.dataset_info,
-            ngraphs=self.hparams.num_test_graphs,
-            bs=self.hparams.inference_batch_size,
             verbose=True,
             inner_verbose=True,
             eta_ddim=1.0,
@@ -371,8 +369,6 @@ class Trainer(pl.LightningModule):
             final_res = self.run_evaluation(
                 step=self.i,
                 dataset_info=self.dataset_info,
-                ngraphs=600,
-                bs=self.hparams.batch_size,
                 verbose=True,
                 inner_verbose=False,
                 eta_ddim=1.0,
