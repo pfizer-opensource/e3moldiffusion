@@ -23,7 +23,7 @@ sample_data/*
 
 configs/
 scripts/
-
+generate_ligands.sh
 # scripts/experiment*.sl
 
 geom/.ipynb_checkpoints/
@@ -42,6 +42,3 @@ notebooks/
 _old/
 
 *xlsx
-
-configs/*
-generate_ligands.sh
