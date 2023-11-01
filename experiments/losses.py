@@ -27,7 +27,7 @@ class DiffusionLoss(nn.Module):
         m = loss.isnan()
         if torch.any(m):
             print(f"Recovered NaNs in {modality}. Selecting NoN-Nans")
-        return loss[~m]
+        return loss[~m], m
 
     def forward(
         self,
@@ -37,8 +37,8 @@ class DiffusionLoss(nn.Module):
         bond_aggregation_index: Tensor,
         weights: Optional[Tensor] = None,
     ) -> Dict:
-        batch_size = int(batch.max()) + 1
-
+        
+        batch_size = len(batch.unique())
         mulliken_loss = None
         wbo_loss = None
 
@@ -51,8 +51,9 @@ class DiffusionLoss(nn.Module):
                 reduction="none",
             ).mean(-1)
             regr_loss = scatter_mean(regr_loss, index=batch, dim=0, dim_size=batch_size)
-            regr_loss = self.loss_non_nans(regr_loss, self.regression_key)
-            regr_loss *= weights
+            regr_loss, m = self.loss_non_nans(regr_loss, self.regression_key)
+            
+            regr_loss *= weights[~m]
             regr_loss = torch.sum(regr_loss, dim=0)
 
             if "mulliken" in true_data:
@@ -98,8 +99,8 @@ class DiffusionLoss(nn.Module):
             atoms_loss = scatter_mean(
                 atoms_loss, index=batch, dim=0, dim_size=batch_size
             )
-            atoms_loss = self.loss_non_nans(atoms_loss, "atoms")
-            atoms_loss *= weights
+            atoms_loss, m = self.loss_non_nans(atoms_loss, "atoms")
+            atoms_loss *= weights[~m]
             atoms_loss = torch.sum(atoms_loss, dim=0)
 
             if self.param[self.modalities.index("charges")] == "data":
@@ -117,8 +118,8 @@ class DiffusionLoss(nn.Module):
             charges_loss = scatter_mean(
                 charges_loss, index=batch, dim=0, dim_size=batch_size
             )
-            charges_loss = self.loss_non_nans(charges_loss, "charges")
-            charges_loss *= weights
+            charges_loss, m = self.loss_non_nans(charges_loss, "charges")
+            charges_loss *= weights[~m]
             charges_loss = torch.sum(charges_loss, dim=0)
 
             if self.param[self.modalities.index("bonds")] == "data":
@@ -140,8 +141,8 @@ class DiffusionLoss(nn.Module):
             bonds_loss = scatter_mean(
                 bonds_loss, index=batch, dim=0, dim_size=batch_size
             )
-            bonds_loss = self.loss_non_nans(bonds_loss, "bonds")
-            bonds_loss *= weights
+            bonds_loss, m = self.loss_non_nans(bonds_loss, "bonds")
+            bonds_loss *= weights[~m]
             bonds_loss = bonds_loss.sum(dim=0)
 
             if "ring" in self.modalities:
@@ -151,8 +152,8 @@ class DiffusionLoss(nn.Module):
                 ring_loss = scatter_mean(
                     ring_loss, index=batch, dim=0, dim_size=batch_size
                 )
-                ring_loss = self.loss_non_nans(ring_loss, "ring")
-                ring_loss *= weights
+                ring_loss, m = self.loss_non_nans(ring_loss, "ring")
+                ring_loss *= weights[~m]
                 ring_loss = torch.sum(ring_loss, dim=0)
             else:
                 ring_loss = None
@@ -164,8 +165,8 @@ class DiffusionLoss(nn.Module):
                 aromatic_loss = scatter_mean(
                     aromatic_loss, index=batch, dim=0, dim_size=batch_size
                 )
-                aromatic_loss = self.loss_non_nans(aromatic_loss, "aromatic")
-                aromatic_loss *= weights
+                aromatic_loss, m = self.loss_non_nans(aromatic_loss, "aromatic")
+                aromatic_loss *= weights[~m]
                 aromatic_loss = torch.sum(aromatic_loss, dim=0)
             else:
                 aromatic_loss = None
@@ -179,10 +180,10 @@ class DiffusionLoss(nn.Module):
                 hybridization_loss = scatter_mean(
                     hybridization_loss, index=batch, dim=0, dim_size=batch_size
                 )
-                hybridization_loss = self.loss_non_nans(
+                hybridization_loss, m = self.loss_non_nans(
                     hybridization_loss, "hybridization"
                 )
-                hybridization_loss *= weights
+                hybridization_loss *= weights[~m]
                 hybridization_loss = torch.sum(hybridization_loss, dim=0)
             else:
                 hybridization_loss = None
