@@ -710,8 +710,6 @@ class Trainer(pl.LightningModule):
         self,
         step: int,
         dataset_info,
-        ngraphs: int = 4000,
-        bs: int = 500,
         save_dir: str = None,
         return_molecules: bool = False,
         verbose: bool = False,
@@ -727,6 +725,9 @@ class Trainer(pl.LightningModule):
         ckpt_energy_model: str = None,
         device: str = "cpu",
     ):
+        """
+        Runs the evaluation on the entire validation dataloader. Generates 1 ligand in 1 receptor structure
+        """
         energy_model = None
         if use_energy_guidance:
             energy_model = load_energy_model(ckpt_energy_model, self.num_atom_features)
@@ -835,7 +836,6 @@ class Trainer(pl.LightningModule):
         total_res["step"] = str(step)
         total_res["epoch"] = str(self.current_epoch)
         total_res["run_time"] = str(run_time)
-        total_res["ngraphs"] = str(ngraphs)
         try:
             if save_dir is None:
                 save_dir = os.path.join(

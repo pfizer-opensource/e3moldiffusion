@@ -42,6 +42,7 @@ def evaluate(
     write_dict,
     write_csv,
     pdbqt_dir,
+    latent_model: bool = False
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -80,7 +81,10 @@ def evaluate(
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
 
-    from experiments.diffusion_discrete_pocket import Trainer
+    if latent_model:
+        from experiments.diffusion_discrete_latent_pocket import Trainer
+    else:
+        from experiments.diffusion_discrete_pocket import Trainer
 
     # if you want bond_model_guidance, flag this here in the Trainer
     device = "cuda"
@@ -323,6 +327,7 @@ def get_args():
     parser.add_argument("--write-csv", action="store_true")
     parser.add_argument("--write-dict", action="store_true")
     parser.add_argument("--pdbqt-dir", type=Path, help="Receptor files in pdbqt format")
+    parser.add_argument("--latent-model", default=False, action="store_true")
     args = parser.parse_args()
     return args
 
@@ -346,4 +351,5 @@ if __name__ == "__main__":
         relax_mol=args.relax_mol,
         max_relax_iter=args.max_relax_iter,
         sanitize=args.sanitize,
+        latent_model=args.latent_model
     )
