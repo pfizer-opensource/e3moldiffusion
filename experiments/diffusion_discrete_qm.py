@@ -250,10 +250,10 @@ class Trainer(pl.LightningModule):
             )
 
         modalities = ["coords", "atoms", "charges", "bonds"]
-        if self.hparams.use_qm_props:
-            modalities += ["mulliken", "wbo"]
         if self.hparams.additional_feats:
             modalities += ["ring", "aromatic", "hybridization"]
+        if self.hparams.use_qm_props:
+            modalities += ["mulliken", "wbo"]
         self.diffusion_loss = DiffusionLoss(
             modalities=modalities,
             param=["data"] * len(modalities),

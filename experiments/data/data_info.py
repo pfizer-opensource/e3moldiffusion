@@ -34,6 +34,7 @@ class GeneralInfos(AbstractDatasetInfos):
         self.statistics = datamodule.statistics
         self.name = "drugs"
         self.atom_encoder = full_atom_encoder
+        self.num_bond_classes = cfg.num_bond_classes
         self.charge_offset = 2
         self.collapse_charges = torch.Tensor([-2, -1, 0, 1, 2, 3]).int()
         # if self.remove_h:
@@ -43,12 +44,16 @@ class GeneralInfos(AbstractDatasetInfos):
 
         super().complete_infos(datamodule.statistics, self.atom_encoder)
 
-        self.input_dims = PlaceHolder(X=self.num_atom_types, C=6, E=5, y=1, pos=3)
-        self.output_dims = PlaceHolder(X=self.num_atom_types, C=6, E=5, y=0, pos=3)
+        self.input_dims = PlaceHolder(
+            X=self.num_atom_types, C=6, E=self.num_bond_classes, y=1, pos=3
+        )
+        self.output_dims = PlaceHolder(
+            X=self.num_atom_types, C=6, E=self.num_bond_classes, y=0, pos=3
+        )
 
     def to_one_hot(self, X, C, E, node_mask):
         X = F.one_hot(X, num_classes=self.num_atom_types).float()
-        E = F.one_hot(E, num_classes=5).float()
+        E = F.one_hot(E, num_classes=self.num_bond_classes).float()
         C = F.one_hot(C + self.charge_offset, num_classes=6).float()
         placeholder = PlaceHolder(X=X, C=C, E=E, y=None, pos=None)
         pl = placeholder.mask(node_mask)

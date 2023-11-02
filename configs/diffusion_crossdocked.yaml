@@ -1,4 +1,4 @@
-load_ckpt: /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune/run0/last.ckpt
+# load_ckpt: /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune/run0/last.ckpt
 # load_ckpt_from_pretrained: /sharedhome/cremej01/workspace/logs/pubchem/x0_pretraining_0_snr_t_weighting_bs400/run0/last.ckpt
 #/hpfs/userws/cremej01/projects/logs/pubchem/pretrain_x0_3_adaptive/run0/last.ckpt
 # ckpt_bond_model: /hpfs/userws/cremej01/projects/logs/geom/bond_pred_seed1/run0/last.ckpt
@@ -8,7 +8,7 @@ save_xyz: true
 calculate_energy: true
 num_test_graphs: 10000
 inference_batch_size: 8
-use_ligand_dataset_sizes: false
+use_ligand_dataset_sizes: true
 test_save_dir: /scratch1/e3moldiffusion/logs/crossdocked/test
 
 ligand_pocket_interaction: true
@@ -29,7 +29,7 @@ use_adaptive_loader: false
 remove_hs: true
 
 gpus: 4
-num_epochs: 401
+num_epochs: 301
 test_interval: 20
 
 #EQGAT

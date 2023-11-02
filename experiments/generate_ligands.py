@@ -289,6 +289,9 @@ def evaluate(
     print(f"Mean score: {mean_score}")
     print(f"Standard deviation: {std_score}")
 
+    import pdb
+
+    pdb.set_trace()
     scores_fl.sort(reverse=True)
     mean_top10_score = np.mean(scores_fl[:10])
     print(f"Top-10 mean score: {mean_top10_score}")

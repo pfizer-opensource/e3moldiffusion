@@ -67,12 +67,15 @@ def get_joint_edge_attrs(
     edge_mask_pocket = (edge_index_global[0] >= len(batch)) & (
         edge_index_global[1] >= len(batch)
     )
-    edge_mask_ligand_pocket = (edge_index_global[0] < len(batch)) & (
+    edge_mask_ligand_pocket = (edge_index_global[1] < len(batch)) & (
         edge_index_global[1] >= len(batch)
     )
     edge_attr_global[edge_mask] = edge_attr_global_lig
     edge_attr_global[edge_mask_pocket] = (
-        torch.tensor([0, 0, 0, 0, 1]).float().to(edge_attr_global.device)
+        torch.tensor([0, 0, 0, 0, 0, 0, 1]).float().to(edge_attr_global.device)
+    )
+    edge_attr_global[edge_mask_ligand_pocket] = (
+        torch.tensor([0, 0, 0, 0, 0, 1, 0]).float().to(edge_attr_global.device)
     )
     # edge_attr_global[edge_mask_pocket] = 0.0
 

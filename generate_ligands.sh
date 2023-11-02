@@ -1,6 +1,6 @@
 #!/bin/sh
 
-for i in 0; do
+for i in 2; do
     echo "${i}"
     mkdir /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune/evaluation/eval_"${i}"
     python experiments/generate_ligands.py \
