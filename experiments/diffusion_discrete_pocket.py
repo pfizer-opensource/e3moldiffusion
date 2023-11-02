@@ -875,7 +875,7 @@ class Trainer(pl.LightningModule):
         every_k_step=1,
         num_nodes_lig=None,
         mol_device="cpu",
-        notebook_inference: bool = False
+        notebook_inference: bool = False,
     ):
         (
             out_dict,
@@ -913,10 +913,10 @@ class Trainer(pl.LightningModule):
             context=context,
             while_train=False,
         )
-        
+
         if notebook_inference:
             return molecules
-    
+
         if num_graphs > 1:
             (
                 stability_dict,

@@ -67,7 +67,7 @@ def get_joint_edge_attrs(
     edge_mask_pocket = (edge_index_global[0] >= len(batch)) & (
         edge_index_global[1] >= len(batch)
     )
-    edge_mask_ligand_pocket = (edge_index_global[1] < len(batch)) & (
+    edge_mask_ligand_pocket = (edge_index_global[0] < len(batch)) & (
         edge_index_global[1] >= len(batch)
     )
     edge_attr_global[edge_mask] = edge_attr_global_lig
