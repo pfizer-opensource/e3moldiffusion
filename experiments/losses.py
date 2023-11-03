@@ -37,7 +37,6 @@ class DiffusionLoss(nn.Module):
         bond_aggregation_index: Tensor,
         weights: Optional[Tensor] = None,
     ) -> Dict:
-        
         batch_size = len(batch.unique())
         mulliken_loss = None
         wbo_loss = None
@@ -52,7 +51,7 @@ class DiffusionLoss(nn.Module):
             ).mean(-1)
             regr_loss = scatter_mean(regr_loss, index=batch, dim=0, dim_size=batch_size)
             regr_loss, m = self.loss_non_nans(regr_loss, self.regression_key)
-            
+
             regr_loss *= weights[~m]
             regr_loss = torch.sum(regr_loss, dim=0)
 

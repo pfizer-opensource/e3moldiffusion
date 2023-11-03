@@ -84,7 +84,6 @@ def make_mol_openbabel(positions, atom_types, atom_decoder):
     Returns:
         rdkit molecule
     """
-    atom_types = [atom_decoder[x] for x in atom_types]
 
     with tempfile.NamedTemporaryFile() as tmp:
         tmp_file = tmp.name

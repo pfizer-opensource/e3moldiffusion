@@ -14,7 +14,7 @@ from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.losses import DiffusionLoss
 from experiments.molecule_utils import Molecule
-from experiments.sampling.analyze import analyze_stability_for_molecules
+from experiments.sampling.analyze_strict import analyze_stability_for_molecules
 from experiments.utils import (
     coalesce_edges,
     get_list_of_edge_adjs,
@@ -331,11 +331,11 @@ class Trainer(pl.LightningModule):
         bonds_loss,
         batch_size,
         stage,
-        mulliken_loss=None,
-        wbo_loss=None,
         ring_loss=None,
         aromatic_loss=None,
         hybridization_loss=None,
+        mulliken_loss=None,
+        wbo_loss=None,
     ):
         self.log(
             f"{stage}/loss",
