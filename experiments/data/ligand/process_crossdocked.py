@@ -19,7 +19,11 @@ import torch
 
 from experiments.data.ligand.molecule_builder import build_molecule
 from experiments.data.ligand import constants
-from experiments.data.ligand.constants import covalent_radii, dataset_params
+from experiments.data.ligand.constants import (
+    covalent_radii,
+    dataset_params,
+    atom_decoder_int,
+)
 
 dataset_info = dataset_params["crossdock_full"]
 amino_acid_dict = dataset_info["aa_encoder"]
@@ -27,7 +31,7 @@ atom_dict = dataset_info["atom_encoder"]
 atom_decoder = dataset_info["atom_decoder"]
 
 
-def process_ligand_and_pocket(pdbfile, sdffile, atom_dict, dist_cutoff, ca_only, no_H):
+def process_ligand_and_pocket(pdbfile, sdffile, dist_cutoff, ca_only, no_H):
     pdb_struct = PDBParser(QUIET=True).get_structure("", pdbfile)
 
     try:
@@ -45,16 +49,6 @@ def process_ligand_and_pocket(pdbfile, sdffile, atom_dict, dist_cutoff, ca_only,
         ]
     )
 
-    try:
-        lig_one_hot = np.stack(
-            [
-                np.eye(1, len(atom_dict), atom_dict[a.capitalize()]).squeeze()
-                for a in lig_atoms
-            ]
-        )
-    except KeyError as e:
-        raise KeyError(f"{e} not in atom dict ({sdffile})")
-
     # Find interacting pocket residues based on distance cutoff
     pocket_residues = []
     for residue in pdb_struct[0].get_residues():
@@ -71,7 +65,6 @@ def process_ligand_and_pocket(pdbfile, sdffile, atom_dict, dist_cutoff, ca_only,
     pocket_ids = [f"{res.parent.id}:{res.id[1]}" for res in pocket_residues]
     ligand_data = {
         "lig_coords": lig_coords,
-        "lig_one_hot": lig_one_hot,
         "lig_atoms": lig_atoms,
         "lig_mol": ligand,
     }
@@ -124,43 +117,29 @@ def process_ligand_and_pocket(pdbfile, sdffile, atom_dict, dist_cutoff, ca_only,
                 full_atoms = full_atoms[mask]
                 full_coords = full_coords[mask]
 
-        try:
-            pocket_one_hot = []
-            for a in full_atoms:
-                if a in amino_acid_dict:
-                    atom = np.eye(
-                        1, len(amino_acid_dict), amino_acid_dict[a.capitalize()]
-                    ).squeeze()
-                elif a != "H":
-                    atom = np.eye(
-                        1, len(amino_acid_dict), len(amino_acid_dict)
-                    ).squeeze()
-                pocket_one_hot.append(atom)
-            pocket_one_hot = np.stack(pocket_one_hot)
-        except KeyError as e:
-            raise KeyError(f"{e} not in atom dict ({pdbfile})")
         pocket_data = {
             "pocket_coords": full_coords,
-            "pocket_one_hot": pocket_one_hot,
             "pocket_ids": pocket_ids,
             "pocket_atoms": full_atoms,
         }
     return ligand_data, pocket_data
 
 
-def compute_smiles(positions, one_hot, mask):
+def compute_smiles(positions, atom_types, mask):
     print("Computing SMILES ...")
-
-    atom_types = np.argmax(one_hot, axis=-1)
 
     sections = np.where(np.diff(mask))[0] + 1
     positions = [torch.from_numpy(x) for x in np.split(positions, sections)]
-    atom_types = [torch.from_numpy(x) for x in np.split(atom_types, sections)]
+    atom_types = [
+        torch.tensor([atom_dict[a] for a in atoms])
+        for atoms in np.split(atom_types, sections)
+    ]
 
     mols_smiles = []
     fail = 0
     pbar = tqdm(enumerate(zip(positions, atom_types)), total=len(np.unique(mask)))
     for i, (pos, atom_type) in pbar:
+        atom_type = [atom_decoder_int[int(a)] for a in atom_type]
         mol = build_molecule(pos, atom_type, dataset_info)
         try:
             mol = Chem.MolToSmiles(mol)
@@ -261,15 +240,13 @@ def get_lennard_jones_rm(atom_mapping):
     return LJ_rm
 
 
-def get_type_histograms(lig_one_hot, pocket_one_hot, atom_encoder, aa_encoder):
-    atom_decoder = list(atom_encoder.keys())
+def get_type_histograms(lig_atoms, pocket_atom, atom_encoder, aa_encoder):
     atom_counts = {k: 0 for k in atom_encoder.keys()}
-    for a in [atom_decoder[x] for x in lig_one_hot.argmax(1)]:
+    for a in lig_atoms:
         atom_counts[a] += 1
 
-    aa_decoder = list(aa_encoder.keys())
     aa_counts = {k: 0 for k in aa_encoder.keys()}
-    for r in [aa_decoder[x] for x in pocket_one_hot.argmax(1)]:
+    for r in pocket_atom:
         aa_counts[r] += 1
 
     return atom_counts, aa_counts
@@ -279,12 +256,10 @@ def saveall(
     filename,
     pdb_and_mol_ids,
     lig_coords,
-    lig_one_hot,
     lig_atom,
     lig_mask,
     lig_mol,
     pocket_coords,
-    pocket_one_hot,
     pocket_atom,
     pocket_mask,
 ):
@@ -292,12 +267,10 @@ def saveall(
         filename,
         names=pdb_and_mol_ids,
         lig_coords=lig_coords,
-        lig_one_hot=lig_one_hot,
         lig_atom=lig_atom,
         lig_mask=lig_mask,
         lig_mol=lig_mol,
         pocket_coords=pocket_coords,
-        pocket_one_hot=pocket_one_hot,
         pocket_atom=pocket_atom,
         pocket_mask=pocket_mask,
     )
@@ -349,12 +322,10 @@ if __name__ == "__main__":
     n_samples_after = {}
     for split in data_split.keys():
         lig_coords = []
-        lig_one_hot = []
         lig_atom = []
         lig_mask = []
         lig_mol = []
         pocket_coords = []
-        pocket_one_hot = []
         pocket_atom = []
         pocket_mask = []
         pdb_and_mol_ids = []
@@ -387,7 +358,6 @@ if __name__ == "__main__":
                 ligand_data, pocket_data = process_ligand_and_pocket(
                     pdbfile,
                     sdffile,
-                    atom_dict=atom_dict,
                     dist_cutoff=args.dist_cutoff,
                     ca_only=args.ca_only,
                     no_H=args.no_H,
@@ -406,12 +376,10 @@ if __name__ == "__main__":
 
             pdb_and_mol_ids.append(f"{pocket_fn}_{ligand_fn}")
             lig_coords.append(ligand_data["lig_coords"])
-            lig_one_hot.append(ligand_data["lig_one_hot"])
             lig_mask.append(count * np.ones(len(ligand_data["lig_coords"])))
             lig_atom.append(ligand_data["lig_atoms"])
             lig_mol.append(ligand_data["lig_mol"])
             pocket_coords.append(pocket_data["pocket_coords"])
-            pocket_one_hot.append(pocket_data["pocket_one_hot"])
             pocket_atom.append(pocket_data["pocket_atoms"])
             pocket_mask.append(count * np.ones(len(pocket_data["pocket_coords"])))
             count_protein.append(pocket_data["pocket_coords"].shape[0])
@@ -438,12 +406,10 @@ if __name__ == "__main__":
                     f.write(" ".join(pocket_data["pocket_ids"]))
 
         lig_coords = np.concatenate(lig_coords, axis=0)
-        lig_one_hot = np.concatenate(lig_one_hot, axis=0)
         lig_atom = np.concatenate(lig_atom, axis=0)
         lig_mask = np.concatenate(lig_mask, axis=0)
         lig_mol = np.array(lig_mol)
         pocket_coords = np.concatenate(pocket_coords, axis=0)
-        pocket_one_hot = np.concatenate(pocket_one_hot, axis=0)
         pocket_atom = np.concatenate(pocket_atom, axis=0)
         pocket_mask = np.concatenate(pocket_mask, axis=0)
 
@@ -451,12 +417,10 @@ if __name__ == "__main__":
             processed_dir / f"{split}.npz",
             pdb_and_mol_ids,
             lig_coords,
-            lig_one_hot,
             lig_atom,
             lig_mask,
             lig_mol,
             pocket_coords,
-            pocket_one_hot,
             pocket_atom,
             pocket_mask,
         )
@@ -471,13 +435,11 @@ if __name__ == "__main__":
         lig_mask = data["lig_mask"]
         pocket_mask = data["pocket_mask"]
         lig_coords = data["lig_coords"]
-        lig_one_hot = data["lig_one_hot"]
         lig_atom = data["lig_atom"]
-        pocket_one_hot = data["pocket_one_hot"]
         pocket_atom = data["pocket_atom"]
 
     # Compute SMILES for all training examples
-    train_smiles = compute_smiles(lig_coords, lig_one_hot, lig_mask)
+    train_smiles = compute_smiles(lig_coords, lig_atom, lig_mask)
     np.save(processed_dir / "train_smiles.npy", train_smiles)
 
     # Joint histogram of number of ligand and pocket nodes
@@ -492,7 +454,7 @@ if __name__ == "__main__":
 
     # Get histograms of ligand and pocket node types
     atom_hist, aa_hist = get_type_histograms(
-        lig_one_hot, pocket_one_hot, atom_dict, amino_acid_dict
+        lig_atom, pocket_atom, atom_dict, amino_acid_dict
     )
 
     # Create summary string

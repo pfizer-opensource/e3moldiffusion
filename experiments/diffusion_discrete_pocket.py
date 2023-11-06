@@ -87,7 +87,13 @@ class Trainer(pl.LightningModule):
         self.prop_dist = prop_dist
 
         atom_types_distribution = dataset_info.atom_types.float()
-        bond_types_distribution = dataset_info.edge_types.float()
+        if self.hparams.num_bond_classes != 5:
+            bond_types_distribution = torch.zeros(
+                (self.hparams.num_bond_classes,), dtype=torch.float32
+            )
+            bond_types_distribution[:5] = dataset_info.edge_types.float()
+        else:
+            bond_types_distribution = dataset_info.edge_types.float()
         charge_types_distribution = dataset_info.charges_marginals.float()
 
         self.register_buffer("atoms_prior", atom_types_distribution.clone())
@@ -102,7 +108,7 @@ class Trainer(pl.LightningModule):
 
         self.num_atom_types = self.hparams.num_atom_types
         self.num_atom_features = self.num_atom_types + self.num_charge_classes
-        self.num_bond_classes = 5
+        self.num_bond_classes = self.hparams.num_bond_classes
 
         self.smiles_list = smiles_list
 
@@ -869,7 +875,7 @@ class Trainer(pl.LightningModule):
         every_k_step=1,
         num_nodes_lig=None,
         mol_device="cpu",
-        notebook_inference: bool = False
+        notebook_inference: bool = False,
     ):
         (
             out_dict,
@@ -907,10 +913,10 @@ class Trainer(pl.LightningModule):
             context=context,
             while_train=False,
         )
-        
+
         if notebook_inference:
             return molecules
-    
+
         if num_graphs > 1:
             (
                 stability_dict,
@@ -930,16 +936,17 @@ class Trainer(pl.LightningModule):
                 device="cpu",
             )
 
-            qed = 0
+            sa = 0
             idx = 0
 
             for i in range(len(valid_molecules)):
-                if qed > statistics_dict["QEDs"][i]:
+                if sa > statistics_dict["SAs"][i]:
                     continue
                 else:
-                    qed = statistics_dict["QEDs"][i]
+                    sa = statistics_dict["SAs"][i]
                     idx = i
 
+            qed = statistics_dict["QEDs"][idx]
             sa = statistics_dict["SAs"][idx]
             lipinski = statistics_dict["Lipinskis"][idx]
             diversity = statistics_dict["Diversity"]

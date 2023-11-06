@@ -809,6 +809,8 @@ def get_molecules(
         atoms_pred = out["atoms_pred"]
         charges_pred = out["charges_pred"]
 
+    if out["bonds_pred"].shape[-1] > 5:
+        out["bonds_pred"] = out["bonds_pred"][:, :5]
     n = data_batch.bincount().sum().item()
     edge_attrs_dense = torch.zeros(size=(n, n, 5), device=device).float()
     edge_attrs_dense[edge_index_global_lig[0, :], edge_index_global_lig[1, :], :] = out[

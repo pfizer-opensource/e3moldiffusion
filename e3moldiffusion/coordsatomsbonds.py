@@ -300,7 +300,7 @@ class DenoisingEdgeNetwork(nn.Module):
                 hn_dim=hn_dim,
                 edge_dim=edge_dim,
                 num_atom_features=num_atom_features,
-                num_bond_types=self.num_bond_types,
+                num_bond_types=num_bond_types,
                 coords_param=coords_param,
             )
 

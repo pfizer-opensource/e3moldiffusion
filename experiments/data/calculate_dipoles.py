@@ -2,7 +2,7 @@ from tqdm import tqdm
 import os
 import pickle
 import argparse
-from experiments.xtb_energy import calculate_xtb_energy
+from experiments.xtb_energy import calculate_dipole
 from torch_geometric.data.collate import collate
 import torch
 import numpy as np
@@ -106,12 +106,8 @@ def process(dataset, split, idx):
     for i, mol in tqdm(enumerate(datamodule), total=len(datamodule)):
         atom_types = [atom_decoder[int(a)] for a in mol.x]
         try:
-            e_ref = np.sum(
-                [atom_reference[a] for a in atom_types]
-            )  # * 27.2114 #Hartree to eV
-            e, _ = calculate_xtb_energy(mol.pos, atom_types)
-            e *= 0.0367493  # eV to Hartree
-            mol.energy = torch.tensor(e - e_ref, dtype=torch.float32).unsqueeze(0)
+            d = calculate_dipole(mol.pos, atom_types)
+            mol.dipole_classic = torch.tensor(d, dtype=torch.float32).unsqueeze(0)
             mols.append(mol)
         except:
             print(f"Molecule with id {i} failed...")

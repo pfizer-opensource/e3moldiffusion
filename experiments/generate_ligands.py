@@ -42,7 +42,6 @@ def evaluate(
     write_dict,
     write_csv,
     pdbqt_dir,
-    latent_model: bool = False
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -81,10 +80,7 @@ def evaluate(
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
 
-    if latent_model:
-        from experiments.diffusion_discrete_latent_pocket import Trainer
-    else:
-        from experiments.diffusion_discrete_pocket import Trainer
+    from experiments.diffusion_discrete_pocket import Trainer
 
     # if you want bond_model_guidance, flag this here in the Trainer
     device = "cuda"
@@ -289,7 +285,7 @@ def evaluate(
     print(f"Mean score: {mean_score}")
     print(f"Standard deviation: {std_score}")
 
-    scores_fl.sort(reverse=True)
+    scores_fl.sort(reverse=False)
     mean_top10_score = np.mean(scores_fl[:10])
     print(f"Top-10 mean score: {mean_top10_score}")
 
@@ -327,7 +323,6 @@ def get_args():
     parser.add_argument("--write-csv", action="store_true")
     parser.add_argument("--write-dict", action="store_true")
     parser.add_argument("--pdbqt-dir", type=Path, help="Receptor files in pdbqt format")
-    parser.add_argument("--latent-model", default=False, action="store_true")
     args = parser.parse_args()
     return args
 
@@ -351,5 +346,4 @@ if __name__ == "__main__":
         relax_mol=args.relax_mol,
         max_relax_iter=args.max_relax_iter,
         sanitize=args.sanitize,
-        latent_model=args.latent_model
     )
