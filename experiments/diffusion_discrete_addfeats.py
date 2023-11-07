@@ -63,14 +63,14 @@ class Trainer(pl.LightningModule):
         charge_types_distribution = dataset_info.charges_marginals.float()
         is_aromatic_distribution = dataset_info.is_aromatic.float()
         is_ring_distribution = dataset_info.is_in_ring.float()
-        hybridization_disitribution = dataset_info.hybridization.float()
+        hybridization_distribution = dataset_info.hybridization.float()
 
         self.register_buffer("atoms_prior", atom_types_distribution.clone())
         self.register_buffer("bonds_prior", bond_types_distribution.clone())
         self.register_buffer("charges_prior", charge_types_distribution.clone())
         self.register_buffer("is_aromatic_prior", is_aromatic_distribution.clone())
         self.register_buffer("is_in_ring_prior", is_ring_distribution.clone())
-        self.register_buffer("hybridization_prior", hybridization_disitribution.clone())
+        self.register_buffer("hybridization_prior", hybridization_distribution.clone())
 
         self.num_is_aromatic = self.num_is_in_ring = 2
         self.num_hybridization = 9
@@ -159,26 +159,44 @@ class Trainer(pl.LightningModule):
         self.cat_atoms = CategoricalDiffusionKernel(
             terminal_distribution=atom_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes - 1
+            if self.hparams.use_qm_props
+            else self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
         )
         self.cat_bonds = CategoricalDiffusionKernel(
             terminal_distribution=bond_types_distribution,
             alphas=self.sde_bonds.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes
+            if self.hparams.use_qm_props
+            else self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
         )
         self.cat_charges = CategoricalDiffusionKernel(
             terminal_distribution=charge_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes
+            if self.hparams.use_qm_props
+            else self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
         )
         self.cat_aromatic = CategoricalDiffusionKernel(
             terminal_distribution=is_aromatic_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_is_aromatic=self.num_is_aromatic,
         )
         self.cat_ring = CategoricalDiffusionKernel(
             terminal_distribution=is_ring_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_is_in_ring=self.num_is_in_ring,
         )
         self.cat_hybridization = CategoricalDiffusionKernel(
-            terminal_distribution=hybridization_disitribution,
+            terminal_distribution=hybridization_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_hybridization=self.num_hybridization,
         )
 
         self.diffusion_loss = DiffusionLoss(
@@ -501,12 +519,21 @@ class Trainer(pl.LightningModule):
             t, pos_centered, data_batch
         )
         atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
-            t, atom_types, data_batch, self.dataset_info, type="atoms"
+            t,
+            atom_types,
+            data_batch,
+            self.dataset_info,
+            num_classes=self.num_atom_types,
+            type="atoms",
         )
         charges, charges_perturbed = self.cat_charges.sample_categorical(
-            t, charges, data_batch, self.dataset_info, type="charges"
+            t,
+            charges,
+            data_batch,
+            self.dataset_info,
+            num_classes=self.num_charge_classes,
+            type="charges",
         )
-
         edge_attr_global_perturbed = (
             self.cat_bonds.sample_edges_categorical(
                 t, edge_index_global, edge_attr_global, data_batch
