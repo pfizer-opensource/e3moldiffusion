@@ -120,6 +120,11 @@ class Trainer(pl.LightningModule):
                 recompute_edge_attributes=True,
                 recompute_radius_graph=False,
                 edge_mp=hparams["edge_mp"],
+                context_mapping=hparams["context_mapping"],
+                num_context_features=hparams["num_context_features"],
+                bond_prediction=hparams["bond_prediction"],
+                property_prediction=hparams["property_prediction"],
+                coords_param=hparams["continuous_param"],
             )
 
         self.sde_pos = DiscreteDDPM(
@@ -512,40 +517,36 @@ class Trainer(pl.LightningModule):
 
         ## tempory: use this version without refactored.
         # ring-feat and perturb
-        ring_feat = F.one_hot(
-            ring_feat.squeeze().long(), num_classes=self.num_is_in_ring
-        ).float()
-        probs = self.cat_ring.marginal_prob(ring_feat, t[data_batch])
-        ring_feat_perturbed = F.one_hot(
-            probs.multinomial(
-                1,
-            ).squeeze(),
+        ring_feat, ring_feat_perturbed = self.cat_ring.sample_categorical(
+            t,
+            ring_feat,
+            data_batch,
+            self.dataset_info,
             num_classes=self.num_is_in_ring,
-        ).float()
-
-        # aromatic-feat and perturb
-        aromatic_feat = F.one_hot(
-            aromatic_feat.squeeze().long(), num_classes=self.num_is_aromatic
-        ).float()
-        probs = self.cat_aromatic.marginal_prob(aromatic_feat, t[data_batch])
-        aromatic_feat_perturbed = F.one_hot(
-            probs.multinomial(
-                1,
-            ).squeeze(),
+            type="ring",
+        )
+        (
+            aromatic_feat,
+            aromatic_feat_perturbed,
+        ) = self.cat_aromatic.sample_categorical(
+            t,
+            aromatic_feat,
+            data_batch,
+            self.dataset_info,
             num_classes=self.num_is_aromatic,
-        ).float()
-
-        # hybridization and perturb
-        hybridization_feat = F.one_hot(
-            hybridization_feat.squeeze().long(), num_classes=self.num_hybridization
-        ).float()
-        probs = self.cat_hybridization.marginal_prob(hybridization_feat, t[data_batch])
-        hybridization_feat_perturbed = F.one_hot(
-            probs.multinomial(
-                1,
-            ).squeeze(),
+            type="aromatic",
+        )
+        (
+            hybridization_feat,
+            hybridization_feat_perturbed,
+        ) = self.cat_hybridization.sample_categorical(
+            t,
+            hybridization_feat,
+            data_batch,
+            self.dataset_info,
             num_classes=self.num_hybridization,
-        ).float()
+            type="hybridization",
+        )
 
         atom_feats_in_perturbed = torch.cat(
             [
