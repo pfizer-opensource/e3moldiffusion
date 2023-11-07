@@ -10,9 +10,9 @@ from experiments.data.utils import load_pickle, save_pickle
 from experiments.data.abstract_dataset import (
     AbstractAdaptiveDataModule,
 )
-from experiments.xtb_energy import calculate_xtb_energy
+from experiments.data.metrics import compute_all_statistics
 from torch.utils.data import Subset
-import os
+
 
 full_atom_encoder = {
     "H": 0,
@@ -32,37 +32,17 @@ full_atom_encoder = {
     "Hg": 14,
     "Bi": 15,
 }
-atom_decoder = {v: k for k, v in full_atom_encoder.items()}
-
-GEOM_DATADIR = "/scratch1/cremej01/data/geom/processed"
 
 
 class GeomDrugsDataset(InMemoryDataset):
-    atom_reference = {
-        "H": -0.393482763936,
-        "B": -0.952436614164,
-        "C": -1.795110518041,
-        "N": -2.60945245463,
-        "O": -3.769421097051,
-        "F": -4.619339964238,
-        "Al": -0.905328611479,
-        "Si": -1.571424085131,
-        "P": -2.377807088084,
-        "S": -3.148271017078,
-        "Cl": -4.482525134961,
-        "As": -2.239425948594,
-        "Br": -4.048339371234,
-        "I": -3.77963026339,
-        "Hg": -0.848032246708,
-        "Bi": -2.26665341636,
-    }
-
     def __init__(
         self, split, root, remove_h, transform=None, pre_transform=None, pre_filter=None
     ):
         assert split in ["train", "val", "test"]
         self.split = split
         self.remove_h = remove_h
+
+        self.compute_bond_distance_angles = True
 
         self.atom_encoder = full_atom_encoder
 
@@ -73,36 +53,19 @@ class GeomDrugsDataset(InMemoryDataset):
 
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
-
         self.statistics = dataset_utils.Statistics(
-            num_nodes=load_pickle(os.path.join(GEOM_DATADIR, self.processed_names[0])),
-            atom_types=torch.from_numpy(
-                np.load(os.path.join(GEOM_DATADIR, self.processed_names[1]))
-            ),
-            bond_types=torch.from_numpy(
-                np.load(os.path.join(GEOM_DATADIR, self.processed_names[2]))
-            ),
-            charge_types=torch.from_numpy(
-                np.load(os.path.join(GEOM_DATADIR, self.processed_names[3]))
-            ),
-            valencies=load_pickle(os.path.join(GEOM_DATADIR, self.processed_names[4])),
-            bond_lengths=load_pickle(
-                os.path.join(GEOM_DATADIR, self.processed_names[5])
-            ),
-            bond_angles=torch.from_numpy(
-                np.load(os.path.join(GEOM_DATADIR, self.processed_names[6]))
-            ),
-            is_aromatic=torch.from_numpy(
-                np.load(os.path.join(GEOM_DATADIR, self.processed_names[7]))
-            ).float(),
-            is_in_ring=torch.from_numpy(
-                np.load(os.path.join(GEOM_DATADIR, self.processed_names[8]))
-            ).float(),
-            hybridization=torch.from_numpy(
-                np.load(os.path.join(GEOM_DATADIR, self.processed_names[9]))
-            ).float(),
+            num_nodes=load_pickle(self.processed_paths[1]),
+            atom_types=torch.from_numpy(np.load(self.processed_paths[2])),
+            bond_types=torch.from_numpy(np.load(self.processed_paths[3])),
+            charge_types=torch.from_numpy(np.load(self.processed_paths[4])),
+            valencies=load_pickle(self.processed_paths[5]),
+            bond_lengths=load_pickle(self.processed_paths[6]),
+            bond_angles=torch.from_numpy(np.load(self.processed_paths[7])),
+            is_aromatic=torch.from_numpy(np.load(self.processed_paths[9])).float(),
+            is_in_ring=torch.from_numpy(np.load(self.processed_paths[10])).float(),
+            hybridization=torch.from_numpy(np.load(self.processed_paths[11])).float(),
         )
-        self.smiles = load_pickle(self.processed_names[10])
+        self.smiles = load_pickle(self.processed_paths[8])
 
     @property
     def raw_file_names(self):
@@ -114,17 +77,51 @@ class GeomDrugsDataset(InMemoryDataset):
             return ["test_data.pickle"]
 
     def processed_file_names(self):
+        h = "noh" if self.remove_h else "h"
         if self.split == "train":
             return [
-                f"train_energy.pt",
+                f"train_{h}_energy.pt",
+                f"train_n_{h}.pickle",
+                f"train_atom_types_{h}.npy",
+                f"train_bond_types_{h}.npy",
+                f"train_charges_{h}.npy",
+                f"train_valency_{h}.pickle",
+                f"train_bond_lengths_{h}.pickle",
+                f"train_angles_{h}.npy",
+                "train_smiles.pickle",
+                f"train_is_aromatic_{h}.npy",
+                f"train_is_in_ring_{h}.npy",
+                f"train_hybridization_{h}.npy",
             ]
         elif self.split == "val":
             return [
-                f"val_energy.pt",
+                f"val_{h}_energy.pt",
+                f"val_n_{h}.pickle",
+                f"val_atom_types_{h}.npy",
+                f"val_bond_types_{h}.npy",
+                f"val_charges_{h}.npy",
+                f"val_valency_{h}.pickle",
+                f"val_bond_lengths_{h}.pickle",
+                f"val_angles_{h}.npy",
+                "val_smiles.pickle",
+                f"val_is_aromatic_{h}.npy",
+                f"val_is_in_ring_{h}.npy",
+                f"val_hybridization_{h}.npy",
             ]
         else:
             return [
-                f"test_energy.pt",
+                f"test_{h}_energy.pt",
+                f"test_n_{h}.pickle",
+                f"test_atom_types_{h}.npy",
+                f"test_bond_types_{h}.npy",
+                f"test_charges_{h}.npy",
+                f"test_valency_{h}.pickle",
+                f"test_bond_lengths_{h}.pickle",
+                f"test_angles_{h}.npy",
+                "test_smiles.pickle",
+                f"test_is_aromatic_{h}.npy",
+                f"test_is_in_ring_{h}.npy",
+                f"test_hybridization_{h}.npy",
             ]
 
     def download(self):
@@ -151,20 +148,6 @@ class GeomDrugsDataset(InMemoryDataset):
                     smiles,
                     remove_hydrogens=self.remove_h,  # need to give full atom encoder since hydrogens might still be available if Chem.RemoveHs is called
                 )
-                try:
-                    atom_types = [atom_decoder[int(a)] for a in data.x]
-                    e_ref = np.sum(
-                        [self.atom_reference[a] for a in atom_types]
-                    )  # * 27.2114 #Hartree to eV
-                    e, _ = calculate_xtb_energy(data.pos, atom_types)
-                    e *= 0.0367493  # eV to Hartree
-                    data.energy = torch.tensor(
-                        e - e_ref, dtype=torch.float32
-                    ).unsqueeze(0)
-
-                except:
-                    print(f"Molecule with id {i} and conformer id {j} failed...")
-                    continue
                 # even when calling Chem.RemoveHs, hydrogens might be present
                 if self.remove_h:
                     data = dataset_utils.remove_hydrogens(
@@ -180,50 +163,25 @@ class GeomDrugsDataset(InMemoryDataset):
 
         torch.save(self.collate(data_list), self.processed_paths[0])
 
-    def processed_names(self):
-        h = "noh" if self.remove_h else "h"
-        if self.split == "train":
-            return [
-                f"train_n_{h}.pickle",
-                f"train_atom_types_{h}.npy",
-                f"train_bond_types_{h}.npy",
-                f"train_charges_{h}.npy",
-                f"train_valency_{h}.pickle",
-                f"train_bond_lengths_{h}.pickle",
-                f"train_angles_{h}.npy",
-                f"train_is_aromatic_{h}.npy",
-                f"train_is_in_ring_{h}.npy",
-                f"train_hybridization_{h}.npy",
-                "train_smiles.pickle",
-            ]
-        elif self.split == "val":
-            return [
-                f"val_n_{h}.pickle",
-                f"val_atom_types_{h}.npy",
-                f"val_bond_types_{h}.npy",
-                f"val_charges_{h}.npy",
-                f"val_valency_{h}.pickle",
-                f"val_bond_lengths_{h}.pickle",
-                f"val_angles_{h}.npy",
-                f"val_is_aromatic_{h}.npy",
-                f"val_is_in_ring_{h}.npy",
-                f"val_hybridization_{h}.npy",
-                "val_smiles.pickle",
-            ]
-        else:
-            return [
-                f"test_n_{h}.pickle",
-                f"test_atom_types_{h}.npy",
-                f"test_bond_types_{h}.npy",
-                f"test_charges_{h}.npy",
-                f"test_valency_{h}.pickle",
-                f"test_bond_lengths_{h}.pickle",
-                f"test_angles_{h}.npy",
-                f"test_is_aromatic_{h}.npy",
-                f"test_is_in_ring_{h}.npy",
-                f"test_hybridization_{h}.npy",
-                "test_smiles.pickle",
-            ]
+        statistics = compute_all_statistics(
+            data_list,
+            self.atom_encoder,
+            charges_dic={-2: 0, -1: 1, 0: 2, 1: 3, 2: 4, 3: 5},
+            additional_feats=True,
+            # do not compute bond distance and bond angle statistics due to time and we do not use it anyways currently
+        )
+        save_pickle(statistics.num_nodes, self.processed_paths[1])
+        np.save(self.processed_paths[2], statistics.atom_types)
+        np.save(self.processed_paths[3], statistics.bond_types)
+        np.save(self.processed_paths[4], statistics.charge_types)
+        save_pickle(statistics.valencies, self.processed_paths[5])
+        save_pickle(statistics.bond_lengths, self.processed_paths[6])
+        np.save(self.processed_paths[7], statistics.bond_angles)
+        save_pickle(set(all_smiles), self.processed_paths[8])
+
+        np.save(self.processed_paths[9], statistics.is_aromatic)
+        np.save(self.processed_paths[10], statistics.is_in_ring)
+        np.save(self.processed_paths[11], statistics.hybridization)
 
 
 class GeomDataModule(AbstractAdaptiveDataModule):
