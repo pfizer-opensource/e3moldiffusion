@@ -264,11 +264,13 @@ def evaluate(
             mols, N_CORES, SAVE_XYZ_FILES
         )
 
-        results_dict["delta_bond_lenghts"] = diff_b_lengths
-        results_dict["delta_bond_angles"] = diff_b_angles
-        results_dict["delta_dihedrals"] = diff_d_angles
-        results_dict["rmsds"] = rmsds
-        results_dict["delta_energies"] = diff_es
+        import pdb
+
+        pdb.set_trace()
+        results_dict["rmsds"] = np.mean(rmsds)
+        results_dict["delta_energies"] = np.mean(diff_es)
+
+        print(results_dict)
 
         with open(os.path.join(save_dir, "results_dict.pickle"), "wb") as f:
             pickle.dump(results_dict, f)
