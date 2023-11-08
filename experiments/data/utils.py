@@ -77,7 +77,10 @@ def mol_to_torch_geometric(
     if "mulliken" in kwargs:
         mulliken = torch.Tensor(kwargs["mulliken"]).float()
         additional["mulliken"] = mulliken
-
+    if "grad" in kwargs:
+        grad = torch.Tensor(kwargs["grad"]).float()
+        additional["grad"] = grad
+        
     data = Data(
         x=atom_types,
         edge_index=edge_index,
@@ -277,6 +280,7 @@ class Statistics:
         is_in_ring=None,
         is_aromatic=None,
         hybridization=None,
+        force_norms=None,
     ):
         self.num_nodes = num_nodes
         # print("NUM NODES IN STATISTICS", num_nodes)
@@ -290,6 +294,7 @@ class Statistics:
         self.is_in_ring = is_in_ring
         self.is_aromatic = is_aromatic
         self.hybridization = hybridization
+        self.force_norms = force_norms
 
 
 def train_val_test_split(dset_len, train_size, val_size, test_size, seed, order=None):
