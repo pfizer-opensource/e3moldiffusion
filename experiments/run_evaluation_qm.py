@@ -27,8 +27,8 @@ def evaluate(
     save_dir,
     save_xyz=False,
     calculate_props=True,
-    use_guidance=False,
-    ckpt_guidance_model=None,
+    use_energy_guidance=False,
+    ckpt_energy_model=None,
     guidance_scale=1.0e-4,
     ngraphs=5000,
     batch_size=80,
@@ -158,6 +158,9 @@ def evaluate(
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
+    if use_energy_guidance and ckpt_energy_model is not None:
+        print("Sampling with energy guidance!")
+
     results_dict, generated_smiles, stable_molecules = model.run_evaluation(
         step=step,
         dataset_info=model.dataset_info,
@@ -171,7 +174,8 @@ def evaluate(
         eta_ddim=eta_ddim,
         run_test_eval=True,
         guidance_scale=guidance_scale,
-        use_energy_guidance=use_guidance,
+        ckpt_energy_model=ckpt_energy_model,
+        use_energy_guidance=use_energy_guidance,
         device="cpu",
     )
 
@@ -197,7 +201,7 @@ def evaluate(
                     atoms=atom_types,
                     coords=mol.positions.tolist(),
                     charge=charge,
-                    options={},
+                    options={"grad": True},
                 )
                 for key, value in results.items():
                     mol.__setattr__(key, value)
@@ -207,6 +211,32 @@ def evaluate(
             except Exception as e:
                 print(e)
                 continue
+
+        
+        if hparams.dataset == "geomqm":
+            import numpy as np
+            # load precalculated target distribution
+            target = datamodule.statistics["train"].force_norms
+            generated_forces = []
+            for m in stable_molecules:
+                if m.normal_termination:
+                    generated_forces.extend(list(np.linalg.norm(m.grad, axis=1)))
+            generated_forces = torch.tensor(generated_forces, dtype=torch.float)
+            # calculate histograms with bin width 1e-5
+            bin_width = 1e-5
+            bins = torch.arange(0, 0.2, bin_width)
+            generated, _ = torch.histogram(generated_forces, bins=bins)
+            # calculate W1
+            cs_generated = torch.cumsum(generated, dim=0)
+            cs_target = torch.cumsum(target, dim=0)
+            cs_generated /= cs_generated[-1].item()
+            cs_target /= cs_target[-1].item()
+
+            force_norm_w1 = torch.sum(torch.abs(cs_generated-cs_target)).item() * bin_width
+            results_dict["ForceNormW1"] = force_norm_w1
+
+    for key, value in results_dict.items():
+        print(f"{key}:\t\t{value.item()}")
 
     if save_xyz:
         context = []
@@ -260,11 +290,16 @@ def evaluate(
             mols, N_CORES, SAVE_XYZ_FILES
         )
 
-        results_dict["delta_bond_lenghts"] = diff_b_lengths
-        results_dict["delta_bond_angles"] = diff_b_angles
-        results_dict["delta_dihedrals"] = diff_d_angles
-        results_dict["rmsds"] = rmsds
-        results_dict["delta_energies"] = diff_es
+        results_dict["delta_bond_lenghts"] = np.mean(np.abs(diff_b_lengths))
+        results_dict["delta_bond_angles"] = np.mean(np.abs(diff_b_angles))
+        tmp = np.abs(diff_d_angles)
+        tmp[tmp >= 180.0] -= 180.0
+        results_dict["delta_dihedrals"] = np.mean(tmp)
+        results_dict["rmsds"] = np.mean(rmsds)
+        results_dict["delta_energies"] = np.mean(np.abs(diff_es))
+
+        for key, value in results_dict.items():
+            print(f"{key}:\t\t{value.item()}")
 
         with open(os.path.join(save_dir, "results_dict.pickle"), "wb") as f:
             pickle.dump(results_dict, f)
@@ -313,9 +348,9 @@ def get_args():
     parser = argparse.ArgumentParser(description='Data generation')
     parser.add_argument('--model-path', default="/sharedhome/seumej/logs/best_mol_stab.ckpt", type=str,
                         help='Path to trained model')
-    parser.add_argument("--use-guidance", default=False, action="store_true")
+    parser.add_argument("--use-energy-guidance", default=False, action="store_true")
     parser.add_argument("--calculate-relax-change", default=True, action="store_true")
-    parser.add_argument("--ckpt-guidance-model", default=None, type=str)
+    parser.add_argument("--ckpt-energy-model", default=None, type=str)
     parser.add_argument("--guidance-start", default=None, type=int)
     parser.add_argument('--guidance-scale', default=1.0e-4, type=float,
                         help='How to scale the guidance shift')
@@ -351,8 +386,8 @@ if __name__ == "__main__":
         eta_ddim=args.eta_ddim,
         save_xyz=args.save_xyz,
         calculate_props=args.calculate_props,
-        use_guidance=args.use_guidance,
-        ckpt_guidance_model=args.ckpt_guidance_model,
+        use_energy_guidance=args.use_energy_guidance,
+        ckpt_energy_model=args.ckpt_energy_model,
         guidance_scale=args.guidance_scale,
         guidance_start=args.guidance_start,
         calculate_relax_change=args.calculate_relax_change,

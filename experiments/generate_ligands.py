@@ -12,6 +12,9 @@ from experiments.utils import prepare_pocket, write_sdf_file
 from Bio.PDB import PDBParser
 from experiments.data.distributions import DistributionProperty
 from experiments.docking import calculate_qvina2_score
+from experiments.sampling.analyze import analyze_stability_for_molecules
+import os
+from datetime import datetime
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
@@ -34,6 +37,7 @@ def evaluate(
     skip_existing,
     fix_n_nodes,
     num_ligands_per_pocket,
+    batch_size,
     ddpm,
     eta_ddim,
     relax_mol,
@@ -71,7 +75,8 @@ def evaluate(
     from experiments.data.data_info import GeneralInfos as DataInfos
 
     dataset_info = DataInfos(datamodule, hparams)
-
+    histogram = os.path.join(hparams.dataset_root, "size_distribution.npy")
+    histogram = np.load(histogram).tolist()
     train_smiles = list(datamodule.train_dataset.smiles)
 
     prop_norm, prop_dist = None, None
@@ -88,6 +93,7 @@ def evaluate(
         model_path,
         dataset_info=dataset_info,
         smiles_list=train_smiles,
+        histogram=histogram,
         prop_norm=prop_norm,
         prop_dist=prop_dist,
         load_ckpt_from_pretrained=None,
@@ -115,10 +121,9 @@ def evaluate(
             test_list = set(f.read().split(","))
         test_files = [x for x in test_files if x.stem in test_list]
 
-    pbar = tqdm(test_files)
+    pbar = tqdm(test_files[:2])
     time_per_pocket = {}
 
-    all_molecules = []
     statistics_dict = {"QED": [], "SA": [], "Lipinski": [], "Diversity": []}
     sdf_files = []
 
@@ -157,41 +162,82 @@ def evaluate(
                 for x in resi_list
             ]
 
-        pocket_data = prepare_pocket(
-            residues,
-            dataset_info.atom_encoder,
-            no_H=True,
-            repeats=num_ligands_per_pocket,
-            device=device,
+        all_molecules = 0
+        tmp_molecules = []
+
+        start = datetime.now()
+        while len(tmp_molecules) < num_ligands_per_pocket:
+            pocket_data = prepare_pocket(
+                residues,
+                dataset_info.atom_encoder,
+                no_H=True,
+                repeats=batch_size,
+                device=device,
+            )
+
+            molecules = model.generate_ligands(
+                pocket_data,
+                num_graphs=batch_size,
+                fix_n_nodes=fix_n_nodes,
+                inner_verbose=False,
+                save_traj=False,
+                ddpm=ddpm,
+                eta_ddim=eta_ddim,
+                relax_mol=relax_mol,
+                max_relax_iter=max_relax_iter,
+                sanitize=sanitize,
+                mol_device="cpu",
+            )
+            all_molecules += len(molecules)
+            (
+                _,
+                _,
+                statistics,
+                _,
+                _,
+                valid_molecules,
+            ) = analyze_stability_for_molecules(
+                molecule_list=molecules,
+                dataset_info=dataset_info,
+                smiles_train=train_smiles,
+                local_rank=0,
+                return_molecules=True,
+                return_stats_per_molecule=True,
+                remove_hs=hparams.remove_hs,
+                device="cpu",
+            )
+            tmp_molecules.extend(valid_molecules)
+
+        run_time = datetime.now() - start
+        print(f"\n Run time={run_time} for 100 valid molecules \n")
+
+        (
+            _,
+            _,
+            statistics,
+            _,
+            _,
+            valid_molecules,
+        ) = analyze_stability_for_molecules(
+            molecule_list=tmp_molecules,
+            dataset_info=dataset_info,
+            smiles_train=train_smiles,
+            local_rank=0,
+            return_molecules=True,
+            return_stats_per_molecule=True,
+            remove_hs=hparams.remove_hs,
+            device="cpu",
         )
+        statistics_dict["QED"].append(statistics["QED"])
+        statistics_dict["SA"].append(statistics["SA"])
+        statistics_dict["Lipinski"].append(statistics["Lipinski"])
+        statistics_dict["Diversity"].append(statistics["Diversity"])
 
-        if fix_n_nodes:
-            # some ligands (e.g. 6JWS_bio1_PT1:A:801) could not be read with sanitize=True
-            suppl = Chem.SDMolSupplier(str(sdf_file), sanitize=False)
-            num_nodes_lig = torch.tensor(suppl[0].GetNumAtoms()).long()
-        else:
-            num_nodes_lig = None
+        valid_molecules = valid_molecules[
+            :num_ligands_per_pocket
+        ]  # we could sort them by QED, SA or whatever
 
-        molecules, statistics = model.generate_ligands(
-            pocket_data,
-            num_graphs=num_ligands_per_pocket,
-            inner_verbose=False,
-            save_traj=False,
-            ddpm=ddpm,
-            eta_ddim=eta_ddim,
-            num_nodes_lig=num_nodes_lig,
-            relax_mol=relax_mol,
-            max_relax_iter=max_relax_iter,
-            sanitize=sanitize,
-            mol_device="cpu",
-        )
-        all_molecules.extend(molecules)
-        statistics_dict["QED"].append(statistics[0])
-        statistics_dict["SA"].append(statistics[1])
-        statistics_dict["Lipinski"].append(statistics[2])
-        statistics_dict["Diversity"].append(statistics[3])
-
-        write_sdf_file(sdf_out_file_raw, molecules)
+        write_sdf_file(sdf_out_file_raw, valid_molecules)
         sdf_files.append(sdf_out_file_raw)
 
         # Time the sampling process
@@ -201,7 +247,7 @@ def evaluate(
 
         pbar.set_description(
             f"Last processed: {ligand_name}. "
-            f"{(time() - t_pocket_start) / len(all_molecules):.2f} "
+            f"{(time() - t_pocket_start) / all_molecules:.2f} "
             f"sec/mol."
         )
 
@@ -303,8 +349,9 @@ def get_args():
                         help='Whether or not to store generated molecules in xyz files')
     parser.add_argument('--calculate-energy', default=False, action="store_true",
                         help='Whether or not to calculate xTB energies and forces')
-    parser.add_argument('--num-ligands-per-pocket', default=10, type=int,
+    parser.add_argument('--num-ligands-per-pocket', default=100, type=int,
                             help='How many ligands per pocket to sample. Defaults to 10')
+    parser.add_argument('--batch-size', default=100, type=int)
     parser.add_argument('--ddim', default=False, action="store_true",
                         help='If DDIM sampling should be used. Defaults to False')
     parser.add_argument('--eta-ddim', default=1.0, type=float,
@@ -337,6 +384,7 @@ if __name__ == "__main__":
         save_dir=args.save_dir,
         skip_existing=args.skip_existing,
         fix_n_nodes=args.fix_n_nodes,
+        batch_size=args.batch_size,
         num_ligands_per_pocket=args.num_ligands_per_pocket,
         ddpm=not args.ddim,
         eta_ddim=args.eta_ddim,

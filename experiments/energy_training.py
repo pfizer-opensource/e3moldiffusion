@@ -17,13 +17,19 @@ class Trainer(pl.LightningModule):
         self,
         hparams: dict,
         dataset_info: AbstractDatasetInfos,
-        **kwargs,
+        smiles_list: list,
+        prop_dist=None,
+        prop_norm=None,
     ):
         super().__init__()
         self.save_hyperparameters(hparams)
-        self.dataset_info = dataset_info
+        self.i = 0
+        self.mol_stab = 0.5
 
-        self.num_atom_types_geom = 16
+        self.dataset_info = dataset_info
+        self.prop_norm = prop_norm
+        self.prop_dist = prop_dist
+
         atom_types_distribution = dataset_info.atom_types.float()
         bond_types_distribution = dataset_info.edge_types.float()
         charge_types_distribution = dataset_info.charges_marginals.float()
@@ -34,11 +40,18 @@ class Trainer(pl.LightningModule):
 
         self.hparams.num_atom_types = dataset_info.input_dims.X
         self.num_charge_classes = dataset_info.input_dims.C
+        self.remove_hs = hparams.get("remove_hs")
+        if self.remove_hs:
+            print("Model without modelling explicit hydrogens")
+
         self.num_atom_types = self.hparams.num_atom_types
         self.num_atom_features = self.num_atom_types + self.num_charge_classes
+        self.num_bond_classes = 5
 
-        if hparams.get("no_h"):
-            print("Training without hydrogen")
+        self.smiles_list = smiles_list
+
+        empirical_num_nodes = dataset_info.n_nodes
+        self.register_buffer(name="empirical_num_nodes", tensor=empirical_num_nodes)
 
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -49,6 +62,7 @@ class Trainer(pl.LightningModule):
             nu=2.5,
             enforce_zero_terminal_snr=False,
             T=self.hparams.timesteps,
+            param=self.hparams.continuous_param,
         )
         self.sde_atom_charge = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -59,14 +73,36 @@ class Trainer(pl.LightningModule):
             nu=1,
             enforce_zero_terminal_snr=False,
         )
+        self.sde_bonds = DiscreteDDPM(
+            beta_min=hparams["beta_min"],
+            beta_max=hparams["beta_max"],
+            N=hparams["timesteps"],
+            scaled_reverse_posterior_sigma=True,
+            schedule=self.hparams.noise_scheduler,
+            nu=1.5,
+            enforce_zero_terminal_snr=False,
+        )
 
         self.cat_atoms = CategoricalDiffusionKernel(
             terminal_distribution=atom_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
+        )
+        self.cat_bonds = CategoricalDiffusionKernel(
+            terminal_distribution=bond_types_distribution,
+            alphas=self.sde_bonds.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
         )
         self.cat_charges = CategoricalDiffusionKernel(
             terminal_distribution=charge_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
         )
 
         self.model = EQGATEnergyNetwork(
@@ -95,9 +131,8 @@ class Trainer(pl.LightningModule):
         if torch.any(m):
             print(f"Recovered NaNs in {modality}. Selecting NoN-Nans")
         return loss[~m]
-    
+
     def step_fnc(self, batch, batch_idx, stage: str):
-        
         is_train = stage == "train"
         out_dict, t, batch_size = self(batch=batch, train=is_train)
 
@@ -119,10 +154,12 @@ class Trainer(pl.LightningModule):
         elif self.hparams.loss_weighting == "uniform":
             weights = torch.ones((batch_size,), device=self.device)
 
-        #import pdb
-        #pdb.set_trace()
-        
-        loss = weights * self.energy_loss(out_dict["energy_pred"].squeeze(-1), batch.energy.squeeze(-1))
+        # import pdb
+        # pdb.set_trace()
+
+        loss = weights * self.energy_loss(
+            out_dict["energy_pred"].squeeze(-1), batch.energy
+        )
         loss = self.loss_non_nans(loss=loss, modality="energy")
         loss = torch.mean(loss, dim=0)
 
@@ -144,7 +181,7 @@ class Trainer(pl.LightningModule):
         data_batch: Tensor = batch.batch
         n = batch.num_nodes
         bs = int(data_batch.max()) + 1
-        
+
         t = torch.randint(
             low=1,
             high=self.hparams.timesteps + 1,
@@ -152,7 +189,7 @@ class Trainer(pl.LightningModule):
             dtype=torch.long,
             device=batch.x.device,
         )
-        
+
         if not train:
             t = torch.zeros_like(t)
 
@@ -163,10 +200,20 @@ class Trainer(pl.LightningModule):
             t, pos_centered, data_batch
         )
         atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
-            t, atom_types, data_batch, self.dataset_info, type="atoms"
+            t,
+            atom_types,
+            data_batch,
+            self.dataset_info,
+            num_classes=self.num_atom_types,
+            type="atoms",
         )
         charges, charges_perturbed = self.cat_charges.sample_categorical(
-            t, charges, data_batch, self.dataset_info, type="charges"
+            t,
+            charges,
+            data_batch,
+            self.dataset_info,
+            num_classes=self.num_charge_classes,
+            type="charges",
         )
 
         atom_feats_in_perturbed = torch.cat(

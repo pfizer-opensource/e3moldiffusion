@@ -80,6 +80,7 @@ class GeomQMDataset(InMemoryDataset):
             is_aromatic=torch.from_numpy(np.load(self.processed_paths[9])).float(),
             is_in_ring=torch.from_numpy(np.load(self.processed_paths[10])).float(),
             hybridization=torch.from_numpy(np.load(self.processed_paths[11])).float(),
+            force_norms=torch.from_numpy(np.load(self.processed_paths[13])).float(),
         )
         self.smiles = load_pickle(self.processed_paths[12])
 
@@ -117,6 +118,7 @@ class GeomQMDataset(InMemoryDataset):
                     remove_hydrogens=self.remove_h,
                     wbo=properties["wbo"],
                     mulliken=properties["mulliken"],
+                    grad=properties["grad"],
                 )
                 if not properties["normal_termination"]:
                     warnings.warn("Abnormal termination of xtb, skipping data point.")
@@ -140,6 +142,7 @@ class GeomQMDataset(InMemoryDataset):
             data_list,
             self.atom_encoder,
             charges_dic={-2: 0, -1: 1, 0: 2, 1: 3, 2: 4, 3: 5},
+            include_force_norms=True,
         )
         save_pickle(statistics.num_nodes, self.processed_paths[1])
         np.save(self.processed_paths[2], statistics.atom_types)
@@ -153,6 +156,7 @@ class GeomQMDataset(InMemoryDataset):
         np.save(self.processed_paths[10], statistics.is_in_ring)
         np.save(self.processed_paths[11], statistics.hybridization)
         save_pickle(set(all_smiles), self.processed_paths[12])
+        np.save(self.processed_paths[13], statistics.force_norms)
 
     @property
     def processed_file_names(self):
@@ -173,6 +177,7 @@ class GeomQMDataset(InMemoryDataset):
                 f"train_is_in_ring_{h}_{confs}.npy",
                 f"train_hybridization_{h}_{confs}.npy",
                 f"train_smiles_{confs}.pickle",
+                f"train_fnorms_{confs}.npy",
             ]
         elif self.split == "val":
             return [
@@ -189,6 +194,7 @@ class GeomQMDataset(InMemoryDataset):
                 f"val_is_in_ring_{h}_{confs}.npy",
                 f"val_hybridization_{h}_{confs}.npy",
                 f"val_smiles_{confs}.pickle",
+                f"val_fnorms_{confs}.npy",
             ]
         else:
             return [
@@ -205,6 +211,7 @@ class GeomQMDataset(InMemoryDataset):
                 f"test_is_in_ring_{h}_{confs}.npy",
                 f"test_hybridization_{h}_{confs}.npy",
                 f"test_smiles_{confs}.pickle",
+                f"test_fnorms_{confs}.npy",
             ]
 
 

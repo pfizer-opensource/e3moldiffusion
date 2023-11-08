@@ -53,6 +53,7 @@ def compute_all_statistics(
     atom_encoder,
     charges_dic,
     additional_feats: bool = True,
+    include_force_norms: bool = False,
 ):
     num_nodes = node_counts(data_list)
     atom_types = atom_type_counts(data_list, num_classes=len(atom_encoder))
@@ -71,11 +72,15 @@ def compute_all_statistics(
     angles = bond_angles(data_list, atom_encoder)
     dihedrals = dihedral_angles(data_list, normalize=normalize)
 
+    feats = {}
+    if include_force_norms:
+        feats["force_norms"] = per_atom_force_norm(data_list)
+        print(feats["force_norms"])
 
     if additional_feats:
-        feats = additional_feat_counts(data_list=data_list)
-        print(feats)
-        return Statistics(
+        feats.update(additional_feat_counts(data_list=data_list))
+
+    return Statistics(
             num_nodes=num_nodes,
             atom_types=atom_types,
             bond_types=bond_types,
@@ -86,17 +91,18 @@ def compute_all_statistics(
             dihedrals=dihedrals,
             **feats,
         )
-    else:
-        return Statistics(
-            num_nodes=num_nodes,
-            atom_types=atom_types,
-            bond_types=bond_types,
-            charge_types=charge_types,
-            valencies=valency,
-            bond_lengths=bond_lengths,
-            bond_angles=angles,
-            dihedrals=dihedrals,
-        )
+
+def per_atom_force_norm(data_list):
+    # make list of all force norms
+    forces = []
+    for data in data_list:
+        forces.extend(list(np.linalg.norm(data.grad, axis=1)))
+    forces = torch.tensor(forces)
+    # calculate histograms with bin width 1e-5
+    bin_width = 1e-5
+    bins = torch.arange(0, 0.2, bin_width)
+    counts, _ = torch.histogram(forces, bins=bins)
+    return counts
 
 
 def additional_feat_counts(

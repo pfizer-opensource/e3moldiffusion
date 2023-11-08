@@ -20,6 +20,7 @@ dependencies:
   - conda-forge::pytorch-lightning=2.0.6
   - conda-forge::jupyter
   - conda-forge::openbabel
+  - xtb
   - pip:
       - xtb
       - ase
@@ -30,3 +31,4 @@ dependencies:
       - torch_ema
       - tensorboard
       - biopython
+      - xtb

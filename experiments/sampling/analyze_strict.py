@@ -27,7 +27,7 @@ class BasicMolecularMetrics(object):
         self.dataset_info = dataset_info
 
         self.number_samples = 0  # update based on unique generated smiles
-        self.train_smiles = canonicalize_list(smiles_train)
+        self.train_smiles, _ = canonicalize_list(smiles_train)
 
         self.train_fps = get_fingerprints_from_smileslist(self.train_smiles)
         self.test = test
@@ -88,9 +88,9 @@ class BasicMolecularMetrics(object):
                                      or open shell systems should be considered an error.
                                      If training data is sanitized and closed shell systems
                                      only, this should throw an error."""
-        valid = []
+        valid_smiles = []
         valid_ids = []
-        valid_mols = []
+        valid_molecules = []
         num_components = []
         error_message = Counter()
         for i, mol in enumerate(generated):
@@ -127,9 +127,9 @@ class BasicMolecularMetrics(object):
                             error_message["radicals"] += 1
                             continue
                     smiles = Chem.MolToSmiles(rdmol)
-                    valid.append(smiles)
+                    valid_smiles.append(smiles)
                     valid_ids.append(i)
-                    valid_mols.append(mol)
+                    valid_molecules.append(mol)
                     error_message["passed"] += 1
                 except Chem.rdchem.AtomValenceException:
                     error_message["wrong_atom_valence"] += 1
@@ -149,7 +149,7 @@ class BasicMolecularMetrics(object):
                 f" -- No error {error_message['passed']}"
             )
         self.validity_metric.update(
-            value=len(valid) / len(generated), weight=len(generated)
+            value=len(valid_smiles) / len(generated), weight=len(generated)
         )
         num_components = torch.tensor(
             num_components, device=self.mean_components.device
@@ -159,9 +159,12 @@ class BasicMolecularMetrics(object):
         not_connected = 100.0 * error_message["disconnected"] / len(generated)
         connected_components = 100.0 - not_connected
 
-        valid = canonicalize_list(valid)
+        valid_smiles, duplicate_ids = canonicalize_list(valid_smiles)
+        valid_molecules = [
+            mol for i, mol in enumerate(valid_molecules) if i not in duplicate_ids
+        ]
 
-        return valid_mols, valid, connected_components, error_message
+        return valid_smiles, valid_molecules, connected_components, error_message
 
     def compute_uniqueness(self, valid):
         """valid: list of SMILES strings."""
@@ -184,8 +187,8 @@ class BasicMolecularMetrics(object):
         the positions and atom types should already be masked."""
         # Validity
         (
-            valid_mols,
             valid_smiles,
+            valid_mols,
             connected_components,
             error_message,
         ) = self.compute_validity(generated, local_rank=local_rank)
@@ -466,7 +469,7 @@ class BasicMolecularMetrics(object):
     def get_kl_divergence(self, generated_smiles):
         # canonicalize_list in order to remove stereo information (also removes duplicates and invalid molecules, but there shouldn't be any)
         unique_molecules = set(
-            canonicalize_list(generated_smiles, include_stereocenters=False)
+            canonicalize_list(generated_smiles, include_stereocenters=False)[0]
         )
 
         # first we calculate the descriptors, which are np.arrays of size n_samples x n_descriptors
