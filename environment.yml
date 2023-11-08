@@ -21,6 +21,7 @@ dependencies:
   - conda-forge::jupyter
   - conda-forge::openbabel
   - pip:
+      - xtb
       - ase
       - py3Dmol
       - lmdb
@@ -28,7 +29,4 @@ dependencies:
       - rmsd
       - torch_ema
       - tensorboard
-      #- torch-scatter # might only install cpu
-      #- torch-sparse # might only install cpu
-      #- torch-cluster # might only install cpu
       - biopython
