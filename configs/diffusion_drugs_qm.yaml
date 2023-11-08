@@ -1,6 +1,5 @@
 
-load_ckpt: /scratch1/e3moldiffusion/logs/geom_qm/x0_snr_addfeats_qm/run0/last.ckpt
-#load_ckpt: /scratch1/e3moldiffusion/logs/geom/x0_retraining_0_snr_posloss5_bs400/run0/last.ckpt
+load_ckpt: /scratch1/e3moldiffusion/logs/geom_qm/x0_snr_qm/run0/last-v1.ckpt
 #load_ckpt_from_pretrained: /sharedhome/cremej01/workspace/logs/pubchem/x0_pretraining_0_snr_t_weighting_bs400/run0/last.ckpt
 # ckpt_bond_model: /hpfs/userws/cremej01/projects/logs/geom/bond_pred_seed1/run0/last.ckpt
 bond_model_guidance: false
@@ -54,7 +53,7 @@ loss_weighting: snr_t
 #CONTEXT
 context_mapping: false
 num_context_features: 0
-properties_list: [] #["dipole_norm","total_energy","HOMO-LUMO_gap","dispersion","atomisation_energy","polarizability"]
+properties_list: [dipole_norm, HOMO-LUMO_gap] #["dipole_norm","total_energy","HOMO-LUMO_gap","dispersion","atomisation_energy","polarizability"]
 
 #LOGGING
 save_dir: /hpfs/userws/cremej01/projects/logs/geom/pretrain_x0

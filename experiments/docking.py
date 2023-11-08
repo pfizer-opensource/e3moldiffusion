@@ -91,16 +91,20 @@ def calculate_qvina2_score(
             # center box at ligand's center of mass
             cx, cy, cz = mol.GetConformer().GetPositions().mean(0)
 
-            # run QuickVina 2
-
+            # run QuickVina 2   
+            try:
+                os.stat("/sharedhome/cremej01/workspace/e3moldiffusion/qvina2.1")
+                PATH = "/sharedhome/cremej01/workspace/e3moldiffusion/qvina2.1"
+            except PermissionError:
+                PATH = "/sharedhome/let55/projects/e3moldiffusion/qvina2.1"
+                
             out = os.popen(
-                f"/sharedhome/cremej01/workspace/e3moldiffusion/qvina2.1 --receptor {receptor_pdbqt_file} "
+                f"/{PATH} --receptor {receptor_pdbqt_file} "
                 f"--ligand {ligand_pdbqt_file} "
                 f"--center_x {cx:.4f} --center_y {cy:.4f} --center_z {cz:.4f} "
                 f"--size_x {size} --size_y {size} --size_z {size} "
                 f"--exhaustiveness {exhaustiveness}",
             ).read()
-
             # clean up
             ligand_pdbqt_file.unlink()
 

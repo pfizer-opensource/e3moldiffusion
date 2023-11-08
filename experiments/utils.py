@@ -793,6 +793,9 @@ def get_molecules(
     dataset_info,
     device,
     data_batch_pocket=None,
+    relax_mol=False,
+    max_relax_iter=200,
+    sanitize=False,
     mol_device="cpu",
     context=None,
     while_train=False,
@@ -806,6 +809,8 @@ def get_molecules(
         atoms_pred = out["atoms_pred"]
         charges_pred = out["charges_pred"]
 
+    if out["bonds_pred"].shape[-1] > 5:
+        out["bonds_pred"] = out["bonds_pred"][:, :5]
     n = data_batch.bincount().sum().item()
     edge_attrs_dense = torch.zeros(size=(n, n, 5), device=device).float()
     edge_attrs_dense[edge_index_global_lig[0, :], edge_index_global_lig[1, :], :] = out[
@@ -868,6 +873,9 @@ def get_molecules(
             if context_split is not None
             else None,
             dataset_info=dataset_info,
+            relax_mol=relax_mol,
+            max_relax_iter=max_relax_iter,
+            sanitize=sanitize,
         )
         molecule_list.append(molecule)
 
@@ -983,8 +991,8 @@ def prepare_pocket(
     ).long()
 
     pocket = Data(
-        x_pocket=pocket_types,
-        pos_pocket=pocket_coord,
+        x_pocket=pocket_types.repeat(repeats),
+        pos_pocket=pocket_coord.repeat(repeats, 1),
         pos_pocket_batch=pocket_mask,
     )
 

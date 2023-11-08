@@ -58,7 +58,7 @@ from experiments.utils import (
     load_energy_model,
 )
 from experiments.sampling.analyze import analyze_stability_for_molecules
-from experiments.losses import DiffusionLoss
+from e3moldiffusion.latent import compute_mmd
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(
@@ -70,7 +70,20 @@ logging.getLogger("pytorch_lightning.accelerators.cuda").addHandler(
 
 BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 
-
+class LatentRegularizationLoss:
+    def __init__(self, kind: str = 'l2') -> None:
+        super().__init__()
+        assert kind in ['l1', 'l2', 'mmd']
+        self.kind = kind
+    def __call__(self, z: torch.Tensor) -> torch.Tensor:
+        if self.kind == 'l1':
+            loss = z.abs().sum(-1).mean()
+        elif self.kind == 'l2':
+            loss = z.pow(2).sum(-1).mean()
+        else:
+            loss = compute_mmd(z, torch.randn_like(z))
+        return loss
+         
 class Trainer(pl.LightningModule):
     def __init__(
         self,
@@ -167,6 +180,8 @@ class Trainer(pl.LightningModule):
             in_dims=(hparams["sdim_latent"], hparams["vdim_latent"]),
             out_dims=(hparams["latent_dim"], None),
         )
+        
+        self.latent_reg_loss = LatentRegularizationLoss(kind='l2')
 
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -245,12 +260,13 @@ class Trainer(pl.LightningModule):
         pass
 
     def on_test_epoch_end(self):
-        print(f"Running test sampling...")
+        if self.hparams.use_ligand_dataset_sizes:
+            print(f"Running test sampling. Ligand sizes are taken from the data.")
+        else:
+            print(f"Running test sampling. Ligand sizes are sampled.")
         results_dict, generated_smiles, valid_molecules = self.run_evaluation(
             step=0,
             dataset_info=self.dataset_info,
-            ngraphs=self.hparams.num_test_graphs,
-            bs=self.hparams.inference_batch_size,
             verbose=True,
             inner_verbose=True,
             eta_ddim=1.0,
@@ -353,8 +369,6 @@ class Trainer(pl.LightningModule):
             final_res = self.run_evaluation(
                 step=self.i,
                 dataset_info=self.dataset_info,
-                ngraphs=600,
-                bs=self.hparams.batch_size,
                 verbose=True,
                 inner_verbose=False,
                 eta_ddim=1.0,
@@ -511,7 +525,7 @@ class Trainer(pl.LightningModule):
             weights=weights,
         )
 
-        reg_loss = out_dict['z'].pow(2).sum(-1).mean(0)
+        reg_loss = self.latent_reg_loss(out_dict['z'])
         
         final_loss = (
             self.hparams.lc_coords * loss["coords"]
@@ -717,8 +731,6 @@ class Trainer(pl.LightningModule):
         self,
         step: int,
         dataset_info,
-        ngraphs: int = 4000,
-        bs: int = 500,
         save_dir: str = None,
         return_molecules: bool = False,
         verbose: bool = False,
@@ -734,6 +746,9 @@ class Trainer(pl.LightningModule):
         ckpt_energy_model: str = None,
         device: str = "cpu",
     ):
+        """
+        Runs the evaluation on the entire validation dataloader. Generates 1 ligand in 1 receptor structure
+        """
         energy_model = None
         if use_energy_guidance:
             energy_model = load_energy_model(ckpt_energy_model, self.num_atom_features)
@@ -742,12 +757,6 @@ class Trainer(pl.LightningModule):
             energy_model.to(self.device)
             energy_model.eval()
 
-        b = ngraphs // bs
-        l = [bs] * b
-        if sum(l) != ngraphs:
-            l.append(ngraphs - sum(l))
-        assert sum(l) == ngraphs
-
         dataloader = (
             self.trainer.datamodule.val_dataloader()
             if not run_test_eval
@@ -755,17 +764,7 @@ class Trainer(pl.LightningModule):
         )
         molecule_list = []
         start = datetime.now()
-        if verbose:
-            if self.local_rank == 0:
-                print(f"Creating {ngraphs} graphs in {l} batches")
-
-        iterable = iter(dataloader)
-        for _, num_graphs in enumerate(l):
-            try:
-                pocket_data = next(iterable)
-            except StopIteration:
-                iterable = iter(dataloader)
-                pocket_data = next(iterable)
+        for _, pocket_data in enumerate(dataloader):
             num_graphs = len(pocket_data.batch.bincount())
             if use_ligand_dataset_sizes:
                 num_nodes_lig = pocket_data.batch.bincount()
@@ -791,27 +790,21 @@ class Trainer(pl.LightningModule):
                 guidance_scale=guidance_scale,
                 energy_model=energy_model,
             )
-            mol_list = get_molecules(
-                out_dict,
-                data_batch,
-                edge_index_global,
-                self.num_atom_types,
-                self.num_charge_classes,
-                self.dataset_info,
-                data_batch_pocket=None,
-                device=self.device,
-                mol_device=device,
-                context=context,
-                while_train=False,
+            molecule_list.extend(
+                get_molecules(
+                    out_dict,
+                    data_batch,
+                    edge_index_global,
+                    self.num_atom_types,
+                    self.num_charge_classes,
+                    self.dataset_info,
+                    data_batch_pocket=data_batch_pocket,
+                    device=self.device,
+                    mol_device=device,
+                    context=context,
+                    while_train=False,
+                )
             )
-
-            molecule_list.append(mol_list)
-
-        molecule_list = [item for sublist in molecule_list for item in sublist]
-
-        # import pdb
-        # pdb.set_trace()
-
         (
             stability_dict,
             validity_dict,
@@ -833,12 +826,17 @@ class Trainer(pl.LightningModule):
             save_cond = (
                 self.validity < validity_dict["validity"]
                 and self.connected_components < statistics_dict["connected_components"]
+            ) or (
+                self.validity <= validity_dict["validity"]
+                and self.connected_components <= statistics_dict["connected_components"]
+                and self.qed < statistics_dict["QED"]
             )
         else:
             save_cond = False
         if save_cond:
             self.validity = validity_dict["validity"]
             self.connected_components = statistics_dict["connected_components"]
+            self.qed = statistics_dict["QED"]
             save_path = os.path.join(self.hparams.save_dir, "best_valid.ckpt")
             self.trainer.save_checkpoint(save_path)
 
@@ -858,7 +856,6 @@ class Trainer(pl.LightningModule):
         total_res["step"] = str(step)
         total_res["epoch"] = str(self.current_epoch)
         total_res["run_time"] = str(run_time)
-        total_res["ngraphs"] = str(ngraphs)
         try:
             if save_dir is None:
                 save_dir = os.path.join(
@@ -890,9 +887,13 @@ class Trainer(pl.LightningModule):
         save_traj,
         ddpm,
         eta_ddim,
+        relax_mol=False,
+        max_relax_iter=200,
+        sanitize=False,
         every_k_step=1,
         num_nodes_lig=None,
         mol_device="cpu",
+        notebook_inference: bool = False
     ):
         (
             out_dict,
@@ -914,7 +915,7 @@ class Trainer(pl.LightningModule):
             guidance_scale=None,
             energy_model=None,
         )
-        molecule = get_molecules(
+        molecules = get_molecules(
             out_dict,
             data_batch,
             edge_index_global,
@@ -922,12 +923,56 @@ class Trainer(pl.LightningModule):
             self.num_charge_classes,
             self.dataset_info,
             data_batch_pocket=None,
+            relax_mol=relax_mol,
+            max_relax_iter=max_relax_iter,
+            sanitize=sanitize,
             device=self.device,
             mol_device=mol_device,
             context=context,
             while_train=False,
         )
-        return molecule
+        
+        if notebook_inference:
+            return molecules
+        
+        if num_graphs > 1:
+            (
+                stability_dict,
+                validity_dict,
+                statistics_dict,
+                all_generated_smiles,
+                stable_molecules,
+                valid_molecules,
+            ) = analyze_stability_for_molecules(
+                molecule_list=molecules,
+                dataset_info=self.dataset_info,
+                smiles_train=self.smiles_list,
+                local_rank=self.local_rank,
+                return_molecules=True,
+                return_stats_per_molecule=True,
+                remove_hs=self.hparams.remove_hs,
+                device="cpu",
+            )
+
+            qed = 0
+            idx = 0
+
+            for i in range(len(valid_molecules)):
+                if qed > statistics_dict["QEDs"][i]:
+                    continue
+                else:
+                    qed = statistics_dict["QEDs"][i]
+                    idx = i
+
+            sa = statistics_dict["SAs"][idx]
+            lipinski = statistics_dict["Lipinskis"][idx]
+            diversity = statistics_dict["Diversity"]
+            print(
+                f"Found valid molecule with QED: {qed}, SA: {sa} and Lipinski: {lipinski}"
+            )
+            return [molecules[idx]], (qed, sa, lipinski, diversity)
+        else:
+            return molecules
 
     def reverse_sampling(
         self,
@@ -953,7 +998,7 @@ class Trainer(pl.LightningModule):
             data_batch_pocket=batch_pocket,
         )
         if num_nodes_lig is not None:
-            batch_num_nodes = num_nodes_lig
+            batch_num_nodes = num_nodes_lig.to(self.device)
         else:
             batch_num_nodes = torch.multinomial(
                 input=empirical_distribution_num_nodes,
@@ -1121,8 +1166,7 @@ class Trainer(pl.LightningModule):
                 edge_type_traj.append(edge_attr_global.detach())
                 charge_type_traj.append(charge_types.detach())
 
-        # import pdb
-        # pdb.set_trace()
+
         # Move generated molecule back to the original pocket position
         pos = pos + pocket_mean[batch]
 

@@ -2,6 +2,27 @@ import numpy as np
 from rdkit import Chem
 import torch
 
+atom_encoder = {
+    "H": 0,
+    "B": 1,
+    "C": 2,
+    "N": 3,
+    "O": 4,
+    "F": 5,
+    "Al": 6,
+    "Si": 7,
+    "P": 8,
+    "S": 9,
+    "Cl": 10,
+    "As": 11,
+    "Br": 12,
+    "I": 13,
+    "Hg": 14,
+    "Bi": 15,
+}
+atom_decoder_int = {v: k for k, v in atom_encoder.items()}
+
+
 # ------------------------------------------------------------------------------
 # Computational
 # ------------------------------------------------------------------------------

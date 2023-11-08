@@ -9,6 +9,7 @@ from pytorch_lightning.callbacks import (
     ModelSummary,
     TQDMProgressBar,
 )
+import numpy as np
 from pytorch_lightning.loggers import TensorBoardLogger
 import warnings
 
@@ -166,6 +167,8 @@ if __name__ == "__main__":
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
 
+    histogram = None
+
     if not hparams.energy_training:
         if hparams.continuous:
             print("Using continuous diffusion")
@@ -193,12 +196,19 @@ if __name__ == "__main__":
                     )
                 else:
                     from experiments.diffusion_pretrain_discrete import Trainer
-            elif hparams.additional_feats and not hparams.use_qm_props:
-                if dataset == "crossdocked":
-                    print("Ligand-pocket training using additional features")
-                    from experiments.diffusion_discrete_moreFeats_ligand import Trainer
+            elif (
+                dataset == "crossdocked"
+                and hparams.additional_feats
+                and not hparams.use_qm_props
+            ):
+                print("Ligand-pocket training using additional features")
+                from experiments.diffusion_discrete_moreFeats_ligand import Trainer
             else:
                 if dataset == "crossdocked":
+                    histogram = os.path.join(
+                        hparams.dataset_root, "size_distribution.npy"
+                    )
+                    histogram = np.load(histogram).tolist()
                     if hparams.latent_dim is None:
                         print("Ligand-pocket training")
                         from experiments.diffusion_discrete_pocket import Trainer
@@ -208,11 +218,17 @@ if __name__ == "__main__":
                 elif dataset == "geomqm":
                     if hparams.additional_feats and hparams.use_qm_props:
                         print("Using RDKit and QM props as additional features")
+                        from experiments.diffusion_discrete_addfeats_qm import Trainer
+                    elif hparams.additional_feats and not hparams.use_qm_props:
+                        from experiments.diffusion_discrete_addfeats import Trainer
                     else:
                         print("Using QM props as additional features")
-                    from experiments.diffusion_discrete_qm import Trainer
+                        from experiments.diffusion_discrete_qm import Trainer
                 else:
-                    from experiments.diffusion_discrete import Trainer
+                    if hparams.additional_feats:
+                        from experiments.diffusion_discrete_moreFeats import Trainer
+                    else:
+                        from experiments.diffusion_discrete import Trainer
     else:
         print("Running energy training")
         from experiments.energy_training import Trainer
@@ -223,6 +239,7 @@ if __name__ == "__main__":
         hparams=hparams.__dict__,
         dataset_info=dataset_info,
         smiles_list=train_smiles,
+        histogram=histogram,
         prop_dist=prop_dist,
         prop_norm=prop_norm,
     )

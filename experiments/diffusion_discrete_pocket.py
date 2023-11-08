@@ -1,7 +1,7 @@
 import logging
 import os
 from datetime import datetime
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 from torch_sparse import coalesce
 from experiments.data.utils import write_xyz_file
 from experiments.xtb_energy import calculate_xtb_energy
@@ -14,6 +14,7 @@ from torch_scatter import scatter_mean
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.data.abstract_dataset import AbstractDatasetInfos
+from experiments.data.distributions import ConditionalDistributionNodes
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.losses import DiffusionLoss
@@ -72,6 +73,7 @@ class Trainer(pl.LightningModule):
         hparams: dict,
         dataset_info: AbstractDatasetInfos,
         smiles_list: list,
+        histogram: Dict,
         prop_dist=None,
         prop_norm=None,
     ):
@@ -87,7 +89,13 @@ class Trainer(pl.LightningModule):
         self.prop_dist = prop_dist
 
         atom_types_distribution = dataset_info.atom_types.float()
-        bond_types_distribution = dataset_info.edge_types.float()
+        if self.hparams.num_bond_classes != 5:
+            bond_types_distribution = torch.zeros(
+                (self.hparams.num_bond_classes,), dtype=torch.float32
+            )
+            bond_types_distribution[:5] = dataset_info.edge_types.float()
+        else:
+            bond_types_distribution = dataset_info.edge_types.float()
         charge_types_distribution = dataset_info.charges_marginals.float()
 
         self.register_buffer("atoms_prior", atom_types_distribution.clone())
@@ -102,12 +110,11 @@ class Trainer(pl.LightningModule):
 
         self.num_atom_types = self.hparams.num_atom_types
         self.num_atom_features = self.num_atom_types + self.num_charge_classes
-        self.num_bond_classes = 5
+        self.num_bond_classes = self.hparams.num_bond_classes
 
         self.smiles_list = smiles_list
 
-        empirical_num_nodes = dataset_info.n_nodes
-        self.register_buffer(name="empirical_num_nodes", tensor=empirical_num_nodes)
+        self.conditional_size_distribution = ConditionalDistributionNodes(histogram)
 
         if self.hparams.load_ckpt_from_pretrained is not None:
             print("Loading from pre-trained model checkpoint...")
@@ -227,8 +234,6 @@ class Trainer(pl.LightningModule):
         results_dict, generated_smiles, valid_molecules = self.run_evaluation(
             step=0,
             dataset_info=self.dataset_info,
-            ngraphs=self.hparams.num_test_graphs,
-            bs=self.hparams.inference_batch_size,
             verbose=True,
             inner_verbose=True,
             eta_ddim=1.0,
@@ -331,8 +336,6 @@ class Trainer(pl.LightningModule):
             final_res = self.run_evaluation(
                 step=self.i,
                 dataset_info=self.dataset_info,
-                ngraphs=600,
-                bs=self.hparams.batch_size,
                 verbose=True,
                 inner_verbose=False,
                 eta_ddim=1.0,
@@ -710,8 +713,6 @@ class Trainer(pl.LightningModule):
         self,
         step: int,
         dataset_info,
-        ngraphs: int = 4000,
-        bs: int = 500,
         save_dir: str = None,
         return_molecules: bool = False,
         verbose: bool = False,
@@ -727,6 +728,9 @@ class Trainer(pl.LightningModule):
         ckpt_energy_model: str = None,
         device: str = "cpu",
     ):
+        """
+        Runs the evaluation on the entire validation dataloader. Generates 1 ligand in 1 receptor structure
+        """
         energy_model = None
         if use_energy_guidance:
             energy_model = load_energy_model(ckpt_energy_model, self.num_atom_features)
@@ -742,21 +746,14 @@ class Trainer(pl.LightningModule):
         )
         molecule_list = []
         start = datetime.now()
-        if verbose:
-            if self.local_rank == 0:
-                print(f"Creating {ngraphs} graphs in {l} batches")
-        iterable = iter(dataloader)
-        for _, num_graphs in enumerate(l):
-            try:
-                pocket_data = next(iterable)
-            except StopIteration:
-                iterable = iter(dataloader)
-                pocket_data = next(iterable)
+        for _, pocket_data in enumerate(dataloader):
             num_graphs = len(pocket_data.batch.bincount())
             if use_ligand_dataset_sizes:
-                num_nodes_lig = pocket_data.batch.bincount()
+                num_nodes_lig = pocket_data.batch.bincount().to(self.device)
             else:
-                num_nodes_lig = None
+                num_nodes_lig = self.conditional_size_distribution.sample_conditional(
+                    n1=None, n2=pocket_data.pos_pocket_batch.bincount()
+                ).to(self.device)
             (
                 out_dict,
                 data_batch,
@@ -768,7 +765,6 @@ class Trainer(pl.LightningModule):
                 num_graphs=num_graphs,
                 num_nodes_lig=num_nodes_lig,
                 pocket_data=pocket_data,
-                empirical_distribution_num_nodes=self.empirical_num_nodes,
                 verbose=inner_verbose,
                 save_traj=save_traj,
                 ddpm=ddpm,
@@ -844,7 +840,6 @@ class Trainer(pl.LightningModule):
         total_res["step"] = str(step)
         total_res["epoch"] = str(self.current_epoch)
         total_res["run_time"] = str(run_time)
-        total_res["ngraphs"] = str(ngraphs)
         try:
             if save_dir is None:
                 save_dir = os.path.join(
@@ -876,10 +871,24 @@ class Trainer(pl.LightningModule):
         save_traj,
         ddpm,
         eta_ddim,
+        relax_mol=False,
+        max_relax_iter=200,
+        sanitize=False,
         every_k_step=1,
-        num_nodes_lig=None,
+        fix_n_nodes=False,
         mol_device="cpu",
     ):
+        if fix_n_nodes:
+            num_nodes_lig = pocket_data.batch.bincount().to(self.device)
+        else:
+            pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(0)
+            num_nodes_lig = (
+                self.conditional_size_distribution.sample_conditional(
+                    n1=None, n2=pocket_size
+                )
+                .repeat(num_graphs)
+                .to(self.device)
+            )
         (
             out_dict,
             data_batch,
@@ -891,7 +900,6 @@ class Trainer(pl.LightningModule):
             num_graphs=num_graphs,
             num_nodes_lig=num_nodes_lig,
             pocket_data=pocket_data,
-            empirical_distribution_num_nodes=self.empirical_num_nodes,
             verbose=inner_verbose,
             save_traj=save_traj,
             ddpm=ddpm,
@@ -900,7 +908,7 @@ class Trainer(pl.LightningModule):
             guidance_scale=None,
             energy_model=None,
         )
-        molecule = get_molecules(
+        molecules = get_molecules(
             out_dict,
             data_batch,
             edge_index_global,
@@ -908,18 +916,21 @@ class Trainer(pl.LightningModule):
             self.num_charge_classes,
             self.dataset_info,
             data_batch_pocket=data_batch_pocket,
+            relax_mol=relax_mol,
+            max_relax_iter=max_relax_iter,
+            sanitize=sanitize,
             device=self.device,
             mol_device=mol_device,
             context=context,
             while_train=False,
         )
-        return molecule
+
+        return molecules
 
     def reverse_sampling(
         self,
         num_graphs: int,
         pocket_data: Tensor,
-        empirical_distribution_num_nodes: Tensor,
         num_nodes_lig: int = None,
         verbose: bool = False,
         save_traj: bool = False,
@@ -933,27 +944,15 @@ class Trainer(pl.LightningModule):
         batch_pocket = pocket_data.pos_pocket_batch.to(self.device)
         x_pocket = pocket_data.x_pocket.to(self.device)
 
-        if num_nodes_lig is not None:
-            batch_num_nodes = num_nodes_lig.to(self.device)
-        else:
-            batch_num_nodes = torch.multinomial(
-                input=empirical_distribution_num_nodes,
-                num_samples=num_graphs,
-                replacement=True,
-            ).to(self.device)
-            batch_num_nodes = batch_num_nodes.clamp(min=1)
-
         batch = torch.arange(num_graphs, device=self.device).repeat_interleave(
-            batch_num_nodes, dim=0
+            num_nodes_lig, dim=0
         )
         bs = int(batch.max()) + 1
 
         # sample context condition
         context = None
         if self.prop_dist is not None:
-            context = self.prop_dist.sample_batch(batch_num_nodes).to(self.device)[
-                batch
-            ]
+            context = self.prop_dist.sample_batch(num_nodes_lig).to(self.device)[batch]
 
         # initialize the 0-mean point cloud from N(0, I) centered in the pocket
         pocket_cog = scatter_mean(pos_pocket, batch_pocket, dim=0)

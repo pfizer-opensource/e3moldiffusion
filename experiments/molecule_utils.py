@@ -4,6 +4,7 @@ from rdkit import Chem, RDLogger
 from rdkit.Geometry import Point3D
 from rdkit import Chem, RDLogger
 from rdkit.Geometry import Point3D
+import warnings
 
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
@@ -16,6 +17,7 @@ bond_dict = [
     Chem.rdchem.BondType.AROMATIC,
 ]
 
+from rdkit.Chem.rdForceFieldHelpers import UFFOptimizeMolecule, UFFHasAllMoleculeParams
 from experiments.data.utils import x_map as additional_node_map
 
 
@@ -32,6 +34,9 @@ class Molecule:
         context=None,
         is_aromatic=None,
         hybridization=None,
+        relax_mol=False,
+        max_relax_iter=200,
+        sanitize=True,
     ):
         """atom_types: n      LongTensor
         charges: n         LongTensor
@@ -47,6 +52,10 @@ class Molecule:
         assert len(atom_types.shape) == 1
         assert len(bond_types.shape) == 2
         assert len(positions.shape) == 2
+
+        self.relax_mol = relax_mol
+        self.max_relax_iter = max_relax_iter
+        self.sanitize = sanitize
 
         self.dataset_info = dataset_info
         atom_decoder = (
@@ -163,7 +172,32 @@ class Molecule:
             )
         mol.AddConformer(conf)
 
-        return mol
+        if self.relax_mol:
+            mol_uff = mol
+            try:
+                if self.sanitize:
+                    Chem.SanitizeMol(mol_uff)
+                self.uff_relax(mol_uff, self.max_relax_iter)
+                if self.sanitize:
+                    Chem.SanitizeMol(mol_uff)
+                return mol_uff
+            except (RuntimeError, ValueError) as e:
+                return mol
+        else:
+            return mol
+
+    def uff_relax(self, mol, max_iter=200):
+        """
+        Uses RDKit's universal force field (UFF) implementation to optimize a
+        molecule.
+        """
+        more_iterations_required = UFFOptimizeMolecule(mol, maxIters=max_iter)
+        if more_iterations_required:
+            warnings.warn(
+                f"Maximum number of FF iterations reached. "
+                f"Returning molecule after {max_iter} relaxation steps."
+            )
+        return more_iterations_required
 
     def build_molecule_edm(self, positions, atom_types, dataset_info):
         atom_decoder = dataset_info["atom_decoder"]

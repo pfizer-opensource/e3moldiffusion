@@ -29,7 +29,12 @@ x_map = {
 
 
 def mol_to_torch_geometric(
-    mol, atom_encoder, smiles, remove_hydrogens: bool = False, **kwargs
+    mol,
+    atom_encoder,
+    smiles,
+    remove_hydrogens: bool = False,
+    cog_proj: bool = True,
+    **kwargs,
 ):
     if remove_hydrogens:
         # mol = Chem.RemoveAllHs(mol)
@@ -47,7 +52,8 @@ def mol_to_torch_geometric(
     edge_attr = bond_types.long()
 
     pos = torch.tensor(mol.GetConformers()[0].GetPositions()).float()
-    pos = pos - torch.mean(pos, dim=0, keepdim=True)
+    if cog_proj:
+        pos = pos - torch.mean(pos, dim=0, keepdim=True)
     atom_types = []
     all_charges = []
     is_aromatic = []

@@ -147,6 +147,8 @@ def add_arguments(parser):
     parser.add_argument("--atoms-categorical", default=False, action="store_true")
     parser.add_argument("--bonds-categorical", default=False, action="store_true")
 
+    parser.add_argument("--num-bond-classes", default=5, type=int)
+
     # BOND PREDICTION AND GUIDANCE:
     parser.add_argument("--bond-guidance-model", default=False, action="store_true")
     parser.add_argument("--bond-prediction", default=False, action="store_true")

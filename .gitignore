@@ -21,8 +21,9 @@ sample_data/*
 
 .vscode/
 
+configs/
 scripts/
-
+generate_ligands.sh
 # scripts/experiment*.sl
 
 geom/.ipynb_checkpoints/

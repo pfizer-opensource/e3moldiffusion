@@ -3,6 +3,11 @@ import os
 import pickle
 import argparse
 from experiments.xtb_energy import calculate_xtb_energy
+from torch_geometric.data.collate import collate
+import torch
+import numpy as np
+from torch.utils.data import Subset
+from torch_geometric.data.collate import collate
 
 
 def get_args():
@@ -10,6 +15,8 @@ def get_args():
     parser = argparse.ArgumentParser(description='Energy calculation')
     parser.add_argument('--dataset', type=str, help='Which dataset')
     parser.add_argument('--split', type=str, help='Which data split train/val/test')
+    parser.add_argument('--idx', type=int, default=None, help='Which part of the dataset (pubchem only)')
+
     args = parser.parse_args()
     return args
 
@@ -33,9 +40,27 @@ atom_encoder = {
     "Bi": 15,
 }
 atom_decoder = {v: k for k, v in atom_encoder.items()}
+atom_reference = {
+    "H": -0.393482763936,
+    "B": -0.952436614164,
+    "C": -1.795110518041,
+    "N": -2.60945245463,
+    "O": -3.769421097051,
+    "F": -4.619339964238,
+    "Al": -0.905328611479,
+    "Si": -1.571424085131,
+    "P": -2.377807088084,
+    "S": -3.148271017078,
+    "Cl": -4.482525134961,
+    "As": -2.239425948594,
+    "Br": -4.048339371234,
+    "I": -3.77963026339,
+    "Hg": -0.848032246708,
+    "Bi": -2.26665341636,
+}
 
 
-def process(dataset, split):
+def process(dataset, split, idx):
     if dataset == "drugs":
         from experiments.data.geom.geom_dataset_adaptive import (
             GeomDrugsDataset as DataModule,
@@ -43,35 +68,82 @@ def process(dataset, split):
 
         root_path = "/scratch1/cremej01/data/geom"
     elif dataset == "qm9":
-        from experiments.data.qm9.qm9_dataset import GeomDrugsDataset as DataModule
+        from experiments.data.qm9.qm9_dataset import QM9Dataset as DataModule
 
         root_path = "/scratch1/cremej01/data/qm9"
+    elif dataset == "aqm":
+        from experiments.data.aqm.aqm_dataset_nonadaptive import (
+            AQMDataset as DataModule,
+        )
+
+        root_path = "/scratch1/cremej01/data/aqm"
+    elif dataset == "pubchem":
+        from experiments.data.pubchem.pubchem_dataset_nonadaptive import (
+            PubChemLMDBDataset as DataModule,
+        )
+
+        root_path = "/scratch1/cremej01/data/pubchem"
+    else:
+        raise ValueError("Dataset not found")
 
     remove_hs = False
 
-    dataset = DataModule(split=split, root=root_path, remove_h=remove_hs)
+    datamodule = DataModule(split=split, root=root_path, remove_h=remove_hs)
 
-    energies = []
-    forces_norm = []
-    failed_ids = []
-    for i, mol in tqdm(enumerate(dataset)):
+    if dataset == "pubchem":
+        split_len = len(datamodule) // 500
+        rng = np.arange(0, len(datamodule))
+        rng = rng[idx * split_len : (idx + 1) * split_len]
+        datamodule = Subset(datamodule, rng)
+
+    # elif dataset == "drugs":
+    #     split_len = len(datamodule) // 50
+    #     rng = np.arange(0, len(datamodule))
+    #     rng = rng[idx * split_len : (idx + 1) * split_len]
+    #     datamodule = Subset(datamodule, rng)
+
+    mols = []
+    for i, mol in tqdm(enumerate(datamodule), total=len(datamodule)):
         atom_types = [atom_decoder[int(a)] for a in mol.x]
         try:
-            e, f = calculate_xtb_energy(mol.pos, atom_types)
+            e_ref = np.sum(
+                [atom_reference[a] for a in atom_types]
+            )  # * 27.2114 #Hartree to eV
+            e, _ = calculate_xtb_energy(mol.pos, atom_types)
+            e *= 0.0367493  # eV to Hartree
+            mol.energy = torch.tensor(e - e_ref, dtype=torch.float32).unsqueeze(0)
+            mols.append(mol)
         except:
-            failed_ids.append(i)
+            print(f"Molecule with id {i} failed...")
             continue
-        energies.append(e)
-        forces_norm.append(f)
 
-    with open(os.path.join(root_path, f"energies_{split}.pickle"), "wb") as f:
-        pickle.dump(energies, f)
-    with open(os.path.join(root_path, f"forces_norms_{split}.pickle"), "wb") as f:
-        pickle.dump(forces_norm, f)
-    with open(os.path.join(root_path, f"failed_ids_{split}.pickle"), "wb") as f:
-        pickle.dump(energies, f)
+    print(f"Collate the data...")
+    data, slices = _collate(mols)
+
+    print(f"Saving the data...")
+    torch.save(
+        (data, slices),
+        (os.path.join(root_path, f"processed/{split}_{idx}_data_energy.pt")),
+    )
+
+
+def _collate(data_list):
+    r"""Collates a Python list of :obj:`torch_geometric.data.Data` objects
+    to the internal storage format of
+    :class:`~torch_geometric.data.InMemoryDataset`."""
+    if len(data_list) == 1:
+        return data_list[0], None
+
+    data, slices, _ = collate(
+        data_list[0].__class__,
+        data_list=data_list,
+        increment=False,
+        add_batch=False,
+    )
+
+    return data, slices
 
 
 if __name__ == "__main__":
     args = get_args()
-    process(args.dataset, args.split)
+    process(args.dataset, args.split, args.idx)
