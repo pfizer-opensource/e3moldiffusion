@@ -175,6 +175,7 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         x0: Tensor,
         t: Tensor,
         num_classes: int,
+        eps: float = 1.0e-6,
     ):
         reverse = self.reverse_posterior_for_every_x0(xt=xt, t=t)
         # Eq. 4 in Austin et al. (2023) "Structured Denoising Diffusion Models in Discrete State-Spaces"
@@ -182,13 +183,14 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         unweighted_probs = (reverse * x0.unsqueeze(-1)).sum(1)
         unweighted_probs[unweighted_probs.sum(dim=-1) == 0] = 1e-5
         # (N, a_t-1)
-        probs = unweighted_probs / unweighted_probs.sum(-1, keepdims=True)
+        probs = unweighted_probs / (unweighted_probs.sum(-1, keepdims=True) + eps)
         x_tm1 = F.one_hot(
             probs.multinomial(
                 1,
             ).squeeze(),
             num_classes=num_classes,
         ).float()
+
         return x_tm1
 
     def sample_reverse_edges_categorical(

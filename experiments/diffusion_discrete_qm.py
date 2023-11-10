@@ -20,6 +20,7 @@ from experiments.utils import (
     get_list_of_edge_adjs,
     load_model,
     zero_mean,
+    get_molecules,
 )
 from torch import Tensor
 from torch_geometric.data import Batch
@@ -36,6 +37,8 @@ from experiments.diffusion.utils import (
     initialize_edge_attrs_reverse,
     bond_guidance,
     energy_guidance,
+    extract_func_groups_,
+    extract_scaffolds_,
 )
 from experiments.molecule_utils import Molecule
 from experiments.utils import (
@@ -590,71 +593,6 @@ class Trainer(pl.LightningModule):
         return out
 
     @torch.no_grad()
-    def generate_graphs(
-        self,
-        num_graphs: int,
-        empirical_distribution_num_nodes: torch.Tensor,
-        verbose=False,
-        save_traj=False,
-        ddpm: bool = True,
-        eta_ddim: float = 1.0,
-        every_k_step: int = 1,
-        guidance_scale: float = 1.0e-4,
-        energy_model=None,
-    ):
-        (
-            pos,
-            atom_types,
-            charge_types,
-            edge_types,
-            edge_index_global,
-            batch_num_nodes,
-            trajs,
-            context,
-        ) = self.reverse_sampling(
-            num_graphs=num_graphs,
-            empirical_distribution_num_nodes=empirical_distribution_num_nodes,
-            verbose=verbose,
-            save_traj=save_traj,
-            ddpm=ddpm,
-            eta_ddim=eta_ddim,
-            every_k_step=every_k_step,
-            guidance_scale=guidance_scale,
-            energy_model=energy_model,
-        )
-
-        if torch.any(pos.isnan()):
-            print(pos.numel(), pos.isnan().sum())
-
-        pos_splits = pos.detach().split(batch_num_nodes.cpu().tolist(), dim=0)
-
-        charge_types_integer = torch.argmax(charge_types, dim=-1)
-        # offset back
-        charge_types_integer = charge_types_integer - self.dataset_info.charge_offset
-        charge_types_integer_split = charge_types_integer.detach().split(
-            batch_num_nodes.cpu().tolist(), dim=0
-        )
-        atom_types_integer = torch.argmax(atom_types, dim=-1)
-        atom_types_integer_split = atom_types_integer.detach().split(
-            batch_num_nodes.cpu().tolist(), dim=0
-        )
-        context_split = (
-            context.split(batch_num_nodes.cpu().tolist(), dim=0)
-            if context is not None
-            else None
-        )
-        return (
-            pos_splits,
-            atom_types_integer_split,
-            charge_types_integer_split,
-            edge_types,
-            edge_index_global,
-            batch_num_nodes,
-            trajs,
-            context_split,
-        )
-
-    @torch.no_grad()
     def run_evaluation(
         self,
         step: int,
@@ -662,6 +600,7 @@ class Trainer(pl.LightningModule):
         ngraphs: int = 4000,
         bs: int = 500,
         save_dir: str = None,
+        save_traj=False,
         return_molecules: bool = False,
         verbose: bool = False,
         inner_verbose=False,
@@ -697,19 +636,15 @@ class Trainer(pl.LightningModule):
                 print(f"Creating {ngraphs} graphs in {l} batches")
         for _, num_graphs in enumerate(l):
             (
-                pos_splits,
-                atom_types_integer_split,
-                charge_types_integer_split,
-                edge_types,
+                out_dict,
+                data_batch,
                 edge_index_global,
-                batch_num_nodes,
-                _,
-                context_split,
-            ) = self.generate_graphs(
+                trajs,
+                context,
+            ) = self.reverse_sampling(
                 num_graphs=num_graphs,
                 verbose=inner_verbose,
-                empirical_distribution_num_nodes=self.empirical_num_nodes,
-                save_traj=False,
+                save_traj=save_traj,
                 ddpm=ddpm,
                 eta_ddim=eta_ddim,
                 every_k_step=every_k_step,
@@ -717,36 +652,20 @@ class Trainer(pl.LightningModule):
                 energy_model=energy_model,
             )
 
-            n = batch_num_nodes.sum().item()
-            edge_attrs_dense = torch.zeros(
-                size=(n, n, 5), dtype=edge_types.dtype, device=edge_types.device
+            molecule_list.extend(
+                get_molecules(
+                    out_dict,
+                    data_batch,
+                    edge_index_global,
+                    self.num_atom_types,
+                    self.num_charge_classes,
+                    self.dataset_info,
+                    device=self.device,
+                    mol_device=device,
+                    context=context,
+                    while_train=False,
+                )
             )
-            edge_attrs_dense[
-                edge_index_global[0, :], edge_index_global[1, :], :
-            ] = edge_types
-            edge_attrs_dense = edge_attrs_dense.argmax(-1)
-            edge_attrs_splits = get_list_of_edge_adjs(edge_attrs_dense, batch_num_nodes)
-
-            for i, (positions, atom_types, charges, edges) in enumerate(
-                zip(
-                    pos_splits,
-                    atom_types_integer_split,
-                    charge_types_integer_split,
-                    edge_attrs_splits,
-                )
-            ):
-                molecule = Molecule(
-                    atom_types=atom_types.detach().to(device),
-                    positions=positions.detach().to(device),
-                    charges=charges.detach().to(device),
-                    bond_types=edges.detach().to(device),
-                    context=context_split[i][0].detach().to(device)
-                    if context_split is not None
-                    else None,
-                    dataset_info=dataset_info,
-                )
-                molecule_list.append(molecule)
-
         (
             stability_dict,
             validity_dict,
@@ -817,10 +736,111 @@ class Trainer(pl.LightningModule):
         else:
             return total_res
 
+    def run_scaffold_elaboration(
+        self,
+        dataset_info,
+        save_dir: str = None,
+        return_molecules: bool = False,
+        verbose: bool = False,
+        save_traj: bool = False,
+        inner_verbose=False,
+        ddpm: bool = True,
+        eta_ddim: float = 1.0,
+        every_k_step: int = 1,
+        run_test_eval: bool = False,
+        guidance_scale: float = 1.0e-4,
+        use_energy_guidance: bool = False,
+        ckpt_energy_model: str = None,
+        use_scaffold_dataset_sizes: bool = True,
+        device: str = "cpu",
+    ):
+        energy_model = None
+        if use_energy_guidance:
+            energy_model = load_energy_model(ckpt_energy_model, self.num_atom_features)
+            # for param in self.energy_model.parameters():
+            #    param.requires_grad = False
+            energy_model.to(self.device)
+            energy_model.eval()
+
+        dataloader = (
+            self.trainer.datamodule.val_dataloader()
+            if not run_test_eval
+            else self.trainer.datamodule.test_dataloader()
+        )
+
+        molecule_list = []
+        start = datetime.now()
+        for _, batch_data in enumerate(dataloader):
+            num_graphs = len(batch_data.batch.bincount())
+
+            if use_scaffold_dataset_sizes:
+                num_nodes = batch_data.batch.bincount().to(self.device)
+            else:
+                num_nodes = self.conditional_size_distribution.sample_conditional(
+                    n1=None, n2=batch_data.batch.bincount()
+                ).to(self.device)
+
+            batch_data = extract_scaffolds_(batch_data)
+            batch_data = extract_func_groups_(batch_data)
+            """
+            batch_data.scaffold_mask
+            batch_data.func_group_mask
+            """
+
+            (
+                out_dict,
+                data_batch,
+                edge_index_global,
+                trajs,
+                context,
+            ) = self.reverse_sampling(
+                num_graphs=num_graphs,
+                verbose=inner_verbose,
+                save_traj=save_traj,
+                ddpm=ddpm,
+                eta_ddim=eta_ddim,
+                every_k_step=every_k_step,
+                guidance_scale=guidance_scale,
+                energy_model=energy_model,
+                scaffolding=True,
+                batch_data=batch_data,
+                num_nodes=num_nodes,
+            )
+
+            molecule_list.extend(
+                get_molecules(
+                    out_dict,
+                    data_batch,
+                    edge_index_global,
+                    self.num_atom_types,
+                    self.num_charge_classes,
+                    self.dataset_info,
+                    device=self.device,
+                    mol_device=device,
+                    context=context,
+                    while_train=False,
+                )
+            )
+        (
+            stability_dict,
+            validity_dict,
+            statistics_dict,
+            all_generated_smiles,
+            stable_molecules,
+            valid_molecules,
+        ) = analyze_stability_for_molecules(
+            molecule_list=molecule_list,
+            dataset_info=dataset_info,
+            smiles_train=self.smiles_list,
+            local_rank=self.local_rank,
+            return_molecules=return_molecules,
+            remove_hs=self.hparams.remove_hs,
+            device=device,
+        )
+
     def reverse_sampling(
         self,
         num_graphs: int,
-        empirical_distribution_num_nodes: Tensor,
         verbose: bool = False,
         save_traj: bool = False,
         ddpm: bool = True,
@@ -828,13 +848,19 @@ class Trainer(pl.LightningModule):
         every_k_step: int = 1,
         guidance_scale: float = 1.0e-4,
         energy_model=None,
+        scaffold_elaboration: bool = False,
+        batch_data: Tensor = None,
+        num_nodes: Tensor = None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
-        batch_num_nodes = torch.multinomial(
-            input=empirical_distribution_num_nodes,
-            num_samples=num_graphs,
-            replacement=True,
-        ).to(self.device)
-        batch_num_nodes = batch_num_nodes.clamp(min=1)
+        if not scaffold_elaboration:
+            batch_num_nodes = torch.multinomial(
+                input=self.empirical_num_nodes,
+                num_samples=num_graphs,
+                replacement=True,
+            ).to(self.device)
+            batch_num_nodes = batch_num_nodes.clamp(min=1)
+        else:
+            batch_num_nodes = num_nodes
         batch = torch.arange(num_graphs, device=self.device).repeat_interleave(
             batch_num_nodes, dim=0
         )
@@ -852,6 +878,13 @@ class Trainer(pl.LightningModule):
             len(batch), 3, device=self.device, dtype=torch.get_default_dtype()
         )
         pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
+
+        if scaffold_elaboration:
+            fixed_nodes_mask = batch_data.fixed_nodes_mask
+            orig_pos = zero_mean(
+                batch_data.pos, batch=batch_data.batch, dim_size=bs, dim=0
+            )
+            pos = pos * (~fixed_nodes_mask) + orig_pos * fixed_nodes_mask
 
         n = len(pos)
 
@@ -871,6 +904,16 @@ class Trainer(pl.LightningModule):
         )
         edge_index_global, _ = dense_to_sparse(edge_index_global)
         edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
+
+        edge_index_global, edge_attr_global = coalesce_edges(
+            edge_index=edge_index_global,
+            bond_edge_index=batch_data.bond_edge_index,
+            bond_edge_attr=batch_data.bond_edge_attr,
+            n=pos.size(0),
+        )
+        edge_index_global, edge_attr_global_batch = sort_edge_index(
+            edge_index=edge_index_global, edge_attr=edge_attr_global, sort_by_row=False
+        )
         if not self.hparams.bond_prediction:
             (
                 edge_attr_global,
@@ -899,6 +942,35 @@ class Trainer(pl.LightningModule):
             device=self.device,
             dtype=torch.get_default_dtype(),
         )
+
+        if scaffold_elaboration:
+            atom_types_batch = F.one_hot(
+                batch_data.x.squeeze().long(), num_classes=self.num_atom_types
+            ).float()
+            charge_types_batch = F.one_hot(
+                batch_data.charges.squeeze().long(), num_classes=self.num_charge_classes
+            ).float()
+            atom_types = (
+                atom_types * (~fixed_nodes_mask) + atom_types_batch * fixed_nodes_mask
+            )
+            charge_types = (
+                charge_types * (~fixed_nodes_mask)
+                + charge_types_batch * fixed_nodes_mask
+            )
+
+            fixed_nodes_indices = torch.where(fixed_nodes_mask == True)[0]
+            edge_0 = torch.where(
+                edge_index_global[0][:, None] == fixed_nodes_indices[None, :]
+            )[0]
+            edge_1 = torch.where(
+                edge_index_global[1][:, None] == fixed_nodes_indices[None, :]
+            )[0]
+            fixed_edges_indices = edge_0[
+                torch.where(edge_0[:, None] == edge_1[None, :])[0]
+            ]
+            fixed_edges = edge_attr_global_batch[fixed_edges_indices]
+
+            edge_attr_global[fixed_edges_indices] = fixed_edges
 
         pos_traj = []
         atom_type_traj = []
@@ -939,6 +1011,9 @@ class Trainer(pl.LightningModule):
                 batch=batch,
                 batch_edge_global=batch_edge_global,
                 context=context,
+                fixed_nodes_mask=fixed_nodes_mask,
+                fixed_edges_indices=fixed_edges_indices,
+                fixed_edges=fixed_edges,
             )
 
             coords_pred = out["coords_pred"].squeeze()
@@ -1060,13 +1135,16 @@ class Trainer(pl.LightningModule):
                 edge_type_traj.append(edge_attr_global.detach())
                 charge_type_traj.append(charge_types.detach())
 
+        out_dict = {
+            "coords_pred": pos,
+            "atoms_pred": atom_types,
+            "charges_pred": charge_types,
+            "bonds_pred": edge_attr_global,
+        }
         return (
-            pos,
-            atom_types,
-            charge_types,
-            edge_attr_global,
+            out_dict,
+            batch,
             edge_index_global,
-            batch_num_nodes,
             [pos_traj, atom_type_traj, charge_type_traj, edge_type_traj],
             context,
         )

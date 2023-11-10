@@ -4,6 +4,14 @@ from torch_geometric.utils import dense_to_sparse, sort_edge_index, remove_self_
 from typing import Optional, List
 from torch_scatter import scatter_mean
 from experiments.utils import get_edges
+from rdkit.Chem.Scaffolds.MurckoScaffold import GetScaffoldForMol
+from rdkit.Chem import RDConfig
+from rdkit import Chem
+import os
+import sys
+
+sys.path.append(os.path.join(RDConfig.RDContribDir, "IFG"))
+from ifg import identify_functional_groups
 
 
 def initialize_edge_attrs_reverse(
@@ -174,3 +182,44 @@ def energy_guidance(
         )[0]
 
     return pos + guidance_scale * pos_shift
+
+
+def extract_scaffolds_(batch_data):
+    def scaffold_per_mol(mol):
+        for a in mol.GetAtoms():
+            a.SetIntProp("org_idx", a.GetIdx())
+
+        scaffold = GetScaffoldForMol(mol)
+        scaffold_atoms = [a.GetIntProp("org_idx") for a in scaffold.GetAtoms()]
+        mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
+        mask[torch.tensor(scaffold_atoms)] = 1
+        return mask
+
+    batch_data.scaffold_mask = torch.hstack(
+        [scaffold_per_mol(mol) for mol in batch_data.mol]
+    )
+
+
+def extract_func_groups_(batch_data, includeHs=True):
+    def func_groups_per_mol(mol, includeHs=True):
+        fgroups = identify_functional_groups(mol)
+        findices = []
+        for f in fgroups:
+            findices.extend(list(f.atomIds))
+        if includeHs:  # include neighboring H atoms in functional groups
+            findices_incl_h = []
+            for fi in findices:
+                hidx = [
+                    n.GetIdx()
+                    for n in mol.GetAtomWithIdx(fi).GetNeighbors()
+                    if n.GetSymbol() == "H"
+                ]
+                findices_incl_h.extend([fi] + hidx)
+            findices = findices_incl_h
+        mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
+        mask[torch.tensor(findices)] = 1
+        return mask
+
+    batch_data.func_group_mask = torch.hstack(
+        [func_groups_per_mol(mol, includeHs) for mol in batch_data.mol]
+    )

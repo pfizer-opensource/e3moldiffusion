@@ -273,40 +273,41 @@ class BasicMolecularMetrics(object):
             "uniqueness": uniqueness,
         }
 
-        statistics_dict = self.compute_statistics(valid_molecules, local_rank)
-        statistics_dict["connected_components"] = connected_components
+        if len(valid_molecules) > 0:
+            statistics_dict = self.compute_statistics(valid_molecules, local_rank)
+            statistics_dict["connected_components"] = connected_components
 
-        self.number_samples = len(all_generated_smiles)
+            self.number_samples = len(all_generated_smiles)
 
-        self.train_subset = (
-            get_random_subset(self.train_smiles, self.number_samples, seed=42)
-            if len(all_generated_smiles) <= len(self.train_smiles)
-            else self.train_smiles
-        )
-        similarity = self.get_bulk_similarity_with_train(all_generated_smiles)
-        diversity = self.get_bulk_diversity(all_generated_smiles)
-        if len(all_generated_smiles) > 0:
-            kl_score = self.get_kl_divergence(all_generated_smiles)
-        else:
-            print("No valid smiles have been generated. Setting kl_score to -1")
-            kl_score = -1.0
-        statistics_dict["similarity"] = similarity
-        statistics_dict["diversity"] = diversity
-        statistics_dict["kl_score"] = kl_score
+            self.train_subset = (
+                get_random_subset(self.train_smiles, self.number_samples, seed=42)
+                if len(all_generated_smiles) <= len(self.train_smiles)
+                else self.train_smiles
+            )
+            similarity = self.get_bulk_similarity_with_train(all_generated_smiles)
+            diversity = self.get_bulk_diversity(all_generated_smiles)
+            if len(all_generated_smiles) > 0:
+                kl_score = self.get_kl_divergence(all_generated_smiles)
+            else:
+                print("No valid smiles have been generated. Setting kl_score to -1")
+                kl_score = -1.0
+            statistics_dict["similarity"] = similarity
+            statistics_dict["diversity"] = diversity
+            statistics_dict["kl_score"] = kl_score
 
-        if len(all_generated_smiles) > 0:
-            mols = get_mols_list(all_generated_smiles)
-            # rings = np.mean([num_rings(mol) for mol in mols])
-            # aromatic_rings = np.mean([num_aromatic_rings(mol) for mol in mols])
-            qeds = np.mean([qed(mol) for mol in mols])
-        else:
-            print("No valid smiles have been generated. Setting qed_score to -1")
-            qeds = -1.0
-        statistics_dict["QED"] = qeds
+            if len(all_generated_smiles) > 0:
+                mols = get_mols_list(all_generated_smiles)
+                # rings = np.mean([num_rings(mol) for mol in mols])
+                # aromatic_rings = np.mean([num_aromatic_rings(mol) for mol in mols])
+                qeds = np.mean([qed(mol) for mol in mols])
+            else:
+                print("No valid smiles have been generated. Setting qed_score to -1")
+                qeds = -1.0
+            statistics_dict["QED"] = qeds
 
-        self.reset()
+            self.reset()
 
-        if not return_molecules:
+        if not return_molecules or len(valid_molecules) == 0:
             all_generated_smiles = None
             valid_molecules = None
         return (

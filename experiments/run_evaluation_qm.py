@@ -26,7 +26,7 @@ def evaluate(
     model_path,
     save_dir,
     save_xyz=False,
-    calculate_props=True,
+    calculate_props=False,
     use_energy_guidance=False,
     ckpt_energy_model=None,
     guidance_scale=1.0e-4,
@@ -127,15 +127,14 @@ def evaluate(
         # from experiments.diffusion_latent_discrete import Trainer #need refactor
         raise NotImplementedError
     else:
-        hparams.use_qm_props = True
-
         print("Using discrete diffusion")
-        if hparams.additional_feats:
-            print("Using additional features")
-            from experiments.diffusion_discrete_moreFeats import Trainer
-        elif dataset == "geomqm" and hparams.use_qm_props:
-            print("Using additional QM features")
+        if hparams.additional_feats and hparams.use_qm_props:
+            print("Using additional RDKit and QM features")
+            from experiments.diffusion_discrete_addfeats_qm import Trainer
+        elif hparams.use_qm_props and not hparams.additional_feats:
             from experiments.diffusion_discrete_qm import Trainer
+        elif hparams.additional_feats and not hparams.use_qm_props:
+            from experiments.diffusion_discrete_addfeats import Trainer
         else:
             from experiments.diffusion_discrete import Trainer
 
@@ -212,9 +211,9 @@ def evaluate(
                 print(e)
                 continue
 
-        
         if hparams.dataset == "geomqm":
             import numpy as np
+
             # load precalculated target distribution
             target = datamodule.statistics["train"].force_norms
             generated_forces = []
@@ -232,7 +231,9 @@ def evaluate(
             cs_generated /= cs_generated[-1].item()
             cs_target /= cs_target[-1].item()
 
-            force_norm_w1 = torch.sum(torch.abs(cs_generated-cs_target)).item() * bin_width
+            force_norm_w1 = (
+                torch.sum(torch.abs(cs_generated - cs_target)).item() * bin_width
+            )
             results_dict["ForceNormW1"] = force_norm_w1
 
     for key, value in results_dict.items():
@@ -358,7 +359,7 @@ def get_args():
                         help='Path to test output')
     parser.add_argument('--save-xyz', default=True, action="store_true",
                         help='Whether or not to store generated molecules in xyz files')
-    parser.add_argument('--calculate-props', default=True, action="store_true",
+    parser.add_argument('--calculate-props', default=False, action="store_true",
                         help='Whether or not to calculate xTB properties')
     parser.add_argument('--ngraphs', default=80, type=int,
                             help='How many graphs to sample. Defaults to 5000')

@@ -34,6 +34,7 @@ class Molecule:
         context=None,
         is_aromatic=None,
         hybridization=None,
+        build_mol_with_addfeats=False,
         relax_mol=False,
         max_relax_iter=200,
         sanitize=True,
@@ -94,6 +95,7 @@ class Molecule:
         self.additional_feats = isinstance(
             self.is_aromatic, torch.Tensor
         ) and isinstance(self.hybridization, torch.Tensor)
+        self.build_mol_with_addfeats = build_mol_with_addfeats
 
         self.rdkit_mol = self.build_molecule(atom_decoder)
         self.num_nodes = len(atom_types)
@@ -106,7 +108,7 @@ class Molecule:
 
         mol = Chem.RWMol()
 
-        if self.additional_feats:
+        if self.additional_feats and self.build_mol_with_addfeats:
             for atom, charge, is_aromatic, sp_hybridization in zip(
                 self.atom_types, self.charges, self.is_aromatic, self.hybridization
             ):

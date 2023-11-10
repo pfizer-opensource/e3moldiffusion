@@ -68,6 +68,9 @@ class PredictionHeadEdge(nn.Module):
         batch_lig: Tensor = None,
         pocket_mask: Tensor = None,
         edge_mask: Tensor = None,
+        fixed_nodes_mask: Tensor = None,
+        fixed_edges_indices: Tensor = None,
+        fixed_edges: Tensor = None,
     ) -> Dict:
         s, v, p, e = x["s"], x["v"], x["p"], x["e"]
         s = self.shared_mapping(s)
@@ -90,9 +93,17 @@ class PredictionHeadEdge(nn.Module):
         elif self.coords_param == "data":
             j, i = edge_index_global
             n = s.size(0)
-            coords_pred = p + coords_pred
             coords_pred = (
-                coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
+                p + coords_pred * fixed_nodes_mask
+                if fixed_nodes_mask is not None
+                else p + coords_pred
+            )
+            coords_pred = (
+                coords_pred
+                - scatter_mean(coords_pred, index=batch, dim=0)[batch]
+                * fixed_nodes_mask
+                if fixed_nodes_mask is not None
+                else coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
             )
             d = (
                 (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)
@@ -116,6 +127,8 @@ class PredictionHeadEdge(nn.Module):
             e_dense = torch.zeros(n, n, e.size(-1), device=e.device)
             e_dense[edge_index_global[0], edge_index_global[1], :] = e
             e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
+            if fixed_edges_indices is not None and fixed_edges is not None:
+                e_dense[fixed_edges_indices] = fixed_edges
             e = e_dense[edge_index_global[0], edge_index_global[1], :]
 
         f = s[i] + s[j] + self.bond_mapping(e)
@@ -123,6 +136,8 @@ class PredictionHeadEdge(nn.Module):
 
         bonds_pred = F.silu(self.bonds_lin_0(edge))
         bonds_pred = self.bonds_lin_1(bonds_pred)
+        if fixed_edges_indices is not None and fixed_edges is not None:
+            bonds_pred[fixed_edges_indices] = fixed_edges
 
         out = {
             "coords_pred": coords_pred,
@@ -364,6 +379,9 @@ class DenoisingEdgeNetwork(nn.Module):
         batch_lig: OptTensor = None,
         pocket_mask: OptTensor = None,
         edge_mask: OptTensor = None,
+        fixed_nodes_mask: OptTensor = None,
+        fixed_edges: OptTensor = None,
+        fixed_edges_indices: OptTensor = None,
     ) -> Dict:
         if pocket_mask is None:
             pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
@@ -435,6 +453,7 @@ class DenoisingEdgeNetwork(nn.Module):
             context=cemb,
             batch_lig=batch_lig,
             pocket_mask=pocket_mask,
+            fixed_nodes_mask=fixed_nodes_mask,
         )
 
         out = self.prediction_head(
@@ -445,6 +464,9 @@ class DenoisingEdgeNetwork(nn.Module):
             batch_lig=batch_lig,
             pocket_mask=pocket_mask,
             edge_mask=edge_mask,
+            fixed_nodes_mask=fixed_nodes_mask,
+            fixed_edges=fixed_edges,
+            fixed_edges_indices=fixed_edges_indices,
         )
 
         # out['coords_perturbed'] = pos

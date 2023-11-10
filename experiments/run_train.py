@@ -170,7 +170,7 @@ if __name__ == "__main__":
     histogram = None
 
     if not hparams.energy_training:
-        if hparams.continuous:
+        if hparams.continuous and dataset != "crossdocked":
             print("Using continuous diffusion")
             if hparams.diffusion_pretraining:
                 print("Starting pre-training")
@@ -201,6 +201,8 @@ if __name__ == "__main__":
                 and hparams.additional_feats
                 and not hparams.use_qm_props
             ):
+                histogram = os.path.join(hparams.dataset_root, "size_distribution.npy")
+                histogram = np.load(histogram).tolist()
                 print("Ligand-pocket training using additional features")
                 from experiments.diffusion_discrete_moreFeats_ligand import Trainer
             else:
@@ -210,8 +212,12 @@ if __name__ == "__main__":
                     )
                     histogram = np.load(histogram).tolist()
                     if hparams.latent_dim is None:
-                        print("Ligand-pocket training")
-                        from experiments.diffusion_discrete_pocket import Trainer
+                        if hparams.continuous:
+                            print("Continuous ligand-pocket training")
+                            from experiments.diffusion_continuous_pocket import Trainer
+                        else:
+                            print("Discrete ligand-pocket training")
+                            from experiments.diffusion_discrete_pocket import Trainer
                     else:
                         print("Ligand-pocket training with latent protein encoding")
                         from experiments.diffusion_discrete_latent_pocket import Trainer
@@ -221,9 +227,12 @@ if __name__ == "__main__":
                         from experiments.diffusion_discrete_addfeats_qm import Trainer
                     elif hparams.additional_feats and not hparams.use_qm_props:
                         from experiments.diffusion_discrete_addfeats import Trainer
-                    else:
+                    elif hparams.use_qm_props and not hparams.additional_feats:
                         print("Using QM props as additional features")
                         from experiments.diffusion_discrete_qm import Trainer
+                    else:
+                        print("Training on GEOM-QM dataset without additional features")
+                        from experiments.diffusion_discrete import Trainer
                 else:
                     if hparams.additional_feats:
                         from experiments.diffusion_discrete_moreFeats import Trainer

@@ -787,6 +787,7 @@ class Trainer(pl.LightningModule):
                     is_aromatic=is_aromatic.detach().to(device),
                     hybridization=hybridization.detach().to(device),
                     dataset_info=dataset_info,
+                    build_mol_with_addfeats=self.hparams.build_mol_with_addfeats,
                 )
                 molecule_list.append(molecule)
 
