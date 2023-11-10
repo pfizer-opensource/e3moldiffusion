@@ -122,6 +122,7 @@ def evaluate(
         test_files = [x for x in test_files if x.stem in test_list]
 
     pbar = tqdm(test_files[:2])
+    # :2 for testing/debugging ?
     time_per_pocket = {}
 
     statistics_dict = {"QED": [], "SA": [], "Lipinski": [], "Diversity": []}
@@ -165,16 +166,15 @@ def evaluate(
         all_molecules = 0
         tmp_molecules = []
 
+        pocket_data = prepare_pocket(
+            residues,
+            dataset_info.atom_encoder,
+            no_H=True,
+            repeats=batch_size,
+            device=device,
+        )
         start = datetime.now()
         while len(tmp_molecules) < num_ligands_per_pocket:
-            pocket_data = prepare_pocket(
-                residues,
-                dataset_info.atom_encoder,
-                no_H=True,
-                repeats=batch_size,
-                device=device,
-            )
-
             molecules = model.generate_ligands(
                 pocket_data,
                 num_graphs=batch_size,
