@@ -105,7 +105,7 @@ def change_internal_coordinates(
         atoms, coords, charge=Chem.GetFormalCharge(mol), options=xtb_options, n_cores=1
     )
     if not results["normal_termination"]:
-        return [], [], [], np.nan.np.nan
+        return [], [], [], np.nan, np.nan
 
     if energy_diff:
         sp_options = {i: xtb_options[i] for i in xtb_options if i != "opt"}

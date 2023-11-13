@@ -443,6 +443,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         batch: Tensor,
         batch_lig: Tensor = None,
         pocket_mask: Tensor = None,
+        node_mask: Tensor = None,
     ):
         s, v, p = x
         d, a, r, e = edge_attr
@@ -472,10 +473,18 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
             p = (
                 p + self.posnorm(mp, batch, batch_lig, pocket_mask) * pocket_mask
                 if pocket_mask is not None
-                else self.posnorm(mp, batch) + p
+                else p + self.posnorm(mp, batch) * node_mask
+                if node_mask is not None
+                else p + self.posnorm(mp, batch)
             )
         else:
-            p = p + mp * pocket_mask if pocket_mask is not None else mp + p
+            p = (
+                p + mp * pocket_mask
+                if pocket_mask is not None
+                else p + mp * node_mask
+                if node_mask is not None
+                else p + mp
+            )
         e = F.silu(me + e)
         e = self.edge_post(e)
 

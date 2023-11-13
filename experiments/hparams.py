@@ -99,6 +99,7 @@ def add_arguments(parser):
     # For Discrete: Include more features: (is_aromatic, is_in_ring, hybridization)
     parser.add_argument("--additional-feats", default=False, action="store_true")
     parser.add_argument("--use-qm-props", default=False, action="store_true")
+    parser.add_argument("--build-mol-with-addfeats", default=False, action="store_true")
 
     # DIFFUSION
     parser.add_argument(

@@ -33,8 +33,8 @@ num_epochs: 301
 test_interval: 20
 
 #EQGAT
-sdim: 128
-vdim: 128
+sdim: 256
+vdim: 256
 edim: 128
 num_layers: 12
 use_cross_product: false

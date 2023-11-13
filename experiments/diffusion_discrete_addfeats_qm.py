@@ -905,6 +905,7 @@ class Trainer(pl.LightningModule):
                     if hybridization_feat_integer_split is not None
                     else None,
                     dataset_info=dataset_info,
+                    build_mol_with_addfeats=self.hparams.build_mol_with_addfeats,
                 )
                 molecule_list.append(molecule)
 
