@@ -567,6 +567,7 @@ class DiscreteDDPM(nn.Module):
         batch,
         cog_proj=False,
         edge_index_global=None,
+        edge_attrs=None,
         eta_ddim: float = 1.0,
     ):
         assert 0.0 <= eta_ddim <= 1.0
@@ -627,6 +628,7 @@ class DiscreteDDPM(nn.Module):
         )
 
         if edge_index_global is not None:
+            noise = torch.randn_like(edge_attrs)
             noise = 0.5 * (noise + noise.permute(1, 0, 2))
             noise = noise[edge_index_global[0, :], edge_index_global[1, :], :]
         else:

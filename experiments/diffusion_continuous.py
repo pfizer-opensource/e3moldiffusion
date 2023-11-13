@@ -884,6 +884,7 @@ class Trainer(pl.LightningModule):
                     edges_pred,
                     batch_edge_global,
                     edge_index_global=edge_index_global,
+                    edge_attrs=edge_attrs,
                     eta_ddim=eta_ddim,
                 )
 

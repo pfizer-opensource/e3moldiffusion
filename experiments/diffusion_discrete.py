@@ -515,6 +515,7 @@ class Trainer(pl.LightningModule):
         every_k_step: int = 1,
         guidance_scale: float = 1.0e-4,
         energy_model=None,
+        chain_iterator=None
     ):
         (
             pos,
@@ -536,6 +537,7 @@ class Trainer(pl.LightningModule):
             every_k_step=every_k_step,
             guidance_scale=guidance_scale,
             energy_model=energy_model,
+            chain_iterator=chain_iterator
         )
 
         if torch.any(pos.isnan()):
@@ -743,6 +745,7 @@ class Trainer(pl.LightningModule):
         every_k_step: int = 1,
         guidance_scale: float = 1.0e-4,
         energy_model=None,
+        chain_iterator=None
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         batch_num_nodes = torch.multinomial(
             input=empirical_distribution_num_nodes,
@@ -807,16 +810,19 @@ class Trainer(pl.LightningModule):
         charge_type_traj = []
         edge_type_traj = []
 
-        if self.hparams.continuous_param == "data":
-            chain = range(0, self.hparams.timesteps)
-        elif self.hparams.continuous_param == "noise":
-            chain = range(0, self.hparams.timesteps - 1)
+        if chain_iterator is None:
+            if self.hparams.continuous_param == "data":
+                chain = range(0, self.hparams.timesteps)
+            elif self.hparams.continuous_param == "noise":
+                chain = range(0, self.hparams.timesteps - 1)
 
-        chain = chain[::every_k_step]
+            chain = chain[::every_k_step]
 
-        iterator = (
-            tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
-        )
+            iterator = (
+                tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
+            )
+        else:
+            iterator = chain_iterator
 
         for timestep in iterator:
             s = torch.full(
