@@ -675,7 +675,8 @@ class Trainer(pl.LightningModule):
                 replacement=True,
             ).to(self.device)
         else:
-            torch.random.manual_seed(42)
+            seed_value = 42 + iteration
+            torch.random.manual_seed(seed_value)
             batch_num_nodes = (
                 torch.multinomial(
                     input=self.empirical_num_nodes,
