@@ -10,6 +10,7 @@ from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from e3moldiffusion.coordsatomsbonds import EQGATEnergyNetwork
 from experiments.data.abstract_dataset import AbstractDatasetInfos
 from experiments.utils import zero_mean
+from experiments.data.distributions import PROP_TO_IDX_GEOMQM as prop_to_idx
 
 
 class Trainer(pl.LightningModule):
@@ -24,12 +25,12 @@ class Trainer(pl.LightningModule):
     ):
         super().__init__()
         self.save_hyperparameters(hparams)
-        self.i = 0
-        self.mol_stab = 0.5
 
         self.dataset_info = dataset_info
         self.prop_norm = prop_norm
         self.prop_dist = prop_dist
+
+        self.property_idx = prop_to_idx[self.hparams.regression_property]
 
         atom_types_distribution = dataset_info.atom_types.float()
         bond_types_distribution = dataset_info.edge_types.float()
@@ -158,10 +159,10 @@ class Trainer(pl.LightningModule):
         # import pdb
         # pdb.set_trace()
 
-        loss = weights * self.energy_loss(
-            out_dict["energy_pred"].squeeze(-1), batch.energy
+        target = self.prop_dist.normalize_tensor(
+            batch.y[:, self.property_idx], self.hparams.regression_property
         )
-        loss = self.loss_non_nans(loss=loss, modality="energy")
+        loss = weights * self.energy_loss(out_dict["property_pred"].squeeze(-1), target)
         loss = torch.mean(loss, dim=0)
 
         self.log(

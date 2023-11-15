@@ -121,8 +121,7 @@ def evaluate(
             test_list = set(f.read().split(","))
         test_files = [x for x in test_files if x.stem in test_list]
 
-    pbar = tqdm(test_files[:2])
-    # :2 for testing/debugging ?
+    pbar = tqdm(test_files)
     time_per_pocket = {}
 
     statistics_dict = {"QED": [], "SA": [], "Lipinski": [], "Diversity": []}

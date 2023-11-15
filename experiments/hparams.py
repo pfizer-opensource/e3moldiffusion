@@ -93,6 +93,20 @@ def add_arguments(parser):
     parser.add_argument("--cutoff-local", default=7.0, type=float)
     parser.add_argument("--cutoff-global", default=10.0, type=float)
     parser.add_argument("--energy-training", default=False, action="store_true")
+    parser.add_argument("--property-training", default=False, action="store_true")
+    parser.add_argument(
+        "--regression-property",
+        default="polarizability",
+        type=str,
+        choices=[
+            "dipole_norm",
+            "total_energy",
+            "HOMO-LUMO_gap",
+            "dispersion",
+            "atomisation_energy",
+            "polarizability",
+        ],
+    )
     parser.add_argument("--energy-loss", default="l2", type=str, choices=["l2", "l1"])
     parser.add_argument("--use-pos-norm", default=False, action="store_true")
 
@@ -148,6 +162,9 @@ def add_arguments(parser):
     parser.add_argument("--atoms-categorical", default=False, action="store_true")
     parser.add_argument("--bonds-categorical", default=False, action="store_true")
 
+    parser.add_argument("--atom-type-masking", default=False, action="store_true")
+    parser.add_argument("--use-absorbing-state", default=False, action="store_true")
+
     parser.add_argument("--num-bond-classes", default=5, type=int)
 
     # BOND PREDICTION AND GUIDANCE:
@@ -155,8 +172,12 @@ def add_arguments(parser):
     parser.add_argument("--bond-prediction", default=False, action="store_true")
     parser.add_argument("--bond-model-guidance", default=False, action="store_true")
     parser.add_argument("--energy-model-guidance", default=False, action="store_true")
+    parser.add_argument(
+        "--polarizabilty-model-guidance", default=False, action="store_true"
+    )
     parser.add_argument("--ckpt-bond-model", default=None, type=str)
     parser.add_argument("--ckpt-energy-model", default=None, type=str)
+    parser.add_argument("--ckpt-polarizabilty-model", default=None, type=str)
     parser.add_argument("--guidance-scale", default=1.0e-4, type=float)
 
     # CONTEXT

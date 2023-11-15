@@ -959,6 +959,29 @@ def write_sdf_file(sdf_path, molecules):
     # print(f'Wrote SDF file to {sdf_path}')
 
 
+def unbatch_data(
+    pos,
+    atom_types,
+    charges,
+    data_batch,
+    dataset_info,
+):
+    pos_splits = pos.detach().split(data_batch.bincount().cpu().tolist(), dim=0)
+
+    atom_types_integer = torch.argmax(atom_types, dim=-1)
+    atom_types_integer_split = atom_types_integer.detach().split(
+        data_batch.bincount().cpu().tolist(), dim=0
+    )
+    charge_types_integer = torch.argmax(charges, dim=-1)
+    # offset back
+    charge_types_integer = charge_types_integer - dataset_info.charge_offset
+    charge_types_integer_split = charge_types_integer.detach().split(
+        data_batch.bincount().cpu().tolist(), dim=0
+    )
+
+    return pos_splits, atom_types_integer_split, charge_types_integer_split
+
+
 def prepare_pocket(
     biopython_residues, full_atom_encoder, no_H=True, repeats=1, device="cuda"
 ):

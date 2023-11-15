@@ -487,6 +487,7 @@ class DiscreteDDPM(nn.Module):
         edge_attrs=None,
         edge_index_global=None,
         eta_ddim: float = 1.0,
+        return_signal: bool = False,
     ):
         if edge_index_global is not None:
             noise = torch.randn_like(edge_attrs)
@@ -515,6 +516,7 @@ class DiscreteDDPM(nn.Module):
             x_prefactor = self.get_x_pos_prefactor(s_int=s, t_int=t).unsqueeze(-1)
             mu = z_t_prefactor[batch] * xt + x_prefactor[batch] * model_out
             xt_m1 = mu + eta_ddim * noise_prefactor[batch] * noise
+
         else:
             gamma_t, gamma_s = self.get_gamma(t_int=t), self.get_gamma(t_int=s)
             (
@@ -557,6 +559,8 @@ class DiscreteDDPM(nn.Module):
         if edge_index_global is None and cog_proj:
             xt_m1 = zero_mean(xt_m1, batch=batch, dim_size=bs, dim=0)
 
+        if return_signal:
+            return xt_m1, x_prefactor
         return xt_m1
 
     def sample_reverse_ddim(

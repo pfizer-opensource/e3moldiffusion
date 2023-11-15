@@ -3,7 +3,11 @@ import os
 from datetime import datetime
 from typing import Optional, List, Tuple, Dict
 from torch_sparse import coalesce
-from experiments.data.utils import write_xyz_file
+from experiments.data.utils import (
+    write_xyz_file,
+    write_xyz_file_from_batch,
+    write_trajectory_as_xyz,
+)
 from experiments.xtb_energy import calculate_xtb_energy
 import pickle
 import pandas as pd
@@ -19,7 +23,6 @@ from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.losses import DiffusionLoss
 from experiments.molecule_utils import Molecule
-from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import (
     load_model_ligand,
     remove_mean_pocket,
@@ -243,6 +246,7 @@ class Trainer(pl.LightningModule):
             run_test_eval=True,
             use_ligand_dataset_sizes=self.hparams.use_ligand_dataset_sizes,
             save_dir=self.hparams.test_save_dir,
+            save_traj=self.hparams.save_traj,
             return_molecules=True,
         )
         atom_decoder = valid_molecules[0].dataset_info.atom_decoder
@@ -305,6 +309,18 @@ class Trainer(pl.LightningModule):
                         prop = valid_molecules[i].context[j] * mad + mean
                         tmp.append(float(prop))
                     context.append(tmp)
+
+        if self.hparams.save_traj:
+            for i in range(len(trajs)):
+                pos_joint, atom_types_joint = trajs[i][-2], trajs[i][-1]
+                types = [atom_decoder[int(a)] for a in atom_types_joint]
+                write_xyz_file(
+                    pos_joint,
+                    types,
+                    os.path.join(
+                        self.hparams.test_save_dir, f"lig_pocket_complex_{i}.xyz"
+                    ),
+                )
 
         if self.prop_dist is not None and self.hparams.save_xyz:
             with open(
@@ -746,7 +762,7 @@ class Trainer(pl.LightningModule):
         )
         molecule_list = []
         start = datetime.now()
-        for _, pocket_data in enumerate(dataloader):
+        for i, pocket_data in enumerate(dataloader):
             num_graphs = len(pocket_data.batch.bincount())
             if use_ligand_dataset_sizes:
                 num_nodes_lig = pocket_data.batch.bincount().to(self.device)
@@ -759,7 +775,6 @@ class Trainer(pl.LightningModule):
                 data_batch,
                 data_batch_pocket,
                 edge_index_global,
-                trajs,
                 context,
             ) = self.reverse_sampling(
                 num_graphs=num_graphs,
@@ -772,6 +787,8 @@ class Trainer(pl.LightningModule):
                 every_k_step=every_k_step,
                 guidance_scale=guidance_scale,
                 energy_model=energy_model,
+                save_dir=save_dir,
+                iteration=i,
             )
 
             molecule_list.extend(
@@ -877,6 +894,7 @@ class Trainer(pl.LightningModule):
         every_k_step=1,
         fix_n_nodes=False,
         mol_device="cpu",
+        save_dir=None,
     ):
         if fix_n_nodes:
             num_nodes_lig = pocket_data.batch.bincount().to(self.device)
@@ -907,6 +925,7 @@ class Trainer(pl.LightningModule):
             every_k_step=every_k_step,
             guidance_scale=None,
             energy_model=None,
+            save_dir=save_dir,
         )
         molecules = get_molecules(
             out_dict,
@@ -939,6 +958,8 @@ class Trainer(pl.LightningModule):
         every_k_step: int = 1,
         guidance_scale: float = 1.0e-4,
         energy_model=None,
+        save_dir: str = None,
+        iteration: int = 0,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         pos_pocket = pocket_data.pos_pocket.to(self.device)
         batch_pocket = pocket_data.pos_pocket_batch.to(self.device)
@@ -1042,11 +1063,6 @@ class Trainer(pl.LightningModule):
             sorting=False,
         )
 
-        pos_traj = []
-        atom_type_traj = []
-        charge_type_traj = []
-        edge_type_traj = []
-
         if self.hparams.continuous_param == "data":
             chain = range(0, self.hparams.timesteps)
         elif self.hparams.continuous_param == "noise":
@@ -1057,7 +1073,7 @@ class Trainer(pl.LightningModule):
         iterator = (
             tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         )
-        for timestep in iterator:
+        for i, timestep in enumerate(iterator):
             s = torch.full(
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=pos.device
             )
@@ -1177,14 +1193,28 @@ class Trainer(pl.LightningModule):
             )
 
             if save_traj:
-                pos_ = pos
-                pos_traj.append(pos_.detach())
-                atom_type_traj.append(atom_types.detach())
-                edge_type_traj.append(edge_attr_global_lig.detach())
-                charge_type_traj.append(charge_types.detach())
+                atom_decoder = self.dataset_info.atom_decoder
+                write_xyz_file_from_batch(
+                    pos,
+                    atom_types,
+                    batch,
+                    pos_pocket=pos_pocket,
+                    atoms_pocket=atom_types_pocket,
+                    batch_pocket=batch_pocket,
+                    joint_traj=True,
+                    atom_decoder=atom_decoder,
+                    path=os.path.join(save_dir, f"iter_{iteration}"),
+                    i=i,
+                )
+
+        if save_traj:
+            write_trajectory_as_xyz(
+                os.path.join(save_dir, f"iter_{iteration}"), batch_size=bs
+            )
 
         # Move generated molecule back to the original pocket position for docking
         pos += pocket_cog_batch
+        pos_pocket += pocket_cog[batch_pocket]
 
         out_dict = {
             "coords_pred": pos,
@@ -1199,7 +1229,6 @@ class Trainer(pl.LightningModule):
             batch,
             batch_pocket,
             edge_index_global_lig,
-            [pos_traj, atom_type_traj, charge_type_traj, edge_type_traj],
             context,
         )
 

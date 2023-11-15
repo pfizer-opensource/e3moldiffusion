@@ -736,7 +736,7 @@ class Trainer(pl.LightningModule):
         else:
             return total_res
 
-    def run_scaffold_elaboration(
+    def run_fixed_substructure_evaluation(
         self,
         dataset_info,
         save_dir: str = None,
@@ -752,6 +752,8 @@ class Trainer(pl.LightningModule):
         use_energy_guidance: bool = False,
         ckpt_energy_model: str = None,
         use_scaffold_dataset_sizes: bool = True,
+        scaffold_elaboration: bool = True,
+        scaffold_hopping: bool = False,
         device: str = "cpu",
     ):
         energy_model = None
@@ -780,12 +782,14 @@ class Trainer(pl.LightningModule):
                     n1=None, n2=batch_data.batch.bincount()
                 ).to(self.device)
 
-            batch_data = extract_scaffolds_(batch_data)
-            batch_data = extract_func_groups_(batch_data)
-            """
-            batch_data.scaffold_mask
-            batch_data.func_group_mask
-            """
+            if scaffold_elaboration:
+                extract_scaffolds_(batch_data)
+            elif scaffold_hopping:
+                extract_func_groups_(batch_data)
+            else:
+                raise Exception(
+                    "Please specify which setting: Scaffold hopping or elaboration."
+                )
 
             (
                 out_dict,
@@ -905,32 +909,36 @@ class Trainer(pl.LightningModule):
         edge_index_global, _ = dense_to_sparse(edge_index_global)
         edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
 
-        edge_index_global, edge_attr_global = coalesce_edges(
-            edge_index=edge_index_global,
-            bond_edge_index=batch_data.bond_edge_index,
-            bond_edge_attr=batch_data.bond_edge_attr,
-            n=pos.size(0),
-        )
-        edge_index_global, edge_attr_global_batch = sort_edge_index(
-            edge_index=edge_index_global, edge_attr=edge_attr_global, sort_by_row=False
-        )
-        if not self.hparams.bond_prediction:
-            (
-                edge_attr_global,
-                edge_index_global,
-                mask,
-                mask_i,
-            ) = initialize_edge_attrs_reverse(
-                edge_index_global,
-                n,
-                self.bonds_prior,
-                self.num_bond_classes - 1
-                if self.hparams.use_qm_props
-                else self.num_bond_classes,
-                self.device,
+        if scaffold_elaboration:
+            edge_index_global, edge_attr_global = coalesce_edges(
+                edge_index=edge_index_global,
+                bond_edge_index=batch_data.bond_edge_index,
+                bond_edge_attr=batch_data.bond_edge_attr,
+                n=pos.size(0),
+            )
+            edge_index_global, edge_attr_global_batch = sort_edge_index(
+                edge_index=edge_index_global,
+                edge_attr=edge_attr_global,
+                sort_by_row=False,
             )
         else:
-            edge_attr_global = None
+            if not self.hparams.bond_prediction:
+                (
+                    edge_attr_global,
+                    edge_index_global,
+                    mask,
+                    mask_i,
+                ) = initialize_edge_attrs_reverse(
+                    edge_index_global,
+                    n,
+                    self.bonds_prior,
+                    self.num_bond_classes - 1
+                    if self.hparams.use_qm_props
+                    else self.num_bond_classes,
+                    self.device,
+                )
+            else:
+                edge_attr_global = None
         batch_edge_global = batch[edge_index_global[0]]
 
         mulliken = torch.randn(
@@ -1011,9 +1019,6 @@ class Trainer(pl.LightningModule):
                 batch=batch,
                 batch_edge_global=batch_edge_global,
                 context=context,
-                fixed_nodes_mask=fixed_nodes_mask,
-                fixed_edges_indices=fixed_edges_indices,
-                fixed_edges=fixed_edges,
             )
 
             coords_pred = out["coords_pred"].squeeze()

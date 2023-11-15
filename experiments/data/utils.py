@@ -10,6 +10,10 @@ from torch_geometric.data import Data
 from torch_geometric.utils import sort_edge_index
 import rdkit
 from pytorch_lightning.utilities import rank_zero_warn
+import os
+from glob import glob
+
+RDLogger.DisableLog("rdApp.*")
 
 x_map = {
     "is_aromatic": [False, True],
@@ -86,7 +90,7 @@ def mol_to_torch_geometric(
     if "grad" in kwargs:
         grad = torch.Tensor(kwargs["grad"]).float()
         additional["grad"] = grad
-        
+
     data = Data(
         x=atom_types,
         edge_index=edge_index,
@@ -145,9 +149,6 @@ def load_pickle(path):
         return pickle.load(f)
 
 
-RDLogger.DisableLog("rdApp.*")
-
-
 def write_xyz_file(coords, atom_types, filename):
     out = f"{len(coords)}\n\n"
     assert len(coords) == len(atom_types)
@@ -155,6 +156,111 @@ def write_xyz_file(coords, atom_types, filename):
         out += f"{atom_types[i]} {coords[i, 0]:.3f} {coords[i, 1]:.3f} {coords[i, 2]:.3f}\n"
     with open(filename, "w") as f:
         f.write(out)
+
+
+def write_xyz_file_from_batch(
+    pos,
+    atoms,
+    batch,
+    atom_decoder=None,
+    pos_pocket=None,
+    atoms_pocket=None,
+    batch_pocket=None,
+    joint_traj=False,
+    path="/scratch1/e3moldiffusion/logs/crossdocked",
+    i=0,
+):
+    if not os.path.exists(path):
+        os.makedirs(path)
+
+    if not joint_traj:
+        atomsxmol = batch.bincount()
+        num_atoms_prev = 0
+        for k, num_atoms in enumerate(atomsxmol):
+            save_dir = os.path.join(path, f"batch_{k}")
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir)
+
+            ats = torch.argmax(
+                atoms[num_atoms_prev : num_atoms_prev + num_atoms], dim=1
+            )
+            types = [atom_decoder[int(a)] for a in ats]
+            positions = pos[num_atoms_prev : num_atoms_prev + num_atoms]
+            write_xyz_file(positions, types, os.path.join(save_dir, f"mol_{i}.xyz"))
+
+            num_atoms_prev += num_atoms
+    else:
+        atomsxmol = batch.bincount()
+        atomsxmol_pocket = batch_pocket.bincount()
+        num_atoms_prev = 0
+        num_atoms_prev_pocket = 0
+        for k, (num_atoms, num_atoms_pocket) in enumerate(
+            zip(atomsxmol, atomsxmol_pocket)
+        ):
+            save_dir = os.path.join(path, f"batch_{k}")
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir)
+
+            ats = torch.argmax(
+                atoms[num_atoms_prev : num_atoms_prev + num_atoms], dim=1
+            )
+            ats_pocket = torch.argmax(
+                atoms_pocket[
+                    num_atoms_prev_pocket : num_atoms_prev_pocket + num_atoms_pocket
+                ],
+                dim=1,
+            )
+            types = [atom_decoder[int(a)] for a in ats]
+            types_pocket = [
+                "B" for _ in range(len(ats_pocket))
+            ]  # [atom_decoder[int(a)] for a in ats_pocket]
+            positions = pos[num_atoms_prev : num_atoms_prev + num_atoms]
+            positions_pocket = pos_pocket[
+                num_atoms_prev_pocket : num_atoms_prev_pocket + num_atoms_pocket
+            ]
+
+            types_joint = types + types_pocket
+            positions_joint = torch.cat([positions, positions_pocket], dim=0)
+
+            write_xyz_file(
+                positions_joint, types_joint, os.path.join(save_dir, f"mol_{i}.xyz")
+            )
+
+            num_atoms_prev += num_atoms
+            num_atoms_prev_pocket += num_atoms_pocket
+
+
+def get_key(fp):
+    filename = os.path.splitext(os.path.basename(fp))[0]
+    int_part = filename.split("_")[-1]
+    return int(int_part)
+
+
+def write_trajectory_as_xyz(
+    path,
+    batch_size,
+):
+    try:
+        os.makedirs(path)
+    except OSError:
+        pass
+
+    for i in range(batch_size):
+        files = sorted(glob(os.path.join(path, f"batch_{i}/mol_*.xyz")), key=get_key)
+        traj_path = os.path.join(path, f"trajectory_{i}.xyz")
+        for j, file in enumerate(files):
+            with open(file, "r") as f:
+                lines = f.readlines()
+
+            with open(traj_path, "a") as file:
+                for line in lines:
+                    file.write(line)
+                if (
+                    j == len(files) - 1
+                ):  ####write the last timestep 10x for better visibility
+                    for _ in range(10):
+                        for line in lines:
+                            file.write(line)
 
 
 def save_pickle(array, path):

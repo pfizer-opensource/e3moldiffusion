@@ -162,14 +162,16 @@ if __name__ == "__main__":
         else datamodule.train_smiles
     )
     prop_norm, prop_dist = None, None
-    if len(hparams.properties_list) > 0 and hparams.context_mapping:
+    if (
+        len(hparams.properties_list) > 0 and hparams.context_mapping
+    ) or hparams.property_training:
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
 
     histogram = None
 
-    if not hparams.energy_training:
+    if not hparams.energy_training and not hparams.property_training:
         if hparams.continuous and dataset != "crossdocked":
             print("Using continuous diffusion")
             if hparams.diffusion_pretraining:
@@ -239,10 +241,14 @@ if __name__ == "__main__":
                     else:
                         from experiments.diffusion_discrete import Trainer
     else:
-        print("Running energy training")
-        from experiments.energy_training import Trainer
-
-        assert hparams.dataset == "drugs"
+        if hparams.energy_training:
+            print("Running energy training")
+            assert hparams.dataset == "drugs"
+            from experiments.energy_training import Trainer
+        else:
+            print(f"Running {hparams.regression_property} training")
+            assert hparams.dataset == "geomqm"
+            from experiments.property_training import Trainer
 
     model = Trainer(
         hparams=hparams.__dict__,

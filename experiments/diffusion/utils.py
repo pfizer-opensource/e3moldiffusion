@@ -9,6 +9,7 @@ from rdkit.Chem import RDConfig
 from rdkit import Chem
 import os
 import sys
+from experiments.utils import zero_mean
 
 sys.path.append(os.path.join(RDConfig.RDContribDir, "IFG"))
 from ifg import identify_functional_groups
@@ -78,11 +79,17 @@ def get_joint_edge_attrs(
     edge_mask_ligand_pocket = (edge_index_global[0] < len(batch)) & (
         edge_index_global[1] >= len(batch)
     )
+    edge_mask_pocket_ligand = (edge_index_global[0] >= len(batch)) & (
+        edge_index_global[1] < len(batch)
+    )
     edge_attr_global[edge_mask] = edge_attr_global_lig
     edge_attr_global[edge_mask_pocket] = (
         torch.tensor([0, 0, 0, 0, 0, 0, 1]).float().to(edge_attr_global.device)
     )
     edge_attr_global[edge_mask_ligand_pocket] = (
+        torch.tensor([0, 0, 0, 0, 0, 1, 0]).float().to(edge_attr_global.device)
+    )
+    edge_attr_global[edge_mask_pocket_ligand] = (
         torch.tensor([0, 0, 0, 0, 0, 1, 0]).float().to(edge_attr_global.device)
     )
     # edge_attr_global[edge_mask_pocket] = 0.0
@@ -157,6 +164,8 @@ def energy_guidance(
     temb,
     energy_model,
     batch,
+    batch_size,
+    scale=10,
     guidance_scale=1.0e-4,
 ):
     with torch.enable_grad():
@@ -168,18 +177,26 @@ def energy_guidance(
             pos=pos,
             batch=batch,
         )
-        energy_prediction = out["energy_pred"]
+        energy_prediction = scale * out["property_pred"]
 
         grad_outputs: List[Optional[torch.Tensor]] = [
             torch.ones_like(energy_prediction)
         ]
-        pos_shift = -torch.autograd.grad(
-            [energy_prediction],
-            [pos],
-            grad_outputs=grad_outputs,
-            create_graph=False,
-            retain_graph=False,
-        )[0]
+        pos_shift = (
+            -1.0
+            * torch.autograd.grad(
+                [energy_prediction],
+                [pos],
+                grad_outputs=grad_outputs,
+                create_graph=False,
+                retain_graph=False,
+            )[0]
+        )
+
+        # pos_shift = zero_mean(pos_shift, batch=batch, dim_size=batch_size, dim=0)
+
+        # pos = pos + guidance_scale * pos_shift
+        # pos = zero_mean(pos, batch=batch, dim_size=batch_size, dim=0)
 
     return pos + guidance_scale * pos_shift
 
