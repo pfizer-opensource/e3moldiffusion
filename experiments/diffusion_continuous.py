@@ -45,6 +45,7 @@ class Trainer(pl.LightningModule):
         smiles_list: list,
         prop_dist=None,
         prop_norm=None,
+        **kwargs
     ):
         super().__init__()
         self.save_hyperparameters(hparams)
@@ -632,11 +633,19 @@ class Trainer(pl.LightningModule):
                 molecule_list.append(molecule)
 
         (
+            #stability_dict,
+            #validity_dict,
+            #statistics_dict,
+            #all_generated_smiles,
+            #stable_molecules,
+            
             stability_dict,
             validity_dict,
             statistics_dict,
             all_generated_smiles,
             stable_molecules,
+            valid_molecules,
+        
         ) = analyze_stability_for_molecules(
             molecule_list=molecule_list,
             dataset_info=dataset_info,

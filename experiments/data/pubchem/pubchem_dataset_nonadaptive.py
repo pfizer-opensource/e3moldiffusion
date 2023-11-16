@@ -49,14 +49,14 @@ class PubChemLMDBDataset(Dataset):
         if remove_hs:
             assert "_noh" in root
             self.stats_dir = (
-                "/scratch1/cremej01/data/pubchem/dataset_noh/processed"
+                "/scratch1/cremej01/data/pubchem/database_noh/processed"
                 if not evaluation
                 else GEOM_DATADIR
             )
         else:
             assert "_h" in root
             self.stats_dir = (
-                "/scratch1/cremej01/data/pubchem/dataset_h/processed"
+                "/scratch1/cremej01/data/pubchem/database_h/processed"
                 if not evaluation
                 else GEOM_DATADIR
             )
@@ -76,9 +76,10 @@ class PubChemLMDBDataset(Dataset):
             charge_types=torch.from_numpy(
                 np.load(os.path.join(self.stats_dir, self.processed_files[3]))
             ),
-            valencies=load_pickle(
-                os.path.join(self.stats_dir, self.processed_files[4])
-            ),
+            valencies=None #load_pickle(
+                #os.path.join(self.stats_dir, self.processed_files[4])
+            #),
+            ,
             bond_lengths=load_pickle(
                 os.path.join(self.stats_dir, self.processed_files[5])
             ),
@@ -95,9 +96,9 @@ class PubChemLMDBDataset(Dataset):
                 np.load(os.path.join(self.stats_dir, self.processed_files[9]))
             ).float(),
         )
-        self.smiles = load_pickle(
-            os.path.join(self.stats_dir, self.processed_files[10])
-        )
+        self.smiles = None # load_pickle(
+            #os.path.join(self.stats_dir, self.processed_files[10])
+        #)
 
     def _init_db(self):
         self._env = lmdb.open(

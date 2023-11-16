@@ -217,6 +217,7 @@ class BasicMolecularMetrics(object):
         remove_hs=False,
         return_molecules=False,
         return_stats_per_molecule=False,
+        calculate_statistics=True
     ):
         stable_molecules = []
         if not remove_hs:
@@ -260,55 +261,58 @@ class BasicMolecularMetrics(object):
             "uniqueness": uniqueness,
         }
 
-        statistics_dict = self.compute_statistics(molecules, local_rank)
-        statistics_dict["connected_components"] = connected_components
+        if calculate_statistics:
+            statistics_dict = self.compute_statistics(molecules, local_rank)
+            statistics_dict["connected_components"] = connected_components
 
-        self.number_samples = len(valid_smiles)
+            self.number_samples = len(valid_smiles)
 
-        self.train_subset = (
-            get_random_subset(self.train_smiles, self.number_samples, seed=42)
-            if len(valid_smiles) <= len(self.train_smiles)
-            else self.train_smiles
-        )
-        similarity = self.get_bulk_similarity_with_train(valid_smiles)
-        diversity = self.get_bulk_diversity(valid_smiles)
-        if len(valid_smiles) > 0:
-            try:
-                kl_score = self.get_kl_divergence(valid_smiles)
-            except:
-                print("kl_score could not be calculated. Setting kl_score to -1")
+            self.train_subset = (
+                get_random_subset(self.train_smiles, self.number_samples, seed=42)
+                if len(valid_smiles) <= len(self.train_smiles)
+                else self.train_smiles
+            )
+            similarity = self.get_bulk_similarity_with_train(valid_smiles)
+            diversity = self.get_bulk_diversity(valid_smiles)
+            if len(valid_smiles) > 0:
+                try:
+                    kl_score = self.get_kl_divergence(valid_smiles)
+                except:
+                    print("kl_score could not be calculated. Setting kl_score to -1")
+                    kl_score = -1.0
+            else:
+                print("No valid smiles have been generated. Setting kl_score to -1")
                 kl_score = -1.0
-        else:
-            print("No valid smiles have been generated. Setting kl_score to -1")
-            kl_score = -1.0
-        statistics_dict["bulk_similarity"] = similarity
-        statistics_dict["bulk_diversity"] = diversity
-        statistics_dict["kl_score"] = kl_score
+            statistics_dict["bulk_similarity"] = similarity
+            statistics_dict["bulk_diversity"] = diversity
+            statistics_dict["kl_score"] = kl_score
 
-        if len(valid_smiles) > 0:
-            mols = get_mols_list(valid_smiles)
-            # rings = np.mean([num_rings(mol) for mol in mols])
-            # aromatic_rings = np.mean([num_aromatic_rings(mol) for mol in mols])
-            qed, sa, logp, lipinski, diversity = self.evaluate_mean(mols)
-        else:
-            print("No valid smiles have been generated. Setting scores to -1")
-            qed = -1.0
-            sa = -1.0
-            logp = -1.0
-            lipinski = -1.0
-            diversity = -1.0
-        statistics_dict["QED"] = qed
-        statistics_dict["SA"] = sa
-        statistics_dict["LogP"] = logp
-        statistics_dict["Lipinski"] = lipinski
-        statistics_dict["Diversity"] = diversity
+            if len(valid_smiles) > 0:
+                mols = get_mols_list(valid_smiles)
+                # rings = np.mean([num_rings(mol) for mol in mols])
+                # aromatic_rings = np.mean([num_aromatic_rings(mol) for mol in mols])
+                qed, sa, logp, lipinski, diversity = self.evaluate_mean(mols)
+            else:
+                print("No valid smiles have been generated. Setting scores to -1")
+                qed = -1.0
+                sa = -1.0
+                logp = -1.0
+                lipinski = -1.0
+                diversity = -1.0
+            statistics_dict["QED"] = qed
+            statistics_dict["SA"] = sa
+            statistics_dict["LogP"] = logp
+            statistics_dict["Lipinski"] = lipinski
+            statistics_dict["Diversity"] = diversity
 
-        if return_stats_per_molecule:
-            qed, sa, logp, lipinski = self.evaluate_per_mol(mols)
-            statistics_dict["QEDs"] = qed
-            statistics_dict["SAs"] = sa
-            statistics_dict["LogPs"] = logp
-            statistics_dict["Lipinskis"] = lipinski
+            if return_stats_per_molecule:
+                qed, sa, logp, lipinski = self.evaluate_per_mol(mols)
+                statistics_dict["QEDs"] = qed
+                statistics_dict["SAs"] = sa
+                statistics_dict["LogPs"] = logp
+                statistics_dict["Lipinskis"] = lipinski
+        else:
+            statistics_dict = None
 
         self.reset()
 
@@ -605,6 +609,7 @@ def analyze_stability_for_molecules(
     return_stats_per_molecule=False,
     remove_hs=False,
     device="cpu",
+    calculate_statistics=True,
 ):
     metrics = BasicMolecularMetrics(
         dataset_info,
@@ -624,6 +629,7 @@ def analyze_stability_for_molecules(
         remove_hs=remove_hs,
         return_stats_per_molecule=return_stats_per_molecule,
         return_molecules=return_molecules,
+        calculate_statistics=calculate_statistics
     )
     return (
         stability_dict,
