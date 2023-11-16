@@ -4,6 +4,9 @@
 
 additional_feats: false
 diffusion_pretraining: true
+use_pos_norm: false
+remove_hs: true
+use_adaptive_loader: false
 
 batch_size: 200
 inference_batch_size: 70
@@ -12,8 +15,6 @@ grad_clip_val: 10
 accum_batch: 1
 gamma: 0.99
 
-use_adaptive_loader: true
-remove_hs: false
 
 gpus: 8
 num_epochs: 3000
@@ -32,7 +33,7 @@ vector_aggr: mean
 
 #DATA
 dataset: pubchem
-dataset_root: /scratch1/cremej01/data/pubchem/database_h
+dataset_root: /scratch1/cremej01/data/pubchem/database_noh
 
 # DIFFUSION
 continuous: false

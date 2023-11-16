@@ -48,18 +48,10 @@ class PubChemLMDBDataset(Dataset):
         self._num_graphs = 95173200 if remove_hs else 95173300  # 94980241 for noH!!
         if remove_hs:
             assert "_noh" in root
-            self.stats_dir = (
-                "/scratch1/cremej01/data/pubchem/database_noh/processed"
-                if not evaluation
-                else GEOM_DATADIR
-            )
+            self.stats_dir = "/scratch1/cremej01/data/pubchem/database_noh/processed"
         else:
             assert "_h" in root
-            self.stats_dir = (
-                "/scratch1/cremej01/data/pubchem/database_h/processed"
-                if not evaluation
-                else GEOM_DATADIR
-            )
+            self.stats_dir = "/scratch1/cremej01/data/pubchem/database_h/processed"
         super().__init__(root)
 
         self.remove_hs = remove_hs
@@ -151,7 +143,7 @@ class PubChemLMDBDataset(Dataset):
 
 
 class PubChemDataModule(LightningDataModule):
-    def __init__(self, hparams, evaluation):
+    def __init__(self, hparams, evaluation=False):
         super(PubChemDataModule, self).__init__()
         self.save_hyperparameters(hparams)
         self.datadir = hparams.dataset_root

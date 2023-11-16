@@ -47,6 +47,7 @@ class Trainer(pl.LightningModule):
         smiles_list: list,
         prop_dist=None,
         prop_norm=None,
+        **kwargs,
     ):
         super().__init__()
         self.save_hyperparameters(hparams)
@@ -62,14 +63,14 @@ class Trainer(pl.LightningModule):
         charge_types_distribution = dataset_info.charges_marginals.float()
         is_aromatic_distribution = dataset_info.is_aromatic.float()
         is_ring_distribution = dataset_info.is_in_ring.float()
-        hybridization_disitribution = dataset_info.hybridization.float()
+        hybridization_distribution = dataset_info.hybridization.float()
 
         self.register_buffer("atoms_prior", atom_types_distribution.clone())
         self.register_buffer("bonds_prior", bond_types_distribution.clone())
         self.register_buffer("charges_prior", charge_types_distribution.clone())
         self.register_buffer("is_aromatic_prior", is_aromatic_distribution.clone())
         self.register_buffer("is_in_ring_prior", is_ring_distribution.clone())
-        self.register_buffer("hybridization_prior", hybridization_disitribution.clone())
+        self.register_buffer("hybridization_prior", hybridization_distribution.clone())
 
         self.num_is_aromatic = self.num_is_in_ring = 2
         self.num_hybridization = 9
@@ -119,6 +120,11 @@ class Trainer(pl.LightningModule):
                 recompute_edge_attributes=True,
                 recompute_radius_graph=False,
                 edge_mp=hparams["edge_mp"],
+                context_mapping=hparams["context_mapping"],
+                num_context_features=hparams["num_context_features"],
+                bond_prediction=hparams["bond_prediction"],
+                property_prediction=hparams["property_prediction"],
+                coords_param=hparams["continuous_param"],
             )
 
         self.sde_pos = DiscreteDDPM(
@@ -129,6 +135,7 @@ class Trainer(pl.LightningModule):
             schedule=self.hparams.noise_scheduler,
             nu=2.5,
             enforce_zero_terminal_snr=False,
+            T=self.hparams.timesteps,
             param=self.hparams.continuous_param,
         )
         self.sde_atom_charge = DiscreteDDPM(
@@ -153,26 +160,38 @@ class Trainer(pl.LightningModule):
         self.cat_atoms = CategoricalDiffusionKernel(
             terminal_distribution=atom_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
         )
         self.cat_bonds = CategoricalDiffusionKernel(
             terminal_distribution=bond_types_distribution,
             alphas=self.sde_bonds.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
         )
         self.cat_charges = CategoricalDiffusionKernel(
             terminal_distribution=charge_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
         )
         self.cat_aromatic = CategoricalDiffusionKernel(
             terminal_distribution=is_aromatic_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_is_aromatic=self.num_is_aromatic,
         )
         self.cat_ring = CategoricalDiffusionKernel(
             terminal_distribution=is_ring_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_is_in_ring=self.num_is_in_ring,
         )
         self.cat_hybridization = CategoricalDiffusionKernel(
-            terminal_distribution=hybridization_disitribution,
+            terminal_distribution=hybridization_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_hybridization=self.num_hybridization,
         )
 
         self.diffusion_loss = DiffusionLoss(

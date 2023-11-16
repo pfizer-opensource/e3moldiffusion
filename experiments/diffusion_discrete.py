@@ -14,12 +14,17 @@ from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.losses import DiffusionLoss
 from experiments.molecule_utils import Molecule
-from experiments.sampling.analyze_strict import analyze_stability_for_molecules
+from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import (
     coalesce_edges,
     get_list_of_edge_adjs,
     load_model,
     zero_mean,
+    get_molecules,
+)
+from experiments.data.utils import (
+    write_xyz_file_from_batch,
+    write_trajectory_as_xyz,
 )
 from torch import Tensor
 from torch_geometric.data import Batch
@@ -503,75 +508,6 @@ class Trainer(pl.LightningModule):
         return out
 
     @torch.no_grad()
-    def generate_graphs(
-        self,
-        num_graphs: int,
-        empirical_distribution_num_nodes: torch.Tensor,
-        device: torch.device,
-        verbose=False,
-        save_traj=False,
-        ddpm: bool = True,
-        eta_ddim: float = 1.0,
-        every_k_step: int = 1,
-        guidance_scale: float = 1.0e-4,
-        energy_model=None,
-        chain_iterator=None
-    ):
-        (
-            pos,
-            atom_types,
-            charge_types,
-            edge_types,
-            edge_index_global,
-            batch_num_nodes,
-            trajs,
-            context,
-        ) = self.reverse_sampling(
-            num_graphs=num_graphs,
-            device=device,
-            empirical_distribution_num_nodes=empirical_distribution_num_nodes,
-            verbose=verbose,
-            save_traj=save_traj,
-            ddpm=ddpm,
-            eta_ddim=eta_ddim,
-            every_k_step=every_k_step,
-            guidance_scale=guidance_scale,
-            energy_model=energy_model,
-            chain_iterator=chain_iterator
-        )
-
-        if torch.any(pos.isnan()):
-            print(pos.numel(), pos.isnan().sum())
-
-        pos_splits = pos.detach().split(batch_num_nodes.cpu().tolist(), dim=0)
-
-        charge_types_integer = torch.argmax(charge_types, dim=-1)
-        # offset back
-        charge_types_integer = charge_types_integer - self.dataset_info.charge_offset
-        charge_types_integer_split = charge_types_integer.detach().split(
-            batch_num_nodes.cpu().tolist(), dim=0
-        )
-        atom_types_integer = torch.argmax(atom_types, dim=-1)
-        atom_types_integer_split = atom_types_integer.detach().split(
-            batch_num_nodes.cpu().tolist(), dim=0
-        )
-        context_split = (
-            context.split(batch_num_nodes.cpu().tolist(), dim=0)
-            if context is not None
-            else None
-        )
-        return (
-            pos_splits,
-            atom_types_integer_split,
-            charge_types_integer_split,
-            edge_types,
-            edge_index_global,
-            batch_num_nodes,
-            trajs,
-            context_split,
-        )
-
-    @torch.no_grad()
     def run_evaluation(
         self,
         step: int,
@@ -589,6 +525,8 @@ class Trainer(pl.LightningModule):
         guidance_scale: float = 1.0e-4,
         use_energy_guidance: bool = False,
         ckpt_energy_model: str = None,
+        save_traj: bool = False,
+        fix_noise_and_nodes: bool = False,
         device: str = "cpu",
     ):
         energy_model = None
@@ -610,66 +548,47 @@ class Trainer(pl.LightningModule):
         if verbose:
             if self.local_rank == 0:
                 print(f"Creating {ngraphs} graphs in {l} batches")
-        for _, num_graphs in enumerate(l):
+        for i, num_graphs in enumerate(l):
             (
-                pos_splits,
-                atom_types_integer_split,
-                charge_types_integer_split,
-                edge_types,
+                out_dict,
+                data_batch,
                 edge_index_global,
-                batch_num_nodes,
-                _,
-                context_split,
-            ) = self.generate_graphs(
+                context,
+            ) = self.reverse_sampling(
                 num_graphs=num_graphs,
                 verbose=inner_verbose,
-                device=self.device,
-                empirical_distribution_num_nodes=self.empirical_num_nodes,
-                save_traj=False,
+                save_traj=save_traj,
                 ddpm=ddpm,
                 eta_ddim=eta_ddim,
                 every_k_step=every_k_step,
                 guidance_scale=guidance_scale,
                 energy_model=energy_model,
+                save_dir=save_dir,
+                fix_noise_and_nodes=fix_noise_and_nodes,
+                iteration=i,
             )
 
-            n = batch_num_nodes.sum().item()
-            edge_attrs_dense = torch.zeros(
-                size=(n, n, 5), dtype=edge_types.dtype, device=edge_types.device
+            molecule_list.extend(
+                get_molecules(
+                    out_dict,
+                    data_batch,
+                    edge_index_global,
+                    self.num_atom_types,
+                    self.num_charge_classes,
+                    self.dataset_info,
+                    device=self.device,
+                    mol_device=device,
+                    context=context,
+                    while_train=False,
+                )
             )
-            edge_attrs_dense[
-                edge_index_global[0, :], edge_index_global[1, :], :
-            ] = edge_types
-            edge_attrs_dense = edge_attrs_dense.argmax(-1)
-            edge_attrs_splits = get_list_of_edge_adjs(edge_attrs_dense, batch_num_nodes)
-
-            for i, (positions, atom_types, charges, edges) in enumerate(
-                zip(
-                    pos_splits,
-                    atom_types_integer_split,
-                    charge_types_integer_split,
-                    edge_attrs_splits,
-                )
-            ):
-                molecule = Molecule(
-                    atom_types=atom_types.detach().to(device),
-                    positions=positions.detach().to(device),
-                    charges=charges.detach().to(device),
-                    bond_types=edges.detach().to(device),
-                    context=context_split[i][0].detach().to(device)
-                    if context_split is not None
-                    else None,
-                    dataset_info=dataset_info,
-                    build_mol_with_addfeats=False,
-                )
-                molecule_list.append(molecule)
-
         (
             stability_dict,
             validity_dict,
             statistics_dict,
             all_generated_smiles,
             stable_molecules,
+            valid_molecules,
         ) = analyze_stability_for_molecules(
             molecule_list=molecule_list,
             dataset_info=dataset_info,
@@ -737,8 +656,6 @@ class Trainer(pl.LightningModule):
     def reverse_sampling(
         self,
         num_graphs: int,
-        empirical_distribution_num_nodes: Tensor,
-        device: torch.device,
         verbose: bool = False,
         save_traj: bool = False,
         ddpm: bool = True,
@@ -746,15 +663,32 @@ class Trainer(pl.LightningModule):
         every_k_step: int = 1,
         guidance_scale: float = 1.0e-4,
         energy_model=None,
-        chain_iterator=None
+        save_dir: float = None,
+        fix_noise_and_nodes: bool = False,
+        iteration: int = 0,
+        chain_iterator=None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
-        batch_num_nodes = torch.multinomial(
-            input=empirical_distribution_num_nodes,
-            num_samples=num_graphs,
-            replacement=True,
-        ).to(device)
+        if not fix_noise_and_nodes:
+            batch_num_nodes = torch.multinomial(
+                input=self.empirical_num_nodes,
+                num_samples=num_graphs,
+                replacement=True,
+            ).to(self.device)
+        else:
+            seed_value = 42 + iteration
+            torch.random.manual_seed(seed_value)
+            batch_num_nodes = (
+                torch.multinomial(
+                    input=self.empirical_num_nodes,
+                    num_samples=1,
+                    replacement=True,
+                )
+                .repeat(num_graphs)
+                .to(self.device)
+            )
+
         batch_num_nodes = batch_num_nodes.clamp(min=1)
-        batch = torch.arange(num_graphs, device=device).repeat_interleave(
+        batch = torch.arange(num_graphs, device=self.device).repeat_interleave(
             batch_num_nodes, dim=0
         )
         bs = int(batch.max()) + 1
@@ -767,7 +701,10 @@ class Trainer(pl.LightningModule):
             ]
 
         # initialiaze the 0-mean point cloud from N(0, I)
-        pos = torch.randn(len(batch), 3, device=device, dtype=torch.get_default_dtype())
+        pos = torch.randn(
+            len(batch), 3, device=self.device, dtype=torch.get_default_dtype()
+        )
+
         pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
 
         n = len(pos)
@@ -800,16 +737,15 @@ class Trainer(pl.LightningModule):
                 mask,
                 mask_i,
             ) = initialize_edge_attrs_reverse(
-                edge_index_global, n, self.bonds_prior, self.num_bond_classes, device
+                edge_index_global,
+                n,
+                self.bonds_prior,
+                self.num_bond_classes,
+                self.device,
             )
         else:
             edge_attr_global = None
         batch_edge_global = batch[edge_index_global[0]]
-
-        pos_traj = []
-        atom_type_traj = []
-        charge_type_traj = []
-        edge_type_traj = []
 
         if chain_iterator is None:
             if self.hparams.continuous_param == "data":
@@ -825,7 +761,7 @@ class Trainer(pl.LightningModule):
         else:
             iterator = chain_iterator
 
-        for timestep in iterator:
+        for i, timestep in enumerate(iterator):
             s = torch.full(
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=pos.device
             )
@@ -860,9 +796,27 @@ class Trainer(pl.LightningModule):
             if ddpm:
                 if self.hparams.noise_scheduler == "adaptive":
                     # positions
-                    pos = self.sde_pos.sample_reverse_adaptive(
-                        s, t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
-                    )
+                    if energy_model is not None:
+                        pos, signal = self.sde_pos.sample_reverse_adaptive(
+                            s,
+                            t,
+                            pos,
+                            coords_pred,
+                            batch,
+                            cog_proj=True,
+                            eta_ddim=eta_ddim,
+                            return_signal=True,
+                        )
+                    else:
+                        pos = self.sde_pos.sample_reverse_adaptive(
+                            s,
+                            t,
+                            pos,
+                            coords_pred,
+                            batch,
+                            cog_proj=True,
+                            eta_ddim=eta_ddim,
+                        )
                 else:
                     # positions
                     pos = self.sde_pos.sample_reverse(
@@ -919,30 +873,43 @@ class Trainer(pl.LightningModule):
                     edge_index_local,
                     edge_index_global,
                 )
-            if energy_model is not None and timestep <= 20:
+            if energy_model is not None:  # and timestep <= 100:
                 pos = energy_guidance(
                     pos,
                     node_feats_in,
                     temb,
                     energy_model,
                     batch,
-                    guidance_scale=guidance_scale,
+                    batch_size=bs,
+                    guidance_scale=guidance_scale,  # signal[0],  # guidance_scale
                 )
 
             if save_traj:
-                pos_traj.append(pos.detach())
-                atom_type_traj.append(atom_types.detach())
-                edge_type_traj.append(edge_attr_global.detach())
-                charge_type_traj.append(charge_types.detach())
+                atom_decoder = self.dataset_info.atom_decoder
+                write_xyz_file_from_batch(
+                    pos,
+                    atom_types,
+                    batch,
+                    atom_decoder=atom_decoder,
+                    path=os.path.join(save_dir, f"iter_{iteration}"),
+                    i=i,
+                )
 
+        if save_traj:
+            write_trajectory_as_xyz(
+                os.path.join(save_dir, f"iter_{iteration}"), batch_size=bs
+            )
+
+        out_dict = {
+            "coords_pred": pos,
+            "atoms_pred": atom_types,
+            "charges_pred": charge_types,
+            "bonds_pred": edge_attr_global,
+        }
         return (
-            pos,
-            atom_types,
-            charge_types,
-            edge_attr_global,
+            out_dict,
+            batch,
             edge_index_global,
-            batch_num_nodes,
-            [pos_traj, atom_type_traj, charge_type_traj, edge_type_traj],
             context,
         )
 

@@ -6,6 +6,9 @@ from experiments.data.utils import write_xyz_file
 from experiments.xtb_energy import calculate_xtb_energy
 import pickle
 import os
+from experiments.xtb_wrapper import xtb_calculate
+from tqdm import tqdm
+import numpy as np
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
@@ -25,6 +28,7 @@ def evaluate(
     save_dir,
     save_xyz=False,
     calculate_energy=False,
+    calculate_props=False,
     use_energy_guidance=False,
     ckpt_energy_model=None,
     guidance_scale=1.0e-4,
@@ -34,6 +38,7 @@ def evaluate(
     step=0,
     ddpm=True,
     eta_ddim=1.0,
+    fix_noise_and_nodes=False,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -147,7 +152,7 @@ def evaluate(
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    results_dict, generated_smiles, stable_molecules, trajs = model.run_evaluation(
+    results_dict, generated_smiles, stable_molecules = model.run_evaluation(
         step=step,
         dataset_info=model.dataset_info,
         ngraphs=ngraphs,
@@ -163,18 +168,16 @@ def evaluate(
         guidance_scale=guidance_scale,
         use_energy_guidance=use_energy_guidance,
         ckpt_energy_model=ckpt_energy_model,
+        fix_noise_and_nodes=fix_noise_and_nodes,
         device="cpu",
     )
 
     atom_decoder = stable_molecules[0].dataset_info.atom_decoder
 
-    if save_traj:
-        for i in range(len(trajs[0])):
-            pos = trajs[0]
-            atoms = trajs[1]
-    energies = []
-    forces_norms = []
     if calculate_energy:
+        energies = []
+        forces_norms = []
+        print("Calculating energies...")
         for i in range(len(stable_molecules)):
             atom_types = [atom_decoder[int(a)] for a in stable_molecules[i].atom_types]
             try:
@@ -185,6 +188,43 @@ def evaluate(
             stable_molecules[i].forces_norm = f
             energies.append(e)
             forces_norms.append(f)
+
+        print(f"Mean energies: {np.mean(energies)}")
+        print(f"Mean force norms: {np.mean(forces_norms)}")
+
+    if calculate_props:
+        polarizabilities = []
+        sm = stable_molecules.copy()
+        stable_molecules = []
+        print("Calculating properties...")
+        for mol in tqdm(sm):
+            atom_types = [atom_decoder[int(a)] for a in mol.atom_types]
+
+            if prop_dist is not None:
+                for j, key in enumerate(hparams.properties_list):
+                    mean, mad = (
+                        prop_dist.normalizer[key]["mean"],
+                        prop_dist.normalizer[key]["mad"],
+                    )
+                    prop = mol.context[j] * mad + mean
+                    mol.context = float(prop)
+            try:
+                charge = mol.charges.sum().item()
+                results = xtb_calculate(
+                    atoms=atom_types,
+                    coords=mol.positions.tolist(),
+                    charge=charge,
+                    options={"grad": True},
+                )
+                for key, value in results.items():
+                    mol.__setattr__(key, value)
+
+                polarizabilities.append(mol.polarizability)
+                stable_molecules.append(mol)
+            except Exception as e:
+                print(e)
+                continue
+        print(f"Mean polarizability: {np.mean(polarizabilities)}")
 
     if save_xyz:
         context = []
@@ -218,6 +258,8 @@ def evaluate(
         pickle.dump(generated_smiles, f)
     with open(os.path.join(save_dir, "stable_molecules.pickle"), "wb") as f:
         pickle.dump(stable_molecules, f)
+    with open(os.path.join(save_dir, "evaluation.pickle"), "wb") as f:
+        pickle.dump(results_dict, f)
 
 
 def get_args():
@@ -235,8 +277,12 @@ def get_args():
                         help='Whether or not to store generated molecules in xyz files')
     parser.add_argument('--calculate-energy', default=False, action="store_true",
                         help='Whether or not to calculate xTB energies and forces')
+    parser.add_argument('--calculate-props', default=False, action="store_true",
+                        help='Whether or not to calculate xTB properties')
     parser.add_argument('--save-traj', default=False, action="store_true",
                         help='Whether or not to save whole trajectory')
+    parser.add_argument('--fix-noise-and-nodes', default=False, action="store_true",
+                        help='Whether or not to fix noise, e.g., for interpolation or guidance')
     parser.add_argument('--ngraphs', default=5000, type=int,
                             help='How many graphs to sample. Defaults to 5000')
     parser.add_argument('--batch-size', default=80, type=int,
@@ -264,7 +310,9 @@ if __name__ == "__main__":
         save_xyz=args.save_xyz,
         save_traj=args.save_traj,
         calculate_energy=args.calculate_energy,
+        calculate_props=args.calculate_props,
         use_energy_guidance=args.use_energy_guidance,
         ckpt_energy_model=args.ckpt_energy_model,
         guidance_scale=args.guidance_scale,
+        fix_noise_and_nodes=args.fix_noise_and_nodes,
     )

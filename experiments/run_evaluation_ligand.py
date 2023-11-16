@@ -5,6 +5,7 @@ from experiments.data.distributions import DistributionProperty
 import pytorch_lightning as pl
 import warnings
 import os
+import numpy as np
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
@@ -26,10 +27,11 @@ def evaluate(
     model_path,
     save_dir,
     save_xyz=True,
-    calculate_energy=True,
+    calculate_energy=False,
     ngraphs=10000,
     batch_size=2,
     use_ligand_dataset_sizes=False,
+    save_traj=False,
     use_energy_guidance=False,
     ckpt_energy_model=None,
     guidance_scale=1.0e-4,
@@ -45,15 +47,15 @@ def evaluate(
     ckpt["hyper_parameters"]["test_save_dir"] = save_dir
     ckpt["hyper_parameters"]["calculate_energy"] = calculate_energy
     ckpt["hyper_parameters"]["save_xyz"] = save_xyz
-    ckpt["hyper_parameters"]["num_test_graphs"] = ngraphs
-    ckpt["hyper_parameters"]["inference_batch_size"] = batch_size
     ckpt["hyper_parameters"]["batch_size"] = batch_size
     ckpt["hyper_parameters"]["select_train_subset"] = False
     ckpt["hyper_parameters"]["diffusion_pretraining"] = False
     ckpt["hyper_parameters"]["gpus"] = 1
     ckpt["hyper_parameters"]["use_ligand_dataset_sizes"] = use_ligand_dataset_sizes
-
-    ckpt["hyper_parameters"]["vdim"] = 256
+    ckpt["hyper_parameters"]["save_traj"] = save_traj
+    ckpt["hyper_parameters"][
+        "dataset_root"
+    ] = "/scratch1/cremej01/data/crossdocked_noH_cutoff8"
 
     ckpt_path = os.path.join(save_dir, f"test_model.ckpt")
     if not os.path.exists(ckpt_path):
@@ -114,14 +116,16 @@ def evaluate(
                 from experiments.diffusion_pretrain_discrete import Trainer
         elif hparams.additional_feats:
             if dataset == "crossdocked":
-                print("Ligand-pocket training using additional features")
+                print("Ligand-pocket testing using additional features")
                 from experiments.diffusion_discrete_moreFeats_ligand import Trainer
             else:
                 print("Using additional features")
                 from experiments.diffusion_discrete_moreFeats import Trainer
         else:
             if dataset == "crossdocked":
-                print("Ligand-pocket training")
+                print("Ligand-pocket testing")
+                histogram = os.path.join(hparams.dataset_root, "size_distribution.npy")
+                histogram = np.load(histogram).tolist()
                 from experiments.diffusion_discrete_pocket import Trainer
             else:
                 from experiments.diffusion_discrete import Trainer
@@ -141,6 +145,7 @@ def evaluate(
         smiles_list=train_smiles,
         prop_dist=prop_dist,
         prop_norm=prop_norm,
+        histogram=histogram,
     )
 
     trainer.test(model, datamodule=datamodule, ckpt_path=ckpt_path)
@@ -153,6 +158,7 @@ def get_args():
                         help='Path to trained model')
     parser.add_argument("--use-energy-guidance", default=False, action="store_true")
     parser.add_argument("--use-ligand-dataset-sizes", default=False, action="store_true")
+    parser.add_argument("--save-traj", default=False, action="store_true")
     parser.add_argument("--ckpt-energy-model", default=None, type=str)
     parser.add_argument('--guidance-scale', default=1.0e-4, type=float,
                         help='How to scale the guidance shift')
@@ -187,6 +193,7 @@ if __name__ == "__main__":
         ddpm=not args.ddim,
         eta_ddim=args.eta_ddim,
         save_xyz=args.save_xyz,
+        save_traj=args.save_traj,
         calculate_energy=args.calculate_energy,
         use_energy_guidance=args.use_energy_guidance,
         use_ligand_dataset_sizes=args.use_ligand_dataset_sizes,

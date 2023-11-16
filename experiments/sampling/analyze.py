@@ -139,6 +139,22 @@ class BasicMolecularMetrics(object):
 
         return valid_smiles, valid_molecules, connected_components, error_message
 
+    def compute_sanitize_validity(self, generated):
+        if len(generated) < 1:
+            return -1.0
+
+        valid = []
+        for mol in generated:
+            rdmol = mol.rdkit_mol
+            try:
+                Chem.SanitizeMol(rdmol)
+            except ValueError:
+                continue
+
+            valid.append(rdmol)
+
+        return len(valid) / len(generated)
+
     def compute_uniqueness(self, valid):
         """valid: list of SMILES strings."""
         return list(set(valid)), len(set(valid)) / len(valid)
@@ -252,11 +268,14 @@ class BasicMolecularMetrics(object):
         ) = self.evaluate(molecules, local_rank=local_rank)
         # Save in any case in the graphs folder
 
+        sanitize_validity = self.compute_sanitize_validity(molecules)
+
         novelty = novelty if isinstance(novelty, int) else novelty.item()
         uniqueness = uniqueness if isinstance(uniqueness, int) else uniqueness.item()
 
         validity_dict = {
             "validity": validity.item(),
+            "sanitize_validity": sanitize_validity,
             "novelty": novelty,
             "uniqueness": uniqueness,
         }

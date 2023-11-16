@@ -206,8 +206,6 @@ class EQGATEdgeGNN(nn.Module):
         context: OptTensor = None,
         batch_lig: OptTensor = None,
         pocket_mask: OptTensor = None,
-        node_mask: OptTensor = None,
-        fixed_nodes_mask=None, # WHERE does this go into ? #942913b4edc0870e417ef0b29e07fcfde9325533
     ) -> Dict:
         # edge_attr_xyz (distances, cosines, relative_positions, edge_features)
         # (E, E, E x 3, E x F)
@@ -226,7 +224,6 @@ class EQGATEdgeGNN(nn.Module):
                 edge_attr=edge_attr_in,
                 batch_lig=batch_lig,
                 pocket_mask=pocket_mask,
-                node_mask=node_mask,
             )
 
             s, v, p, e = out["s"], out["v"], out["p"], out["e"]
