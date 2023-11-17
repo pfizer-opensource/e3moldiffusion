@@ -473,7 +473,9 @@ def load_model(filepath, num_atom_features, device="cpu", **kwargs):
     return model.to(device)
 
 
-def load_model_ligand(filepath, num_atom_features, device="cpu", **kwargs):
+def load_model_ligand(
+    filepath, num_atom_features, num_bond_classes=5, device="cpu", **kwargs
+):
     import re
 
     ckpt = torch.load(filepath, map_location="cpu")
@@ -481,7 +483,7 @@ def load_model_ligand(filepath, num_atom_features, device="cpu", **kwargs):
 
     args["use_pos_norm"] = False
 
-    model = create_model(args, num_atom_features)
+    model = create_model(args, num_atom_features, num_bond_classes)
 
     state_dict = ckpt["state_dict"]
     state_dict = {
@@ -498,7 +500,7 @@ def load_model_ligand(filepath, num_atom_features, device="cpu", **kwargs):
     return model.to(device)
 
 
-def create_model(hparams, num_atom_features):
+def create_model(hparams, num_atom_features, num_bond_classes):
     from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 
     model = DenoisingEdgeNetwork(
@@ -507,7 +509,7 @@ def create_model(hparams, num_atom_features):
         latent_dim=None,
         use_cross_product=hparams["use_cross_product"],
         num_atom_features=num_atom_features,
-        num_bond_types=5,
+        num_bond_types=num_bond_classes,
         edge_dim=hparams["edim"],
         cutoff_local=hparams["cutoff_local"],
         vector_aggr=hparams["vector_aggr"],
@@ -798,6 +800,7 @@ def get_molecules(
     sanitize=False,
     mol_device="cpu",
     context=None,
+    check_validity=False,
     while_train=False,
 ):
     if while_train:
@@ -876,6 +879,7 @@ def get_molecules(
             relax_mol=relax_mol,
             max_relax_iter=max_relax_iter,
             sanitize=sanitize,
+            check_validity=check_validity,
         )
         molecule_list.append(molecule)
 

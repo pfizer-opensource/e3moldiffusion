@@ -38,6 +38,7 @@ class Molecule:
         relax_mol=False,
         max_relax_iter=200,
         sanitize=True,
+        check_validity=False,
     ):
         """atom_types: n      LongTensor
         charges: n         LongTensor
@@ -57,6 +58,7 @@ class Molecule:
         self.relax_mol = relax_mol
         self.max_relax_iter = max_relax_iter
         self.sanitize = sanitize
+        self.check_validity = check_validity
 
         self.dataset_info = dataset_info
         atom_decoder = (
@@ -114,7 +116,10 @@ class Molecule:
             ):
                 if atom == -1:
                     continue
-                a = Chem.Atom(atom_decoder[int(atom.item())])
+                try:
+                    a = Chem.Atom(atom_decoder[int(atom.item())])
+                except:
+                    continue
                 if charge.item() != 0:
                     a.SetFormalCharge(charge.item())
                 a.SetIsAromatic(additional_node_map["is_aromatic"][is_aromatic.item()])
@@ -128,7 +133,10 @@ class Molecule:
             for atom, charge in zip(self.atom_types, self.charges):
                 if atom == -1:
                     continue
-                a = Chem.Atom(atom_decoder[int(atom.item())])
+                try:
+                    a = Chem.Atom(atom_decoder[int(atom.item())])
+                except:
+                    a = Chem.Atom("H")
                 if charge.item() != 0:
                     a.SetFormalCharge(charge.item())
                 mol.AddAtom(a)
@@ -184,9 +192,15 @@ class Molecule:
                     Chem.SanitizeMol(mol_uff)
                 return mol_uff
             except (RuntimeError, ValueError) as e:
-                return mol
+                if self.check_validity:
+                    return self.compute_validity(mol)
+                else:
+                    return mol
         else:
-            return mol
+            if self.check_validity:
+                return self.compute_validity(mol)
+            else:
+                return mol
 
     def uff_relax(self, mol, max_iter=200):
         """
@@ -200,6 +214,25 @@ class Molecule:
                 f"Returning molecule after {max_iter} relaxation steps."
             )
         return more_iterations_required
+
+    def compute_validity(self, mol):
+        if mol is not None:
+            try:
+                mol_frags = Chem.rdmolops.GetMolFrags(
+                    mol, asMols=True, sanitizeFrags=False
+                )
+                if len(mol_frags) > 1:
+                    return None
+                else:
+                    largest_mol = max(
+                        mol_frags, default=mol, key=lambda m: m.GetNumAtoms()
+                    )
+                    Chem.SanitizeMol(largest_mol)
+                    smiles = Chem.MolToSmiles(largest_mol)
+            except:
+                return None
+
+        return mol
 
     def build_molecule_edm(self, positions, atom_types, dataset_info):
         atom_decoder = dataset_info["atom_decoder"]

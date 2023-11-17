@@ -109,9 +109,6 @@ class EQGATEdgeGNN(nn.Module):
         self.p1 = p1
         self.ligand_pocket_interaction = ligand_pocket_interaction
 
-        if self.ligand_pocket_interaction:
-            self.se3norm = SE3Norm()
-
         self.sdim, self.vdim = hn_dim
         self.edge_dim = edge_dim
 
@@ -166,8 +163,9 @@ class EQGATEdgeGNN(nn.Module):
         source, target = edge_index
         r = pos[target] - pos[source]
         if self.ligand_pocket_interaction:
-            normed_pos = self.se3norm(pos, batch)
-            a = normed_pos[target] * normed_pos[source]
+            mask = source != target
+            pos[mask] = pos[mask] / torch.norm(pos[mask], dim=1).unsqueeze(1)
+            a = pos[target] * pos[source]
         else:
             a = pos[target] * pos[source]
         a = a.sum(-1)

@@ -237,30 +237,35 @@ def get_key(fp):
 
 
 def write_trajectory_as_xyz(
+    molecules,
     path,
-    batch_size,
 ):
     try:
         os.makedirs(path)
     except OSError:
         pass
 
-    for i in range(batch_size):
-        files = sorted(glob(os.path.join(path, f"batch_{i}/mol_*.xyz")), key=get_key)
-        traj_path = os.path.join(path, f"trajectory_{i}.xyz")
-        for j, file in enumerate(files):
-            with open(file, "r") as f:
-                lines = f.readlines()
+    for i, mol in enumerate(molecules):
+        rdkit_mol = mol.rdkit_mol
+        valid = rdkit_mol is not None and mol.compute_validity(rdkit_mol) is not None
+        if valid:
+            files = sorted(
+                glob(os.path.join(path, f"batch_{i}/mol_*.xyz")), key=get_key
+            )
+            traj_path = os.path.join(path, f"trajectory_{i}.xyz")
+            for j, file in enumerate(files):
+                with open(file, "r") as f:
+                    lines = f.readlines()
 
-            with open(traj_path, "a") as file:
-                for line in lines:
-                    file.write(line)
-                if (
-                    j == len(files) - 1
-                ):  ####write the last timestep 10x for better visibility
-                    for _ in range(10):
-                        for line in lines:
-                            file.write(line)
+                with open(traj_path, "a") as file:
+                    for line in lines:
+                        file.write(line)
+                    if (
+                        j == len(files) - 1
+                    ):  ####write the last timestep 10x for better visibility
+                        for _ in range(10):
+                            for line in lines:
+                                file.write(line)
 
 
 def save_pickle(array, path):

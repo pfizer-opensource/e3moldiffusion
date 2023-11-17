@@ -36,7 +36,7 @@ vector_aggr: mean
 
 #DATA
 dataset: geomqm
-dataset_root: /scratch1/cremej01/data/geom_qm
+dataset_root: /scratch1/seumej/geom_qm/
 # dataset_root: /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/data
 
 # DIFFUSION

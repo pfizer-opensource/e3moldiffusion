@@ -39,11 +39,14 @@ def evaluate(
     ddpm=True,
     eta_ddim=1.0,
     fix_noise_and_nodes=False,
+    relax_sampling=False,
+    relax_steps=10,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
     hparams["select_train_subset"] = False
     hparams["diffusion_pretraining"] = False
+    hparams["num_charge_classes"] = 6
     hparams = dotdict(hparams)
 
     hparams.load_ckpt_from_pretrained = None
@@ -169,6 +172,8 @@ def evaluate(
         use_energy_guidance=use_energy_guidance,
         ckpt_energy_model=ckpt_energy_model,
         fix_noise_and_nodes=fix_noise_and_nodes,
+        relax_sampling=relax_sampling,
+        relax_steps=relax_steps,
         device="cpu",
     )
 
@@ -283,6 +288,9 @@ def get_args():
                         help='Whether or not to save whole trajectory')
     parser.add_argument('--fix-noise-and-nodes', default=False, action="store_true",
                         help='Whether or not to fix noise, e.g., for interpolation or guidance')
+    parser.add_argument('--relax-sampling', default=False, action="store_true",
+                        help='Whether or not to relax using denoising with timestep 0')
+    parser.add_argument('--relax-steps', default=10, type=int, help='How many denoising relaxation steps')
     parser.add_argument('--ngraphs', default=5000, type=int,
                             help='How many graphs to sample. Defaults to 5000')
     parser.add_argument('--batch-size', default=80, type=int,
@@ -315,4 +323,6 @@ if __name__ == "__main__":
         ckpt_energy_model=args.ckpt_energy_model,
         guidance_scale=args.guidance_scale,
         fix_noise_and_nodes=args.fix_noise_and_nodes,
+        relax_sampling=args.relax_sampling,
+        relax_steps=args.relax_steps,
     )

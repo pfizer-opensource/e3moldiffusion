@@ -123,7 +123,9 @@ class Trainer(pl.LightningModule):
             print("Loading from pre-trained model checkpoint...")
 
             self.model = load_model_ligand(
-                self.hparams.load_ckpt_from_pretrained, self.num_atom_features
+                self.hparams.load_ckpt_from_pretrained,
+                self.num_atom_features,
+                self.num_bond_classes,
             )
             # num_params = len(self.model.state_dict())
             # for i, param in enumerate(self.model.parameters()):
@@ -826,18 +828,13 @@ class Trainer(pl.LightningModule):
         if not run_test_eval:
             save_cond = (
                 self.validity < validity_dict["validity"]
-                and self.connected_components < statistics_dict["connected_components"]
-            ) or (
-                self.validity <= validity_dict["validity"]
                 and self.connected_components <= statistics_dict["connected_components"]
-                and self.qed < statistics_dict["QED"]
             )
         else:
             save_cond = False
         if save_cond:
             self.validity = validity_dict["validity"]
             self.connected_components = statistics_dict["connected_components"]
-            self.qed = statistics_dict["QED"]
             save_path = os.path.join(self.hparams.save_dir, "best_valid.ckpt")
             self.trainer.save_checkpoint(save_path)
 

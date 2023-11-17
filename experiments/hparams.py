@@ -166,6 +166,7 @@ def add_arguments(parser):
     parser.add_argument("--use-absorbing-state", default=False, action="store_true")
 
     parser.add_argument("--num-bond-classes", default=5, type=int)
+    parser.add_argument("--num-charge-classes", default=6, type=int)
 
     # BOND PREDICTION AND GUIDANCE:
     parser.add_argument("--bond-guidance-model", default=False, action="store_true")

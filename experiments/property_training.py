@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 from torch_geometric.data import Batch
+from collections import defaultdict
 
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
@@ -122,11 +123,54 @@ class Trainer(pl.LightningModule):
         else:
             self.energy_loss = torch.nn.L1Loss(reduce=False, reduction="none")
 
+        # initialize loss collection
+        self.losses = None
+        self._reset_losses_dict()
+
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
 
     def validation_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="val")
+
+    def on_validation_epoch_end(self):
+        if not self.trainer.sanity_checking:
+            # construct dict of logged metrics
+            result_dict = {
+                "epoch": float(self.current_epoch),
+                "lr": self.trainer.optimizers[0].param_groups[0]["lr"],
+            }
+            result_dict.update(self._get_mean_loss_dict_for_type())
+            self.log_dict(result_dict, sync_dist=True)
+
+        self._reset_losses_dict()
+
+    def test_step(self, batch, batch_idx):
+        return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="test")
+
+    def on_test_epoch_end(self):
+        # Log all test losses
+        if not self.trainer.sanity_checking:
+            result_dict = {}
+            result_dict.update(self._get_mean_loss_dict_for_type())
+            # Get only test entries
+            result_dict = {k: v for k, v in result_dict.items() if k.startswith("test")}
+            self.log_dict(result_dict, sync_dist=True)
+
+            print(f"Test run finished!")
+
+    def _reset_losses_dict(self):
+        self.losses = {}
+        for stage in ["train", "val", "test"]:
+            self.losses[stage] = []
+
+    def _get_mean_loss_dict_for_type(self):
+        assert self.losses is not None
+        mean_losses = {}
+        for stage in ["train", "val", "test"]:
+            if len(self.losses[stage]) > 0:
+                mean_losses[stage] = torch.stack(self.losses[stage]).mean()
+        return mean_losses
 
     def loss_non_nans(self, loss: Tensor, modality: str) -> Tensor:
         m = loss.isnan()
@@ -165,13 +209,15 @@ class Trainer(pl.LightningModule):
         loss = weights * self.energy_loss(out_dict["property_pred"].squeeze(-1), target)
         loss = torch.mean(loss, dim=0)
 
+        self.losses[stage].append(loss.detach())
+
         self.log(
             f"{stage}/loss",
             loss,
             on_step=True,
             batch_size=batch_size,
             prog_bar=True,
-            sync_dist=self.hparams.gpus > 1 and stage == "val",
+            sync_dist=self.hparams.gpus > 1 and (stage == "val" or stage == "test"),
         )
 
         return loss
@@ -192,8 +238,8 @@ class Trainer(pl.LightningModule):
             device=batch.x.device,
         )
 
-        if not train:
-            t = torch.zeros_like(t)
+        # if not train:
+        #     t = torch.zeros_like(t)
 
         pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
 
@@ -237,8 +283,8 @@ class Trainer(pl.LightningModule):
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.hparams["lr"],
-            amsgrad=False,
-            weight_decay=1e-6,
+            amsgrad=True,
+            weight_decay=1.0e-12,
         )
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer=optimizer,

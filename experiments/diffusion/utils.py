@@ -76,22 +76,28 @@ def get_joint_edge_attrs(
     edge_mask_pocket = (edge_index_global[0] >= len(batch)) & (
         edge_index_global[1] >= len(batch)
     )
-    edge_mask_ligand_pocket = (edge_index_global[0] < len(batch)) & (
-        edge_index_global[1] >= len(batch)
-    )
-    edge_mask_pocket_ligand = (edge_index_global[0] >= len(batch)) & (
-        edge_index_global[1] < len(batch)
-    )
     edge_attr_global[edge_mask] = edge_attr_global_lig
-    edge_attr_global[edge_mask_pocket] = (
-        torch.tensor([0, 0, 0, 0, 0, 0, 1]).float().to(edge_attr_global.device)
-    )
-    edge_attr_global[edge_mask_ligand_pocket] = (
-        torch.tensor([0, 0, 0, 0, 0, 1, 0]).float().to(edge_attr_global.device)
-    )
-    edge_attr_global[edge_mask_pocket_ligand] = (
-        torch.tensor([0, 0, 0, 0, 0, 1, 0]).float().to(edge_attr_global.device)
-    )
+
+    if num_bond_classes == 7:
+        edge_mask_ligand_pocket = (edge_index_global[0] < len(batch)) & (
+            edge_index_global[1] >= len(batch)
+        )
+        edge_mask_pocket_ligand = (edge_index_global[0] >= len(batch)) & (
+            edge_index_global[1] < len(batch)
+        )
+        edge_attr_global[edge_mask_pocket] = (
+            torch.tensor([0, 0, 0, 0, 0, 0, 1]).float().to(edge_attr_global.device)
+        )
+        edge_attr_global[edge_mask_ligand_pocket] = (
+            torch.tensor([0, 0, 0, 0, 0, 1, 0]).float().to(edge_attr_global.device)
+        )
+        edge_attr_global[edge_mask_pocket_ligand] = (
+            torch.tensor([0, 0, 0, 0, 0, 1, 0]).float().to(edge_attr_global.device)
+        )
+    else:
+        edge_attr_global[edge_mask_pocket] = (
+            torch.tensor([0, 0, 0, 0, 1]).float().to(edge_attr_global.device)
+        )
     # edge_attr_global[edge_mask_pocket] = 0.0
 
     batch_full = torch.cat([batch, batch_pocket])
@@ -165,8 +171,8 @@ def energy_guidance(
     energy_model,
     batch,
     batch_size,
-    scale=10,
-    guidance_scale=1.0e-4,
+    scale=100,
+    guidance_scale=1.0e-2,
 ):
     with torch.enable_grad():
         node_feats_in = node_feats_in.detach()
@@ -193,12 +199,12 @@ def energy_guidance(
             )[0]
         )
 
-        # pos_shift = zero_mean(pos_shift, batch=batch, dim_size=batch_size, dim=0)
+        pos_shift = zero_mean(pos_shift, batch=batch, dim_size=batch_size, dim=0)
 
-        # pos = pos + guidance_scale * pos_shift
-        # pos = zero_mean(pos, batch=batch, dim_size=batch_size, dim=0)
+        pos = pos + guidance_scale * pos_shift
+        pos = zero_mean(pos, batch=batch, dim_size=batch_size, dim=0)
 
-    return pos + guidance_scale * pos_shift
+    return pos
 
 
 def extract_scaffolds_(batch_data):
