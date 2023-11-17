@@ -247,7 +247,10 @@ def write_trajectory_as_xyz(
 
     for i, mol in enumerate(molecules):
         rdkit_mol = mol.rdkit_mol
-        valid = rdkit_mol is not None and mol.compute_validity(rdkit_mol) is not None
+        valid = (
+            rdkit_mol is not None
+            and mol.compute_validity(rdkit_mol, strict=True) is not None
+        )
         if valid:
             files = sorted(
                 glob(os.path.join(path, f"batch_{i}/mol_*.xyz")), key=get_key

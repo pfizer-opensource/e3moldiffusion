@@ -5,6 +5,7 @@ from rdkit.Geometry import Point3D
 from rdkit import Chem, RDLogger
 from rdkit.Geometry import Point3D
 import warnings
+import numpy as np
 
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
@@ -215,7 +216,7 @@ class Molecule:
             )
         return more_iterations_required
 
-    def compute_validity(self, mol):
+    def compute_validity(self, mol, strict=False):
         if mol is not None:
             try:
                 mol_frags = Chem.rdmolops.GetMolFrags(
@@ -227,8 +228,35 @@ class Molecule:
                     largest_mol = max(
                         mol_frags, default=mol, key=lambda m: m.GetNumAtoms()
                     )
+                    initial_adj = Chem.GetAdjacencyMatrix(
+                        largest_mol, useBO=True, force=True
+                    )
                     Chem.SanitizeMol(largest_mol)
                     smiles = Chem.MolToSmiles(largest_mol)
+
+                    if sum([a.GetNumImplicitHs() for a in largest_mol.GetAtoms()]) > 0:
+                        return None
+                    if strict:
+                        # sanitization changes bond order without throwing exceptions for certain cases
+                        # https://github.com/rdkit/rdkit/blob/master/Docs/Book/RDKit_Book.rst#molecular-sanitization
+                        # only consider change in BO to be wrong when difference is > 0.5 (not just kekulization difference)
+                        adj2 = Chem.GetAdjacencyMatrix(
+                            largest_mol, useBO=True, force=True
+                        )
+                        if not np.all(np.abs(initial_adj - adj2) < 1):
+                            return None
+                        # atom valencies are only correct when unpaired electrons are added
+                        # when training data does not contain open shell systems, this should be considered an error
+                        if (
+                            sum(
+                                [
+                                    a.GetNumRadicalElectrons()
+                                    for a in largest_mol.GetAtoms()
+                                ]
+                            )
+                            > 0
+                        ):
+                            return None
             except:
                 return None
 
