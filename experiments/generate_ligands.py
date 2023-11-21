@@ -36,6 +36,7 @@ def evaluate(
     test_list,
     skip_existing,
     fix_n_nodes,
+    n_nodes_bias,
     num_ligands_per_pocket,
     build_obabel_mol,
     batch_size,
@@ -184,6 +185,7 @@ def evaluate(
                 pocket_data,
                 num_graphs=batch_size,
                 fix_n_nodes=fix_n_nodes,
+                n_nodes_bias=n_nodes_bias,
                 build_obabel_mol=build_obabel_mol,
                 inner_verbose=False,
                 save_traj=False,
@@ -317,7 +319,7 @@ def evaluate(
     if write_dict:
         torch.save(results_dict, Path(save_dir, "qvina2_scores.pt"))
 
-    scores_fl = [r[0] for r in results["scores"] if len(r) >= 1]
+    scores_fl = [np.mean(r) for r in results["scores"] if len(r) >= 1]
 
     print(f"Mean statistics across all sampled ligands: {statistics_dict}")
 
@@ -365,6 +367,7 @@ def get_args():
     parser.add_argument("--test-list", type=Path, default=None)
     parser.add_argument("--save-dir", type=Path)
     parser.add_argument("--fix-n-nodes", action="store_true")
+    parser.add_argument("--n-nodes-bias", default=0, type=int)
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--write-csv", action="store_true")
     parser.add_argument("--write-dict", action="store_true")
@@ -383,6 +386,7 @@ if __name__ == "__main__":
         save_dir=args.save_dir,
         skip_existing=args.skip_existing,
         fix_n_nodes=args.fix_n_nodes,
+        n_nodes_bias=args.n_nodes_bias,
         batch_size=args.batch_size,
         num_ligands_per_pocket=args.num_ligands_per_pocket,
         build_obabel_mol=args.build_obabel_mol,

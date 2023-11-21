@@ -29,10 +29,11 @@ class Molecule:
     def __init__(
         self,
         atom_types,
-        bond_types,
         positions,
         charges,
         dataset_info,
+        bond_types=None,
+        rdkit_mol=None,
         atom_types_pocket=None,
         positions_pocket=None,
         context=None,
@@ -55,11 +56,13 @@ class Molecule:
         assert atom_types.dim() == 1 and atom_types.dtype == torch.long, (
             f"shape of atoms {atom_types.shape} " f"and dtype {atom_types.dtype}"
         )
-        assert bond_types.dim() == 2 and bond_types.dtype == torch.long, (
-            f"shape of bonds {bond_types.shape} --" f" {bond_types.dtype}"
-        )
+        if bond_types is not None:
+            assert bond_types.dim() == 2 and bond_types.dtype == torch.long, (
+                f"shape of bonds {bond_types.shape} --" f" {bond_types.dtype}"
+            )
+            assert len(bond_types.shape) == 2
+
         assert len(atom_types.shape) == 1
-        assert len(bond_types.shape) == 2
         assert len(positions.shape) == 2
 
         self.relax_mol = relax_mol
@@ -75,7 +78,7 @@ class Molecule:
         )
 
         self.atom_types = atom_types.long()
-        self.bond_types = bond_types.long()
+        self.bond_types = bond_types.long() if bond_types is not None else None
         self.positions = positions
         self.positions_pocket = positions_pocket
         self.atom_types_pocket = atom_types_pocket
@@ -106,11 +109,14 @@ class Molecule:
         ) and isinstance(self.hybridization, torch.Tensor)
         self.build_mol_with_addfeats = build_mol_with_addfeats
 
-        self.rdkit_mol = (
-            self.build_molecule_openbabel()
-            if build_obabel_mol
-            else self.build_molecule()
-        )
+        if rdkit_mol is None:
+            self.rdkit_mol = (
+                self.build_molecule_openbabel()
+                if build_obabel_mol
+                else self.build_molecule()
+            )
+        else:
+            self.rdkit_mol = rdkit_mol
         self.num_nodes = len(atom_types)
         self.num_atom_types = len(self.atom_decoder)
 
@@ -254,7 +260,9 @@ class Molecule:
                 mol.AddBond(
                     bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), bond.GetBondType()
                 )
-            mol = self.process_obabel_molecule(mol, sanitize=True, largest_frag=True)
+            mol = self.process_obabel_molecule(
+                mol, sanitize=self.sanitize, largest_frag=self.sanitize
+            )
         except:
             return None
 

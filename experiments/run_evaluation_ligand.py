@@ -96,9 +96,6 @@ def evaluate(
     if hparams.continuous:
         print("Using continuous diffusion")
         from experiments.diffusion_continuous import Trainer
-    elif hparams.bond_prediction:
-        print("Starting bond prediction model via discrete diffusion")
-        from experiments.bond_prediction_discrete import Trainer
     elif hparams.latent_dim:
         print("Using latent diffusion")
         # from experiments.diffusion_latent_discrete import Trainer #need refactor
@@ -116,7 +113,7 @@ def evaluate(
         elif hparams.additional_feats:
             if dataset == "crossdocked":
                 print("Ligand-pocket testing using additional features")
-                from experiments.diffusion_discrete_moreFeats_ligand import Trainer
+                from experiments.diffusion_discrete_pocket_addfeats import Trainer
             else:
                 print("Using additional features")
                 from experiments.diffusion_discrete_moreFeats import Trainer

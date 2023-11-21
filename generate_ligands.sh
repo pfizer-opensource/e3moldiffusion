@@ -1,6 +1,6 @@
 #!/bin/sh
 
-for i in 8; do
+for i in 9; do
     echo "${i}"
     mkdir /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_fienetune_lr2_cutoff5_bonds7/evaluation/eval_"${i}"
     python experiments/generate_ligands.py \
@@ -12,10 +12,11 @@ for i in 8; do
     --write-dict \
     --skip-existing \
     --num-ligands-per-pocket 100 \
-    --batch-size 70 \
-    --build-obabel-mol 
+    --batch-size 60 \
+    # --n-nodes-bias 5 \
+    #--build-obabel-mol \
+    #--sanitize
     #--fix-n-nodes \
     #--relax-mol \
     #--max-relax-iter 200 \
-    #--sanitize
 done

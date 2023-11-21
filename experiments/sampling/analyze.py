@@ -363,6 +363,7 @@ class BasicMolecularMetrics(object):
             molecules, stat.atom_types, save_histogram=self.test
         )
         self.atom_types_tv(atom_types_tv)
+
         edge_types_tv, bond_tv_per_class, sparsity_level = bond_types_distance(
             molecules, stat.bond_types, save_histogram=self.test
         )

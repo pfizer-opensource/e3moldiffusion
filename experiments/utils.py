@@ -1,5 +1,7 @@
 import argparse
 import math
+import os
+from glob import glob
 from os.path import dirname, exists, join
 from typing import Tuple
 
@@ -17,6 +19,7 @@ from torch_geometric.utils.sort_edge_index import sort_edge_index
 from torch_geometric.utils.subgraph import subgraph
 from torch_scatter import scatter_add, scatter_mean
 from torch_sparse import coalesce
+from tqdm import tqdm
 
 from e3moldiffusion.molfeat import atom_type_config
 from experiments.molecule_utils import Molecule
@@ -65,6 +68,26 @@ atomic_masses = np.array([
     289.194, 293.204, 293.208, 294.214,
 ])
 # fmt: on
+
+
+FULL_ATOM_ENCODER = {
+    "H": 0,
+    "B": 1,
+    "C": 2,
+    "N": 3,
+    "O": 4,
+    "F": 5,
+    "Al": 6,
+    "Si": 7,
+    "P": 8,
+    "S": 9,
+    "Cl": 10,
+    "As": 11,
+    "Br": 12,
+    "I": 13,
+    "Hg": 14,
+    "Bi": 15,
+}
 
 
 class LoadFromFile(argparse.Action):
@@ -1081,3 +1104,74 @@ def prepare_pocket(
     )
 
     return pocket
+
+
+def sdfs_to_molecules(sdf_path, remove_hs=True):
+    dataset_info = {"atom_decoder": FULL_ATOM_ENCODER}
+    mols = []
+
+    sdf_files = glob(os.path.join(sdf_path, "*.sdf"))
+
+    for sdf in tqdm(sdf_files):
+        ligands = Chem.SDMolSupplier(sdf)
+        for mol in ligands:
+            if mol is not None:
+                Chem.Kekulize(mol, clearAromaticFlags=True)
+                atoms = []
+                charges = []
+                for atom in mol.GetAtoms():
+                    atoms.append(FULL_ATOM_ENCODER[atom.GetSymbol()])
+                    charges.append(atom.GetFormalCharge())
+                atoms = torch.Tensor(atoms).long()
+                charges = torch.Tensor(charges).long()
+                coords = torch.from_numpy(mol.GetConformer().GetPositions()).float()
+
+                n = coords.size(0)
+                adj = torch.from_numpy(
+                    Chem.rdmolops.GetAdjacencyMatrix(mol, useBO=True)
+                )
+                edge_index = adj.nonzero().contiguous().T
+                bond_types = adj[edge_index[0], edge_index[1]]
+                bond_types[bond_types == 1.5] = 4
+                if remove_hs:
+                    assert max(bond_types) != 4
+                edge_attr = bond_types.long()
+                batch = torch.zeros(len(atoms))
+                bond_edge_index, bond_edge_attr = sort_edge_index(
+                    edge_index=edge_index, edge_attr=edge_attr, sort_by_row=False
+                )
+                edge_index_global = (
+                    torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1))
+                    .int()
+                    .fill_diagonal_(0)
+                )
+                edge_index_global, _ = dense_to_sparse(edge_index_global)
+                edge_index_global = sort_edge_index(
+                    edge_index_global, sort_by_row=False
+                )
+                edge_index_global, edge_attr_global = coalesce_edges(
+                    edge_index=edge_index_global,
+                    bond_edge_index=bond_edge_index,
+                    bond_edge_attr=bond_edge_attr,
+                    n=n,
+                )
+                edge_index_global, edge_attr_global = sort_edge_index(
+                    edge_index=edge_index_global,
+                    edge_attr=edge_attr_global,
+                    sort_by_row=False,
+                )
+                edge_attrs_dense = torch.zeros(size=(n, n), device="cpu").long()
+                edge_attrs_dense[
+                    edge_index_global[0, :], edge_index_global[1, :]
+                ] = edge_attr_global
+
+                molecule = Molecule(
+                    atom_types=atoms,
+                    positions=coords,
+                    bond_types=edge_attrs_dense,
+                    charges=charges,
+                    rdkit_mol=mol,
+                    dataset_info=dataset_info,
+                )
+                mols.append(molecule)
+    return mols
