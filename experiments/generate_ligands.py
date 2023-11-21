@@ -1,20 +1,20 @@
 import argparse
+import os
 import warnings
+from datetime import datetime
 from pathlib import Path
 from time import time
-import re
+
 import numpy as np
-import torch
-from rdkit import Chem
-from tqdm import tqdm
 import pandas as pd
-from experiments.utils import prepare_pocket, write_sdf_file
+import torch
 from Bio.PDB import PDBParser
+from tqdm import tqdm
+
 from experiments.data.distributions import DistributionProperty
 from experiments.docking import calculate_qvina2_score
 from experiments.sampling.analyze import analyze_stability_for_molecules
-import os
-from datetime import datetime
+from experiments.utils import prepare_pocket, write_sdf_file
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
@@ -37,6 +37,7 @@ def evaluate(
     skip_existing,
     fix_n_nodes,
     num_ligands_per_pocket,
+    build_obabel_mol,
     batch_size,
     ddpm,
     eta_ddim,
@@ -51,6 +52,7 @@ def evaluate(
     hparams = torch.load(model_path)["hyper_parameters"]
     hparams["select_train_subset"] = False
     hparams["diffusion_pretraining"] = False
+    hparams["num_charge_classes"] = 6
     hparams = dotdict(hparams)
 
     hparams.load_ckpt_from_pretrained = None
@@ -127,7 +129,11 @@ def evaluate(
     statistics_dict = {"QED": [], "SA": [], "Lipinski": [], "Diversity": []}
     sdf_files = []
 
-    print("Starting sampling...")
+    if build_obabel_mol:
+        print(
+            "Sampled molecules will be built with OpenBabel (without bond information)!"
+        )
+    print("\nStarting sampling...\n")
     for sdf_file in pbar:
         ligand_name = sdf_file.stem
 
@@ -178,6 +184,7 @@ def evaluate(
                 pocket_data,
                 num_graphs=batch_size,
                 fix_n_nodes=fix_n_nodes,
+                build_obabel_mol=build_obabel_mol,
                 inner_verbose=False,
                 save_traj=False,
                 ddpm=ddpm,
@@ -185,23 +192,15 @@ def evaluate(
                 relax_mol=relax_mol,
                 max_relax_iter=max_relax_iter,
                 sanitize=sanitize,
-                mol_device="cpu",
             )
             all_molecules += len(molecules)
-            (
-                _,
-                _,
-                statistics,
-                _,
-                _,
-                valid_molecules,
-            ) = analyze_stability_for_molecules(
+            valid_molecules = analyze_stability_for_molecules(
                 molecule_list=molecules,
                 dataset_info=dataset_info,
                 smiles_train=train_smiles,
                 local_rank=0,
                 return_molecules=True,
-                return_stats_per_molecule=True,
+                calculate_statistics=False,
                 remove_hs=hparams.remove_hs,
                 device="cpu",
             )
@@ -350,6 +349,7 @@ def get_args():
                         help='Whether or not to calculate xTB energies and forces')
     parser.add_argument('--num-ligands-per-pocket', default=100, type=int,
                             help='How many ligands per pocket to sample. Defaults to 10')
+    parser.add_argument("--build-obabel-mol", default=False, action="store_true")
     parser.add_argument('--batch-size', default=100, type=int)
     parser.add_argument('--ddim', default=False, action="store_true",
                         help='If DDIM sampling should be used. Defaults to False')
@@ -385,6 +385,7 @@ if __name__ == "__main__":
         fix_n_nodes=args.fix_n_nodes,
         batch_size=args.batch_size,
         num_ligands_per_pocket=args.num_ligands_per_pocket,
+        build_obabel_mol=args.build_obabel_mol,
         ddpm=not args.ddim,
         eta_ddim=args.eta_ddim,
         write_dict=args.write_dict,

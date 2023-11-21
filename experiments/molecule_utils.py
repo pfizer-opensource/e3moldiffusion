@@ -1,11 +1,13 @@
-import torch
-import rdkit
-from rdkit import Chem, RDLogger
-from rdkit.Geometry import Point3D
-from rdkit import Chem, RDLogger
-from rdkit.Geometry import Point3D
+import tempfile
 import warnings
+
 import numpy as np
+import openbabel
+import torch
+from rdkit import Chem, RDLogger
+from rdkit.Geometry import Point3D
+
+from experiments.data.utils import write_xyz_file
 
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
@@ -18,7 +20,8 @@ bond_dict = [
     Chem.rdchem.BondType.AROMATIC,
 ]
 
-from rdkit.Chem.rdForceFieldHelpers import UFFOptimizeMolecule, UFFHasAllMoleculeParams
+from rdkit.Chem.rdForceFieldHelpers import UFFHasAllMoleculeParams, UFFOptimizeMolecule
+
 from experiments.data.utils import x_map as additional_node_map
 
 
@@ -40,12 +43,15 @@ class Molecule:
         max_relax_iter=200,
         sanitize=True,
         check_validity=False,
+        build_obabel_mol=False,
     ):
-        """atom_types: n      LongTensor
+        """
+        atom_types: n      LongTensor
         charges: n         LongTensor
         bond_types: n x n  LongTensor
         positions: n x 3   FloatTensor
-        atom_decoder: extracted from dataset_infos."""
+        atom_decoder: extracted from dataset_infos.
+        """
         assert atom_types.dim() == 1 and atom_types.dtype == torch.long, (
             f"shape of atoms {atom_types.shape} " f"and dtype {atom_types.dtype}"
         )
@@ -62,7 +68,7 @@ class Molecule:
         self.check_validity = check_validity
 
         self.dataset_info = dataset_info
-        atom_decoder = (
+        self.atom_decoder = (
             dataset_info["atom_decoder"]
             if isinstance(dataset_info, dict)
             else self.dataset_info.atom_decoder
@@ -100,11 +106,15 @@ class Molecule:
         ) and isinstance(self.hybridization, torch.Tensor)
         self.build_mol_with_addfeats = build_mol_with_addfeats
 
-        self.rdkit_mol = self.build_molecule(atom_decoder)
+        self.rdkit_mol = (
+            self.build_molecule_openbabel()
+            if build_obabel_mol
+            else self.build_molecule()
+        )
         self.num_nodes = len(atom_types)
-        self.num_atom_types = len(atom_decoder)
+        self.num_atom_types = len(self.atom_decoder)
 
-    def build_molecule(self, atom_decoder, verbose=False):
+    def build_molecule(self, verbose=False):
         """If positions is None,"""
         if verbose:
             print("building new molecule")
@@ -118,7 +128,7 @@ class Molecule:
                 if atom == -1:
                     continue
                 try:
-                    a = Chem.Atom(atom_decoder[int(atom.item())])
+                    a = Chem.Atom(self.atom_decoder[int(atom.item())])
                 except:
                     continue
                 if charge.item() != 0:
@@ -129,20 +139,20 @@ class Molecule:
                 )
                 mol.AddAtom(a)
                 if verbose:
-                    print("Atom added: ", atom.item(), atom_decoder[atom.item()])
+                    print("Atom added: ", atom.item(), self.atom_decoder[atom.item()])
         else:
             for atom, charge in zip(self.atom_types, self.charges):
                 if atom == -1:
                     continue
                 try:
-                    a = Chem.Atom(atom_decoder[int(atom.item())])
+                    a = Chem.Atom(self.atom_decoder[int(atom.item())])
                 except:
                     a = Chem.Atom("H")
                 if charge.item() != 0:
                     a.SetFormalCharge(charge.item())
                 mol.AddAtom(a)
                 if verbose:
-                    print("Atom added: ", atom.item(), atom_decoder[atom.item()])
+                    print("Atom added: ", atom.item(), self.atom_decoder[atom.item()])
 
         edge_types = torch.triu(self.bond_types, diagonal=1)
         edge_types[edge_types == -1] = 0
@@ -202,6 +212,114 @@ class Molecule:
                 return self.compute_validity(mol)
             else:
                 return mol
+
+    def build_molecule_openbabel(self):
+        """
+        Build an RDKit molecule using openbabel for creating bonds
+        Args:
+            positions: N x 3
+            atom_types: N
+            atom_decoder: maps indices to atom types
+        Returns:
+            rdkit molecule
+        """
+        atom_types = [self.atom_decoder[a] for a in self.atom_types]
+
+        try:
+            with tempfile.NamedTemporaryFile() as tmp:
+                tmp_file = tmp.name
+
+                # Write xyz file
+                write_xyz_file(self.positions, atom_types, tmp_file)
+
+                # Convert to sdf file with openbabel
+                # openbabel will add bonds
+                obConversion = openbabel.OBConversion()
+                obConversion.SetInAndOutFormats("xyz", "sdf")
+                ob_mol = openbabel.OBMol()
+                obConversion.ReadFile(ob_mol, tmp_file)
+
+                obConversion.WriteFile(ob_mol, tmp_file)
+
+                # Read sdf file with RDKit
+                tmp_mol = Chem.SDMolSupplier(tmp_file, sanitize=False)[0]
+
+            # Build new molecule. This is a workaround to remove radicals.
+            mol = Chem.RWMol()
+            for atom in tmp_mol.GetAtoms():
+                mol.AddAtom(Chem.Atom(atom.GetSymbol()))
+            mol.AddConformer(tmp_mol.GetConformer(0))
+
+            for bond in tmp_mol.GetBonds():
+                mol.AddBond(
+                    bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), bond.GetBondType()
+                )
+            mol = self.process_obabel_molecule(mol, sanitize=True, largest_frag=True)
+        except:
+            return None
+
+        return mol
+
+    def process_obabel_molecule(
+        self,
+        rdmol,
+        add_hydrogens=False,
+        sanitize=False,
+        relax_iter=0,
+        largest_frag=False,
+    ):
+        """
+        Apply filters to an RDKit molecule. Makes a copy first.
+        Args:
+            rdmol: rdkit molecule
+            add_hydrogens
+            sanitize
+            relax_iter: maximum number of UFF optimization iterations
+            largest_frag: filter out the largest fragment in a set of disjoint
+                molecules
+        Returns:
+            RDKit molecule or None if it does not pass the filters
+        """
+
+        # Create a copy
+        mol = Chem.Mol(rdmol)
+
+        if sanitize:
+            try:
+                Chem.SanitizeMol(mol)
+            except ValueError:
+                warnings.warn("Sanitization failed. Returning None.")
+                return None
+
+        if add_hydrogens:
+            mol = Chem.AddHs(mol, addCoords=(len(mol.GetConformers()) > 0))
+
+        if largest_frag:
+            mol_frags = Chem.GetMolFrags(mol, asMols=True, sanitizeFrags=False)
+            mol = max(mol_frags, default=mol, key=lambda m: m.GetNumAtoms())
+            if sanitize:
+                # sanitize the updated molecule
+                try:
+                    Chem.SanitizeMol(mol)
+                except ValueError:
+                    return None
+
+        if relax_iter > 0:
+            if not UFFHasAllMoleculeParams(mol):
+                warnings.warn(
+                    "UFF parameters not available for all atoms. " "Returning None."
+                )
+                return None
+
+            try:
+                self.uff_relax(mol, relax_iter)
+                if sanitize:
+                    # sanitize the updated molecule
+                    Chem.SanitizeMol(mol)
+            except (RuntimeError, ValueError) as e:
+                return None
+
+        return mol
 
     def uff_relax(self, mol, max_iter=200):
         """

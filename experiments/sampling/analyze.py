@@ -1,17 +1,17 @@
+import itertools
 from collections import Counter
+from multiprocessing import Pool
+
+import numpy as np
 import torch
 from rdkit import Chem, RDLogger
-from torchmetrics import MaxMetric, MeanMetric
-from experiments.sampling.utils import *
-import numpy as np
-import itertools
-import torch
-from tqdm import tqdm
-from multiprocessing import Pool
-from rdkit import Chem
-from rdkit.DataStructs import TanimotoSimilarity, BulkTanimotoSimilarity
+from rdkit.Chem import QED, Crippen, Descriptors, Lipinski
 from rdkit.Chem.QED import qed
-from rdkit.Chem import Descriptors, Crippen, Lipinski, QED
+from rdkit.DataStructs import BulkTanimotoSimilarity, TanimotoSimilarity
+from torchmetrics import MaxMetric, MeanMetric
+from tqdm import tqdm
+
+from experiments.sampling.utils import *
 from experiments.sampling.utils import calculateScore
 
 lg = RDLogger.logger()
@@ -146,12 +146,13 @@ class BasicMolecularMetrics(object):
         valid = []
         for mol in generated:
             rdmol = mol.rdkit_mol
-            try:
-                Chem.SanitizeMol(rdmol)
-            except ValueError:
-                continue
+            if rdmol is not None:
+                try:
+                    Chem.SanitizeMol(rdmol)
+                except ValueError:
+                    continue
 
-            valid.append(rdmol)
+                valid.append(rdmol)
 
         return len(valid) / len(generated)
 
@@ -233,7 +234,7 @@ class BasicMolecularMetrics(object):
         remove_hs=False,
         return_molecules=False,
         return_stats_per_molecule=False,
-        calculate_statistics=True
+        calculate_statistics=True,
     ):
         stable_molecules = []
         if not remove_hs:
@@ -648,13 +649,17 @@ def analyze_stability_for_molecules(
         remove_hs=remove_hs,
         return_stats_per_molecule=return_stats_per_molecule,
         return_molecules=return_molecules,
-        calculate_statistics=calculate_statistics
+        calculate_statistics=calculate_statistics,
     )
-    return (
-        stability_dict,
-        validity_dict,
-        statistics_dict,
-        sampled_smiles,
-        stable_molecules,
-        valid_molecules,
-    )
+
+    if calculate_statistics:
+        return (
+            stability_dict,
+            validity_dict,
+            statistics_dict,
+            sampled_smiles,
+            stable_molecules,
+            valid_molecules,
+        )
+    else:
+        return valid_molecules

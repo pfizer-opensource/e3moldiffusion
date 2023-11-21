@@ -6,13 +6,19 @@ import pandas as pd
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
+from torch import Tensor
+from torch_geometric.data import Batch
+from torch_geometric.nn import radius_graph
+from torch_geometric.utils import dense_to_sparse, sort_edge_index
+from tqdm import tqdm
+
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.data.abstract_dataset import AbstractDatasetInfos
 from experiments.data.distributions import prepare_context
-from experiments.diffusion.utils import initialize_edge_attrs_reverse, bond_guidance
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
+from experiments.diffusion.utils import bond_guidance, initialize_edge_attrs_reverse
 from experiments.losses import DiffusionLoss
 from experiments.molecule_utils import Molecule
 from experiments.sampling.analyze_strict import analyze_stability_for_molecules
@@ -22,11 +28,6 @@ from experiments.utils import (
     load_model,
     zero_mean,
 )
-from torch import Tensor
-from torch_geometric.data import Batch
-from torch_geometric.nn import radius_graph
-from torch_geometric.utils import dense_to_sparse, sort_edge_index
-from tqdm import tqdm
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(

@@ -1,7 +1,8 @@
-import torch
 from typing import Dict, List, Optional
-from torch import nn, Tensor
+
+import torch
 import torch.nn.functional as F
+from torch import Tensor, nn
 from torch_scatter import scatter_mean
 
 

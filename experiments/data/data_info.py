@@ -1,9 +1,10 @@
 import torch
 import torch.nn.functional as F
-from experiments.molecule_utils import PlaceHolder
+
 from experiments.data.abstract_dataset import (
     AbstractDatasetInfos,
 )
+from experiments.molecule_utils import PlaceHolder
 
 full_atom_encoder = {
     "H": 0,

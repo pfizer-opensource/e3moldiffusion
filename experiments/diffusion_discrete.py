@@ -1,57 +1,42 @@
 import logging
 import os
 from datetime import datetime
-from typing import Optional, List, Tuple
+from typing import List, Tuple
 
 import pandas as pd
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
-from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
-from e3moldiffusion.molfeat import get_bond_feature_dims
-from experiments.data.abstract_dataset import AbstractDatasetInfos
-from experiments.diffusion.categorical import CategoricalDiffusionKernel
-from experiments.diffusion.continuous import DiscreteDDPM
-from experiments.losses import DiffusionLoss
-from experiments.molecule_utils import Molecule
-from experiments.sampling.analyze import analyze_stability_for_molecules
-from experiments.utils import (
-    coalesce_edges,
-    get_list_of_edge_adjs,
-    load_model,
-    zero_mean,
-    get_molecules,
-)
-from experiments.data.utils import (
-    write_xyz_file_from_batch,
-    write_trajectory_as_xyz,
-)
 from torch import Tensor
 from torch_geometric.data import Batch
-from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from tqdm import tqdm
 
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
-from experiments.diffusion.continuous import DiscreteDDPM
-from experiments.diffusion.categorical import CategoricalDiffusionKernel
+from experiments.data.abstract_dataset import AbstractDatasetInfos
 from experiments.data.distributions import prepare_context
+from experiments.data.utils import (
+    write_trajectory_as_xyz,
+    write_xyz_file_from_batch,
+)
+from experiments.diffusion.categorical import CategoricalDiffusionKernel
+from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.utils import (
-    initialize_edge_attrs_reverse,
     bond_guidance,
     energy_guidance,
-)
-from experiments.molecule_utils import Molecule
-from experiments.utils import (
-    coalesce_edges,
-    get_list_of_edge_adjs,
-    zero_mean,
-    load_model,
-    load_bond_model,
-    load_energy_model,
+    initialize_edge_attrs_reverse,
 )
 from experiments.losses import DiffusionLoss
+from experiments.sampling.analyze import analyze_stability_for_molecules
+from experiments.utils import (
+    coalesce_edges,
+    get_molecules,
+    load_bond_model,
+    load_energy_model,
+    load_model,
+    zero_mean,
+)
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(
@@ -164,7 +149,6 @@ class Trainer(pl.LightningModule):
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
             beta_max=hparams["beta_max"],
-            N=hparams["timesteps"],
             scaled_reverse_posterior_sigma=True,
             schedule=self.hparams.noise_scheduler,
             nu=2.5,
@@ -545,6 +529,8 @@ class Trainer(pl.LightningModule):
         ckpt_energy_model: str = None,
         save_traj: bool = False,
         fix_noise_and_nodes: bool = False,
+        guidance_steps: int = 100,
+        optimization: str = "minimize",
         relax_sampling: bool = False,
         relax_steps: int = 10,
         device: str = "cpu",
@@ -563,11 +549,12 @@ class Trainer(pl.LightningModule):
             l.append(ngraphs - sum(l))
         assert sum(l) == ngraphs
 
-        molecule_list = []
         start = datetime.now()
         if verbose:
             if self.local_rank == 0:
                 print(f"Creating {ngraphs} graphs in {l} batches")
+
+        molecule_list = []
         for i, num_graphs in enumerate(l):
             molecules = self.reverse_sampling(
                 num_graphs=num_graphs,
@@ -581,6 +568,8 @@ class Trainer(pl.LightningModule):
                 save_dir=save_dir,
                 fix_noise_and_nodes=fix_noise_and_nodes,
                 iteration=i,
+                guidance_steps=guidance_steps,
+                optimization=optimization,
                 relax_sampling=relax_sampling,
                 relax_steps=relax_steps,
             )
@@ -657,6 +646,141 @@ class Trainer(pl.LightningModule):
         else:
             return total_res
 
+    @torch.no_grad()
+    def generate_valid_samples(
+        self,
+        dataset_info,
+        ngraphs: int = 4000,
+        bs: int = 500,
+        save_dir: str = None,
+        return_molecules: bool = False,
+        verbose: bool = False,
+        inner_verbose=False,
+        ddpm: bool = True,
+        eta_ddim: float = 1.0,
+        every_k_step: int = 1,
+        guidance_scale: float = 1.0e-4,
+        use_energy_guidance: bool = False,
+        ckpt_energy_model: str = None,
+        save_traj: bool = False,
+        fix_noise_and_nodes: bool = False,
+        guidance_steps: int = 100,
+        optimization: str = "minimize",
+        relax_sampling: bool = False,
+        relax_steps: int = 10,
+        device: str = "cpu",
+    ):
+        energy_model = None
+        if use_energy_guidance:
+            energy_model = load_energy_model(ckpt_energy_model, self.num_atom_features)
+            # for param in self.energy_model.parameters():
+            #    param.requires_grad = False
+            energy_model.to(self.device)
+            energy_model.eval()
+
+        start = datetime.now()
+
+        i = 0
+        n_graphs_remaining = ngraphs
+        valid_molecule_list = []
+        while len(valid_molecule_list) < ngraphs:
+            b = n_graphs_remaining // bs
+            l = [bs] * b
+            if sum(l) != n_graphs_remaining:
+                l.append(n_graphs_remaining - sum(l))
+            assert sum(l) == n_graphs_remaining
+            if verbose:
+                if self.local_rank == 0:
+                    print(f"Creating {n_graphs_remaining} graphs in {l} batches")
+            molecule_list = []
+            for num_graphs in l:
+                molecules = self.reverse_sampling(
+                    num_graphs=num_graphs,
+                    verbose=inner_verbose,
+                    save_traj=save_traj,
+                    ddpm=ddpm,
+                    eta_ddim=eta_ddim,
+                    every_k_step=every_k_step,
+                    guidance_scale=guidance_scale,
+                    energy_model=energy_model,
+                    save_dir=save_dir,
+                    fix_noise_and_nodes=fix_noise_and_nodes,
+                    iteration=i,
+                    guidance_steps=guidance_steps,
+                    optimization=optimization,
+                    relax_sampling=relax_sampling,
+                    relax_steps=relax_steps,
+                )
+
+                molecule_list.extend(molecules)
+                i += 1
+
+            valid_molecules = analyze_stability_for_molecules(
+                molecule_list=molecule_list,
+                dataset_info=dataset_info,
+                smiles_train=self.smiles_list,
+                local_rank=self.local_rank,
+                return_molecules=return_molecules,
+                calculate_statistics=False,
+                device=device,
+            )
+            valid_molecule_list.extend(valid_molecules)
+
+            n_graphs_remaining = (ngraphs - len(valid_molecule_list)) * 2
+
+        (
+            stability_dict,
+            validity_dict,
+            statistics_dict,
+            all_generated_smiles,
+            stable_molecules,
+            valid_molecules,
+        ) = analyze_stability_for_molecules(
+            molecule_list=valid_molecule_list,
+            dataset_info=dataset_info,
+            smiles_train=self.smiles_list,
+            local_rank=self.local_rank,
+            return_molecules=return_molecules,
+            device=device,
+        )
+
+        run_time = datetime.now() - start
+        if verbose:
+            if self.local_rank == 0:
+                print(f"Run time={run_time}")
+        total_res = dict(stability_dict)
+        total_res.update(validity_dict)
+        total_res.update(statistics_dict)
+        if self.local_rank == 0:
+            print(total_res)
+        total_res = pd.DataFrame.from_dict([total_res])
+        if self.local_rank == 0:
+            print(total_res)
+
+        total_res["run_time"] = str(run_time)
+        total_res["ngraphs"] = str(len(valid_molecules))
+        try:
+            if save_dir is None:
+                save_dir = os.path.join(
+                    self.hparams.save_dir,
+                    "run" + str(self.hparams.id),
+                    "evaluation.csv",
+                )
+                print(f"Saving evaluation csv file to {save_dir}")
+            else:
+                save_dir = os.path.join(save_dir, "evaluation.csv")
+            if self.local_rank == 0:
+                with open(save_dir, "a") as f:
+                    total_res.to_csv(f, header=True)
+        except Exception as e:
+            print(e)
+            pass
+
+        if return_molecules:
+            return total_res, all_generated_smiles, stable_molecules
+        else:
+            return total_res
+
     def reverse_sampling(
         self,
         num_graphs: int,
@@ -671,6 +795,8 @@ class Trainer(pl.LightningModule):
         fix_noise_and_nodes: bool = False,
         iteration: int = 0,
         chain_iterator=None,
+        guidance_steps: int = 100,
+        optimization: str = "minimize",
         relax_sampling: bool = False,
         relax_steps: int = 10,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
@@ -698,6 +824,10 @@ class Trainer(pl.LightningModule):
             batch_num_nodes, dim=0
         )
         bs = int(batch.max()) + 1
+
+        if energy_model is not None:
+            t = torch.arange(0, self.hparams.timesteps)
+            alphas = self.sde_pos.alphas_cumprod[t]
 
         # sample context condition
         context = None
@@ -802,27 +932,15 @@ class Trainer(pl.LightningModule):
             if ddpm:
                 if self.hparams.noise_scheduler == "adaptive":
                     # positions
-                    if energy_model is not None:
-                        pos, signal = self.sde_pos.sample_reverse_adaptive(
-                            s,
-                            t,
-                            pos,
-                            coords_pred,
-                            batch,
-                            cog_proj=True,
-                            eta_ddim=eta_ddim,
-                            return_signal=True,
-                        )
-                    else:
-                        pos = self.sde_pos.sample_reverse_adaptive(
-                            s,
-                            t,
-                            pos,
-                            coords_pred,
-                            batch,
-                            cog_proj=True,
-                            eta_ddim=eta_ddim,
-                        )
+                    pos = self.sde_pos.sample_reverse_adaptive(
+                        s,
+                        t,
+                        pos,
+                        coords_pred,
+                        batch,
+                        cog_proj=True,
+                        eta_ddim=eta_ddim,
+                    )
                 else:
                     # positions
                     pos = self.sde_pos.sample_reverse(
@@ -879,7 +997,8 @@ class Trainer(pl.LightningModule):
                     edge_index_local,
                     edge_index_global,
                 )
-            if energy_model is not None:  # and timestep <= 100:
+            if energy_model is not None and timestep <= guidance_steps:
+                signal = alphas[timestep] / (guidance_scale * 10)
                 pos = energy_guidance(
                     pos,
                     node_feats_in,
@@ -887,7 +1006,9 @@ class Trainer(pl.LightningModule):
                     energy_model,
                     batch,
                     batch_size=bs,
-                    guidance_scale=guidance_scale,  # signal[0],  # guidance_scale
+                    optimization=optimization,
+                    guidance_scale=guidance_scale,
+                    signal=signal,
                 )
 
             if save_traj:
@@ -944,7 +1065,9 @@ class Trainer(pl.LightningModule):
 
         if save_traj:
             write_trajectory_as_xyz(
-                molecules, os.path.join(save_dir, f"iter_{iteration}")
+                molecules,
+                path=os.path.join(save_dir, f"iter_{iteration}"),
+                strict=True,
             )
 
         return molecules
@@ -1094,7 +1217,8 @@ class Trainer(pl.LightningModule):
         if save_traj:
             write_trajectory_as_xyz(
                 molecules,
-                os.path.join(save_dir, f"iter_{iteration}"),
+                path=os.path.join(save_dir, f"iter_{iteration}"),
+                strict=True,
             )
 
         return molecules

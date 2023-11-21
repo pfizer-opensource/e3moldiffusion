@@ -2,9 +2,8 @@ import logging
 import os
 from datetime import datetime
 from typing import List, Tuple
-from tqdm import tqdm
-import pandas as pd
 
+import pandas as pd
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
@@ -12,25 +11,24 @@ from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
+from tqdm import tqdm
 
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
-from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.data.abstract_dataset import AbstractDatasetInfos
 from experiments.data.distributions import prepare_context
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
-
+from experiments.diffusion.continuous import DiscreteDDPM
+from experiments.losses import DiffusionLoss
 from experiments.molecule_utils import Molecule
+from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import (
     coalesce_edges,
     get_list_of_edge_adjs,
-    zero_mean,
-    load_model,
     load_bond_model,
+    load_model,
+    zero_mean,
 )
-from experiments.sampling.analyze import analyze_stability_for_molecules
-
-from experiments.losses import DiffusionLoss
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 
@@ -45,7 +43,7 @@ class Trainer(pl.LightningModule):
         smiles_list: list,
         prop_dist=None,
         prop_norm=None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__()
         self.save_hyperparameters(hparams)
@@ -633,19 +631,17 @@ class Trainer(pl.LightningModule):
                 molecule_list.append(molecule)
 
         (
-            #stability_dict,
-            #validity_dict,
-            #statistics_dict,
-            #all_generated_smiles,
-            #stable_molecules,
-            
+            # stability_dict,
+            # validity_dict,
+            # statistics_dict,
+            # all_generated_smiles,
+            # stable_molecules,
             stability_dict,
             validity_dict,
             statistics_dict,
             all_generated_smiles,
             stable_molecules,
             valid_molecules,
-        
         ) = analyze_stability_for_molecules(
             molecule_list=molecule_list,
             dataset_info=dataset_info,

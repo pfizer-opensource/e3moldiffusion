@@ -1,6 +1,8 @@
 import os
-from callbacks.ema import ExponentialMovingAverage
+import warnings
 from argparse import ArgumentParser
+
+import numpy as np
 import pytorch_lightning as pl
 import torch.nn.functional as F
 from pytorch_lightning.callbacks import (
@@ -9,16 +11,16 @@ from pytorch_lightning.callbacks import (
     ModelSummary,
     TQDMProgressBar,
 )
-import numpy as np
 from pytorch_lightning.loggers import TensorBoardLogger
-import warnings
+
+from callbacks.ema import ExponentialMovingAverage
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
 )
 
-from experiments.hparams import add_arguments
 from experiments.data.distributions import DistributionProperty
+from experiments.hparams import add_arguments
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -191,12 +193,13 @@ if __name__ == "__main__":
         else:
             print("Using discrete diffusion")
             if hparams.diffusion_pretraining:
-                print("Starting pre-training")
                 if hparams.additional_feats:
-                    from experiments.diffusion_pretrain_discrete_moreFeats import (
+                    print("Starting pre-training on PubChem3D with additional features")
+                    from experiments.diffusion_pretrain_discrete_addfeats import (
                         Trainer,
                     )
                 else:
+                    print("Starting pre-training on PubChem3D")
                     from experiments.diffusion_pretrain_discrete import Trainer
             elif (
                 dataset == "crossdocked"
@@ -206,7 +209,9 @@ if __name__ == "__main__":
                 histogram = os.path.join(hparams.dataset_root, "size_distribution.npy")
                 histogram = np.load(histogram).tolist()
                 print("Ligand-pocket training using additional features")
-                from experiments.diffusion_discrete_moreFeats_ligand import Trainer
+                from experiments.diffusion_discrete_pocket_addfeats import (
+                    Trainer,
+                )
             else:
                 if dataset == "crossdocked":
                     histogram = os.path.join(
@@ -219,7 +224,9 @@ if __name__ == "__main__":
                             from experiments.diffusion_continuous_pocket import Trainer
                         else:
                             print("Discrete ligand-pocket training")
-                            from experiments.diffusion_discrete_pocket import Trainer
+                            from experiments.diffusion_discrete_pocket import (
+                                Trainer,
+                            )
                     else:
                         print("Ligand-pocket training with latent protein encoding")
                         from experiments.diffusion_discrete_latent_pocket import Trainer

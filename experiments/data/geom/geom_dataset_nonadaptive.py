@@ -1,15 +1,14 @@
+from os.path import join
 from typing import Optional
 
-from experiments.data.geom.geom_dataset_adaptive import GeomDrugsDataset
-from pytorch_lightning import LightningDataModule
-from torch_geometric.data import DataLoader
-from tqdm import tqdm
-from os.path import join
-from experiments.data.utils import train_subset
 from torch.utils.data import Subset
+from torch_geometric.data import DataLoader
+
 from experiments.data.abstract_dataset import (
     AbstractDataModule,
 )
+from experiments.data.geom.geom_dataset_adaptive import GeomDrugsDataset
+from experiments.data.utils import train_subset
 
 full_atom_encoder = {
     "H": 0,

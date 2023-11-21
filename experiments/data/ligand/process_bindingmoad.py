@@ -1,26 +1,24 @@
+import argparse
+import random
+import warnings
+from collections import defaultdict
 from pathlib import Path
 from time import time
-import random
-from collections import defaultdict
-import argparse
-import warnings
 
-from tqdm import tqdm
 import numpy as np
 import torch
-from Bio.PDB import PDBParser
-from Bio.PDB.Polypeptide import three_to_one, is_aa
-from Bio.PDB import PDBIO
+from Bio.PDB import PDBIO, PDBParser
+from Bio.PDB.Polypeptide import is_aa, three_to_one
 from openbabel import openbabel
 from rdkit import Chem
 from rdkit.Chem import QED
 from scipy.ndimage import gaussian_filter
+from tqdm import tqdm
 
-from experiments.data.ligand.geometry_utils import get_bb_transform
-from experiments.data.ligand import utils
-from experiments.data.ligand.molecule_builder import build_molecule
-from experiments.data.ligand import constants
+from experiments.data.ligand import constants, utils
 from experiments.data.ligand.constants import covalent_radii, dataset_params
+from experiments.data.ligand.geometry_utils import get_bb_transform
+from experiments.data.ligand.molecule_builder import build_molecule
 
 dataset_info = dataset_params["bindingmoad"]
 amino_acid_dict = dataset_info["aa_encoder"]

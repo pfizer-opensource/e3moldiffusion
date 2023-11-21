@@ -1,5 +1,6 @@
 import os
-from experiments.utils import LoadFromCheckpoint, LoadFromFile
+
+from experiments.utils import LoadFromFile
 
 DEFAULT_SAVE_DIR = os.path.join(os.getcwd(), "3DcoordsAtomsBonds_0")
 

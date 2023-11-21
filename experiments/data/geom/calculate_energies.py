@@ -1,11 +1,13 @@
-from tqdm import tqdm
+import argparse
 import os
 import pickle
-import argparse
-from experiments.xtb_energy import calculate_xtb_energy
-from torch_geometric.data.collate import collate
-import torch
+
 import numpy as np
+import torch
+from torch_geometric.data.collate import collate
+from tqdm import tqdm
+
+from experiments.xtb_energy import calculate_xtb_energy
 
 
 def get_args():
@@ -82,21 +84,19 @@ def process(dataset, split):
             e_ref = np.sum(
                 [atom_reference[a] for a in atom_types]
             )  # * 27.2114 #Hartree to eV
-            e, _ = calculate_xtb_energy(data.pos, atom_types)
+            e, _ = calculate_xtb_energy(mol.pos, atom_types)
             e *= 0.0367493  # eV to Hartree
-            data.energy = torch.tensor(e - e_ref, dtype=torch.float32).unsqueeze(0)
+            mol.energy = torch.tensor(e - e_ref, dtype=torch.float32).unsqueeze(0)
         except:
             print(f"Molecule with id {i} failed...")
             failed_ids.append(i)
             continue
-        mol.energy = e
-        mol.forces_norm = f
         mols.append(mol)
 
-    print(f"Collate the data...")
+    print("Collate the data...")
     data, slices = _collate(mols)
 
-    print(f"Saving the data...")
+    print("Saving the data...")
     torch.save(
         (data, slices), (os.path.join(root_path, f"processed/{split}_data_energy.pt"))
     )

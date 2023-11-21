@@ -1,6 +1,6 @@
 import numpy as np
-from rdkit import Chem
 import torch
+from rdkit import Chem
 
 atom_encoder = {
     "H": 0,

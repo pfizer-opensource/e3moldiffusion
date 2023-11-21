@@ -1,11 +1,12 @@
-import warnings
 import argparse
-import torch
-from experiments.data.distributions import DistributionProperty
-import pytorch_lightning as pl
-import warnings
 import os
+import warnings
+
 import numpy as np
+import pytorch_lightning as pl
+import torch
+
+from experiments.data.distributions import DistributionProperty
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
@@ -28,9 +29,9 @@ def evaluate(
     save_dir,
     save_xyz=True,
     calculate_energy=False,
-    ngraphs=10000,
     batch_size=2,
     use_ligand_dataset_sizes=False,
+    build_obabel_mol=False,
     save_traj=False,
     use_energy_guidance=False,
     ckpt_energy_model=None,
@@ -52,10 +53,9 @@ def evaluate(
     ckpt["hyper_parameters"]["diffusion_pretraining"] = False
     ckpt["hyper_parameters"]["gpus"] = 1
     ckpt["hyper_parameters"]["use_ligand_dataset_sizes"] = use_ligand_dataset_sizes
+    ckpt["hyper_parameters"]["build_obabel_mol"] = build_obabel_mol
     ckpt["hyper_parameters"]["save_traj"] = save_traj
-    ckpt["hyper_parameters"][
-        "dataset_root"
-    ] = "/scratch1/cremej01/data/crossdocked_noH_cutoff8"
+    ckpt["hyper_parameters"]["num_charge_classes"] = 6
 
     ckpt_path = os.path.join(save_dir, f"test_model.ckpt")
     if not os.path.exists(ckpt_path):
@@ -65,7 +65,6 @@ def evaluate(
     hparams = dotdict(hparams)
 
     print(f"Loading {hparams.dataset} Datamodule.")
-    non_adaptive = True
     dataset = "crossdocked"
     if hparams.use_adaptive_loader:
         print("Using adaptive dataloader")
@@ -109,7 +108,7 @@ def evaluate(
         if hparams.diffusion_pretraining:
             print("Starting pre-training")
             if hparams.additional_feats:
-                from experiments.diffusion_pretrain_discrete_moreFeats import (
+                from experiments.diffusion_pretrain_discrete_addfeats import (
                     Trainer,
                 )
             else:
@@ -129,6 +128,11 @@ def evaluate(
                 from experiments.diffusion_discrete_pocket import Trainer
             else:
                 from experiments.diffusion_discrete import Trainer
+
+    if build_obabel_mol:
+        print(
+            "Sampled molecules will be built with OpenBabel (without bond information)!"
+        )
 
     trainer = pl.Trainer(
         accelerator="gpu" if hparams.gpus else "cpu",
@@ -158,6 +162,7 @@ def get_args():
                         help='Path to trained model')
     parser.add_argument("--use-energy-guidance", default=False, action="store_true")
     parser.add_argument("--use-ligand-dataset-sizes", default=False, action="store_true")
+    parser.add_argument("--build-obabel-mol", default=False, action="store_true")
     parser.add_argument("--save-traj", default=False, action="store_true")
     parser.add_argument("--ckpt-energy-model", default=None, type=str)
     parser.add_argument('--guidance-scale', default=1.0e-4, type=float,
@@ -168,8 +173,6 @@ def get_args():
                         help='Whether or not to store generated molecules in xyz files')
     parser.add_argument('--calculate-energy', default=False, action="store_true",
                         help='Whether or not to calculate xTB energies and forces')
-    parser.add_argument('--ngraphs', default=5000, type=int,
-                            help='How many graphs to sample. Defaults to 5000')
     parser.add_argument('--batch-size', default=80, type=int,
                             help='Batch-size to generate the selected ngraphs. Defaults to 80.')
     parser.add_argument('--ddim', default=False, action="store_true",
@@ -188,7 +191,6 @@ if __name__ == "__main__":
     evaluate(
         model_path=args.model_path,
         save_dir=args.save_dir,
-        ngraphs=args.ngraphs,
         batch_size=args.batch_size,
         ddpm=not args.ddim,
         eta_ddim=args.eta_ddim,
@@ -197,6 +199,7 @@ if __name__ == "__main__":
         calculate_energy=args.calculate_energy,
         use_energy_guidance=args.use_energy_guidance,
         use_ligand_dataset_sizes=args.use_ligand_dataset_sizes,
+        build_obabel_mol=args.build_obabel_mol,
         ckpt_energy_model=args.ckpt_energy_model,
         guidance_scale=args.guidance_scale,
     )

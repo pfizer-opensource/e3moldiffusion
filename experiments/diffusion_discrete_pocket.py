@@ -1,63 +1,48 @@
 import logging
 import os
-from datetime import datetime
-from typing import Optional, List, Tuple, Dict
-from torch_sparse import coalesce
-from experiments.data.utils import (
-    write_xyz_file,
-    write_xyz_file_from_batch,
-    write_trajectory_as_xyz,
-)
-from experiments.xtb_energy import calculate_xtb_energy
 import pickle
+from datetime import datetime
+from typing import Dict, List, Tuple
+
 import pandas as pd
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
-from torch_scatter import scatter_mean
-from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
-from e3moldiffusion.molfeat import get_bond_feature_dims
-from experiments.data.abstract_dataset import AbstractDatasetInfos
-from experiments.data.distributions import ConditionalDistributionNodes
-from experiments.diffusion.categorical import CategoricalDiffusionKernel
-from experiments.diffusion.continuous import DiscreteDDPM
-from experiments.losses import DiffusionLoss
-from experiments.molecule_utils import Molecule
-from experiments.utils import (
-    load_model_ligand,
-    remove_mean_pocket,
-    concat_ligand_pocket,
-    get_molecules,
-    get_inp_molecules,
-)
 from torch import Tensor
 from torch_geometric.data import Batch
-from torch_geometric.nn import radius_graph
-from torch_geometric.utils import dense_to_sparse, sort_edge_index, remove_self_loops
+from torch_geometric.utils import dense_to_sparse, sort_edge_index
+from torch_scatter import scatter_mean
 from tqdm import tqdm
 
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
-from experiments.diffusion.continuous import DiscreteDDPM
+from experiments.data.abstract_dataset import AbstractDatasetInfos
+from experiments.data.distributions import ConditionalDistributionNodes, prepare_context
+from experiments.data.utils import (
+    write_trajectory_as_xyz,
+    write_xyz_file,
+    write_xyz_file_from_batch,
+)
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
-from experiments.data.distributions import prepare_context
+from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.utils import (
-    initialize_edge_attrs_reverse,
-    get_joint_edge_attrs,
     bond_guidance,
     energy_guidance,
+    get_joint_edge_attrs,
+    initialize_edge_attrs_reverse,
 )
-from experiments.molecule_utils import Molecule
+from experiments.losses import DiffusionLoss
+from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import (
     coalesce_edges,
-    get_list_of_edge_adjs,
-    zero_mean,
-    load_model,
+    concat_ligand_pocket,
+    get_molecules,
     load_bond_model,
     load_energy_model,
+    load_model_ligand,
+    remove_mean_pocket,
 )
-from experiments.sampling.analyze import analyze_stability_for_molecules
-from experiments.losses import DiffusionLoss
+from experiments.xtb_energy import calculate_xtb_energy
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(
@@ -233,9 +218,9 @@ class Trainer(pl.LightningModule):
 
     def on_test_epoch_end(self):
         if self.hparams.use_ligand_dataset_sizes:
-            print(f"Running test sampling. Ligand sizes are taken from the data.")
+            print("Running test sampling. Ligand sizes are taken from the data.")
         else:
-            print(f"Running test sampling. Ligand sizes are sampled.")
+            print("Running test sampling. Ligand sizes are sampled.")
         results_dict, generated_smiles, valid_molecules = self.run_evaluation(
             step=0,
             dataset_info=self.dataset_info,
@@ -247,6 +232,7 @@ class Trainer(pl.LightningModule):
             device="cpu",
             run_test_eval=True,
             use_ligand_dataset_sizes=self.hparams.use_ligand_dataset_sizes,
+            build_obabel_mol=self.hparams.build_obabel_mol,
             save_dir=self.hparams.test_save_dir,
             save_traj=self.hparams.save_traj,
             return_molecules=True,
@@ -311,18 +297,6 @@ class Trainer(pl.LightningModule):
                         prop = valid_molecules[i].context[j] * mad + mean
                         tmp.append(float(prop))
                     context.append(tmp)
-
-        if self.hparams.save_traj:
-            for i in range(len(trajs)):
-                pos_joint, atom_types_joint = trajs[i][-2], trajs[i][-1]
-                types = [atom_decoder[int(a)] for a in atom_types_joint]
-                write_xyz_file(
-                    pos_joint,
-                    types,
-                    os.path.join(
-                        self.hparams.test_save_dir, f"lig_pocket_complex_{i}.xyz"
-                    ),
-                )
 
         if self.prop_dist is not None and self.hparams.save_xyz:
             with open(
@@ -740,10 +714,12 @@ class Trainer(pl.LightningModule):
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
         use_ligand_dataset_sizes: bool = False,
+        build_obabel_mol: bool = False,
         run_test_eval: bool = False,
         guidance_scale: float = 1.0e-4,
         use_energy_guidance: bool = False,
         ckpt_energy_model: str = None,
+        n_nodes_bias: int = 0,
         device: str = "cpu",
     ):
         """
@@ -772,13 +748,8 @@ class Trainer(pl.LightningModule):
                 num_nodes_lig = self.conditional_size_distribution.sample_conditional(
                     n1=None, n2=pocket_data.pos_pocket_batch.bincount()
                 ).to(self.device)
-            (
-                out_dict,
-                data_batch,
-                data_batch_pocket,
-                edge_index_global,
-                context,
-            ) = self.reverse_sampling(
+                num_nodes_lig += n_nodes_bias
+            molecules = self.reverse_sampling(
                 num_graphs=num_graphs,
                 num_nodes_lig=num_nodes_lig,
                 pocket_data=pocket_data,
@@ -790,24 +761,10 @@ class Trainer(pl.LightningModule):
                 guidance_scale=guidance_scale,
                 energy_model=energy_model,
                 save_dir=save_dir,
+                build_obabel_mol=build_obabel_mol,
                 iteration=i,
             )
-
-            molecule_list.extend(
-                get_molecules(
-                    out_dict,
-                    data_batch,
-                    edge_index_global,
-                    self.num_atom_types,
-                    self.num_charge_classes,
-                    self.dataset_info,
-                    data_batch_pocket=data_batch_pocket,
-                    device=self.device,
-                    mol_device=device,
-                    context=context,
-                    while_train=False,
-                )
-            )
+            molecule_list.extend(molecules)
         (
             stability_dict,
             validity_dict,
@@ -887,10 +844,11 @@ class Trainer(pl.LightningModule):
         eta_ddim,
         relax_mol=False,
         max_relax_iter=200,
-        sanitize=False,
+        sanitize=True,
         every_k_step=1,
         fix_n_nodes=False,
-        mol_device="cpu",
+        n_nodes_bias=0,
+        build_obabel_mol=False,
         save_dir=None,
     ):
         if fix_n_nodes:
@@ -904,14 +862,8 @@ class Trainer(pl.LightningModule):
                 .repeat(num_graphs)
                 .to(self.device)
             )
-        (
-            out_dict,
-            data_batch,
-            data_batch_pocket,
-            edge_index_global,
-            trajs,
-            context,
-        ) = self.reverse_sampling(
+            num_nodes_lig += n_nodes_bias
+        molecules = self.reverse_sampling(
             num_graphs=num_graphs,
             num_nodes_lig=num_nodes_lig,
             pocket_data=pocket_data,
@@ -922,25 +874,12 @@ class Trainer(pl.LightningModule):
             every_k_step=every_k_step,
             guidance_scale=None,
             energy_model=None,
-            save_dir=save_dir,
-        )
-        molecules = get_molecules(
-            out_dict,
-            data_batch,
-            edge_index_global,
-            self.num_atom_types,
-            self.num_charge_classes,
-            self.dataset_info,
-            data_batch_pocket=data_batch_pocket,
             relax_mol=relax_mol,
             max_relax_iter=max_relax_iter,
             sanitize=sanitize,
-            device=self.device,
-            mol_device=mol_device,
-            context=context,
-            while_train=False,
+            build_obabel_mol=build_obabel_mol,
+            save_dir=save_dir,
         )
-
         return molecules
 
     def reverse_sampling(
@@ -956,6 +895,10 @@ class Trainer(pl.LightningModule):
         guidance_scale: float = 1.0e-4,
         energy_model=None,
         save_dir: str = None,
+        relax_mol=False,
+        max_relax_iter=200,
+        sanitize=False,
+        build_obabel_mol=False,
         iteration: int = 0,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         pos_pocket = pocket_data.pos_pocket.to(self.device)
@@ -1204,11 +1147,6 @@ class Trainer(pl.LightningModule):
                     i=i,
                 )
 
-        if save_traj:
-            write_trajectory_as_xyz(
-                os.path.join(save_dir, f"iter_{iteration}"), batch_size=bs
-            )
-
         # Move generated molecule back to the original pocket position for docking
         pos += pocket_cog_batch
         pos_pocket += pocket_cog[batch_pocket]
@@ -1221,13 +1159,32 @@ class Trainer(pl.LightningModule):
             "charges_pred": charge_types,
             "bonds_pred": edge_attr_global_lig,
         }
-        return (
+        molecules = get_molecules(
             out_dict,
             batch,
-            batch_pocket,
             edge_index_global_lig,
-            context,
+            self.num_atom_types,
+            self.num_charge_classes,
+            self.dataset_info,
+            data_batch_pocket=batch_pocket,
+            device=self.device,
+            mol_device="cpu",
+            context=context,
+            relax_mol=relax_mol,
+            max_relax_iter=max_relax_iter,
+            sanitize=sanitize,
+            while_train=False,
+            build_obabel_mol=build_obabel_mol,
         )
+
+        if save_traj:
+            write_trajectory_as_xyz(
+                molecules,
+                strict=False,
+                path=os.path.join(save_dir, f"iter_{iteration}"),
+            )
+
+        return molecules
 
     def configure_optimizers(self):
         if self.hparams.optimizer == "adam":

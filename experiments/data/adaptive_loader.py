@@ -1,13 +1,12 @@
-from collections.abc import Mapping, Sequence
-from typing import Union, List, Optional
 import math
+from collections.abc import Mapping, Sequence
+from typing import List, Optional, Union
 
 import torch
+import torch.utils.data
+from torch.utils.data.dataloader import default_collate
 from torch_geometric.data import Batch, Dataset
 from torch_geometric.data.data import BaseData
-from torch.utils.data.dataloader import default_collate
-import torch.utils.data
-from torch_geometric.loader import DataLoader
 
 try:
     from torch_geometric.data import LightningDataset

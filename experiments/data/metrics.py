@@ -1,10 +1,9 @@
 import math
 from collections import Counter
+
 import numpy as np
 import torch
 import torch.nn.functional as F
-from experiments.data.utils import Statistics
-from experiments.molecule_utils import Molecule
 from rdkit import Chem
 from torch_geometric.data import Data
 from torchmetrics import (
@@ -14,6 +13,9 @@ from torchmetrics import (
     Metric,
     MetricCollection,
 )
+
+from experiments.data.utils import Statistics
+from experiments.molecule_utils import Molecule
 
 allowed_bonds = {
     "H": {0: 1, 1: 0, -1: 0},
@@ -81,16 +83,17 @@ def compute_all_statistics(
         feats.update(additional_feat_counts(data_list=data_list))
 
     return Statistics(
-            num_nodes=num_nodes,
-            atom_types=atom_types,
-            bond_types=bond_types,
-            charge_types=charge_types,
-            valencies=valency,
-            bond_lengths=bond_lengths,
-            bond_angles=angles,
-            dihedrals=dihedrals,
-            **feats,
-        )
+        num_nodes=num_nodes,
+        atom_types=atom_types,
+        bond_types=bond_types,
+        charge_types=charge_types,
+        valencies=valency,
+        bond_lengths=bond_lengths,
+        bond_angles=angles,
+        dihedrals=dihedrals,
+        **feats,
+    )
+
 
 def per_atom_force_norm(data_list):
     # make list of all force norms
@@ -122,13 +125,13 @@ def additional_feat_counts(
     for i in range(len(counts_list)):
         counts_list[i] = counts_list[i] / counts_list[i].sum()
     print("Done")
-    
+
     results = dict()
     for key, count in zip(keys, counts_list):
         results[key] = count
 
     print(results)
-    
+
     return results
 
 
@@ -275,6 +278,7 @@ def bond_angles(data_list, atom_encoder):
     all_bond_angles = all_bond_angles / s
     print("Done.")
     return all_bond_angles
+
 
 def dihedral_angles(data_list, normalize=True):
     def calculate_dihedral_angles(mol):

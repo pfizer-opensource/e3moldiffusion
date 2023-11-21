@@ -1,24 +1,25 @@
-import yaml
 import argparse
+import math
+from os.path import dirname, exists, join
+from typing import Tuple
+
 import numpy as np
 import torch
-from os.path import dirname, join, exists
-from pytorch_lightning.utilities import rank_zero_warn
-from torch_geometric.data.collate import collate
-from rdkit import Chem
-from torch_sparse import coalesce
-from e3moldiffusion.molfeat import atom_type_config
-from torch_scatter import scatter_mean, scatter_add
-import math
 import torch.nn.functional as F
-from experiments.molecule_utils import Molecule
-from typing import Tuple
+import yaml
+from pytorch_lightning.utilities import rank_zero_warn
+from rdkit import Chem
+from torch_geometric.data import Data
+from torch_geometric.nn import radius_graph
+from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from torch_geometric.utils.num_nodes import maybe_num_nodes
 from torch_geometric.utils.sort_edge_index import sort_edge_index
 from torch_geometric.utils.subgraph import subgraph
-from torch_geometric.nn import radius_graph
-from torch_geometric.utils import dense_to_sparse, sort_edge_index
-from torch_geometric.data import Data
+from torch_scatter import scatter_add, scatter_mean
+from torch_sparse import coalesce
+
+from e3moldiffusion.molfeat import atom_type_config
+from experiments.molecule_utils import Molecule
 
 # fmt: off
 # Atomic masses are based on:
@@ -216,8 +217,9 @@ losses = torch.stack(loss0, loss1, loss3)
 multitaskloss = multitaskloss_instance(losses)
 """
 
-from torch import Tensor
 from typing import Optional
+
+from torch import Tensor
 
 
 def one_hot(
@@ -441,6 +443,37 @@ def concat_ligand_pocket(
         c_ctx = c_ctx[sort_idx]
 
     return pos_ctx, x_ctx, c_ctx, batch_ctx, mask_ligand
+
+
+def concat_ligand_pocket_addfeats(
+    pos_lig,
+    pos_pocket,
+    atom_features_ligand,
+    atom_features_pocket,
+    batch_lig,
+    batch_pocket,
+    sorting=False,
+):
+    batch_ctx = torch.cat([batch_lig, batch_pocket], dim=0)
+
+    mask_ligand = torch.cat(
+        [
+            torch.ones([batch_lig.size(0)], device=batch_lig.device).bool(),
+            torch.zeros([batch_pocket.size(0)], device=batch_pocket.device).bool(),
+        ],
+        dim=0,
+    )
+    pos_ctx = torch.cat([pos_lig, pos_pocket], dim=0)
+    atom_feats = torch.cat([atom_features_ligand, atom_features_pocket], dim=0)
+
+    if sorting:
+        sort_idx = torch.sort(batch_ctx, stable=True).indices
+        mask_ligand = mask_ligand[sort_idx]
+        batch_ctx = batch_ctx[sort_idx]
+        pos_ctx = pos_ctx[sort_idx]
+        atom_feats = atom_feats[sort_idx]
+
+    return pos_ctx, atom_feats, batch_ctx, mask_ligand
 
 
 def assert_zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0, eps: float = 1e-6):
@@ -801,6 +834,8 @@ def get_molecules(
     mol_device="cpu",
     context=None,
     check_validity=False,
+    build_mol_with_addfeats=False,
+    build_obabel_mol=False,
     while_train=False,
 ):
     if while_train:
@@ -822,38 +857,52 @@ def get_molecules(
     edge_attrs_dense = edge_attrs_dense.argmax(-1)
     edge_attrs_splits = get_list_of_edge_adjs(edge_attrs_dense, data_batch.bincount())
 
-    pos_splits = (
-        out["coords_pred"].detach().split(data_batch.bincount().cpu().tolist(), dim=0)
-    )
+    batch_num_nodes = data_batch.bincount().cpu().tolist()
+    pos_splits = out["coords_pred"].detach().split(batch_num_nodes, dim=0)
     if data_batch_pocket is not None:
+        batch_num_nodes_pocket = data_batch_pocket.bincount().cpu().tolist()
         pos_pocket_splits = (
-            out["coords_pocket"]
-            .detach()
-            .split(data_batch_pocket.bincount().cpu().tolist(), dim=0)
+            out["coords_pocket"].detach().split(batch_num_nodes_pocket, dim=0)
         )
         atom_types_integer_pocket = torch.argmax(out["atoms_pocket"], dim=-1)
         atom_types_integer_split_pocket = atom_types_integer_pocket.detach().split(
-            data_batch_pocket.bincount().cpu().tolist(), dim=0
+            batch_num_nodes_pocket, dim=0
         )
 
     atom_types_integer = torch.argmax(atoms_pred, dim=-1)
-    atom_types_integer_split = atom_types_integer.detach().split(
-        data_batch.bincount().cpu().tolist(), dim=0
-    )
+    atom_types_integer_split = atom_types_integer.detach().split(batch_num_nodes, dim=0)
     charge_types_integer = torch.argmax(charges_pred, dim=-1)
     # offset back
     charge_types_integer = charge_types_integer - dataset_info.charge_offset
     charge_types_integer_split = charge_types_integer.detach().split(
-        data_batch.bincount().cpu().tolist(), dim=0
+        batch_num_nodes, dim=0
     )
+    if "aromatic_pred" in out.keys() and "hybridization_pred" in out.keys():
+        add_feats = True
+        aromatic_feat = out["aromatic_pred"]
+        hybridization_feat = out["hybridization_pred"]
+        aromatic_feat_integer = torch.argmax(aromatic_feat, dim=-1)
+        aromatic_feat_integer_split = aromatic_feat_integer.detach().split(
+            batch_num_nodes, dim=0
+        )
+
+        hybridization_feat_integer = torch.argmax(hybridization_feat, dim=-1)
+        hybridization_feat_integer_split = hybridization_feat_integer.detach().split(
+            batch_num_nodes, dim=0
+        )
+    else:
+        add_feats = False
     context_split = (
-        context.split(data_batch.bincount().cpu().tolist(), dim=0)
-        if context is not None
-        else None
+        context.split(batch_num_nodes, dim=0) if context is not None else None
     )
 
     molecule_list = []
-    for i, (positions, atom_types, charges, edges) in enumerate(
+    for i, (
+        positions,
+        atom_types,
+        charges,
+        edges,
+    ) in enumerate(
         zip(
             pos_splits,
             atom_types_integer_split,
@@ -875,11 +924,19 @@ def get_molecules(
             context=context_split[i][0].detach().to(mol_device)
             if context_split is not None
             else None,
+            is_aromatic=aromatic_feat_integer_split[i].detach().to(mol_device)
+            if add_feats
+            else None,
+            hybridization=hybridization_feat_integer_split[i].detach().to(mol_device)
+            if add_feats
+            else None,
+            build_mol_with_addfeats=build_mol_with_addfeats,
             dataset_info=dataset_info,
             relax_mol=relax_mol,
             max_relax_iter=max_relax_iter,
             sanitize=sanitize,
             check_validity=check_validity,
+            build_obabel_mol=build_obabel_mol,
         )
         molecule_list.append(molecule)
 

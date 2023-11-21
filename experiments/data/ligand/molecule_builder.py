@@ -1,21 +1,21 @@
-import warnings
 import tempfile
+import warnings
 
-import torch
 import numpy as np
-from rdkit import Chem
-from rdkit.Chem.rdForceFieldHelpers import UFFOptimizeMolecule, UFFHasAllMoleculeParams
 import openbabel
+import torch
+from rdkit import Chem
+from rdkit.Chem.rdForceFieldHelpers import UFFHasAllMoleculeParams, UFFOptimizeMolecule
 
 from experiments.data.ligand import utils
 from experiments.data.ligand.constants import (
+    bond_dict,
     bonds1,
     bonds2,
     bonds3,
     margin1,
     margin2,
     margin3,
-    bond_dict,
 )
 
 

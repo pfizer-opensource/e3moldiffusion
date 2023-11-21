@@ -1,17 +1,16 @@
+import os
 import pickle
-import torch
-from torch_geometric.utils import subgraph
-import pickle
+from glob import glob
+
 import numpy as np
+import rdkit
 import rmsd
+import torch
 from openbabel import pybel
+from pytorch_lightning.utilities import rank_zero_warn
 from rdkit import Chem, RDLogger
 from torch_geometric.data import Data
-from torch_geometric.utils import sort_edge_index
-import rdkit
-from pytorch_lightning.utilities import rank_zero_warn
-import os
-from glob import glob
+from torch_geometric.utils import sort_edge_index, subgraph
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -173,23 +172,21 @@ def write_xyz_file_from_batch(
     if not os.path.exists(path):
         os.makedirs(path)
 
-    if not joint_traj:
-        atomsxmol = batch.bincount()
-        num_atoms_prev = 0
-        for k, num_atoms in enumerate(atomsxmol):
-            save_dir = os.path.join(path, f"batch_{k}")
-            if not os.path.exists(save_dir):
-                os.makedirs(save_dir)
+    atomsxmol = batch.bincount()
+    num_atoms_prev = 0
+    for k, num_atoms in enumerate(atomsxmol):
+        save_dir = os.path.join(path, f"batch_{k}")
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
 
-            ats = torch.argmax(
-                atoms[num_atoms_prev : num_atoms_prev + num_atoms], dim=1
-            )
-            types = [atom_decoder[int(a)] for a in ats]
-            positions = pos[num_atoms_prev : num_atoms_prev + num_atoms]
-            write_xyz_file(positions, types, os.path.join(save_dir, f"mol_{i}.xyz"))
+        ats = torch.argmax(atoms[num_atoms_prev : num_atoms_prev + num_atoms], dim=1)
+        types = [atom_decoder[int(a)] for a in ats]
+        positions = pos[num_atoms_prev : num_atoms_prev + num_atoms]
+        write_xyz_file(positions, types, os.path.join(save_dir, f"mol_{i}.xyz"))
 
-            num_atoms_prev += num_atoms
-    else:
+        num_atoms_prev += num_atoms
+
+    if joint_traj:
         atomsxmol = batch.bincount()
         atomsxmol_pocket = batch_pocket.bincount()
         num_atoms_prev = 0
@@ -223,7 +220,9 @@ def write_xyz_file_from_batch(
             positions_joint = torch.cat([positions, positions_pocket], dim=0)
 
             write_xyz_file(
-                positions_joint, types_joint, os.path.join(save_dir, f"mol_{i}.xyz")
+                positions_joint,
+                types_joint,
+                os.path.join(save_dir, f"lig_pocket_{i}.xyz"),
             )
 
             num_atoms_prev += num_atoms
@@ -239,6 +238,7 @@ def get_key(fp):
 def write_trajectory_as_xyz(
     molecules,
     path,
+    strict=True,
 ):
     try:
         os.makedirs(path)
@@ -249,7 +249,7 @@ def write_trajectory_as_xyz(
         rdkit_mol = mol.rdkit_mol
         valid = (
             rdkit_mol is not None
-            and mol.compute_validity(rdkit_mol, strict=True) is not None
+            and mol.compute_validity(rdkit_mol, strict=strict) is not None
         )
         if valid:
             files = sorted(

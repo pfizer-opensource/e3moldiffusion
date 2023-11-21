@@ -1,7 +1,8 @@
-from torch.utils.data import Subset
 from typing import Optional
 
 import torch
+from torch.utils.data import Subset
+
 from experiments.data.adaptive_loader import AdaptiveLightningDataset
 
 try:

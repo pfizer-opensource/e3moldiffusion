@@ -1,15 +1,15 @@
-import torch
-import torch.nn.functional as F
-from torch_geometric.utils import dense_to_sparse, sort_edge_index, remove_self_loops
-from typing import Optional, List
-from torch_scatter import scatter_mean
-from experiments.utils import get_edges
-from rdkit.Chem.Scaffolds.MurckoScaffold import GetScaffoldForMol
-from rdkit.Chem import RDConfig
-from rdkit import Chem
 import os
 import sys
-from experiments.utils import zero_mean
+from typing import List, Optional
+
+import torch
+import torch.nn.functional as F
+from rdkit.Chem import RDConfig
+from rdkit.Chem.Scaffolds.MurckoScaffold import GetScaffoldForMol
+from torch_geometric.utils import remove_self_loops, sort_edge_index
+from torch_scatter import scatter_mean
+
+from experiments.utils import get_edges, zero_mean
 
 sys.path.append(os.path.join(RDConfig.RDContribDir, "IFG"))
 from ifg import identify_functional_groups
@@ -124,6 +124,8 @@ def bond_guidance(
 ):
     guidance_type = "logsum"
     guidance_scale = 1.0e-4
+
+    bs = len(batch.bincount())
     with torch.enable_grad():
         node_feats_in = node_feats_in.detach()
         pos = pos.detach().requires_grad_(True)
@@ -171,8 +173,9 @@ def energy_guidance(
     energy_model,
     batch,
     batch_size,
-    scale=100,
-    guidance_scale=1.0e-2,
+    signal=1.0e-3,
+    guidance_scale=100,
+    optimization="minimize",
 ):
     with torch.enable_grad():
         node_feats_in = node_feats_in.detach()
@@ -183,28 +186,31 @@ def energy_guidance(
             pos=pos,
             batch=batch,
         )
-        energy_prediction = scale * out["property_pred"]
+        if optimization == "minimize":
+            sign = -1.0
+        elif optimization == "maximize":
+            sign = 1.0
+        else:
+            raise Exception("Optimization arg needs to be 'minimize' or 'maximize'!")
+        energy_prediction = sign * guidance_scale * out["property_pred"]
 
         grad_outputs: List[Optional[torch.Tensor]] = [
             torch.ones_like(energy_prediction)
         ]
-        pos_shift = (
-            -1.0
-            * torch.autograd.grad(
-                [energy_prediction],
-                [pos],
-                grad_outputs=grad_outputs,
-                create_graph=False,
-                retain_graph=False,
-            )[0]
-        )
+        pos_shift = torch.autograd.grad(
+            [energy_prediction],
+            [pos],
+            grad_outputs=grad_outputs,
+            create_graph=False,
+            retain_graph=False,
+        )[0]
 
         pos_shift = zero_mean(pos_shift, batch=batch, dim_size=batch_size, dim=0)
 
-        pos = pos + guidance_scale * pos_shift
+        pos = pos + signal * pos_shift
         pos = zero_mean(pos, batch=batch, dim_size=batch_size, dim=0)
 
-    return pos
+    return pos.detach()
 
 
 def extract_scaffolds_(batch_data):

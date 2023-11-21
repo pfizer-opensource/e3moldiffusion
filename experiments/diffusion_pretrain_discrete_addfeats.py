@@ -1,19 +1,20 @@
 import logging
+
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
+from torch import Tensor
+from torch_geometric.data import Batch
+from torch_geometric.utils import dense_to_sparse, sort_edge_index
+
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.data.abstract_dataset import AbstractDatasetInfos
 from experiments.data.distributions import prepare_context
-from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.losses import DiffusionLoss
-from experiments.utils import coalesce_edges, load_model, zero_mean, dropout_node
-from torch import Tensor
-from torch_geometric.data import Batch
-from torch_scatter import scatter_add
+from experiments.utils import coalesce_edges, dropout_node, zero_mean
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(
@@ -32,43 +33,55 @@ class Trainer(pl.LightningModule):
         hparams: dict,
         dataset_info: AbstractDatasetInfos,
         smiles_list: list,
-        prop_dist=None,
-        prop_norm=None,
+        **kwargs,
     ):
         super().__init__()
         self.save_hyperparameters(hparams)
         self.i = 0
 
         self.dataset_info = dataset_info
-        self.prop_norm = prop_norm
-        self.prop_dist = prop_dist
 
         self.num_atom_types_geom = 16
-        if self.hparams.dataset == "pubchem":
-            pubchem_ids = [0, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13]
-            geom_only = [
-                i for i in range(self.num_atom_types_geom) if i not in pubchem_ids
-            ]
         atom_types_distribution = dataset_info.atom_types.float()
-        atom_types_distribution[geom_only] = 0.0
-        bond_types_distribution = dataset_info.edge_types.float()
         charge_types_distribution = dataset_info.charges_marginals.float()
         is_aromatic_distribution = dataset_info.is_aromatic.float()
         is_ring_distribution = dataset_info.is_in_ring.float()
-        hybridization_disitribution = dataset_info.hybridization.float()
+        hybridization_distribution = dataset_info.hybridization.float()
+
+        if self.hparams.atom_type_masking:
+            mask_token = torch.tensor([0.0])
+            atom_types_distribution = torch.cat([atom_types_distribution, mask_token])
+        elif self.hparams.use_absorbing_state:
+            atom_types_distribution = torch.zeros((17,), dtype=torch.float32)
+            atom_types_distribution[-1] = 1.0
+            charge_types_distribution = torch.zeros((6,), dtype=torch.float32)
+            charge_types_distribution[-1] = 1.0
+
+        bond_types_distribution = dataset_info.edge_types.float()
+
+        if self.hparams.num_bond_classes != 5:
+            bond_types_distribution = torch.zeros(
+                (self.hparams.num_bond_classes,), dtype=torch.float32
+            )
+            bond_types_distribution[:5] = dataset_info.edge_types.float()
 
         self.register_buffer("atoms_prior", atom_types_distribution.clone())
         self.register_buffer("bonds_prior", bond_types_distribution.clone())
         self.register_buffer("charges_prior", charge_types_distribution.clone())
         self.register_buffer("is_aromatic_prior", is_aromatic_distribution.clone())
         self.register_buffer("is_in_ring_prior", is_ring_distribution.clone())
-        self.register_buffer("hybridization_prior", hybridization_disitribution.clone())
+        self.register_buffer("hybridization_prior", hybridization_distribution.clone())
 
         self.num_is_aromatic = self.num_is_in_ring = 2
         self.num_hybridization = 9
 
         self.hparams.num_atom_types = dataset_info.input_dims.X
         self.num_charge_classes = dataset_info.input_dims.C
+        if self.hparams.atom_type_masking:
+            self.hparams.num_atom_types += 1
+        elif self.hparams.use_absorbing_state:
+            self.hparams.num_atom_types += 1
+            self.num_charge_classes += 1
         self.num_atom_types = self.hparams.num_atom_types
         self.num_atom_features = (
             self.num_atom_types
@@ -77,14 +90,12 @@ class Trainer(pl.LightningModule):
             + self.num_is_in_ring
             + self.num_hybridization
         )
-        self.num_bond_classes = 5
-        self.remove_hs = hparams.get("remove_hs")
-        if self.remove_hs:
-            print("Model without modelling explicit hydrogens")
-        self.smiles_list = smiles_list
+        self.num_bond_classes = self.hparams.num_bond_classes
 
-        empirical_num_nodes = dataset_info.n_nodes
-        self.register_buffer(name="empirical_num_nodes", tensor=empirical_num_nodes)
+        if hparams.get("no_h"):
+            print("Training without hydrogen")
+
+        self.smiles_list = smiles_list
 
         self.model = DenoisingEdgeNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
@@ -140,26 +151,44 @@ class Trainer(pl.LightningModule):
         self.cat_atoms = CategoricalDiffusionKernel(
             terminal_distribution=atom_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes - 1
+            if self.hparams.use_qm_props
+            else self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
         )
         self.cat_bonds = CategoricalDiffusionKernel(
             terminal_distribution=bond_types_distribution,
             alphas=self.sde_bonds.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes
+            if self.hparams.use_qm_props
+            else self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
         )
         self.cat_charges = CategoricalDiffusionKernel(
             terminal_distribution=charge_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_atom_types=self.num_atom_types,
+            num_bond_types=self.num_bond_classes
+            if self.hparams.use_qm_props
+            else self.num_bond_classes,
+            num_charge_types=self.num_charge_classes,
         )
         self.cat_aromatic = CategoricalDiffusionKernel(
             terminal_distribution=is_aromatic_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_is_aromatic=self.num_is_aromatic,
         )
         self.cat_ring = CategoricalDiffusionKernel(
             terminal_distribution=is_ring_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_is_in_ring=self.num_is_in_ring,
         )
         self.cat_hybridization = CategoricalDiffusionKernel(
-            terminal_distribution=hybridization_disitribution,
+            terminal_distribution=hybridization_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
+            num_hybridization=self.num_hybridization,
         )
 
         self.diffusion_loss = DiffusionLoss(
@@ -265,6 +294,29 @@ class Trainer(pl.LightningModule):
         )
 
     def step_fnc(self, batch, batch_idx, stage: str):
+        batch_size = int(batch.batch.max()) + 1
+        t = torch.randint(
+            low=1,
+            high=self.hparams.timesteps + 1,
+            size=(batch_size,),
+            dtype=torch.long,
+            device=batch.x.device,
+        )
+        if self.hparams.loss_weighting == "snr_s_t":
+            weights = self.sde_bonds.snr_s_t_weighting(
+                s=t - 1, t=t, clamp_min=None, clamp_max=None
+            ).to(batch.x.device)
+        elif self.hparams.loss_weighting == "snr_t":
+            weights = self.sde_bonds.snr_t_weighting(
+                t=t, device=batch.x.device, clamp_min=0.05, clamp_max=5.0
+            )
+        elif self.hparams.loss_weighting == "exp_t":
+            weights = self.sde_atom_charge.exp_t_weighting(t=t, device=self.device)
+        elif self.hparams.loss_weighting == "exp_t_half":
+            weights = self.sde_atom_charge.exp_t_half_weighting(t=t, device=self.device)
+        elif self.hparams.loss_weighting == "uniform":
+            weights = None
+
         if self.hparams.context_mapping:
             context = prepare_context(
                 self.hparams["properties_list"],
@@ -274,27 +326,8 @@ class Trainer(pl.LightningModule):
             )
             batch.context = context
 
-        out_dict, t, node_mask, batch_size = self(batch=batch)
-        data_batch = (
-            batch.batch[node_mask] if self.hparams.dropout_prob > 0 else batch.batch
-        )
+        out_dict = self(batch=batch, t=t)
 
-        if self.hparams.loss_weighting == "snr_s_t":
-            weights = self.sde_atom_charge.snr_s_t_weighting(
-                s=t - 1, t=t, clamp_min=None, clamp_max=None
-            ).to(batch.x.device)
-        elif self.hparams.loss_weighting == "snr_t":
-            weights = self.sde_atom_charge.snr_t_weighting(
-                t=t, device=batch.x.device, clamp_min=0.05, clamp_max=1.5
-            )
-        elif self.hparams.loss_weighting == "exp_t":
-            weights = self.sde_atom_charge.exp_t_weighting(t=t, device=batch.x.device)
-        elif self.hparams.loss_weighting == "exp_t_half":
-            weights = self.sde_atom_charge.exp_t_half_weighting(
-                t=t, device=batch.x.device
-            )
-        elif self.hparams.loss_weighting == "uniform":
-            weights = None
         true_data = {
             "coords": out_dict["coords_true"]
             if self.hparams.continuous_param == "data"
@@ -340,7 +373,7 @@ class Trainer(pl.LightningModule):
         loss = self.diffusion_loss(
             true_data=true_data,
             pred_data=pred_data,
-            batch=data_batch,
+            batch=batch.batch,
             bond_aggregation_index=out_dict["bond_aggregation_index"],
             weights=weights,
         )
@@ -375,7 +408,7 @@ class Trainer(pl.LightningModule):
 
         return final_loss
 
-    def forward(self, batch: Batch):
+    def forward(self, batch: Batch, t: Tensor):
         atom_types: Tensor = batch.x
         pos: Tensor = batch.pos
         charges: Tensor = batch.charges
@@ -384,15 +417,7 @@ class Trainer(pl.LightningModule):
         bond_edge_attr = batch.edge_attr
         context = batch.context if self.hparams.context_mapping else None
         n = batch.num_nodes
-        node_mask = None
-        batch_size = int(data_batch.max()) + 1
-        t = torch.randint(
-            low=1,
-            high=self.hparams.timesteps + 1,
-            size=(batch_size,),
-            dtype=torch.long,
-            device=batch.x.device,
-        )
+        bs = int(data_batch.max()) + 1
 
         ring_feat = batch.is_in_ring
         aromatic_feat = batch.is_aromatic
@@ -402,7 +427,12 @@ class Trainer(pl.LightningModule):
             edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
         )
 
-        pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=batch_size)
+        # TIME EMBEDDING
+        temb = t.float() / self.hparams.timesteps
+        temb = temb.clamp(min=self.hparams.eps_min)
+        temb = temb.unsqueeze(dim=1)
+
+        pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
 
         if not hasattr(batch, "fc_edge_index"):
             edge_index_global = (
@@ -433,12 +463,21 @@ class Trainer(pl.LightningModule):
             t, pos_centered, data_batch
         )
         atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
-            t, atom_types, data_batch, self.dataset_info, type="atoms"
+            t,
+            atom_types,
+            data_batch,
+            self.dataset_info,
+            num_classes=self.num_atom_types,
+            type="atoms",
         )
         charges, charges_perturbed = self.cat_charges.sample_categorical(
-            t, charges, data_batch, self.dataset_info, type="charges"
+            t,
+            charges,
+            data_batch,
+            self.dataset_info,
+            num_classes=self.num_charge_classes,
+            type="charges",
         )
-
         edge_attr_global_perturbed = (
             self.cat_bonds.sample_edges_categorical(
                 t, edge_index_global, edge_attr_global, data_batch
@@ -449,72 +488,36 @@ class Trainer(pl.LightningModule):
 
         ## tempory: use this version without refactored.
         # ring-feat and perturb
-        ring_feat = F.one_hot(
-            ring_feat.squeeze().long(), num_classes=self.num_is_in_ring
-        ).float()
-        probs = self.cat_ring.marginal_prob(ring_feat, t[data_batch])
-        ring_feat_perturbed = F.one_hot(
-            probs.multinomial(
-                1,
-            ).squeeze(),
+        ring_feat, ring_feat_perturbed = self.cat_ring.sample_categorical(
+            t,
+            ring_feat,
+            data_batch,
+            self.dataset_info,
             num_classes=self.num_is_in_ring,
-        ).float()
-
-        # aromatic-feat and perturb
-        aromatic_feat = F.one_hot(
-            aromatic_feat.squeeze().long(), num_classes=self.num_is_aromatic
-        ).float()
-        probs = self.cat_aromatic.marginal_prob(aromatic_feat, t[data_batch])
-        aromatic_feat_perturbed = F.one_hot(
-            probs.multinomial(
-                1,
-            ).squeeze(),
+            type="ring",
+        )
+        (
+            aromatic_feat,
+            aromatic_feat_perturbed,
+        ) = self.cat_aromatic.sample_categorical(
+            t,
+            aromatic_feat,
+            data_batch,
+            self.dataset_info,
             num_classes=self.num_is_aromatic,
-        ).float()
-
-        # hybridization and perturb
-        hybridization_feat = F.one_hot(
-            hybridization_feat.squeeze().long(), num_classes=self.num_hybridization
-        ).float()
-        probs = self.cat_hybridization.marginal_prob(hybridization_feat, t[data_batch])
-        hybridization_feat_perturbed = F.one_hot(
-            probs.multinomial(
-                1,
-            ).squeeze(),
+            type="aromatic",
+        )
+        (
+            hybridization_feat,
+            hybridization_feat_perturbed,
+        ) = self.cat_hybridization.sample_categorical(
+            t,
+            hybridization_feat,
+            data_batch,
+            self.dataset_info,
             num_classes=self.num_hybridization,
-        ).float()
-
-        # MASKING PREDICTION
-        if self.hparams.dropout_prob > 0:
-            edge_index_global, edge_mask, node_mask, batch_mask = dropout_node(
-                edge_index_global,
-                p=self.hparams.dropout_prob,
-                batch=data_batch,
-                num_nodes=n,
-            )
-            edge_attr_global_perturbed = edge_attr_global_perturbed[edge_mask]
-            pos_perturbed = pos_perturbed[node_mask]
-            atom_types_perturbed = atom_types_perturbed[node_mask]
-            charges_perturbed = charges_perturbed[node_mask]
-            ring_feat_perturbed = ring_feat_perturbed[node_mask]
-            aromatic_feat_perturbed = aromatic_feat_perturbed[node_mask]
-            hybridization_feat_perturbed = hybridization_feat_perturbed[node_mask]
-
-            batch_edge_global = data_batch[edge_index_global[0]]
-            data_batch = data_batch[node_mask]
-            batch_size = int(sum(batch_mask))
-
-            edge_index_global = (
-                torch.eq(data_batch.unsqueeze(0), data_batch.unsqueeze(-1))
-                .int()
-                .fill_diagonal_(0)
-            )
-            edge_index_global, _ = dense_to_sparse(edge_index_global)
-            edge_index_global, edge_attr_global_perturbed = sort_edge_index(
-                edge_index=edge_index_global,
-                edge_attr=edge_attr_global_perturbed,
-                sort_by_row=False,
-            )
+            type="hybridization",
+        )
 
         atom_feats_in_perturbed = torch.cat(
             [
@@ -527,13 +530,6 @@ class Trainer(pl.LightningModule):
             dim=-1,
         )
 
-        # TIME EMBEDDING
-        t = t[data_batch] if self.hparams.dropout_prob > 0 else t
-        temb = t.float() / self.hparams.timesteps
-        temb = temb.clamp(min=self.hparams.eps_min)
-        temb = temb.unsqueeze(dim=1)
-
-        # FORWARD
         out = self.model(
             x=atom_feats_in_perturbed,
             t=temb,
@@ -554,16 +550,6 @@ class Trainer(pl.LightningModule):
         out["aromatic_perturbed"] = aromatic_feat_perturbed
         out["hybridization_perturbed"] = hybridization_feat_perturbed
 
-        if self.hparams.dropout_prob > 0:
-            # MASKING LABELS
-            edge_attr_global = edge_attr_global[edge_mask]
-            pos_centered = pos_centered[node_mask]
-            atom_types = atom_types[node_mask]
-            charges = charges[node_mask]
-            ring_feat = ring_feat[node_mask]
-            aromatic_feat = aromatic_feat[node_mask]
-            hybridization_feat = hybridization_feat[node_mask]
-
         out["coords_true"] = pos_centered
         out["coords_noise_true"] = noise_coords_true
         out["atoms_true"] = atom_types.argmax(dim=-1)
@@ -575,49 +561,26 @@ class Trainer(pl.LightningModule):
 
         out["bond_aggregation_index"] = edge_index_global[1]
 
-        return out, t, node_mask, batch_size
+        return out
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.hparams["lr"],
             amsgrad=True,
-            weight_decay=1.0e-12,
+            weight_decay=1e-12,
         )
-        if self.hparams["lr_scheduler"] == "reduce_on_plateau":
-            lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer=optimizer,
-                patience=self.hparams["lr_patience"],
-                cooldown=self.hparams["lr_cooldown"],
-                factor=self.hparams["lr_factor"],
-            )
-        elif self.hparams["lr_scheduler"] == "cyclic":
-            lr_scheduler = torch.optim.lr_scheduler.CyclicLR(
-                optimizer,
-                base_lr=self.hparams["lr_min"],
-                max_lr=self.hparams["lr"],
-                mode="exp_range",
-                step_size_up=self.hparams["lr_step_size"],
-                cycle_momentum=False,
-            )
-        elif self.hparams["lr_scheduler"] == "one_cyclic":
-            lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                optimizer,
-                max_lr=self.hparams["lr"],
-                steps_per_epoch=len(self.trainer.datamodule.train_dataset),
-                epochs=self.hparams["num_epochs"],
-            )
-        elif self.hparams["lr_scheduler"] == "cosine_annealing":
-            lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer,
-                T_max=self.hparams["lr_patience"],
-                eta_min=self.hparams["lr_min"],
-            )
-        scheduler = {
-            "scheduler": lr_scheduler,
-            "interval": "epoch",
-            "frequency": self.hparams["lr_frequency"],
-            "monitor": "val/coords_loss_epoch",
-            "strict": False,
-        }
-        return [optimizer], [scheduler]
+        # lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        #    optimizer=optimizer,
+        #    patience=self.hparams["lr_patience"],
+        #    cooldown=self.hparams["lr_cooldown"],
+        #    factor=self.hparams["lr_factor"],
+        # )
+        # scheduler = {
+        #    "scheduler": lr_scheduler,
+        #    "interval": "epoch",
+        #    "frequency": self.hparams["lr_frequency"],
+        #    "monitor": "val/loss",
+        #    "strict": False,
+        # }
+        return [optimizer]  # , [scheduler]

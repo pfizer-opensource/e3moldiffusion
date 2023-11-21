@@ -1,29 +1,26 @@
+import argparse
+import random
+import shutil
 from pathlib import Path
 from time import time
-import argparse
-import shutil
-import random
 
 import matplotlib.pyplot as plt
-import seaborn as sns
-
-from tqdm import tqdm
 import numpy as np
-
+import seaborn as sns
+import torch
 from Bio.PDB import PDBParser
-from Bio.PDB.Polypeptide import three_to_one, is_aa
+from Bio.PDB.Polypeptide import is_aa, three_to_one
 from rdkit import Chem
 from scipy.ndimage import gaussian_filter
+from tqdm import tqdm
 
-import torch
-
-from experiments.data.ligand.molecule_builder import build_molecule
 from experiments.data.ligand import constants
 from experiments.data.ligand.constants import (
+    atom_decoder_int,
     covalent_radii,
     dataset_params,
-    atom_decoder_int,
 )
+from experiments.data.ligand.molecule_builder import build_molecule
 
 dataset_info = dataset_params["crossdock_full"]
 amino_acid_dict = dataset_info["aa_encoder"]

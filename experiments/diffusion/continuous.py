@@ -1,8 +1,9 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from torch import Tensor, nn
 import torch.nn.functional as F
+from torch import Tensor, nn
+
 from experiments.utils import zero_mean
 
 
@@ -144,7 +145,6 @@ class DiscreteDDPM(nn.Module):
         self,
         beta_min: float = 1e-4,
         beta_max: float = 2e-2,
-        N: int = 300,
         scaled_reverse_posterior_sigma: bool = True,
         schedule: str = "cosine",
         nu: float = 1.0,
@@ -158,12 +158,11 @@ class DiscreteDDPM(nn.Module):
         Args:
           beta_min: value of beta(0)
           beta_max: value of beta(1)
-          N: number of discretization steps
+          T: number of discretization steps
         """
         super().__init__()
         self.beta_min = beta_min
         self.beta_max = beta_max
-        self.N = N
         self.scaled_reverse_posterior_sigma = scaled_reverse_posterior_sigma
         assert param in ["noise", "data"]
         self.param = param
@@ -178,18 +177,18 @@ class DiscreteDDPM(nn.Module):
             "linear-time",
         ]
 
+        self.schedule = schedule
+        self.T = T
+
         discrete_betas = get_beta_schedule(
             beta_start=beta_min,
             beta_end=beta_max,
-            num_diffusion_timesteps=N,
-            kind=schedule,
+            num_diffusion_timesteps=self.T,
+            kind=self.schedule,
             nu=nu,
             plot=False,
             alpha_clamp=clamp_alpha_min,
         )
-
-        self.schedule = schedule
-        self.T = T
 
         if enforce_zero_terminal_snr:
             discrete_betas = self.enforce_zero_terminal_snr(betas=discrete_betas)
@@ -298,7 +297,7 @@ class DiscreteDDPM(nn.Module):
         return mean, std
 
     def plot_signal_to_noise(self):
-        t = torch.arange(0, self.N)
+        t = torch.arange(0, self.T)
         signal = self.alphas_cumprod[t]
         noise = 1.0 - signal
         plt.plot(t, signal, label="signal")

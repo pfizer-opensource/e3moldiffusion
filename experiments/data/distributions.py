@@ -1,6 +1,5 @@
-from torch.distributions.categorical import Categorical
-import numpy as np
 import torch
+from torch.distributions.categorical import Categorical
 
 
 def get_distributions(args, dataset_info, datamodule):

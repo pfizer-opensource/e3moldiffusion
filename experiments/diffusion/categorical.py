@@ -1,9 +1,9 @@
 import torch
-from experiments.diffusion.continuous import get_beta_schedule
-import matplotlib.pyplot as plt
-from torch import Tensor
 import torch.nn.functional as F
+from torch import Tensor
 from torch_geometric.utils import sort_edge_index
+
+from experiments.diffusion.continuous import get_beta_schedule
 
 DEFAULT_BETAS = get_beta_schedule(kind="cosine", num_diffusion_timesteps=500)
 DEFAULT_ALPHAS = 1.0 - DEFAULT_BETAS
@@ -175,7 +175,8 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         x0: Tensor,
         t: Tensor,
         num_classes: int,
-        eps: float = 1.0e-6,
+        eps: float = 1.0e-5,
+        local_rank: int = 0,
     ):
         reverse = self.reverse_posterior_for_every_x0(xt=xt, t=t)
         # Eq. 4 in Austin et al. (2023) "Structured Denoising Diffusion Models in Discrete State-Spaces"

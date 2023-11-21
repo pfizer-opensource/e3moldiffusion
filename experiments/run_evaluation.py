@@ -1,14 +1,16 @@
-import warnings
 import argparse
+import os
+import pickle
+import warnings
+
+import numpy as np
 import torch
+from tqdm import tqdm
+
 from experiments.data.distributions import DistributionProperty
 from experiments.data.utils import write_xyz_file
 from experiments.xtb_energy import calculate_xtb_energy
-import pickle
-import os
 from experiments.xtb_wrapper import xtb_calculate
-from tqdm import tqdm
-import numpy as np
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
@@ -39,8 +41,11 @@ def evaluate(
     ddpm=True,
     eta_ddim=1.0,
     fix_noise_and_nodes=False,
+    guidance_steps=100,
+    optimization="minimize",
     relax_sampling=False,
     relax_steps=10,
+    sample_only_valid=False,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -155,29 +160,57 @@ def evaluate(
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    results_dict, generated_smiles, stable_molecules = model.run_evaluation(
-        step=step,
-        dataset_info=model.dataset_info,
-        ngraphs=ngraphs,
-        bs=batch_size,
-        return_molecules=True,
-        verbose=True,
-        inner_verbose=True,
-        save_dir=save_dir,
-        ddpm=ddpm,
-        eta_ddim=eta_ddim,
-        run_test_eval=True,
-        save_traj=save_traj,
-        guidance_scale=guidance_scale,
-        use_energy_guidance=use_energy_guidance,
-        ckpt_energy_model=ckpt_energy_model,
-        fix_noise_and_nodes=fix_noise_and_nodes,
-        relax_sampling=relax_sampling,
-        relax_steps=relax_steps,
-        device="cpu",
-    )
+    if sample_only_valid:
+        print("\nStarting sampling of only valid molecules...\n")
+        results_dict, generated_smiles, stable_molecules = model.generate_valid_samples(
+            dataset_info=model.dataset_info,
+            ngraphs=ngraphs,
+            bs=batch_size,
+            return_molecules=True,
+            verbose=True,
+            inner_verbose=True,
+            save_dir=save_dir,
+            ddpm=ddpm,
+            eta_ddim=eta_ddim,
+            save_traj=save_traj,
+            guidance_scale=guidance_scale,
+            use_energy_guidance=use_energy_guidance,
+            ckpt_energy_model=ckpt_energy_model,
+            fix_noise_and_nodes=fix_noise_and_nodes,
+            guidance_steps=guidance_steps,
+            optimization=optimization,
+            relax_sampling=relax_sampling,
+            relax_steps=relax_steps,
+            device="cpu",
+        )
+    else:
+        print("\nStarting sampling...\n")
+        results_dict, generated_smiles, stable_molecules = model.run_evaluation(
+            step=step,
+            dataset_info=model.dataset_info,
+            ngraphs=ngraphs,
+            bs=batch_size,
+            return_molecules=True,
+            verbose=True,
+            inner_verbose=True,
+            save_dir=save_dir,
+            ddpm=ddpm,
+            eta_ddim=eta_ddim,
+            run_test_eval=True,
+            save_traj=save_traj,
+            guidance_scale=guidance_scale,
+            use_energy_guidance=use_energy_guidance,
+            ckpt_energy_model=ckpt_energy_model,
+            fix_noise_and_nodes=fix_noise_and_nodes,
+            guidance_steps=guidance_steps,
+            optimization=optimization,
+            relax_sampling=relax_sampling,
+            relax_steps=relax_steps,
+            device="cpu",
+        )
 
-    atom_decoder = stable_molecules[0].dataset_info.atom_decoder
+    print("\nFinished sampling!\n")
+    atom_decoder = stable_molecules[0].atom_decoder
 
     if calculate_energy:
         energies = []
@@ -272,10 +305,14 @@ def get_args():
     parser = argparse.ArgumentParser(description='Data generation')
     parser.add_argument('--model-path', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol/best_mol_stab.ckpt", type=str,
                         help='Path to trained model')
+    parser.add_argument("--sample-only-valid", default=False, action="store_true")
     parser.add_argument("--use-energy-guidance", default=False, action="store_true")
     parser.add_argument("--ckpt-energy-model", default=None, type=str)
+    parser.add_argument("--optimization", default="minimize", type=str, choices=["minimize", "maximize"])
     parser.add_argument('--guidance-scale', default=1.0e-4, type=float,
                         help='How to scale the guidance shift')
+    parser.add_argument('--guidance-steps', default=100, type=int,
+                        help='How many guidance steps')
     parser.add_argument('--save-dir', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol", type=str,
                         help='Path to test output')
     parser.add_argument('--save-xyz', default=False, action="store_true",
@@ -321,8 +358,11 @@ if __name__ == "__main__":
         calculate_props=args.calculate_props,
         use_energy_guidance=args.use_energy_guidance,
         ckpt_energy_model=args.ckpt_energy_model,
+        guidance_steps=args.guidance_steps,
         guidance_scale=args.guidance_scale,
         fix_noise_and_nodes=args.fix_noise_and_nodes,
+        optimization=args.optimization,
         relax_sampling=args.relax_sampling,
         relax_steps=args.relax_steps,
+        sample_only_valid=args.sample_only_valid,
     )

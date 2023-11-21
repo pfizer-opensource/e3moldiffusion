@@ -1,12 +1,12 @@
-from typing import Union, Iterable
+from typing import Iterable, Union
 
+import networkx as nx
 import numpy as np
 import torch
 import torch.nn.functional as F
-from rdkit import Chem
-import networkx as nx
-from networkx.algorithms import isomorphism
 from Bio.PDB.Polypeptide import is_aa
+from networkx.algorithms import isomorphism
+from rdkit import Chem
 
 
 class Queue:

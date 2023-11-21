@@ -1,21 +1,17 @@
-from collections import Counter
+import logging
 import math
-import math
 from collections import Counter
+from typing import Any, Collection, Iterable, List, Optional, Tuple
+
 import numpy as np
 import torch
 import torch.nn.functional as F
-from rdkit import Chem, RDLogger
+from rdkit import Chem, DataStructs, RDLogger
+from rdkit.Chem import AllChem, Descriptors, Mol, rdMolDescriptors
 from rdkit.DataStructs import TanimotoSimilarity
-from rdkit import Chem
-from rdkit.Chem import Descriptors, Mol, rdMolDescriptors
-from typing import Optional, List, Iterable, Collection, Tuple, Any
 from rdkit.ML.Descriptors import MoleculeDescriptors
-from rdkit.Chem import AllChem
-from rdkit import RDLogger, DataStructs
 from scipy import histogram
 from scipy.stats import entropy, gaussian_kde
-import logging
 
 # Mute RDKit logger
 RDLogger.logger().setLevel(RDLogger.CRITICAL)

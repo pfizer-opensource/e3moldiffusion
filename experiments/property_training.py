@@ -1,17 +1,14 @@
-import logging
 import pytorch_lightning as pl
 import torch
-import torch.nn.functional as F
 from torch import Tensor
 from torch_geometric.data import Batch
-from collections import defaultdict
 
-from experiments.diffusion.continuous import DiscreteDDPM
-from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from e3moldiffusion.coordsatomsbonds import EQGATEnergyNetwork
 from experiments.data.abstract_dataset import AbstractDatasetInfos
-from experiments.utils import zero_mean
 from experiments.data.distributions import PROP_TO_IDX_GEOMQM as prop_to_idx
+from experiments.diffusion.categorical import CategoricalDiffusionKernel
+from experiments.diffusion.continuous import DiscreteDDPM
+from experiments.utils import zero_mean
 
 
 class Trainer(pl.LightningModule):

@@ -1,6 +1,5 @@
 import numpy as np
-
-from constants import CA_C_DIST, N_CA_DIST, N_CA_C_ANGLE
+from constants import CA_C_DIST, N_CA_C_ANGLE, N_CA_DIST
 
 
 def rotation_matrix(angle, axis):
