@@ -258,9 +258,9 @@ class Trainer(pl.LightningModule):
 
     def on_test_epoch_end(self):
         if self.hparams.use_ligand_dataset_sizes:
-            print(f"Running test sampling. Ligand sizes are taken from the data.")
+            print("Running test sampling. Ligand sizes are taken from the data.")
         else:
-            print(f"Running test sampling. Ligand sizes are sampled.")
+            print("Running test sampling. Ligand sizes are sampled.")
         results_dict, generated_smiles, valid_molecules = self.run_evaluation(
             step=0,
             dataset_info=self.dataset_info,
@@ -272,6 +272,7 @@ class Trainer(pl.LightningModule):
             device="cpu",
             run_test_eval=True,
             use_ligand_dataset_sizes=self.hparams.use_ligand_dataset_sizes,
+            build_obabel_mol=self.hparams.build_obabel_mol,
             save_dir=self.hparams.test_save_dir,
             save_traj=self.hparams.save_traj,
             return_molecules=True,
@@ -856,10 +857,12 @@ class Trainer(pl.LightningModule):
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
         use_ligand_dataset_sizes: bool = False,
+        build_obabel_mol: bool = False,
         run_test_eval: bool = False,
         guidance_scale: float = 1.0e-4,
         use_energy_guidance: bool = False,
         ckpt_energy_model: str = None,
+        n_nodes_bias: int = 0,
         device: str = "cpu",
     ):
         """
@@ -888,6 +891,7 @@ class Trainer(pl.LightningModule):
                 num_nodes_lig = self.conditional_size_distribution.sample_conditional(
                     n1=None, n2=pocket_data.pos_pocket_batch.bincount()
                 ).to(self.device)
+                num_nodes_lig += n_nodes_bias
             molecules = self.reverse_sampling(
                 num_graphs=num_graphs,
                 num_nodes_lig=num_nodes_lig,
@@ -900,6 +904,7 @@ class Trainer(pl.LightningModule):
                 guidance_scale=guidance_scale,
                 energy_model=energy_model,
                 save_dir=save_dir,
+                build_obabel_mol=build_obabel_mol,
                 iteration=i,
             )
             molecule_list.extend(molecules)
@@ -982,10 +987,11 @@ class Trainer(pl.LightningModule):
         eta_ddim,
         relax_mol=False,
         max_relax_iter=200,
-        sanitize=False,
+        sanitize=True,
         every_k_step=1,
         fix_n_nodes=False,
-        mol_device="cpu",
+        n_nodes_bias=0,
+        build_obabel_mol=False,
         save_dir=None,
     ):
         if fix_n_nodes:
@@ -999,6 +1005,7 @@ class Trainer(pl.LightningModule):
                 .repeat(num_graphs)
                 .to(self.device)
             )
+            num_nodes_lig += n_nodes_bias
         molecules = self.reverse_sampling(
             num_graphs=num_graphs,
             num_nodes_lig=num_nodes_lig,
@@ -1010,9 +1017,12 @@ class Trainer(pl.LightningModule):
             every_k_step=every_k_step,
             guidance_scale=None,
             energy_model=None,
+            relax_mol=relax_mol,
+            max_relax_iter=max_relax_iter,
+            sanitize=sanitize,
+            build_obabel_mol=build_obabel_mol,
             save_dir=save_dir,
         )
-
         return molecules
 
     def reverse_sampling(
@@ -1028,6 +1038,10 @@ class Trainer(pl.LightningModule):
         guidance_scale: float = 1.0e-4,
         energy_model=None,
         save_dir: str = None,
+        relax_mol=False,
+        max_relax_iter=200,
+        sanitize=False,
+        build_obabel_mol=False,
         iteration: int = 0,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         pos_pocket = pocket_data.pos_pocket.to(self.device)
@@ -1389,14 +1403,19 @@ class Trainer(pl.LightningModule):
             device=self.device,
             mol_device="cpu",
             context=context,
+            relax_mol=relax_mol,
+            max_relax_iter=max_relax_iter,
+            sanitize=sanitize,
             while_train=False,
             build_mol_with_addfeats=True,
+            build_obabel_mol=build_obabel_mol,
         )
         if save_traj:
             write_trajectory_as_xyz(
                 molecules,
-                path=os.path.join(save_dir, f"iter_{iteration}"),
                 strict=False,
+                joint_traj=True,
+                path=os.path.join(save_dir, f"iter_{iteration}"),
             )
 
         return molecules

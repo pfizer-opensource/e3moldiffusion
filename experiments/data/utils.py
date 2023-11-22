@@ -239,6 +239,7 @@ def write_trajectory_as_xyz(
     molecules,
     path,
     strict=True,
+    joint_traj=False,
 ):
     try:
         os.makedirs(path)
@@ -252,9 +253,14 @@ def write_trajectory_as_xyz(
             and mol.compute_validity(rdkit_mol, strict=strict) is not None
         )
         if valid:
-            files = sorted(
-                glob(os.path.join(path, f"batch_{i}/mol_*.xyz")), key=get_key
-            )
+            if joint_traj:
+                files = sorted(
+                    glob(os.path.join(path, f"batch_{i}/lig_pocket_*.xyz")), key=get_key
+                )
+            else:
+                files = sorted(
+                    glob(os.path.join(path, f"batch_{i}/mol_*.xyz")), key=get_key
+                )
             traj_path = os.path.join(path, f"trajectory_{i}.xyz")
             for j, file in enumerate(files):
                 with open(file, "r") as f:

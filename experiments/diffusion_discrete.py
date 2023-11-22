@@ -726,7 +726,10 @@ class Trainer(pl.LightningModule):
             )
             valid_molecule_list.extend(valid_molecules)
 
-            n_graphs_remaining = (ngraphs - len(valid_molecule_list)) * 2
+            if (ngraphs - len(valid_molecule_list)) <= 4:
+                n_graphs_remaining = 10
+            else:
+                n_graphs_remaining = (ngraphs - len(valid_molecule_list)) * 2
 
         (
             stability_dict,

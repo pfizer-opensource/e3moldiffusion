@@ -631,10 +631,12 @@ def analyze_stability_for_molecules(
     remove_hs=False,
     device="cpu",
     calculate_statistics=True,
+    test=False,
 ):
     metrics = BasicMolecularMetrics(
         dataset_info,
         smiles_train=smiles_train,
+        test=test,
         device=device,
     )
     (

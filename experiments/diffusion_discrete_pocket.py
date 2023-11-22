@@ -1181,6 +1181,7 @@ class Trainer(pl.LightningModule):
             write_trajectory_as_xyz(
                 molecules,
                 strict=False,
+                joint_traj=True,
                 path=os.path.join(save_dir, f"iter_{iteration}"),
             )
 
