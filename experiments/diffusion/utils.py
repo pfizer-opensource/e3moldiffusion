@@ -221,7 +221,10 @@ def extract_scaffolds_(batch_data):
         scaffold = GetScaffoldForMol(mol)
         scaffold_atoms = [a.GetIntProp("org_idx") for a in scaffold.GetAtoms()]
         mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
-        mask[torch.tensor(scaffold_atoms)] = 1
+        try:
+            mask[torch.tensor(scaffold_atoms)] = 1
+        except Exception as e:
+            print(e)
         return mask
 
     batch_data.scaffold_mask = torch.hstack(
@@ -231,6 +234,10 @@ def extract_scaffolds_(batch_data):
 
 def extract_func_groups_(batch_data, includeHs=True):
     def func_groups_per_mol(mol, includeHs=True):
+        try:
+            Chem.SanitizeMol(mol)
+        except:
+            pass
         fgroups = identify_functional_groups(mol)
         findices = []
         for f in fgroups:
@@ -246,7 +253,10 @@ def extract_func_groups_(batch_data, includeHs=True):
                 findices_incl_h.extend([fi] + hidx)
             findices = findices_incl_h
         mask = torch.zeros(mol.GetNumAtoms(), dtype=bool)
-        mask[torch.tensor(findices)] = 1
+        try:
+            mask[torch.tensor(findices)] = 1
+        except Exception as e:
+            print(e)
         return mask
 
     batch_data.func_group_mask = torch.hstack(

@@ -37,8 +37,15 @@ def evaluate(
     step=0,
     ddpm=True,
     eta_ddim=1.0,
+    every_k_step=1,
+    max_num_batches=-1,
     guidance_start=None,
     calculate_relax_change=True,
+    scaffold_elaboration=False,
+    scaffold_hopping=False,
+    resample_steps=1,
+    fraction_new_nodes=0.0,
+    T=500,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -101,6 +108,9 @@ def evaluate(
     if dataset == "pubchem":
         datamodule = DataModule(hparams, evaluation=True)
     else:
+        # TODO: remove this here, this is only so dataloading is quicker for debugging
+        hparams.dataset_root = "/scratch1/seumej/geom_qm/"
+        hparams.max_num_conformers = 1
         datamodule = DataModule(hparams)
 
     from experiments.data.data_info import GeneralInfos as DataInfos
@@ -155,6 +165,11 @@ def evaluate(
         strict=False,
     ).to(device)
     model = model.eval()
+    if scaffold_elaboration or scaffold_hopping:
+        # somehow i can access the datamodule from model.trainer.datamodule
+        # might be due to:
+        # The loaded checkpoint was produced with Lightning v2.0.6, which is newer than your current Lightning version: v2.0.4
+        model.datamodule = datamodule
 
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -162,23 +177,51 @@ def evaluate(
     if use_energy_guidance and ckpt_energy_model is not None:
         print("Sampling with energy guidance!")
 
-    results_dict, generated_smiles, stable_molecules = model.run_evaluation(
-        step=step,
-        dataset_info=model.dataset_info,
-        ngraphs=ngraphs,
-        bs=batch_size,
-        return_molecules=True,
-        verbose=True,
-        inner_verbose=True,
-        save_dir=save_dir,
-        ddpm=ddpm,
-        eta_ddim=eta_ddim,
-        run_test_eval=True,
-        guidance_scale=guidance_scale,
-        ckpt_energy_model=ckpt_energy_model,
-        use_energy_guidance=use_energy_guidance,
-        device="cpu",
-    )
+    if scaffold_elaboration or scaffold_hopping:
+        assert (
+            scaffold_elaboration != scaffold_hopping
+        ), "Either scaffold elaboration or scaffold hopping can be used at a time"
+        model.run_fixed_substructure_evaluation(
+            dataset_info=model.dataset_info,
+            save_dir=save_dir,
+            return_molecules=True,
+            verbose=True,
+            save_traj=False,
+            inner_verbose=True,
+            ddpm=ddpm,
+            eta_ddim=eta_ddim,
+            every_k_step=every_k_step,
+            run_test_eval=True,
+            guidance_scale=guidance_scale,
+            use_energy_guidance=use_energy_guidance,
+            ckpt_energy_model=ckpt_energy_model,
+            use_scaffold_dataset_sizes=True,
+            scaffold_elaboration=scaffold_elaboration,
+            scaffold_hopping=scaffold_hopping,
+            max_num_batches=max_num_batches,
+            fraction_new_nodes=fraction_new_nodes,
+            resample_steps=resample_steps,
+            T=T,
+            device="cpu",
+        )
+    else:
+        results_dict, generated_smiles, stable_molecules = model.run_evaluation(
+            step=step,
+            dataset_info=model.dataset_info,
+            ngraphs=ngraphs,
+            bs=batch_size,
+            return_molecules=True,
+            verbose=True,
+            inner_verbose=True,
+            save_dir=save_dir,
+            ddpm=ddpm,
+            eta_ddim=eta_ddim,
+            run_test_eval=True,
+            guidance_scale=guidance_scale,
+            ckpt_energy_model=ckpt_energy_model,
+            use_energy_guidance=use_energy_guidance,
+            device="cpu",
+        )
 
     atom_decoder = stable_molecules[0].dataset_info.atom_decoder
 
@@ -350,7 +393,7 @@ def evaluate(
 def get_args():
     # fmt: off
     parser = argparse.ArgumentParser(description='Data generation')
-    parser.add_argument('--model-path', default="/sharedhome/seumej/logs/best_mol_stab.ckpt", type=str,
+    parser.add_argument('--model-path', default="/scratch1/e3moldiffusion/logs/geom_qm/x0_snr_qm/best_mol_stab.ckpt", type=str,
                         help='Path to trained model')
     parser.add_argument("--use-energy-guidance", default=False, action="store_true")
     parser.add_argument("--calculate-relax-change", default=True, action="store_true")
@@ -364,7 +407,7 @@ def get_args():
                         help='Whether or not to store generated molecules in xyz files')
     parser.add_argument('--calculate-props', default=False, action="store_true",
                         help='Whether or not to calculate xTB properties')
-    parser.add_argument('--ngraphs', default=80, type=int,
+    parser.add_argument('--ngraphs', default=70, type=int,
                             help='How many graphs to sample. Defaults to 5000')
     parser.add_argument('--batch-size', default=70, type=int,
                             help='Batch-size to generate the selected ngraphs. Defaults to 80.')
@@ -374,6 +417,13 @@ def get_args():
                         help='How to scale the std of noise in the reverse posterior. \
                             Can also be used for DDPM to track a deterministic trajectory. \
                             Defaults to 1.0')
+    parser.add_argument('--scaffold-elaboration', default=False, action="store_true", help="Run scaffold elaboration")
+    parser.add_argument('--scaffold-hopping', default=False, action="store_true", help="Run scaffold hopping")
+    parser.add_argument('--resample-steps', default=1, type=int, help="Number of resampling steps for scaffold elaboration/hopping")
+    parser.add_argument('--every-k-step', default=1, type=int, help="Jump k steps in denoising")
+    parser.add_argument('--fraction-new-nodes', default=0.0, type=float, help="Fraction of new nodes to be added in scaffold elaboration/hopping")
+    parser.add_argument('--max-num-batches', default=1, type=int, help="Maximum number of batches to use for scaffold elaboration/hopping")
+    parser.add_argument('-T', default=500, type=int, help="T for denoising diffusion")
     args = parser.parse_args()
     return args
 
@@ -388,6 +438,8 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         ddpm=not args.ddim,
         eta_ddim=args.eta_ddim,
+        every_k_step=args.every_k_step,
+        max_num_batches=args.max_num_batches,
         save_xyz=args.save_xyz,
         calculate_props=args.calculate_props,
         use_energy_guidance=args.use_energy_guidance,
@@ -395,4 +447,9 @@ if __name__ == "__main__":
         guidance_scale=args.guidance_scale,
         guidance_start=args.guidance_start,
         calculate_relax_change=args.calculate_relax_change,
+        scaffold_elaboration=args.scaffold_elaboration,
+        scaffold_hopping=args.scaffold_hopping,
+        resample_steps=args.resample_steps,
+        fraction_new_nodes=args.fraction_new_nodes,
+        T=args.T,
     )

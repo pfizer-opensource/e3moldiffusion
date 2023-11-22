@@ -268,12 +268,13 @@ class DiscreteDDPM(nn.Module):
 
         return betas
 
-    def marginal_prob(self, x: Tensor, t: Tensor):
+    def marginal_prob(self, x: Tensor, t: Tensor, cumulative: bool = True):
         """_summary_
         Eq. 4 in https://arxiv.org/abs/2006.11239
         Args:
             x (Tensor): _description_ Continuous data feature tensor
             t (Tensor): _description_ Discrete time variable between 1 and T
+            cumulative (bool): _description_ Whether to use cumulative or non-cumulative alphas
         Returns:
             _type_: _description_
         """
@@ -281,12 +282,19 @@ class DiscreteDDPM(nn.Module):
         assert str(t.dtype) == "torch.int64"
         expand_axis = len(x.size()) - 1
 
-        if self.schedule == "adaptive":
-            signal = self.get_alpha_bar(t_int=t)
-            std = self.get_sigma_bar(t_int=t)
+        if cumulative:
+            if self.schedule == "adaptive":
+                signal = self.get_alpha_bar(t_int=t)
+                std = self.get_sigma_bar(t_int=t)
+            else:
+                signal = self.sqrt_alphas_cumprod[t]
+                std = self.sqrt_1m_alphas_cumprod[t]
         else:
-            signal = self.sqrt_alphas_cumprod[t]
-            std = self.sqrt_1m_alphas_cumprod[t]
+            if self.schedule == "adaptive":
+                signal = self.get_alpha(t_int=t)
+                std = torch.sqrt(1-signal)
+            else:
+                raise NotImplementedError
 
         for _ in range(expand_axis):
             signal = signal.unsqueeze(-1)
@@ -333,6 +341,13 @@ class DiscreteDDPM(nn.Module):
             t_int = torch.round(t_normalized * self.T)
         g = self._gamma.to(t_int.device)[t_int]
         return g.float()
+
+    def get_alpha(self, t_normalized=None, t_int=None, key=None):
+        assert int(t_normalized is None) + int(t_int is None) == 1
+        if t_int is None:
+            t_int = torch.round(t_normalized * self.T)
+        a = self.alphas.to(t_int.device)[t_int.long()]
+        return a.float()
 
     def sigma_pos_ts_sq(self, t_int, s_int):
         gamma_s = self.get_gamma(t_int=s_int)
@@ -449,7 +464,7 @@ class DiscreteDDPM(nn.Module):
 
         return xt_m1
 
-    def sample_pos(self, t, pos, data_batch, remove_mean=True):
+    def sample_pos(self, t, pos, data_batch, remove_mean=True, cumulative: bool = True):
         # Coords: point cloud in R^3
         # sample noise for coords and recenter
         bs = int(data_batch.max()) + 1
@@ -460,17 +475,17 @@ class DiscreteDDPM(nn.Module):
                 noise_coords_true, batch=data_batch, dim_size=bs, dim=0
             )
         # get signal and noise coefficients for coords
-        mean_coords, std_coords = self.marginal_prob(x=pos, t=t[data_batch])
+        mean_coords, std_coords = self.marginal_prob(x=pos, t=t[data_batch], cumulative=cumulative)
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
 
         return noise_coords_true, pos_perturbed
 
-    def sample(self, t, feature, data_batch):
+    def sample(self, t, feature, data_batch, cumulative: bool = True):
         noise_coords_true = torch.randn_like(feature)
 
         # get signal and noise coefficients for coords
-        mean_coords, std_coords = self.marginal_prob(x=feature, t=t[data_batch])
+        mean_coords, std_coords = self.marginal_prob(x=feature, t=t[data_batch], cumulative=cumulative)
         feature_perturbed = mean_coords + std_coords * noise_coords_true
 
         return noise_coords_true, feature_perturbed

@@ -69,19 +69,21 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         self.register_buffer("Qt_bar", Qt_bar)
         self.register_buffer("Qt_bar_prev", Qt_bar_prev)
 
-    def marginal_prob(self, x0: torch.Tensor, t: torch.Tensor):
+    def marginal_prob(self, x0: torch.Tensor, t: torch.Tensor, cumulative: bool=True):
         """_summary_
         Computes the forward categorical posterior q(xt | x0) ~ Cat(xt, p = x0_j . Qt_bar_ji)
         Args:
             x0 (torch.Tensor): _description_ one-hot vectors of shape (n, k)
             t (torch.Tensor): _description_ time variable of shape (n,)
+            cumulative (bool): _description_ whether to use the cumulative Qt or not
 
         Returns:
             _type_: _description_
         """
 
         # Qt_bar (k0, k_t)
-        probs = torch.einsum("nj, nji -> ni", [x0, self.Qt_bar[t]])
+        Q = self.Qt_bar if cumulative else self.Qt
+        probs = torch.einsum("nj, nji -> ni", [x0, Q[t]])
         check = torch.all((probs.sum(-1) - 1.0).abs() < 1e-4)
         assert check
 
@@ -246,6 +248,7 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         edge_attr_global,
         data_batch,
         return_one_hot=True,
+        cumulative=True
     ):
         j, i = edge_index_global
         mask = j < i
@@ -256,7 +259,7 @@ class CategoricalDiffusionKernel(torch.nn.Module):
             edge_attr_triu, num_classes=self.num_bond_types
         ).float()
         t_edge = t[data_batch[mask_i]]
-        probs = self.marginal_prob(edge_attr_triu_ohe, t=t_edge)
+        probs = self.marginal_prob(edge_attr_triu_ohe, t=t_edge, cumulative=cumulative)
         edges_t_given_0 = probs.multinomial(
             1,
         ).squeeze()
@@ -283,7 +286,7 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         return edge_attr_global_perturbed
 
     def sample_categorical(
-        self, t, x0, data_batch, dataset_info, num_classes=16, type="atoms"
+        self, t, x0, data_batch, dataset_info, num_classes=16, type="atoms", cumulative=True
     ):
         assert type in ["atoms", "charges", "ring", "aromatic", "hybridization"]
 
@@ -291,7 +294,7 @@ class CategoricalDiffusionKernel(torch.nn.Module):
             x0 = dataset_info.one_hot_charges(x0)
         else:
             x0 = F.one_hot(x0.squeeze().long(), num_classes=num_classes).float()
-        probs = self.marginal_prob(x0.float(), t[data_batch])
+        probs = self.marginal_prob(x0.float(), t[data_batch], cumulative=cumulative)
         x0_perturbed = probs.multinomial(
             1,
         ).squeeze()

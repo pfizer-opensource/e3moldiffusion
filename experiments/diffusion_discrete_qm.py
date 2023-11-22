@@ -1,7 +1,8 @@
 import logging
 import os
 from datetime import datetime
-from typing import List, Tuple
+from typing import Optional, List, Tuple
+import pdb
 
 import pandas as pd
 import pytorch_lightning as pl
@@ -11,6 +12,7 @@ from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from tqdm import tqdm
+from torch_scatter import scatter_mean
 
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
@@ -721,6 +723,7 @@ class Trainer(pl.LightningModule):
         else:
             return total_res
 
+    @torch.no_grad()
     def run_fixed_substructure_evaluation(
         self,
         dataset_info,
@@ -737,8 +740,12 @@ class Trainer(pl.LightningModule):
         use_energy_guidance: bool = False,
         ckpt_energy_model: str = None,
         use_scaffold_dataset_sizes: bool = True,
+        fraction_new_nodes: float = 0.0,
         scaffold_elaboration: bool = True,
         scaffold_hopping: bool = False,
+        resample_steps: int = 1,
+        max_num_batches: int = -1,
+        T: int = 500,
         device: str = "cpu",
     ):
         energy_model = None
@@ -750,22 +757,30 @@ class Trainer(pl.LightningModule):
             energy_model.eval()
 
         dataloader = (
-            self.trainer.datamodule.val_dataloader()
+            self.datamodule.val_dataloader()
             if not run_test_eval
-            else self.trainer.datamodule.test_dataloader()
+            else self.datamodule.test_dataloader()
         )
 
         molecule_list = []
         start = datetime.now()
-        for _, batch_data in enumerate(dataloader):
+        for i, batch_data in enumerate(dataloader):
+            if (max_num_batches >= 0) and (i >= max_num_batches):
+                break
             num_graphs = len(batch_data.batch.bincount())
-
             if use_scaffold_dataset_sizes:
                 num_nodes = batch_data.batch.bincount().to(self.device)
             else:
-                num_nodes = self.conditional_size_distribution.sample_conditional(
-                    n1=None, n2=batch_data.batch.bincount()
-                ).to(self.device)
+                num_nodes = batch_data.batch.bincount().to(self.device)
+                num_fixed = batch_data.fixed_nodes_mask.sum()
+                num_nodes += torch.round(
+                    (
+                        torch.randint_like(num_nodes, 0, 100, dtype=num_nodes.dtype)
+                        * num_fixed
+                        * fraction_new_nodes
+                    )
+                    / 100
+                )
 
             if scaffold_elaboration:
                 extract_scaffolds_(batch_data)
@@ -791,41 +806,91 @@ class Trainer(pl.LightningModule):
                 every_k_step=every_k_step,
                 guidance_scale=guidance_scale,
                 energy_model=energy_model,
-                scaffolding=True,
+                scaffold_elaboration=scaffold_elaboration,
+                scaffold_hopping=scaffold_hopping,
                 batch_data=batch_data,
                 num_nodes=num_nodes,
+                resample_steps=resample_steps,
+                T=T,
             )
 
-            molecule_list.extend(
-                get_molecules(
-                    out_dict,
-                    data_batch,
-                    edge_index_global,
-                    self.num_atom_types,
-                    self.num_charge_classes,
-                    self.dataset_info,
-                    device=self.device,
-                    mol_device=device,
-                    context=context,
-                    while_train=False,
-                )
+            new_mols = get_molecules(
+                out_dict,
+                data_batch,
+                edge_index_global,
+                self.num_atom_types,
+                self.num_charge_classes,
+                self.dataset_info,
+                device=self.device,
+                mol_device=device,
+                context=context,
+                while_train=False,
             )
+            for idx, mol in enumerate(new_mols):
+                if scaffold_elaboration:
+                    mol.fixed_mask = batch_data.fixed_nodes_mask[
+                        batch_data.batch == idx
+                    ].cpu()
+
+                elif scaffold_hopping:
+                    mol.fixed_mask = batch_data.fixed_nodes_mask[
+                        batch_data.batch == idx
+                    ].cpu()
+                mol.ref_mol = batch_data.mol[idx]
+                mol.trans_pos = batch_data.trans_pos[batch_data.batch == idx].cpu()
+            molecule_list.extend(new_mols)
+        import pickle
+
+        with open(os.path.join(save_dir, "molecules.pkl"), "wb") as f:
+            print(f"saving mols to {os.path.join(save_dir, 'molecules.pkl')}")
+            pickle.dump(molecule_list, f)
         (
             stability_dict,
             validity_dict,
             statistics_dict,
             all_generated_smiles,
             stable_molecules,
-            valid_molecules,
         ) = analyze_stability_for_molecules(
             molecule_list=molecule_list,
             dataset_info=dataset_info,
             smiles_train=self.smiles_list,
             local_rank=self.local_rank,
             return_molecules=return_molecules,
-            remove_hs=self.hparams.remove_hs,
             device=device,
         )
+        run_time = datetime.now() - start
+        if verbose:
+            if self.local_rank == 0:
+                print(f"Run time={run_time}")
+        total_res = dict(stability_dict)
+        total_res.update(validity_dict)
+        total_res.update(statistics_dict)
+        total_res = pd.DataFrame.from_dict([total_res])
+        total_res["run_time"] = str(run_time)
+        if self.local_rank == 0:
+            print(total_res)
+
+        try:
+            if save_dir is None:
+                save_dir = os.path.join(
+                    self.hparams.save_dir,
+                    "run" + str(self.hparams.id),
+                    "evaluation.csv",
+                )
+                print(f"Saving evaluation csv file to {save_dir}")
+            else:
+                save_dir = os.path.join(save_dir, "evaluation.csv")
+            if self.local_rank == 0:
+                with open(save_dir, "a") as f:
+                    total_res.to_csv(f, header=True)
+        except Exception as e:
+            print(e)
+            pass
+
+        if return_molecules:
+            return total_res, all_generated_smiles, stable_molecules
+        else:
+            return total_res
 
     def reverse_sampling(
         self,
@@ -838,10 +903,14 @@ class Trainer(pl.LightningModule):
         guidance_scale: float = 1.0e-4,
         energy_model=None,
         scaffold_elaboration: bool = False,
+        scaffold_hopping: bool = False,
         batch_data: Tensor = None,
         num_nodes: Tensor = None,
+        resample_steps: int = 1,
+        fraction_new_nodes: float = 0.0,  # TODO
+        T: int = 500,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
-        if not scaffold_elaboration:
+        if not (scaffold_elaboration | scaffold_hopping):
             batch_num_nodes = torch.multinomial(
                 input=self.empirical_num_nodes,
                 num_samples=num_graphs,
@@ -868,13 +937,6 @@ class Trainer(pl.LightningModule):
         )
         pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
 
-        if scaffold_elaboration:
-            fixed_nodes_mask = batch_data.fixed_nodes_mask
-            orig_pos = zero_mean(
-                batch_data.pos, batch=batch_data.batch, dim_size=bs, dim=0
-            )
-            pos = pos * (~fixed_nodes_mask) + orig_pos * fixed_nodes_mask
-
         n = len(pos)
 
         # initialize the atom-types
@@ -894,38 +956,49 @@ class Trainer(pl.LightningModule):
         edge_index_global, _ = dense_to_sparse(edge_index_global)
         edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
 
-        if scaffold_elaboration:
+        if scaffold_elaboration or scaffold_hopping:
+            # global edge attributes
             edge_index_global, edge_attr_global = coalesce_edges(
                 edge_index=edge_index_global,
-                bond_edge_index=batch_data.bond_edge_index,
-                bond_edge_attr=batch_data.bond_edge_attr,
+                bond_edge_index=batch_data.edge_index.to(self.device),
+                bond_edge_attr=batch_data.edge_attr.to(self.device),
                 n=pos.size(0),
             )
-            edge_index_global, edge_attr_global_batch = sort_edge_index(
+            edge_index_global, orig_edge_attr_global = sort_edge_index(
                 edge_index=edge_index_global,
                 edge_attr=edge_attr_global,
                 sort_by_row=False,
             )
+            # global wbo
+            edge_index_global, orig_wbo_global = coalesce_edges(
+                edge_index=edge_index_global,
+                bond_edge_index=batch_data.edge_index.to(self.device),
+                bond_edge_attr=batch_data.wbo.to(self.device),
+                n=pos.size(0),
+            )
+            edge_index_global, orig_wbo_global = sort_edge_index(
+                edge_index=edge_index_global,
+                edge_attr=orig_wbo_global,
+                sort_by_row=False,
+            )
+        if not self.hparams.bond_prediction:
+            (
+                edge_attr_global,
+                edge_index_global,
+                mask,
+                mask_i,
+            ) = initialize_edge_attrs_reverse(
+                edge_index_global,
+                n,
+                self.bonds_prior,
+                self.num_bond_classes - 1
+                if self.hparams.use_qm_props
+                else self.num_bond_classes,
+                self.device,
+            )
         else:
-            if not self.hparams.bond_prediction:
-                (
-                    edge_attr_global,
-                    edge_index_global,
-                    mask,
-                    mask_i,
-                ) = initialize_edge_attrs_reverse(
-                    edge_index_global,
-                    n,
-                    self.bonds_prior,
-                    self.num_bond_classes - 1
-                    if self.hparams.use_qm_props
-                    else self.num_bond_classes,
-                    self.device,
-                )
-            else:
-                edge_attr_global = None
+            edge_attr_global = None
         batch_edge_global = batch[edge_index_global[0]]
-
         mulliken = torch.randn(
             len(batch), 1, device=self.device, dtype=torch.get_default_dtype()
         )
@@ -937,20 +1010,29 @@ class Trainer(pl.LightningModule):
         )
 
         if scaffold_elaboration:
-            atom_types_batch = F.one_hot(
-                batch_data.x.squeeze().long(), num_classes=self.num_atom_types
-            ).float()
-            charge_types_batch = F.one_hot(
-                batch_data.charges.squeeze().long(), num_classes=self.num_charge_classes
-            ).float()
-            atom_types = (
-                atom_types * (~fixed_nodes_mask) + atom_types_batch * fixed_nodes_mask
-            )
-            charge_types = (
-                charge_types * (~fixed_nodes_mask)
-                + charge_types_batch * fixed_nodes_mask
-            )
+            fixed_nodes_mask = batch_data.scaffold_mask.to(self.device)
+            batch_data.fixed_nodes_mask = fixed_nodes_mask.detach()
+        elif scaffold_hopping:
+            fixed_nodes_mask = batch_data.func_group_mask.to(self.device)
+            batch_data.fixed_nodes_mask = fixed_nodes_mask.detach()
 
+        if scaffold_elaboration or scaffold_hopping:
+            # get original positions
+            orig_pos = zero_mean(
+                batch_data.pos, batch=batch_data.batch, dim_size=bs, dim=0
+            ).to(self.device)
+            batch_data.trans_pos = orig_pos.detach()
+            # get original atom features
+            orig_atom_types_int = batch_data.x.to(self.device)
+            orig_atom_types_onehot = F.one_hot(
+                orig_atom_types_int, self.num_atom_types
+            ).float()
+            orig_charge_types_int = batch_data.charges.to(self.device)
+            orig_charge_types_onehot = self.dataset_info.one_hot_charges(
+                orig_charge_types_int
+            )
+            orig_mulliken = batch_data.mulliken.to(self.device)
+            # get fixed edge indices
             fixed_nodes_indices = torch.where(fixed_nodes_mask == True)[0]
             edge_0 = torch.where(
                 edge_index_global[0][:, None] == fixed_nodes_indices[None, :]
@@ -958,22 +1040,27 @@ class Trainer(pl.LightningModule):
             edge_1 = torch.where(
                 edge_index_global[1][:, None] == fixed_nodes_indices[None, :]
             )[0]
-            fixed_edges_indices = edge_0[
+            edge_index_between_fixed_nodes = edge_0[
                 torch.where(edge_0[:, None] == edge_1[None, :])[0]
             ]
-            fixed_edges = edge_attr_global_batch[fixed_edges_indices]
-
-            edge_attr_global[fixed_edges_indices] = fixed_edges
+            edge_mask_between_fixed_nodes = torch.zeros_like(
+                orig_edge_attr_global, dtype=torch.bool, device=self.device
+            )
+            edge_mask_between_fixed_nodes[edge_index_between_fixed_nodes] = True
 
         pos_traj = []
         atom_type_traj = []
         charge_type_traj = []
         edge_type_traj = []
 
+        if isinstance(T, int):
+            print(f"Denoising from time step {T}")
+        else:
+            T = self.hparams.timesteps
         if self.hparams.continuous_param == "data":
-            chain = range(0, self.hparams.timesteps)
+            chain = range(0, T)
         elif self.hparams.continuous_param == "noise":
-            chain = range(0, self.hparams.timesteps - 1)
+            chain = range(0, T - 1)
 
         chain = chain[::every_k_step]
 
@@ -990,134 +1077,287 @@ class Trainer(pl.LightningModule):
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
 
-            node_feats_in = [atom_types, charge_types, mulliken]
-            edge_attr_global_full = torch.cat([edge_attr_global, wbo], dim=-1)
+            for r in range(resample_steps):
+                node_feats_in = [atom_types, charge_types, mulliken]
+                edge_attr_global_full = torch.cat([edge_attr_global, wbo], dim=-1)
 
-            node_feats_in = torch.cat(node_feats_in, dim=-1)
-            out = self.model(
-                x=node_feats_in,
-                t=temb,
-                pos=pos,
-                edge_index_local=edge_index_local,
-                edge_index_global=edge_index_global,
-                edge_attr_global=edge_attr_global_full,
-                batch=batch,
-                batch_edge_global=batch_edge_global,
-                context=context,
-            )
+                node_feats_in = torch.cat(node_feats_in, dim=-1)
+                out = self.model(
+                    x=node_feats_in,
+                    t=temb,
+                    pos=pos,
+                    edge_index_local=edge_index_local,
+                    edge_index_global=edge_index_global,
+                    edge_attr_global=edge_attr_global_full,
+                    batch=batch,
+                    batch_edge_global=batch_edge_global,
+                    context=context,
+                )
 
-            coords_pred = out["coords_pred"].squeeze()
-            # N x a_0
-            edges_pred = out["bonds_pred"]
+                coords_pred = out["coords_pred"].squeeze()
+                # N x a_0
+                edges_pred = out["bonds_pred"]
 
-            edges_pred, wbo_pred = out["bonds_pred"].split(
-                [self.num_bond_classes - 1, 1], dim=-1
-            )
+                edges_pred, wbo_pred = out["bonds_pred"].split(
+                    [self.num_bond_classes - 1, 1], dim=-1
+                )
 
-            atom_split = [self.num_atom_types, self.num_charge_classes, 1]
+                atom_split = [self.num_atom_types, self.num_charge_classes, 1]
 
-            (
-                atoms_pred,
-                charges_pred,
-                mulliken_pred,
-            ) = out[
-                "atoms_pred"
-            ].split(atom_split, dim=-1)
+                (
+                    atoms_pred,
+                    charges_pred,
+                    mulliken_pred,
+                ) = out[
+                    "atoms_pred"
+                ].split(atom_split, dim=-1)
 
-            atoms_pred = atoms_pred.softmax(dim=-1)
-            edges_pred = edges_pred.softmax(dim=-1)
-            # E x b_0
-            charges_pred = charges_pred.softmax(dim=-1)
+                atoms_pred = atoms_pred.softmax(dim=-1)
+                edges_pred = edges_pred.softmax(dim=-1)
+                # E x b_0
+                charges_pred = charges_pred.softmax(dim=-1)
 
-            if ddpm:
-                if self.hparams.noise_scheduler == "adaptive":
-                    # positions
-                    pos = self.sde_pos.sample_reverse_adaptive(
-                        s, t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
-                    )
-                    mulliken = self.sde_mulliken.sample_reverse_adaptive(
-                        s,
-                        t,
-                        mulliken,
-                        mulliken_pred,
-                        batch,
-                        cog_proj=False,
-                    )
-                    wbo = self.sde_wbo.sample_reverse_adaptive(
-                        s,
-                        t,
-                        wbo,
-                        wbo_pred,
-                        batch_edge_global,
-                        cog_proj=False,
-                    )
+                if ddpm:
+                    if self.hparams.noise_scheduler == "adaptive":
+                        # positions
+                        pos = self.sde_pos.sample_reverse_adaptive(
+                            s,
+                            t,
+                            pos,
+                            coords_pred,
+                            batch,
+                            cog_proj=True,
+                            eta_ddim=eta_ddim,
+                        )
+                        mulliken = self.sde_mulliken.sample_reverse_adaptive(
+                            s,
+                            t,
+                            mulliken,
+                            mulliken_pred,
+                            batch,
+                            cog_proj=False,
+                        )
+                        wbo = self.sde_wbo.sample_reverse_adaptive(
+                            s,
+                            t,
+                            wbo,
+                            wbo_pred,
+                            batch_edge_global,
+                            cog_proj=False,
+                        )
+                    else:
+                        # positions
+                        pos = self.sde_pos.sample_reverse(
+                            t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
+                        )
                 else:
-                    # positions
-                    pos = self.sde_pos.sample_reverse(
+                    pos = self.sde_pos.sample_reverse_ddim(
                         t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
                     )
-            else:
-                pos = self.sde_pos.sample_reverse_ddim(
-                    t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
-                )
 
-            # atoms
-            atom_types = self.cat_atoms.sample_reverse_categorical(
-                xt=atom_types,
-                x0=atoms_pred,
-                t=t[batch],
-                num_classes=self.num_atom_types,
-            )
-            # charges
-            charge_types = self.cat_charges.sample_reverse_categorical(
-                xt=charge_types,
-                x0=charges_pred,
-                t=t[batch],
-                num_classes=self.num_charge_classes,
-            )
-            # edges
-            if not self.hparams.bond_prediction:
-                (
-                    edge_attr_global,
-                    edge_index_global,
-                    mask,
-                    mask_i,
-                ) = self.cat_bonds.sample_reverse_edges_categorical(
-                    edge_attr_global,
-                    edges_pred,
-                    t,
-                    mask,
-                    mask_i,
-                    batch=batch,
-                    edge_index_global=edge_index_global,
-                    num_classes=self.num_bond_classes - 1
-                    if self.hparams.use_qm_props
-                    else self.num_bond_classes,
+                # atoms
+                atom_types = self.cat_atoms.sample_reverse_categorical(
+                    xt=atom_types,
+                    x0=atoms_pred,
+                    t=t[batch],
+                    num_classes=self.num_atom_types,
                 )
-            else:
-                edge_attr_global = edges_pred
+                # charges
+                charge_types = self.cat_charges.sample_reverse_categorical(
+                    xt=charge_types,
+                    x0=charges_pred,
+                    t=t[batch],
+                    num_classes=self.num_charge_classes,
+                )
+                # edges
+                if not self.hparams.bond_prediction:
+                    (
+                        edge_attr_global,
+                        edge_index_global,
+                        mask,
+                        mask_i,
+                    ) = self.cat_bonds.sample_reverse_edges_categorical(
+                        edge_attr_global,
+                        edges_pred,
+                        t,
+                        mask,
+                        mask_i,
+                        batch=batch,
+                        edge_index_global=edge_index_global,
+                        num_classes=self.num_bond_classes - 1
+                        if self.hparams.use_qm_props
+                        else self.num_bond_classes,
+                    )
+                else:
+                    edge_attr_global = edges_pred
 
-            if self.hparams.bond_model_guidance:
-                pos = bond_guidance(
-                    pos,
-                    node_feats_in,
-                    temb,
-                    self.bond_model,
-                    batch,
-                    batch_edge_global,
-                    edge_attr_global,
-                    edge_index_local,
-                    edge_index_global,
-                )
-            if energy_model is not None and timestep <= 100:
-                pos = energy_guidance(
-                    pos,
-                    node_feats_in[:, :-1],
-                    temb,
-                    energy_model,
-                    batch,
-                    guidance_scale=guidance_scale,
-                )
+                if self.hparams.bond_model_guidance:
+                    pos = bond_guidance(
+                        pos,
+                        node_feats_in,
+                        temb,
+                        self.bond_model,
+                        batch,
+                        batch_edge_global,
+                        edge_attr_global,
+                        edge_index_local,
+                        edge_index_global,
+                    )
+                if energy_model is not None and timestep <= 100:
+                    pos = energy_guidance(
+                        pos,
+                        node_feats_in[:, :-1],
+                        temb,
+                        energy_model,
+                        batch,
+                        guidance_scale=guidance_scale,
+                    )
+
+                if scaffold_elaboration or scaffold_hopping:
+                    # create noised positions
+                    _, pos_perturbed = self.sde_pos.sample_pos(
+                        t, orig_pos, batch, remove_mean=True
+                    )
+                    # translate the COM of the masked noised nodes with the COM of the (masked) generated nodes
+                    pos_perturbed_trans = (
+                        pos_perturbed
+                        + (
+                            scatter_mean(
+                                pos[fixed_nodes_mask], batch[fixed_nodes_mask], dim=0
+                            )
+                            - scatter_mean(
+                                pos_perturbed[fixed_nodes_mask],
+                                batch[fixed_nodes_mask],
+                                dim=0,
+                            )
+                        )[batch]
+                    )
+                    # combine sampled pos of non fixed nodes with noised pos of fixed nodes
+                    pos = (
+                        pos * (~fixed_nodes_mask[:, None])
+                        + pos_perturbed_trans * fixed_nodes_mask[:, None]
+                    )
+
+                    # create noised atom types
+                    _, atom_types_perturbed = self.cat_atoms.sample_categorical(
+                        t,
+                        orig_atom_types_int,
+                        batch,
+                        self.dataset_info,
+                        num_classes=self.num_atom_types,
+                        type="atoms",
+                    )
+                    # combine sampled atom types of non fixed nodes with noised atom types of fixed nodes
+                    atom_types = (
+                        atom_types * (~fixed_nodes_mask[:, None])
+                        + atom_types_perturbed * fixed_nodes_mask[:, None]
+                    )
+
+                    # create noised charges
+                    _, charges_perturbed = self.cat_charges.sample_categorical(
+                        t,
+                        orig_charge_types_int,
+                        batch,
+                        self.dataset_info,
+                        num_classes=self.num_charge_classes,
+                        type="charges",
+                    )
+                    # combine sampled charges of non fixed nodes with noised charges of fixed nodes
+                    charge_types = (
+                        charge_types * (~fixed_nodes_mask[:, None])
+                        + charges_perturbed * fixed_nodes_mask[:, None]
+                    )
+                    # create noised mulliken
+                    mulliken_perturbed = self.sde_mulliken.sample(
+                        t, orig_mulliken, batch
+                    )[1].unsqueeze(1)
+                    # combine sampled mulliken of non fixed nodes with noised mulliken of fixed nodes
+                    mulliken = (
+                        mulliken * (~fixed_nodes_mask[:, None])
+                        + mulliken_perturbed * fixed_nodes_mask[:, None]
+                    )
+
+                    # create noised wbo
+                    wbo_perturbed = self.sde_wbo.sample(
+                        t, orig_wbo_global, batch_edge_global
+                    )[1].unsqueeze(1)
+                    # combine sampled wbo of non fixed nodes with noised wbo of fixed nodes
+
+                    wbo = (
+                        wbo * (~edge_mask_between_fixed_nodes[:, None])
+                        + wbo_perturbed * edge_mask_between_fixed_nodes[:, None]
+                    )
+
+                    # create noised edges
+                    edge_attr_global_perturbed = (
+                        self.cat_bonds.sample_edges_categorical(
+                            t,
+                            edge_index_global,
+                            orig_edge_attr_global,
+                            batch,
+                        )
+                    )
+                    # combine sampled edges of non fixed nodes with noised edges of fixed nodes
+                    edge_attr_global = (
+                        edge_attr_global * (~edge_mask_between_fixed_nodes[:, None])
+                        + edge_attr_global_perturbed
+                        * edge_mask_between_fixed_nodes[:, None]
+                    )
+
+                    if r < (resample_steps - 1) and timestep > 0:
+                        # noise the combined pos again
+                        # pos_noise = torch.randn_like(pos)
+                        # pos_noise = zero_mean(
+                        #     pos_noise, batch=batch, dim_size=bs, dim=0
+                        # )
+                        # pos = (
+                        #     pos * self.sde_pos.sqrt_alphas[t].unsqueeze(-1)[batch]
+                        #     + pos_noise
+                        #     * torch.sqrt(1 - self.sde_pos.alphas[t]).unsqueeze(-1)[
+                        #         batch
+                        #     ]
+                        # )
+                        pos = self.sde_pos.sample_pos(
+                            t,
+                            pos,
+                            batch,
+                            remove_mean=True,
+                            cumulative=False,
+                        )[1]
+                        # noise the categorical atom features again
+                        atom_types = self.cat_atoms.sample_categorical(
+                            t,
+                            atom_types.argmax(dim=1),
+                            batch,
+                            self.dataset_info,
+                            num_classes=self.num_atom_types,
+                            type="atoms",
+                            cumulative=False,
+                        )[1]
+                        charge_types = self.cat_charges.sample_categorical(
+                            t,
+                            charge_types.argmax(dim=1)
+                            - self.dataset_info.charge_offset,
+                            batch,
+                            self.dataset_info,
+                            num_classes=self.num_charge_classes,
+                            type="charges",
+                            cumulative=False,
+                        )[1]
+                        # noise the edge attributes again
+                        edge_attr_global = self.cat_bonds.sample_edges_categorical(
+                            t,
+                            edge_index_global,
+                            edge_attr_global.argmax(dim=1),
+                            batch,
+                            cumulative=False,
+                        )
+                        # noise the mulliken again
+                        mulliken = self.sde_mulliken.sample(
+                            t, mulliken, batch, cumulative=False
+                        )[1]
+                        # noise the wbo again
+                        wbo = self.sde_wbo.sample(t, wbo, batch_edge_global)[1]
 
             if save_traj:
                 pos_traj.append(pos.detach())
