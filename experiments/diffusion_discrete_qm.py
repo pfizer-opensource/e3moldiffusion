@@ -792,6 +792,11 @@ class Trainer(pl.LightningModule):
         guidance_scale: float = 1.0e-4,
         use_energy_guidance: bool = False,
         ckpt_energy_model: str = None,
+        fix_noise_and_nodes: bool = False,
+        guidance_steps: int = 100,
+        optimization: str = "minimize",
+        relax_sampling: bool = False,
+        relax_steps: int = 10,
         use_scaffold_dataset_sizes: bool = True,
         fraction_new_nodes: float = 0.0,
         scaffold_elaboration: bool = True,
@@ -844,13 +849,7 @@ class Trainer(pl.LightningModule):
                     "Please specify which setting: Scaffold hopping or elaboration."
                 )
 
-            (
-                out_dict,
-                data_batch,
-                edge_index_global,
-                trajs,
-                context,
-            ) = self.reverse_sampling(
+            molecules = self.reverse_sampling(
                 num_graphs=num_graphs,
                 verbose=inner_verbose,
                 save_traj=save_traj,
@@ -859,6 +858,13 @@ class Trainer(pl.LightningModule):
                 every_k_step=every_k_step,
                 guidance_scale=guidance_scale,
                 energy_model=energy_model,
+                save_dir=save_dir,
+                fix_noise_and_nodes=fix_noise_and_nodes,
+                iteration=i,
+                guidance_steps=guidance_steps,
+                optimization=optimization,
+                relax_sampling=relax_sampling,
+                relax_steps=relax_steps,
                 scaffold_elaboration=scaffold_elaboration,
                 scaffold_hopping=scaffold_hopping,
                 batch_data=batch_data,
@@ -866,20 +872,7 @@ class Trainer(pl.LightningModule):
                 resample_steps=resample_steps,
                 T=T,
             )
-
-            new_mols = get_molecules(
-                out_dict,
-                data_batch,
-                edge_index_global,
-                self.num_atom_types,
-                self.num_charge_classes,
-                self.dataset_info,
-                device=self.device,
-                mol_device=device,
-                context=context,
-                while_train=False,
-            )
-            for idx, mol in enumerate(new_mols):
+            for idx, mol in enumerate(molecules):
                 if scaffold_elaboration:
                     mol.fixed_mask = batch_data.fixed_nodes_mask[
                         batch_data.batch == idx
@@ -891,7 +884,7 @@ class Trainer(pl.LightningModule):
                     ].cpu()
                 mol.ref_mol = batch_data.mol[idx]
                 mol.trans_pos = batch_data.trans_pos[batch_data.batch == idx].cpu()
-            molecule_list.extend(new_mols)
+            molecule_list.extend(molecules)
         import pickle
 
         with open(os.path.join(save_dir, "molecules.pkl"), "wb") as f:
