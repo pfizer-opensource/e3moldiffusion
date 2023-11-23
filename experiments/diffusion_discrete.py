@@ -681,17 +681,16 @@ class Trainer(pl.LightningModule):
         start = datetime.now()
 
         i = 0
-        n_graphs_remaining = ngraphs
         valid_molecule_list = []
         while len(valid_molecule_list) < ngraphs:
-            b = n_graphs_remaining // bs
+            b = ngraphs // bs
             l = [bs] * b
-            if sum(l) != n_graphs_remaining:
-                l.append(n_graphs_remaining - sum(l))
-            assert sum(l) == n_graphs_remaining
+            if sum(l) != ngraphs:
+                l.append(ngraphs - sum(l))
+            assert sum(l) == ngraphs
             if verbose:
                 if self.local_rank == 0:
-                    print(f"Creating {n_graphs_remaining} graphs in {l} batches")
+                    print(f"Creating {ngraphs} graphs in {l} batches")
             molecule_list = []
             for num_graphs in l:
                 molecules = self.reverse_sampling(
@@ -725,11 +724,6 @@ class Trainer(pl.LightningModule):
                 device=device,
             )
             valid_molecule_list.extend(valid_molecules)
-
-            if (ngraphs - len(valid_molecule_list)) <= 4:
-                n_graphs_remaining = 10
-            else:
-                n_graphs_remaining = (ngraphs - len(valid_molecule_list)) * 2
 
         (
             stability_dict,

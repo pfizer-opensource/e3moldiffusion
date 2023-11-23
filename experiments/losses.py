@@ -39,6 +39,8 @@ class DiffusionLoss(nn.Module):
         weights: Optional[Tensor] = None,
     ) -> Dict:
         batch_size = len(batch.unique())
+        charges_loss = None
+        bonds_loss = None
         mulliken_loss = None
         wbo_loss = None
 
@@ -56,7 +58,7 @@ class DiffusionLoss(nn.Module):
             regr_loss *= weights[~m]
             regr_loss = torch.sum(regr_loss, dim=0)
 
-            if "mulliken" in true_data:
+            if "mulliken" in self.modalities:
                 mulliken_loss = F.mse_loss(
                     pred_data["mulliken"],
                     true_data["mulliken"],
@@ -68,7 +70,7 @@ class DiffusionLoss(nn.Module):
                 mulliken_loss *= weights
                 mulliken_loss = torch.sum(mulliken_loss, dim=0)
 
-            if "wbo" in true_data:
+            if "wbo" in self.modalities:
                 wbo_loss = F.mse_loss(
                     pred_data["wbo"],
                     true_data["wbo"],
@@ -103,47 +105,51 @@ class DiffusionLoss(nn.Module):
             atoms_loss *= weights[~m]
             atoms_loss = torch.sum(atoms_loss, dim=0)
 
-            if self.param[self.modalities.index("charges")] == "data":
-                fnc = F.cross_entropy
-                take_mean = False
-            else:
-                fnc = F.mse_loss
-                take_mean = True
+            if "charges" in self.modalities:
+                if self.param[self.modalities.index("charges")] == "data":
+                    fnc = F.cross_entropy
+                    take_mean = False
+                else:
+                    fnc = F.mse_loss
+                    take_mean = True
 
-            charges_loss = fnc(
-                pred_data["charges"], true_data["charges"], reduction="none"
-            )
-            if take_mean:
-                charges_loss = charges_loss.mean(dim=1)
-            charges_loss = scatter_mean(
-                charges_loss, index=batch, dim=0, dim_size=batch_size
-            )
-            charges_loss, m = self.loss_non_nans(charges_loss, "charges")
-            charges_loss *= weights[~m]
-            charges_loss = torch.sum(charges_loss, dim=0)
+                charges_loss = fnc(
+                    pred_data["charges"], true_data["charges"], reduction="none"
+                )
+                if take_mean:
+                    charges_loss = charges_loss.mean(dim=1)
+                charges_loss = scatter_mean(
+                    charges_loss, index=batch, dim=0, dim_size=batch_size
+                )
+                charges_loss, m = self.loss_non_nans(charges_loss, "charges")
+                charges_loss *= weights[~m]
+                charges_loss = torch.sum(charges_loss, dim=0)
 
-            if self.param[self.modalities.index("bonds")] == "data":
-                fnc = F.cross_entropy
-                take_mean = False
-            else:
-                fnc = F.mse_loss
-                take_mean = True
+            if "bonds" in self.modalities:
+                if self.param[self.modalities.index("bonds")] == "data":
+                    fnc = F.cross_entropy
+                    take_mean = False
+                else:
+                    fnc = F.mse_loss
+                    take_mean = True
 
-            bonds_loss = fnc(pred_data["bonds"], true_data["bonds"], reduction="none")
-            if take_mean:
-                bonds_loss = bonds_loss.mean(dim=1)
-            bonds_loss = 0.5 * scatter_mean(
-                bonds_loss,
-                index=bond_aggregation_index,
-                dim=0,
-                dim_size=true_data["atoms"].size(0),
-            )
-            bonds_loss = scatter_mean(
-                bonds_loss, index=batch, dim=0, dim_size=batch_size
-            )
-            bonds_loss, m = self.loss_non_nans(bonds_loss, "bonds")
-            bonds_loss *= weights[~m]
-            bonds_loss = bonds_loss.sum(dim=0)
+                bonds_loss = fnc(
+                    pred_data["bonds"], true_data["bonds"], reduction="none"
+                )
+                if take_mean:
+                    bonds_loss = bonds_loss.mean(dim=1)
+                bonds_loss = 0.5 * scatter_mean(
+                    bonds_loss,
+                    index=bond_aggregation_index,
+                    dim=0,
+                    dim_size=true_data["atoms"].size(0),
+                )
+                bonds_loss = scatter_mean(
+                    bonds_loss, index=batch, dim=0, dim_size=batch_size
+                )
+                bonds_loss, m = self.loss_non_nans(bonds_loss, "bonds")
+                bonds_loss *= weights[~m]
+                bonds_loss = bonds_loss.sum(dim=0)
 
             if "ring" in self.modalities:
                 ring_loss = F.cross_entropy(
@@ -199,18 +205,24 @@ class DiffusionLoss(nn.Module):
             else:
                 fnc = F.mse_loss
             atoms_loss = fnc(pred_data["atoms"], true_data["atoms"], reduction="mean")
-            if self.param[self.modalities.index("charges")] == "data":
-                fnc = F.cross_entropy
-            else:
-                fnc = F.mse_loss
-            charges_loss = fnc(
-                pred_data["charges"], true_data["charges"], reduction="mean"
-            )
-            if self.param[self.modalities.index("bonds")] == "data":
-                fnc = F.cross_entropy
-            else:
-                fnc = F.mse_loss
-            bonds_loss = fnc(pred_data["bonds"], true_data["bonds"], reduction="mean")
+
+            if "charges" in self.modalities:
+                if self.param[self.modalities.index("charges")] == "data":
+                    fnc = F.cross_entropy
+                else:
+                    fnc = F.mse_loss
+                charges_loss = fnc(
+                    pred_data["charges"], true_data["charges"], reduction="mean"
+                )
+
+            if "bonds" in self.modalities:
+                if self.param[self.modalities.index("bonds")] == "data":
+                    fnc = F.cross_entropy
+                else:
+                    fnc = F.mse_loss
+                bonds_loss = fnc(
+                    pred_data["bonds"], true_data["bonds"], reduction="mean"
+                )
 
             if "ring" in self.modalities:
                 ring_loss = F.cross_entropy(

@@ -1,8 +1,7 @@
 import logging
 import os
 from datetime import datetime
-from typing import Optional, List, Tuple
-import pdb
+from typing import List, Tuple
 
 import pandas as pd
 import pytorch_lightning as pl
@@ -11,17 +10,20 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
-from tqdm import tqdm
 from torch_scatter import scatter_mean
+from tqdm import tqdm
 
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.data.abstract_dataset import AbstractDatasetInfos
 from experiments.data.distributions import prepare_context
+from experiments.data.utils import (
+    write_trajectory_as_xyz,
+    write_xyz_file_from_batch,
+)
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.utils import (
-    bond_guidance,
     energy_guidance,
     extract_func_groups_,
     extract_scaffolds_,
@@ -32,7 +34,6 @@ from experiments.sampling.analyze_strict import analyze_stability_for_molecules
 from experiments.utils import (
     coalesce_edges,
     get_molecules,
-    load_bond_model,
     load_energy_model,
     load_model,
     zero_mean,
@@ -83,10 +84,8 @@ class Trainer(pl.LightningModule):
             print("Model without modelling explicit hydrogens")
 
         self.num_atom_types = self.hparams.num_atom_types
-        self.num_atom_features = (
-            self.num_atom_types + self.num_charge_classes + 1
-        )  # + mulliken
-        self.num_bond_classes = 6  # + wbo
+        self.num_atom_features = self.num_atom_types + self.num_charge_classes + 1
+        self.num_bond_features = self.hparams.num_bond_classes + 1
 
         self.smiles_list = smiles_list
 
@@ -113,7 +112,7 @@ class Trainer(pl.LightningModule):
                 latent_dim=None,
                 use_cross_product=hparams["use_cross_product"],
                 num_atom_features=self.num_atom_features,
-                num_bond_types=self.num_bond_classes,
+                num_bond_types=self.num_bond_features,
                 edge_dim=hparams["edim"],
                 cutoff_local=hparams["cutoff_local"],
                 vector_aggr=hparams["vector_aggr"],
@@ -167,52 +166,51 @@ class Trainer(pl.LightningModule):
             nu=1,
             enforce_zero_terminal_snr=False,
         )
-        self.sde_bonds = DiscreteDDPM(
-            beta_min=hparams["beta_min"],
-            beta_max=hparams["beta_max"],
-            N=hparams["timesteps"],
-            scaled_reverse_posterior_sigma=True,
-            schedule=self.hparams.noise_scheduler,
-            nu=1.5,
-            enforce_zero_terminal_snr=False,
-        )
+        if self.num_charge_classes > 0:
+            print("Formal charges are included as categorical features!")
+            self.cat_charges = CategoricalDiffusionKernel(
+                terminal_distribution=charge_types_distribution,
+                alphas=self.sde_atom_charge.alphas.clone(),
+                num_atom_types=self.num_atom_types,
+                num_bond_types=self.hparams.num_bond_classes,
+                num_charge_types=self.num_charge_classes,
+            )
+        if self.hparams.num_bond_classes != 0:
+            print("Bond types are included as categorical features!")
+            self.sde_bonds = DiscreteDDPM(
+                beta_min=hparams["beta_min"],
+                beta_max=hparams["beta_max"],
+                N=hparams["timesteps"],
+                scaled_reverse_posterior_sigma=True,
+                schedule=self.hparams.noise_scheduler,
+                nu=1.5,
+                enforce_zero_terminal_snr=False,
+            )
+            self.cat_bonds = CategoricalDiffusionKernel(
+                terminal_distribution=bond_types_distribution,
+                alphas=self.sde_bonds.alphas.clone(),
+                num_atom_types=self.num_atom_types,
+                num_bond_types=self.hparams.num_bond_classes,
+                num_charge_types=self.num_charge_classes,
+            )
 
         self.cat_atoms = CategoricalDiffusionKernel(
             terminal_distribution=atom_types_distribution,
             alphas=self.sde_atom_charge.alphas.clone(),
             num_atom_types=self.num_atom_types,
-            num_bond_types=self.num_bond_classes - 1,
-            num_charge_types=self.num_charge_classes,
-        )
-        self.cat_bonds = CategoricalDiffusionKernel(
-            terminal_distribution=bond_types_distribution,
-            alphas=self.sde_bonds.alphas.clone(),
-            num_atom_types=self.num_atom_types,
-            num_bond_types=self.num_bond_classes - 1,
-            num_charge_types=self.num_charge_classes,
-        )
-        self.cat_charges = CategoricalDiffusionKernel(
-            terminal_distribution=charge_types_distribution,
-            alphas=self.sde_atom_charge.alphas.clone(),
-            num_atom_types=self.num_atom_types,
-            num_bond_types=self.num_bond_classes - 1,
+            num_bond_types=self.hparams.num_bond_classes,
             num_charge_types=self.num_charge_classes,
         )
 
-        modalities = ["coords", "atoms", "charges", "bonds", "mulliken", "wbo"]
+        modalities = ["coords", "atoms", "mulliken", "wbo"]
+        if self.hparams.num_bond_classes > 0:
+            modalities += ["bonds"]
+        if self.num_charge_classes > 0:
+            modalities += ["charges"]
         self.diffusion_loss = DiffusionLoss(
             modalities=modalities,
             param=["data"] * len(modalities),
         )
-
-        if self.hparams.bond_model_guidance:
-            print("Using bond model guidance...")
-            self.bond_model = load_bond_model(
-                self.hparams.ckpt_bond_model, dataset_info
-            )
-            for param in self.bond_model.parameters():
-                param.requires_grad = False
-            self.bond_model.eval()
 
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
@@ -273,10 +271,10 @@ class Trainer(pl.LightningModule):
         loss,
         coords_loss,
         atoms_loss,
-        charges_loss,
-        bonds_loss,
         batch_size,
         stage,
+        charges_loss=None,
+        bonds_loss=None,
         ring_loss=None,
         aromatic_loss=None,
         hybridization_loss=None,
@@ -310,23 +308,25 @@ class Trainer(pl.LightningModule):
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
 
-        self.log(
-            f"{stage}/charges_loss",
-            charges_loss,
-            on_step=True,
-            batch_size=batch_size,
-            prog_bar=(stage == "train"),
-            sync_dist=self.hparams.gpus > 1 and stage == "val",
-        )
+        if charges_loss is not None:
+            self.log(
+                f"{stage}/charges_loss",
+                charges_loss,
+                on_step=True,
+                batch_size=batch_size,
+                prog_bar=(stage == "train"),
+                sync_dist=self.hparams.gpus > 1 and stage == "val",
+            )
 
-        self.log(
-            f"{stage}/bonds_loss",
-            bonds_loss,
-            on_step=True,
-            batch_size=batch_size,
-            prog_bar=(stage == "train"),
-            sync_dist=self.hparams.gpus > 1 and stage == "val",
-        )
+        if bonds_loss is not None:
+            self.log(
+                f"{stage}/bonds_loss",
+                bonds_loss,
+                on_step=True,
+                batch_size=batch_size,
+                prog_bar=(stage == "train"),
+                sync_dist=self.hparams.gpus > 1 and stage == "val",
+            )
         self.log(
             f"{stage}/mulliken_loss",
             mulliken_loss,
@@ -388,34 +388,50 @@ class Trainer(pl.LightningModule):
             if self.hparams.continuous_param == "data"
             else out_dict["coords_noise_true"],
             "atoms": out_dict["atoms_true"],
-            "charges": out_dict["charges_true"],
-            "bonds": out_dict["bonds_true"],
         }
 
         coords_pred = out_dict["coords_pred"]
         atoms_pred = out_dict["atoms_pred"]
         edges_pred = out_dict["bonds_pred"]
 
-        atom_split = [self.num_atom_types, self.num_charge_classes, 1]
+        atom_split = (
+            [self.num_atom_types, self.num_charge_classes, 1]
+            if self.num_charge_classes != 0
+            else [self.num_atom_types, 1]
+        )
 
         true_data["mulliken"] = out_dict["mulliken_true"].unsqueeze(1)
         true_data["wbo"] = out_dict["wbo_true"].unsqueeze(1)
-        edges_pred, wbo_pred = edges_pred.split([self.num_bond_classes - 1, 1], dim=-1)
-
-        (
-            atoms_pred,
-            charges_pred,
-            mulliken_pred,
-        ) = atoms_pred.split(atom_split, dim=-1)
+        if self.num_charge_classes != 0:
+            true_data["charges"] = out_dict["charges_true"].unsqueeze(1)
+            (
+                atoms_pred,
+                charges_pred,
+                mulliken_pred,
+            ) = atoms_pred.split(atom_split, dim=-1)
+        else:
+            (
+                atoms_pred,
+                mulliken_pred,
+            ) = atoms_pred.split(atom_split, dim=-1)
+        if self.hparams.num_bond_classes > 0:
+            true_data["bonds"] = out_dict["bonds_true"]
+            edges_pred, wbo_pred = edges_pred.split(
+                [self.hparams.num_bond_classes, 1], dim=-1
+            )
+        else:
+            wbo_pred = edges_pred
 
         pred_data = {
             "coords": coords_pred,
             "atoms": atoms_pred,
-            "charges": charges_pred,
-            "bonds": edges_pred,
         }
         pred_data["mulliken"] = mulliken_pred
         pred_data["wbo"] = wbo_pred
+        if self.num_charge_classes > 0:
+            pred_data["charges"] = charges_pred
+        if self.hparams.num_bond_classes > 0:
+            pred_data["bonds"] = edges_pred
 
         loss = self.diffusion_loss(
             true_data=true_data,
@@ -425,14 +441,38 @@ class Trainer(pl.LightningModule):
             weights=weights,
         )
 
-        final_loss = (
-            self.hparams.lc_coords * loss["coords"]
-            + self.hparams.lc_atoms * loss["atoms"]
-            + self.hparams.lc_bonds * loss["bonds"]
-            + self.hparams.lc_charges * loss["charges"]
-            + self.hparams.lc_mulliken * loss["mulliken"]
-            + self.hparams.lc_wbo * loss["wbo"]
-        )
+        if self.hparams.num_bond_classes > 0 and self.num_charge_classes > 0:
+            final_loss = (
+                self.hparams.lc_coords * loss["coords"]
+                + self.hparams.lc_atoms * loss["atoms"]
+                + self.hparams.lc_bonds * loss["bonds"]
+                + self.hparams.lc_charges * loss["charges"]
+                + self.hparams.lc_mulliken * loss["mulliken"]
+                + self.hparams.lc_wbo * loss["wbo"]
+            )
+        elif self.hparams.num_bond_classes > 0 and self.num_charge_classes == 0:
+            final_loss = (
+                self.hparams.lc_coords * loss["coords"]
+                + self.hparams.lc_atoms * loss["atoms"]
+                + self.hparams.lc_bonds * loss["bonds"]
+                + self.hparams.lc_mulliken * loss["mulliken"]
+                + self.hparams.lc_wbo * loss["wbo"]
+            )
+        elif self.hparams.num_bond_classes == 0 and self.num_charge_classes > 0:
+            final_loss = (
+                self.hparams.lc_coords * loss["coords"]
+                + self.hparams.lc_atoms * loss["atoms"]
+                + self.hparams.lc_charges * loss["charges"]
+                + self.hparams.lc_mulliken * loss["mulliken"]
+                + self.hparams.lc_wbo * loss["wbo"]
+            )
+        else:
+            final_loss = (
+                self.hparams.lc_coords * loss["coords"]
+                + self.hparams.lc_atoms * loss["atoms"]
+                + self.hparams.lc_mulliken * loss["mulliken"]
+                + self.hparams.lc_wbo * loss["wbo"]
+            )
 
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
@@ -443,10 +483,10 @@ class Trainer(pl.LightningModule):
             final_loss,
             loss["coords"],
             loss["atoms"],
-            loss["charges"],
-            loss["bonds"],
             batch_size,
             stage,
+            charges_loss=loss["charges"],
+            bonds_loss=loss["bonds"],
             mulliken_loss=loss["mulliken"],
             wbo_loss=loss["wbo"],
         )
@@ -463,11 +503,7 @@ class Trainer(pl.LightningModule):
         bond_edge_index = batch.edge_index
         bond_edge_attr = batch.edge_attr
         context = batch.context if self.hparams.context_mapping else None
-        n = batch.num_nodes
         bs = int(data_batch.max()) + 1
-        bond_edge_index, bond_edge_attr = sort_edge_index(
-            edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
-        )
 
         # TIME EMBEDDING
         temb = t.float() / self.hparams.timesteps
@@ -487,15 +523,21 @@ class Trainer(pl.LightningModule):
         else:
             edge_index_global = batch.fc_edge_index
 
-        edge_index_global, edge_attr_global = coalesce_edges(
-            edge_index=edge_index_global,
-            bond_edge_index=bond_edge_index,
-            bond_edge_attr=bond_edge_attr,
-            n=pos.size(0),
-        )
-        edge_index_global, edge_attr_global = sort_edge_index(
-            edge_index=edge_index_global, edge_attr=edge_attr_global, sort_by_row=False
-        )
+        if self.hparams.num_bond_classes > 0:
+            bond_edge_index, bond_edge_attr = sort_edge_index(
+                edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
+            )
+            edge_index_global, edge_attr_global = coalesce_edges(
+                edge_index=edge_index_global,
+                bond_edge_index=bond_edge_index,
+                bond_edge_attr=bond_edge_attr,
+                n=pos.size(0),
+            )
+            edge_index_global, edge_attr_global = sort_edge_index(
+                edge_index=edge_index_global,
+                edge_attr=edge_attr_global,
+                sort_by_row=False,
+            )
         batch_edge_global = data_batch[edge_index_global[0]]
 
         # SAMPLING
@@ -510,36 +552,47 @@ class Trainer(pl.LightningModule):
             num_classes=self.num_atom_types,
             type="atoms",
         )
-        charges, charges_perturbed = self.cat_charges.sample_categorical(
-            t,
-            charges,
-            data_batch,
-            self.dataset_info,
-            num_classes=self.num_charge_classes,
-            type="charges",
-        )
-        edge_attr_global_perturbed = (
-            self.cat_bonds.sample_edges_categorical(
-                t, edge_index_global, edge_attr_global, data_batch
+        if self.num_charge_classes > 0:
+            charges, charges_perturbed = self.cat_charges.sample_categorical(
+                t,
+                charges,
+                data_batch,
+                self.dataset_info,
+                num_classes=self.num_charge_classes,
+                type="charges",
             )
-            if not self.hparams.bond_prediction
-            else None
-        )
+        if self.hparams.num_bond_classes > 0:
+            edge_attr_global_perturbed = (
+                self.cat_bonds.sample_edges_categorical(
+                    t, edge_index_global, edge_attr_global, data_batch
+                )
+                if not self.hparams.bond_prediction
+                else None
+            )
 
         wbo = wbo[edge_index_global[1]]
         noise_mulliken_true, mulliken_perturbed = self.sde_mulliken.sample(
             t, mulliken, data_batch
         )
         noise_wbo_true, wbo_perturbed = self.sde_wbo.sample(t, wbo, batch_edge_global)
-        edge_attr_global_perturbed = torch.cat(
-            [edge_attr_global_perturbed, wbo_perturbed.unsqueeze(1)], dim=-1
-        )
+        if self.hparams.num_bond_classes > 0:
+            edge_attr_global_perturbed = torch.cat(
+                [edge_attr_global_perturbed, wbo_perturbed.unsqueeze(1)], dim=-1
+            )
+        else:
+            edge_attr_global_perturbed = wbo_perturbed.unsqueeze(1)
 
-        atom_feats = [
-            atom_types_perturbed,
-            charges_perturbed,
-            mulliken_perturbed.unsqueeze(1),
-        ]
+        if self.num_charge_classes > 0:
+            atom_feats = [
+                atom_types_perturbed,
+                charges_perturbed,
+                mulliken_perturbed.unsqueeze(1),
+            ]
+        else:
+            atom_feats = [
+                atom_types_perturbed,
+                mulliken_perturbed.unsqueeze(1),
+            ]
         atom_feats_in_perturbed = torch.cat(
             atom_feats,
             dim=-1,
@@ -560,16 +613,24 @@ class Trainer(pl.LightningModule):
 
         out["coords_perturbed"] = pos_perturbed
         out["atoms_perturbed"] = atom_types_perturbed
-        out["charges_perturbed"] = charges_perturbed
-        out["bonds_perturbed"] = edge_attr_global_perturbed
+        out["charges_perturbed"] = (
+            charges_perturbed if self.num_charge_classes > 0 else None
+        )
+        out["bonds_perturbed"] = (
+            edge_attr_global_perturbed if self.hparams.num_bond_classes > 0 else None
+        )
         out["mulliken_perturbed"] = mulliken_perturbed
         out["wbo_perturbed"] = wbo_perturbed
 
         out["coords_true"] = pos_centered
         out["coords_noise_true"] = noise_coords_true
         out["atoms_true"] = atom_types.argmax(dim=-1)
-        out["bonds_true"] = edge_attr_global
-        out["charges_true"] = charges.argmax(dim=-1)
+        out["bonds_true"] = (
+            edge_attr_global if self.hparams.num_bond_classes > 0 else None
+        )
+        out["charges_true"] = (
+            charges.argmax(dim=-1) if self.num_charge_classes > 0 else None
+        )
         out["mulliken_true"] = mulliken
         out["wbo_true"] = wbo
         out["mulliken_noise_true"] = noise_mulliken_true
@@ -587,7 +648,6 @@ class Trainer(pl.LightningModule):
         ngraphs: int = 4000,
         bs: int = 500,
         save_dir: str = None,
-        save_traj=False,
         return_molecules: bool = False,
         verbose: bool = False,
         inner_verbose=False,
@@ -598,13 +658,17 @@ class Trainer(pl.LightningModule):
         guidance_scale: float = 1.0e-4,
         use_energy_guidance: bool = False,
         ckpt_energy_model: str = None,
+        save_traj: bool = False,
+        fix_noise_and_nodes: bool = False,
+        guidance_steps: int = 100,
+        optimization: str = "minimize",
+        relax_sampling: bool = False,
+        relax_steps: int = 10,
         device: str = "cpu",
     ):
         energy_model = None
         if use_energy_guidance:
-            energy_model = load_energy_model(
-                ckpt_energy_model, self.num_atom_features - 1
-            )
+            energy_model = load_energy_model(ckpt_energy_model, self.num_atom_features)
             # for param in self.energy_model.parameters():
             #    param.requires_grad = False
             energy_model.to(self.device)
@@ -616,19 +680,14 @@ class Trainer(pl.LightningModule):
             l.append(ngraphs - sum(l))
         assert sum(l) == ngraphs
 
-        molecule_list = []
         start = datetime.now()
         if verbose:
             if self.local_rank == 0:
                 print(f"Creating {ngraphs} graphs in {l} batches")
-        for _, num_graphs in enumerate(l):
-            (
-                out_dict,
-                data_batch,
-                edge_index_global,
-                trajs,
-                context,
-            ) = self.reverse_sampling(
+
+        molecule_list = []
+        for i, num_graphs in enumerate(l):
+            molecules = self.reverse_sampling(
                 num_graphs=num_graphs,
                 verbose=inner_verbose,
                 save_traj=save_traj,
@@ -637,22 +696,16 @@ class Trainer(pl.LightningModule):
                 every_k_step=every_k_step,
                 guidance_scale=guidance_scale,
                 energy_model=energy_model,
+                save_dir=save_dir,
+                fix_noise_and_nodes=fix_noise_and_nodes,
+                iteration=i,
+                guidance_steps=guidance_steps,
+                optimization=optimization,
+                relax_sampling=relax_sampling,
+                relax_steps=relax_steps,
             )
 
-            molecule_list.extend(
-                get_molecules(
-                    out_dict,
-                    data_batch,
-                    edge_index_global,
-                    self.num_atom_types,
-                    self.num_charge_classes,
-                    self.dataset_info,
-                    device=self.device,
-                    mol_device=device,
-                    context=context,
-                    while_train=False,
-                )
-            )
+            molecule_list.extend(molecules)
         (
             stability_dict,
             validity_dict,
@@ -895,6 +948,7 @@ class Trainer(pl.LightningModule):
     def reverse_sampling(
         self,
         num_graphs: int,
+        batch_data: Tensor = None,
         verbose: bool = False,
         save_traj: bool = False,
         ddpm: bool = True,
@@ -902,27 +956,48 @@ class Trainer(pl.LightningModule):
         every_k_step: int = 1,
         guidance_scale: float = 1.0e-4,
         energy_model=None,
-        scaffold_elaboration: bool = False,
+        save_dir: float = None,
+        fix_noise_and_nodes: bool = False,
+        iteration: int = 0,
+        chain_iterator=None,
+        guidance_steps: int = 100,
+        optimization: str = "minimize",
+        relax_sampling: bool = False,
+        relax_steps: int = 10,
         scaffold_hopping: bool = False,
-        batch_data: Tensor = None,
-        num_nodes: Tensor = None,
+        scaffold_elaboration: bool = False,
         resample_steps: int = 1,
-        fraction_new_nodes: float = 0.0,  # TODO
-        T: int = 500,
+        fraction_new_nodes: float = 0.0,
+        T=None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
-        if not (scaffold_elaboration | scaffold_hopping):
+        if not fix_noise_and_nodes:
             batch_num_nodes = torch.multinomial(
                 input=self.empirical_num_nodes,
                 num_samples=num_graphs,
                 replacement=True,
             ).to(self.device)
-            batch_num_nodes = batch_num_nodes.clamp(min=1)
         else:
-            batch_num_nodes = num_nodes
+            seed_value = 42 + iteration
+            torch.random.manual_seed(seed_value)
+            batch_num_nodes = (
+                torch.multinomial(
+                    input=self.empirical_num_nodes,
+                    num_samples=1,
+                    replacement=True,
+                )
+                .repeat(num_graphs)
+                .to(self.device)
+            )
+
+        batch_num_nodes = batch_num_nodes.clamp(min=1)
         batch = torch.arange(num_graphs, device=self.device).repeat_interleave(
             batch_num_nodes, dim=0
         )
         bs = int(batch.max()) + 1
+
+        if energy_model is not None:
+            t = torch.arange(0, self.hparams.timesteps)
+            alphas = self.sde_pos.alphas_cumprod[t]
 
         # sample context condition
         context = None
@@ -981,7 +1056,7 @@ class Trainer(pl.LightningModule):
                 edge_attr=orig_wbo_global,
                 sort_by_row=False,
             )
-        if not self.hparams.bond_prediction:
+        if not self.hparams.bond_prediction and self.hparams.num_bond_classes > 0:
             (
                 edge_attr_global,
                 edge_index_global,
@@ -991,9 +1066,7 @@ class Trainer(pl.LightningModule):
                 edge_index_global,
                 n,
                 self.bonds_prior,
-                self.num_bond_classes - 1
-                if self.hparams.use_qm_props
-                else self.num_bond_classes,
+                self.hparams.num_bond_classes,
                 self.device,
             )
         else:
@@ -1048,11 +1121,6 @@ class Trainer(pl.LightningModule):
             )
             edge_mask_between_fixed_nodes[edge_index_between_fixed_nodes] = True
 
-        pos_traj = []
-        atom_type_traj = []
-        charge_type_traj = []
-        edge_type_traj = []
-
         if isinstance(T, int):
             print(f"Denoising from time step {T}")
         else:
@@ -1068,7 +1136,7 @@ class Trainer(pl.LightningModule):
             tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         )
 
-        for timestep in iterator:
+        for i, timestep in enumerate(iterator):
             s = torch.full(
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=pos.device
             )
@@ -1078,8 +1146,14 @@ class Trainer(pl.LightningModule):
             temb = temb.unsqueeze(dim=1)
 
             for r in range(resample_steps):
-                node_feats_in = [atom_types, charge_types, mulliken]
-                edge_attr_global_full = torch.cat([edge_attr_global, wbo], dim=-1)
+                if self.num_charge_classes > 0:
+                    node_feats_in = [atom_types, charge_types, mulliken]
+                else:
+                    node_feats_in = [atom_types, mulliken]
+                if self.hparams.num_bond_classes > 0:
+                    edge_attr_global_full = torch.cat([edge_attr_global, wbo], dim=-1)
+                else:
+                    edge_attr_global_full = wbo
 
                 node_feats_in = torch.cat(node_feats_in, dim=-1)
                 out = self.model(
@@ -1098,24 +1172,37 @@ class Trainer(pl.LightningModule):
                 # N x a_0
                 edges_pred = out["bonds_pred"]
 
-                edges_pred, wbo_pred = out["bonds_pred"].split(
-                    [self.num_bond_classes - 1, 1], dim=-1
-                )
+                if self.hparams.num_bond_classes > 0:
+                    edges_pred, wbo_pred = out["bonds_pred"].split(
+                        [self.hparams.num_bond_classes, 1], dim=-1
+                    )
+                else:
+                    wbo_pred = out["bonds_pred"]
 
-                atom_split = [self.num_atom_types, self.num_charge_classes, 1]
-
-                (
-                    atoms_pred,
-                    charges_pred,
-                    mulliken_pred,
-                ) = out[
-                    "atoms_pred"
-                ].split(atom_split, dim=-1)
+                if self.num_charge_classes > 0:
+                    atom_split = [self.num_atom_types, self.num_charge_classes, 1]
+                    (
+                        atoms_pred,
+                        charges_pred,
+                        mulliken_pred,
+                    ) = out[
+                        "atoms_pred"
+                    ].split(atom_split, dim=-1)
+                else:
+                    atom_split = [self.num_atom_types, 1]
+                    (
+                        atoms_pred,
+                        mulliken_pred,
+                    ) = out[
+                        "atoms_pred"
+                    ].split(atom_split, dim=-1)
 
                 atoms_pred = atoms_pred.softmax(dim=-1)
-                edges_pred = edges_pred.softmax(dim=-1)
+                if self.hparams.num_bond_classes > 0:
+                    edges_pred = edges_pred.softmax(dim=-1)
                 # E x b_0
-                charges_pred = charges_pred.softmax(dim=-1)
+                if self.num_charge_classes > 0:
+                    charges_pred = charges_pred.softmax(dim=-1)
 
                 if ddpm:
                     if self.hparams.noise_scheduler == "adaptive":
@@ -1162,47 +1249,35 @@ class Trainer(pl.LightningModule):
                     t=t[batch],
                     num_classes=self.num_atom_types,
                 )
-                # charges
-                charge_types = self.cat_charges.sample_reverse_categorical(
-                    xt=charge_types,
-                    x0=charges_pred,
-                    t=t[batch],
-                    num_classes=self.num_charge_classes,
-                )
-                # edges
-                if not self.hparams.bond_prediction:
-                    (
-                        edge_attr_global,
-                        edge_index_global,
-                        mask,
-                        mask_i,
-                    ) = self.cat_bonds.sample_reverse_edges_categorical(
-                        edge_attr_global,
-                        edges_pred,
-                        t,
-                        mask,
-                        mask_i,
-                        batch=batch,
-                        edge_index_global=edge_index_global,
-                        num_classes=self.num_bond_classes - 1
-                        if self.hparams.use_qm_props
-                        else self.num_bond_classes,
+                if self.num_charge_classes > 0:
+                    # charges
+                    charge_types = self.cat_charges.sample_reverse_categorical(
+                        xt=charge_types,
+                        x0=charges_pred,
+                        t=t[batch],
+                        num_classes=self.num_charge_classes,
                     )
-                else:
-                    edge_attr_global = edges_pred
+                if self.hparams.num_bond_classes > 0:
+                    # edges
+                    if not self.hparams.bond_prediction:
+                        (
+                            edge_attr_global,
+                            edge_index_global,
+                            mask,
+                            mask_i,
+                        ) = self.cat_bonds.sample_reverse_edges_categorical(
+                            edge_attr_global,
+                            edges_pred,
+                            t,
+                            mask,
+                            mask_i,
+                            batch=batch,
+                            edge_index_global=edge_index_global,
+                            num_classes=self.hparams.num_bond_classes,
+                        )
+                    else:
+                        edge_attr_global = edges_pred
 
-                if self.hparams.bond_model_guidance:
-                    pos = bond_guidance(
-                        pos,
-                        node_feats_in,
-                        temb,
-                        self.bond_model,
-                        batch,
-                        batch_edge_global,
-                        edge_attr_global,
-                        edge_index_local,
-                        edge_index_global,
-                    )
                 if energy_model is not None and timestep <= 100:
                     pos = energy_guidance(
                         pos,
@@ -1360,24 +1435,282 @@ class Trainer(pl.LightningModule):
                         wbo = self.sde_wbo.sample(t, wbo, batch_edge_global)[1]
 
             if save_traj:
-                pos_traj.append(pos.detach())
-                atom_type_traj.append(atom_types.detach())
-                edge_type_traj.append(edge_attr_global.detach())
-                charge_type_traj.append(charge_types.detach())
+                atom_decoder = self.dataset_info.atom_decoder
+                write_xyz_file_from_batch(
+                    pos,
+                    atom_types,
+                    batch,
+                    atom_decoder=atom_decoder,
+                    path=os.path.join(save_dir, f"iter_{iteration}"),
+                    i=i,
+                )
+
+        if relax_sampling:
+            return self.relax_sampling(
+                pos,
+                atom_types,
+                mulliken,
+                wbo,
+                edge_index_global,
+                batch,
+                batch_edge_global,
+                charge_types=charge_types if self.num_charge_classes > 0 else None,
+                edge_attr_global=edge_attr_global
+                if self.hparams.num_bond_classes > 0
+                else None,
+                edge_index_local=None,
+                mask=mask if self.hparams.num_bond_classes > 0 else None,
+                mask_i=mask_i if self.hparams.num_bond_classes > 0 else None,
+                batch_size=bs,
+                context=context,
+                ddpm=ddpm,
+                eta_ddim=eta_ddim,
+                save_traj=save_traj,
+                save_dir=save_dir,
+                i=i,
+                iteration=iteration,
+                relax_steps=relax_steps,
+            )
 
         out_dict = {
             "coords_pred": pos,
             "atoms_pred": atom_types,
-            "charges_pred": charge_types,
-            "bonds_pred": edge_attr_global,
+            "charges_pred": charge_types if self.num_charge_classes > 0 else None,
+            "bonds_pred": edge_attr_global
+            if self.hparams.num_bond_classes > 0
+            else None,
         }
-        return (
+        molecules = get_molecules(
             out_dict,
             batch,
             edge_index_global,
-            [pos_traj, atom_type_traj, charge_type_traj, edge_type_traj],
-            context,
+            self.num_atom_types,
+            self.num_charge_classes,
+            self.dataset_info,
+            device=self.device,
+            mol_device="cpu",
+            context=context,
+            while_train=False,
         )
+
+        if save_traj:
+            write_trajectory_as_xyz(
+                molecules,
+                path=os.path.join(save_dir, f"iter_{iteration}"),
+                strict=True,
+            )
+
+        return molecules
+
+    def relax_sampling(
+        self,
+        pos,
+        atom_types,
+        mulliken,
+        wbo,
+        charge_types,
+        edge_attr_global,
+        edge_index_local,
+        edge_index_global,
+        batch,
+        batch_edge_global,
+        mask,
+        mask_i,
+        batch_size,
+        context,
+        ddpm,
+        eta_ddim,
+        save_dir,
+        save_traj,
+        i,
+        iteration,
+        relax_steps=10,
+    ):
+        timestep = 0
+        for j in range(relax_steps):
+            s = torch.full(
+                size=(batch_size,),
+                fill_value=timestep,
+                dtype=torch.long,
+                device=pos.device,
+            )
+            t = s + 1
+
+            temb = t / self.hparams.timesteps
+            temb = temb.unsqueeze(dim=1)
+
+            if self.num_charge_classes > 0:
+                node_feats_in = [atom_types, charge_types, mulliken]
+            else:
+                node_feats_in = [atom_types, mulliken]
+            if self.hparams.num_bond_classes > 0:
+                edge_attr_global_full = torch.cat([edge_attr_global, wbo], dim=-1)
+            else:
+                edge_attr_global_full = wbo
+
+            node_feats_in = torch.cat(node_feats_in, dim=-1)
+            out = self.model(
+                x=node_feats_in,
+                t=temb,
+                pos=pos,
+                edge_index_local=edge_index_local,
+                edge_index_global=edge_index_global,
+                edge_attr_global=edge_attr_global_full,
+                batch=batch,
+                batch_edge_global=batch_edge_global,
+                context=context,
+            )
+
+            coords_pred = out["coords_pred"].squeeze()
+            # N x a_0
+            edges_pred = out["bonds_pred"]
+
+            if self.hparams.num_bond_classes > 0:
+                edges_pred, wbo_pred = out["bonds_pred"].split(
+                    [self.hparams.num_bond_classes, 1], dim=-1
+                )
+            else:
+                wbo_pred = out["bonds_pred"]
+
+            if self.num_charge_classes > 0:
+                atom_split = [self.num_atom_types, self.num_charge_classes, 1]
+                (
+                    atoms_pred,
+                    charges_pred,
+                    mulliken_pred,
+                ) = out[
+                    "atoms_pred"
+                ].split(atom_split, dim=-1)
+            else:
+                atom_split = [self.num_atom_types, 1]
+                (
+                    atoms_pred,
+                    mulliken_pred,
+                ) = out[
+                    "atoms_pred"
+                ].split(atom_split, dim=-1)
+
+            atoms_pred = atoms_pred.softmax(dim=-1)
+            if self.hparams.num_bond_classes > 0:
+                edges_pred = edges_pred.softmax(dim=-1)
+            # E x b_0
+            if self.num_charge_classes > 0:
+                charges_pred = charges_pred.softmax(dim=-1)
+
+            if ddpm:
+                if self.hparams.noise_scheduler == "adaptive":
+                    # positions
+                    pos = self.sde_pos.sample_reverse_adaptive(
+                        s,
+                        t,
+                        pos,
+                        coords_pred,
+                        batch,
+                        cog_proj=True,
+                        eta_ddim=eta_ddim,
+                    )
+                    mulliken = self.sde_mulliken.sample_reverse_adaptive(
+                        s,
+                        t,
+                        mulliken,
+                        mulliken_pred,
+                        batch,
+                        cog_proj=False,
+                    )
+                    wbo = self.sde_wbo.sample_reverse_adaptive(
+                        s,
+                        t,
+                        wbo,
+                        wbo_pred,
+                        batch_edge_global,
+                        cog_proj=False,
+                    )
+                else:
+                    # positions
+                    pos = self.sde_pos.sample_reverse(
+                        t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
+                    )
+            else:
+                pos = self.sde_pos.sample_reverse_ddim(
+                    t, pos, coords_pred, batch, cog_proj=True, eta_ddim=eta_ddim
+                )
+
+            # atoms
+            atom_types = self.cat_atoms.sample_reverse_categorical(
+                xt=atom_types,
+                x0=atoms_pred,
+                t=t[batch],
+                num_classes=self.num_atom_types,
+            )
+            if self.num_charge_classes > 0:
+                # charges
+                charge_types = self.cat_charges.sample_reverse_categorical(
+                    xt=charge_types,
+                    x0=charges_pred,
+                    t=t[batch],
+                    num_classes=self.num_charge_classes,
+                )
+            if self.hparams.num_bond_classes > 0:
+                # edges
+                if not self.hparams.bond_prediction:
+                    (
+                        edge_attr_global,
+                        edge_index_global,
+                        mask,
+                        mask_i,
+                    ) = self.cat_bonds.sample_reverse_edges_categorical(
+                        edge_attr_global,
+                        edges_pred,
+                        t,
+                        mask,
+                        mask_i,
+                        batch=batch,
+                        edge_index_global=edge_index_global,
+                        num_classes=self.hparams.num_bond_classes,
+                    )
+                else:
+                    edge_attr_global = edges_pred
+
+            if save_traj:
+                atom_decoder = self.dataset_info.atom_decoder
+                write_xyz_file_from_batch(
+                    pos,
+                    atom_types,
+                    batch,
+                    atom_decoder=atom_decoder,
+                    path=os.path.join(save_dir, f"iter_{iteration}"),
+                    i=i + j,
+                )
+
+        out_dict = {
+            "coords_pred": pos,
+            "atoms_pred": atom_types,
+            "charges_pred": charge_types if self.num_charge_classes > 0 else None,
+            "bonds_pred": edge_attr_global
+            if self.hparams.num_bond_classes > 0
+            else None,
+        }
+        molecules = get_molecules(
+            out_dict,
+            batch,
+            edge_index_global,
+            self.num_atom_types,
+            self.num_charge_classes,
+            self.dataset_info,
+            device=self.device,
+            mol_device="cpu",
+            context=context,
+            while_train=False,
+        )
+
+        if save_traj:
+            write_trajectory_as_xyz(
+                molecules,
+                path=os.path.join(save_dir, f"iter_{iteration}"),
+                strict=True,
+            )
+
+        return molecules
 
     def configure_optimizers(self):
         if self.hparams.optimizer == "adam":

@@ -112,7 +112,7 @@ class Molecule:
         if rdkit_mol is None:
             self.rdkit_mol = (
                 self.build_molecule_openbabel()
-                if build_obabel_mol
+                if build_obabel_mol or bond_types is None
                 else self.build_molecule()
             )
         else:

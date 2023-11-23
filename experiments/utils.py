@@ -868,17 +868,7 @@ def get_molecules(
         )
     else:
         atoms_pred = out["atoms_pred"]
-        charges_pred = out["charges_pred"]
-
-    if out["bonds_pred"].shape[-1] > 5:
-        out["bonds_pred"] = out["bonds_pred"][:, :5]
-    n = data_batch.bincount().sum().item()
-    edge_attrs_dense = torch.zeros(size=(n, n, 5), device=device).float()
-    edge_attrs_dense[edge_index_global_lig[0, :], edge_index_global_lig[1, :], :] = out[
-        "bonds_pred"
-    ]
-    edge_attrs_dense = edge_attrs_dense.argmax(-1)
-    edge_attrs_splits = get_list_of_edge_adjs(edge_attrs_dense, data_batch.bincount())
+        charges_pred = out["charges_pred"] if num_charge_classes > 0 else None
 
     batch_num_nodes = data_batch.bincount().cpu().tolist()
     pos_splits = out["coords_pred"].detach().split(batch_num_nodes, dim=0)
@@ -894,12 +884,36 @@ def get_molecules(
 
     atom_types_integer = torch.argmax(atoms_pred, dim=-1)
     atom_types_integer_split = atom_types_integer.detach().split(batch_num_nodes, dim=0)
-    charge_types_integer = torch.argmax(charges_pred, dim=-1)
-    # offset back
-    charge_types_integer = charge_types_integer - dataset_info.charge_offset
-    charge_types_integer_split = charge_types_integer.detach().split(
-        batch_num_nodes, dim=0
-    )
+
+    if charges_pred is not None:
+        no_charges = False
+        charge_types_integer = torch.argmax(charges_pred, dim=-1)
+        # offset back
+        charge_types_integer = charge_types_integer - dataset_info.charge_offset
+        charge_types_integer_split = charge_types_integer.detach().split(
+            batch_num_nodes, dim=0
+        )
+    else:
+        no_charges = True
+        charge_types_integer_split = torch.zeros_like(atom_types_integer_split)
+
+    if out["bonds_pred"] is not None:
+        no_bonds = False
+        if out["bonds_pred"].shape[-1] > 5:
+            out["bonds_pred"] = out["bonds_pred"][:, :5]
+        n = data_batch.bincount().sum().item()
+        edge_attrs_dense = torch.zeros(size=(n, n, 5), device=device).float()
+        edge_attrs_dense[
+            edge_index_global_lig[0, :], edge_index_global_lig[1, :], :
+        ] = out["bonds_pred"]
+        edge_attrs_dense = edge_attrs_dense.argmax(-1)
+        edge_attrs_splits = get_list_of_edge_adjs(
+            edge_attrs_dense, data_batch.bincount()
+        )
+    else:
+        no_bonds = True
+        edge_attrs_splits = torch.zeros_like(atom_types_integer_split)
+
     if "aromatic_pred" in out.keys() and "hybridization_pred" in out.keys():
         add_feats = True
         aromatic_feat = out["aromatic_pred"]
@@ -915,11 +929,13 @@ def get_molecules(
         )
     else:
         add_feats = False
+
     context_split = (
         context.split(batch_num_nodes, dim=0) if context is not None else None
     )
 
     molecule_list = []
+
     for i, (
         positions,
         atom_types,
@@ -936,8 +952,8 @@ def get_molecules(
         molecule = Molecule(
             atom_types=atom_types.detach().to(mol_device),
             positions=positions.detach().to(mol_device),
-            charges=charges.detach().to(mol_device),
-            bond_types=edges.detach().to(mol_device),
+            charges=None if no_charges else charges.detach().to(mol_device),
+            bond_types=None if no_bonds else edges.detach().to(mol_device),
             positions_pocket=pos_pocket_splits[i].detach().to(mol_device)
             if data_batch_pocket is not None
             else None,

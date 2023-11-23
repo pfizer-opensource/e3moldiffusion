@@ -12,6 +12,7 @@ from Bio.PDB import PDBParser
 from tqdm import tqdm
 
 from experiments.data.distributions import DistributionProperty
+from experiments.data.utils import save_pickle
 from experiments.docking import calculate_qvina2_score
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import prepare_pocket, write_sdf_file
@@ -322,20 +323,23 @@ def evaluate(
     if write_dict:
         torch.save(results_dict, Path(save_dir, "qvina2_scores.pt"))
 
-    scores_fl = [np.mean(r) for r in results["scores"] if len(r) >= 1]
+    scores_mean = [np.mean(r) for r in results["scores"] if len(r) >= 1]
 
     print(f"Mean statistics across all sampled ligands: {statistics_dict}")
+    save_pickle(statistics_dict, os.path.join(save_dir, "statistics_dict.pickle"))
 
-    missing = len(results["scores"]) - len(scores_fl)
+    missing = len(results["scores"]) - len(scores_mean)
     print(f"Number of dockings evaluated with NaN: {missing}")
 
-    mean_score = np.mean(scores_fl)
-    std_score = np.std(scores_fl)
+    mean_score = np.mean(scores_mean)
+    std_score = np.std(scores_mean)
     print(f"Mean score: {mean_score}")
     print(f"Standard deviation: {std_score}")
 
-    scores_fl.sort(reverse=False)
-    mean_top10_score = np.mean(scores_fl[:10])
+    scores = [
+        np.mean(r.sort(reverse=True)[:10]) for r in results["scores"] if len(r) >= 1
+    ]
+    mean_top10_score = np.mean(scores)
     print(f"Top-10 mean score: {mean_top10_score}")
 
 
