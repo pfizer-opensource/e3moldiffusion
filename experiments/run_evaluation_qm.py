@@ -46,12 +46,15 @@ def evaluate(
     resample_steps=1,
     fraction_new_nodes=0.0,
     T=500,
+    relax_sampling=True,
+    relax_steps=10,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
     hparams["select_train_subset"] = False
     hparams["diffusion_pretraining"] = False
     hparams = dotdict(hparams)
+    hparams.num_charge_classes = 6
 
     hparams.load_ckpt_from_pretrained = None
     hparams.gpus = 1
@@ -65,6 +68,9 @@ def evaluate(
             non_adaptive = False
             from experiments.data.geom.geom_dataset_adaptive import (
                 GeomDataModule as DataModule,
+            )
+            from experiments.data.geom.geom_dataset_adaptive_qm import (
+                GeomQMDataModule as DataModule,
             )
         else:
             print("Using non-adaptive dataloader")
@@ -110,6 +116,7 @@ def evaluate(
     else:
         # TODO: remove this here, this is only so dataloading is quicker for debugging
         hparams.dataset_root = "/scratch1/seumej/geom_qm/"
+        # hparams.dataset_root = "/scratch1/cremej01/data/geom"
         hparams.max_num_conformers = 1
         datamodule = DataModule(hparams)
 
@@ -181,7 +188,7 @@ def evaluate(
         assert (
             scaffold_elaboration != scaffold_hopping
         ), "Either scaffold elaboration or scaffold hopping can be used at a time"
-        model.run_fixed_substructure_evaluation(
+        results_dict, generated_smiles, stable_molecules = model.run_fixed_substructure_evaluation(
             dataset_info=model.dataset_info,
             save_dir=save_dir,
             return_molecules=True,
@@ -201,8 +208,10 @@ def evaluate(
             max_num_batches=max_num_batches,
             fraction_new_nodes=fraction_new_nodes,
             resample_steps=resample_steps,
-            T=T,
+            # T=T,
             device="cpu",
+            relax_sampling=relax_sampling,
+            relax_steps=relax_steps,
         )
     else:
         results_dict, generated_smiles, stable_molecules = model.run_evaluation(
@@ -256,30 +265,30 @@ def evaluate(
                 print(e)
                 continue
 
-        if hparams.dataset == "geomqm":
-            import numpy as np
+        # if hparams.dataset == "geomqm":
+        #     import numpy as np
 
-            # load precalculated target distribution
-            target = datamodule.statistics["train"].force_norms
-            generated_forces = []
-            for m in stable_molecules:
-                if m.normal_termination:
-                    generated_forces.extend(list(np.linalg.norm(m.grad, axis=1)))
-            generated_forces = torch.tensor(generated_forces, dtype=torch.float)
-            # calculate histograms with bin width 1e-5
-            bin_width = 1e-5
-            bins = torch.arange(0, 0.2, bin_width)
-            generated, _ = torch.histogram(generated_forces, bins=bins)
-            # calculate W1
-            cs_generated = torch.cumsum(generated, dim=0)
-            cs_target = torch.cumsum(target, dim=0)
-            cs_generated /= cs_generated[-1].item()
-            cs_target /= cs_target[-1].item()
+        #     # load precalculated target distribution
+        #     target = datamodule.statistics["train"].force_norms
+        #     generated_forces = []
+        #     for m in stable_molecules:
+        #         if m.normal_termination:
+        #             generated_forces.extend(list(np.linalg.norm(m.grad, axis=1)))
+        #     generated_forces = torch.tensor(generated_forces, dtype=torch.float)
+        #     # calculate histograms with bin width 1e-5
+        #     bin_width = 1e-5
+        #     bins = torch.arange(0, 0.2, bin_width)
+        #     generated, _ = torch.histogram(generated_forces, bins=bins)
+        #     # calculate W1
+        #     cs_generated = torch.cumsum(generated, dim=0)
+        #     cs_target = torch.cumsum(target, dim=0)
+        #     cs_generated /= cs_generated[-1].item()
+        #     cs_target /= cs_target[-1].item()
 
-            force_norm_w1 = (
-                torch.sum(torch.abs(cs_generated - cs_target)).item() * bin_width
-            )
-            results_dict["ForceNormW1"] = force_norm_w1
+        #     force_norm_w1 = (
+        #         torch.sum(torch.abs(cs_generated - cs_target)).item() * bin_width
+        #     )
+        #     results_dict["ForceNormW1"] = force_norm_w1
 
     for key, value in results_dict.items():
         print(f"{key}:\t\t{value.item()}")
@@ -396,14 +405,14 @@ def get_args():
     parser.add_argument('--model-path', default="/scratch1/e3moldiffusion/logs/geom_qm/x0_snr_qm/best_mol_stab.ckpt", type=str,
                         help='Path to trained model')
     parser.add_argument("--use-energy-guidance", default=False, action="store_true")
-    parser.add_argument("--calculate-relax-change", default=True, action="store_true")
+    parser.add_argument("--calculate-relax-change", default=False, action="store_true")
     parser.add_argument("--ckpt-energy-model", default=None, type=str)
     parser.add_argument("--guidance-start", default=None, type=int)
     parser.add_argument('--guidance-scale', default=1.0e-4, type=float,
                         help='How to scale the guidance shift')
     parser.add_argument('--save-dir', default="/sharedhome/seumej/results", type=str,
                         help='Path to test output')
-    parser.add_argument('--save-xyz', default=True, action="store_true",
+    parser.add_argument('--save-xyz', default=False, action="store_true",
                         help='Whether or not to store generated molecules in xyz files')
     parser.add_argument('--calculate-props', default=False, action="store_true",
                         help='Whether or not to calculate xTB properties')
@@ -421,9 +430,11 @@ def get_args():
     parser.add_argument('--scaffold-hopping', default=False, action="store_true", help="Run scaffold hopping")
     parser.add_argument('--resample-steps', default=1, type=int, help="Number of resampling steps for scaffold elaboration/hopping")
     parser.add_argument('--every-k-step', default=1, type=int, help="Jump k steps in denoising")
-    parser.add_argument('--fraction-new-nodes', default=0.0, type=float, help="Fraction of new nodes to be added in scaffold elaboration/hopping")
+    parser.add_argument('--fraction-new-nodes', default=0.1, type=float, help="Fraction of new nodes to be added in scaffold elaboration/hopping")
     parser.add_argument('--max-num-batches', default=1, type=int, help="Maximum number of batches to use for scaffold elaboration/hopping")
     parser.add_argument('-T', default=500, type=int, help="T for denoising diffusion")
+    parser.add_argument('--relax-sampling', default=False, action="store_true", help="Relax molecules")
+    parser.add_argument('--relax-steps', default=10, type=int, help="Number of relaxation steps")
     args = parser.parse_args()
     return args
 
@@ -452,4 +463,6 @@ if __name__ == "__main__":
         resample_steps=args.resample_steps,
         fraction_new_nodes=args.fraction_new_nodes,
         T=args.T,
+        relax_sampling=args.relax_sampling,
+        relax_steps=args.relax_steps,
     )
