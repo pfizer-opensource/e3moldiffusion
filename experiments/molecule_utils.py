@@ -112,7 +112,7 @@ class Molecule:
         if rdkit_mol is None:
             self.rdkit_mol = (
                 self.build_molecule_openbabel()
-                if build_obabel_mol
+                if build_obabel_mol or bond_types is None
                 else self.build_molecule()
             )
         else:
@@ -273,7 +273,6 @@ class Molecule:
         rdmol,
         add_hydrogens=False,
         sanitize=False,
-        relax_iter=0,
         largest_frag=False,
     ):
         """
@@ -312,7 +311,7 @@ class Molecule:
                 except ValueError:
                     return None
 
-        if relax_iter > 0:
+        if self.relax_mol:
             if not UFFHasAllMoleculeParams(mol):
                 warnings.warn(
                     "UFF parameters not available for all atoms. " "Returning None."
@@ -320,8 +319,8 @@ class Molecule:
                 return None
 
             try:
-                self.uff_relax(mol, relax_iter)
-                if sanitize:
+                self.uff_relax(mol, self.max_relax_iter)
+                if self.sanitize:
                     # sanitize the updated molecule
                     Chem.SanitizeMol(mol)
             except (RuntimeError, ValueError) as e:

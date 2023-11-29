@@ -4,6 +4,7 @@ from typing import List, Optional
 
 import torch
 import torch.nn.functional as F
+from rdkit import Chem
 from rdkit.Chem import RDConfig
 from rdkit.Chem.Scaffolds.MurckoScaffold import GetScaffoldForMol
 from torch_geometric.utils import remove_self_loops, sort_edge_index

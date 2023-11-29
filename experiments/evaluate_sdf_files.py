@@ -124,6 +124,7 @@ if __name__ == "__main__":
         local_rank=0,
         return_molecules=True,
         remove_hs=hparams.remove_hs,
+        test=True,
         device="cpu",
     )
     print("Done!")

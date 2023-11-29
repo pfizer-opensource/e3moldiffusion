@@ -1,13 +1,15 @@
+import argparse
 import os
 import re
 import tempfile
-import numpy as np
-import torch
 from pathlib import Path
-import argparse
+
+import numpy as np
 import pandas as pd
+import torch
 from rdkit import Chem
 from tqdm import tqdm
+
 from experiments.utils import write_sdf_file
 
 
@@ -91,13 +93,13 @@ def calculate_qvina2_score(
             # center box at ligand's center of mass
             cx, cy, cz = mol.GetConformer().GetPositions().mean(0)
 
-            # run QuickVina 2   
+            # run QuickVina 2
             try:
                 os.stat("/sharedhome/cremej01/workspace/e3moldiffusion/qvina2.1")
                 PATH = "/sharedhome/cremej01/workspace/e3moldiffusion/qvina2.1"
             except PermissionError:
                 PATH = "/sharedhome/let55/projects/e3moldiffusion/qvina2.1"
-                
+
             out = os.popen(
                 f"/{PATH} --receptor {receptor_pdbqt_file} "
                 f"--ligand {ligand_pdbqt_file} "
@@ -204,3 +206,17 @@ if __name__ == "__main__":
 
     if args.write_dict:
         torch.save(results_dict, Path(args.out_dir, "qvina2_scores.pt"))
+
+    scores_fl = [np.mean(r) for r in results["scores"] if len(r) >= 1]
+
+    missing = len(results["scores"]) - len(scores_fl)
+    print(f"Number of dockings evaluated with NaN: {missing}")
+
+    mean_score = np.mean(scores_fl)
+    std_score = np.std(scores_fl)
+    print(f"Mean score: {mean_score}")
+    print(f"Standard deviation: {std_score}")
+
+    scores_fl.sort(reverse=False)
+    mean_top10_score = np.mean(scores_fl[:10])
+    print(f"Top-10 mean score: {mean_top10_score}")

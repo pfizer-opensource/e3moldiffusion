@@ -93,6 +93,9 @@ def evaluate(
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
 
+    histogram = os.path.join(hparams.dataset_root, "size_distribution.npy")
+    histogram = np.load(histogram).tolist()
+
     if hparams.continuous:
         print("Using continuous diffusion")
         from experiments.diffusion_continuous import Trainer
@@ -120,8 +123,6 @@ def evaluate(
         else:
             if dataset == "crossdocked":
                 print("Ligand-pocket testing")
-                histogram = os.path.join(hparams.dataset_root, "size_distribution.npy")
-                histogram = np.load(histogram).tolist()
                 from experiments.diffusion_discrete_pocket import Trainer
             else:
                 from experiments.diffusion_discrete import Trainer
