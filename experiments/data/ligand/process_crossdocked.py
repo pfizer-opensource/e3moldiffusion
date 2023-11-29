@@ -9,7 +9,9 @@ import numpy as np
 import seaborn as sns
 import torch
 from Bio.PDB import PDBParser
-from Bio.PDB.Polypeptide import is_aa, three_to_one
+from Bio.PDB.Polypeptide import is_aa
+from Bio.PDB.Polypeptide import protein_letters_3to1 as three_to_one
+
 from rdkit import Chem
 from scipy.ndimage import gaussian_filter
 from tqdm import tqdm
@@ -24,6 +26,7 @@ from experiments.data.ligand.molecule_builder import build_molecule
 
 dataset_info = dataset_params["crossdock_full"]
 amino_acid_dict = dataset_info["aa_encoder"]
+aa_atom_encoder = dataset_info["aa_atom_encoder"]
 atom_dict = dataset_info["atom_encoder"]
 atom_decoder = dataset_info["atom_decoder"]
 
@@ -76,7 +79,7 @@ def process_ligand_and_pocket(pdbfile, sdffile, dist_cutoff, ca_only, no_H):
                             np.eye(
                                 1,
                                 len(amino_acid_dict),
-                                amino_acid_dict[three_to_one(res.get_resname())],
+                                amino_acid_dict[three_to_one.get(res.get_resname())],
                             ).squeeze()
                         )
                         full_coords.append(atom.coord)
@@ -89,23 +92,38 @@ def process_ligand_and_pocket(pdbfile, sdffile, dist_cutoff, ca_only, no_H):
             "pocket_one_hot": pocket_one_hot,
             "pocket_ids": pocket_ids,
         }
-    else:
-        full_atoms = np.concatenate(
-            [
-                np.array([atom.element for atom in res.get_atoms()])
-                for res in pocket_residues
-            ],
-            axis=0,
-        )
+    else:        
+        # c-alphas and residue idendity
+        pocket_one_hot = []
+        ca_mask = []
 
-        full_coords = np.concatenate(
-            [
-                np.array([atom.coord for atom in res.get_atoms()])
-                for res in pocket_residues
-            ],
-            axis=0,
-        )
+        # full
+        full_atoms = []
+        full_coords = []
 
+        for res in pocket_residues:
+            for atom in res.get_atoms():
+                if atom.name == "CA":
+                        pocket_one_hot.append(
+                            np.eye(
+                                1,
+                                len(amino_acid_dict),
+                                amino_acid_dict[three_to_one.get(res.get_resname())],
+                            ).squeeze()
+                        )
+                        m = True
+                else:
+                    m = False
+                ca_mask.append(m)
+                full_atoms.append(atom.element)
+                full_coords.append(atom.coord)
+                
+        pocket_one_hot = np.stack(pocket_one_hot,axis=0)
+        full_atoms = np.stack(full_atoms, axis=0)
+        full_coords = np.stack(full_coords, axis=0)
+        ca_mask = np.array(ca_mask, dtype=bool)
+        assert (sum(ca_mask) == pocket_one_hot.shape[0])
+        assert len(full_atoms) == len(full_coords)
         if no_H:
             indices_H = np.where(full_atoms == "H")
             if indices_H[0].size > 0:
@@ -113,11 +131,13 @@ def process_ligand_and_pocket(pdbfile, sdffile, dist_cutoff, ca_only, no_H):
                 mask[indices_H] = False
                 full_atoms = full_atoms[mask]
                 full_coords = full_coords[mask]
-
+                ca_mask = ca_mask[mask]
         pocket_data = {
             "pocket_coords": full_coords,
             "pocket_ids": pocket_ids,
             "pocket_atoms": full_atoms,
+            "pocket_one_hot": pocket_one_hot,
+            "pocket_ca_mask": ca_mask
         }
     return ligand_data, pocket_data
 
@@ -259,6 +279,8 @@ def saveall(
     pocket_coords,
     pocket_atom,
     pocket_mask,
+    pocket_one_hot,
+    pocket_ca_mask,
 ):
     np.savez(
         filename,
@@ -270,6 +292,8 @@ def saveall(
         pocket_coords=pocket_coords,
         pocket_atom=pocket_atom,
         pocket_mask=pocket_mask,
+        pocket_one_hot=pocket_one_hot,
+        pocket_ca_mask=pocket_ca_mask
     )
     return True
 
@@ -325,6 +349,9 @@ if __name__ == "__main__":
         pocket_coords = []
         pocket_atom = []
         pocket_mask = []
+        # new
+        pocket_one_hot_resids = []
+        pocket_ca_mask = []
         pdb_and_mol_ids = []
         count_protein = []
         count_ligand = []
@@ -379,6 +406,11 @@ if __name__ == "__main__":
             pocket_coords.append(pocket_data["pocket_coords"])
             pocket_atom.append(pocket_data["pocket_atoms"])
             pocket_mask.append(count * np.ones(len(pocket_data["pocket_coords"])))
+            # new
+            if not args.ca_only:
+                pocket_one_hot_resids.append(pocket_data["pocket_one_hot"])
+                pocket_ca_mask.append(pocket_data["pocket_ca_mask"])
+                
             count_protein.append(pocket_data["pocket_coords"].shape[0])
             count_ligand.append(ligand_data["lig_coords"].shape[0])
             count_total.append(
@@ -409,6 +441,13 @@ if __name__ == "__main__":
         pocket_coords = np.concatenate(pocket_coords, axis=0)
         pocket_atom = np.concatenate(pocket_atom, axis=0)
         pocket_mask = np.concatenate(pocket_mask, axis=0)
+        
+        if not args.ca_only:
+            pocket_one_hot_resids = np.concatenate(pocket_one_hot_resids, axis=0)
+            pocket_ca_mask = np.concatenate(pocket_ca_mask, axis=0)
+        else:
+            pocket_one_hot_resids = np.array([])
+            pocket_ca_mask = np.array([])
 
         saveall(
             processed_dir / f"{split}.npz",
@@ -420,6 +459,8 @@ if __name__ == "__main__":
             pocket_coords,
             pocket_atom,
             pocket_mask,
+            pocket_one_hot=pocket_one_hot_resids,
+            pocket_ca_mask=pocket_ca_mask
         )
 
         n_samples_after[split] = len(pdb_and_mol_ids)
@@ -451,7 +492,7 @@ if __name__ == "__main__":
 
     # Get histograms of ligand and pocket node types
     atom_hist, aa_hist = get_type_histograms(
-        lig_atom, pocket_atom, atom_dict, amino_acid_dict
+        lig_atom, pocket_atom, atom_dict, aa_atom_encoder
     )
 
     # Create summary string
@@ -469,6 +510,8 @@ if __name__ == "__main__":
     summary_string += f"'atom_decoder': {list(atom_dict.keys())}\n"
     summary_string += f"'aa_encoder': {amino_acid_dict}\n"
     summary_string += f"'aa_decoder': {list(amino_acid_dict.keys())}\n"
+    summary_string += f"'aa_atom_encoder': {aa_atom_encoder}\n"
+    summary_string += f"'aa_atom_decoder': {list(aa_atom_encoder.keys())}\n"
     summary_string += f"'bonds1': {bonds1.tolist()}\n"
     summary_string += f"'bonds2': {bonds2.tolist()}\n"
     summary_string += f"'bonds3': {bonds3.tolist()}\n"
