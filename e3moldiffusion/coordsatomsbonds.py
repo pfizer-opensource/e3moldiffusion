@@ -507,7 +507,8 @@ class LatentEncoderNetwork(nn.Module):
     ):
         source, target = edge_index
         r = pos[target] - pos[source]
-        a = pos[target] * pos[source]
+        pos_norm = F.normalize(pos, p=2, dim=-1)
+        a = pos_norm[target] * pos_norm[source]
         a = a.sum(-1)
         d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6)
         if sqrt:
