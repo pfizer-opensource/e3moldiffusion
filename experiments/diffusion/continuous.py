@@ -291,8 +291,16 @@ class DiscreteDDPM(nn.Module):
                 std = self.sqrt_1m_alphas_cumprod[t]
         else:
             if self.schedule == "adaptive":
-                signal = self.get_alpha(t_int=t)
-                std = torch.sqrt(1-signal)
+                # signal = self.get_alpha(t_int=t)
+                # std = torch.sqrt(1-signal)
+                gamma_t, gamma_s = sde.get_gamma(t_int=t), sde.get_gamma(t_int=t-1)
+                (
+                    sigma2_t_given_s,
+                    sigma_t_given_s,
+                    alpha_t_given_s,
+                ) = self.sigma_and_alpha_t_given_s(gamma_t, gamma_s)
+                signal = alpha_t_given_s
+                std = sigma_t_given_s
             else:
                 raise NotImplementedError
 
