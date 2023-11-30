@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from rdkit import Chem, RDLogger
 from torch_geometric.data import DataLoader, InMemoryDataset
+from tqdm import tqdm
 
 import experiments.data.utils as dataset_utils
 from experiments.data.abstract_dataset import (
@@ -174,6 +175,11 @@ class LigandPocketDataset(InMemoryDataset):
                     for atoms in np.split(v, sections)
                 ]
             else:
+                if k == "pocket_one_hot":
+                    pocket_one_hot_mask = data["pocket_mask"][data["pocket_ca_mask"]]
+                    sections = np.where(np.diff(pocket_one_hot_mask))[0]
+                    mol_data["pocket_one_hot_mask"] = [torch.from_numpy(x) for x in np.split(pocket_one_hot_mask, sections)]
+                    
                 mol_data[k] = [torch.from_numpy(x) for x in np.split(v, sections)]
             # add number of nodes for convenience
             if k == "lig_mask":
@@ -184,6 +190,10 @@ class LigandPocketDataset(InMemoryDataset):
                 mol_data["num_pocket_nodes"] = torch.tensor(
                     [len(x) for x in mol_data["pocket_mask"]]
                 )
+            elif k == "pocket_one_hot":
+                mol_data["num_resids_nodes"] = torch.tensor(
+                    [len(x) for x in mol_data["pocket_one_hot_mask"]]
+                )
 
         for i, (
             mol_lig,
@@ -193,8 +203,11 @@ class LigandPocketDataset(InMemoryDataset):
             coords_pocket,
             atoms_pocket,
             mask_pocket,
+            pocket_ca_mask,
+            pocket_one_hot,
+            pocket_one_hot_mask,
         ) in enumerate(
-            zip(
+            tqdm(zip(
                 mol_data["lig_mol"],
                 mol_data["lig_coords"],
                 mol_data["lig_atom"],
@@ -202,7 +215,11 @@ class LigandPocketDataset(InMemoryDataset):
                 mol_data["pocket_coords"],
                 mol_data["pocket_atom"],
                 mol_data["pocket_mask"],
-            )
+                mol_data["pocket_ca_mask"],
+                mol_data["pocket_one_hot"],
+                mol_data["pocket_one_hot_mask"],
+            ),
+                 total=len(mol_data["lig_mol"]))
         ):
             try:
                 # atom_types = [atom_decoder[int(a)] for a in atoms_lig]
@@ -224,7 +241,10 @@ class LigandPocketDataset(InMemoryDataset):
             data.x_pocket = atoms_pocket
             data.lig_mask = mask_lig
             data.pocket_mask = mask_pocket
-
+            # AA information
+            data.pocket_ca_mask = pocket_ca_mask
+            data.pocket_one_hot = pocket_one_hot
+            data.pocket_one_hot_mask = pocket_one_hot_mask
             all_smiles.append(smiles_lig)
             data_list_lig.append(data)
 
@@ -238,6 +258,7 @@ class LigandPocketDataset(InMemoryDataset):
                 data_list_lig[i].pos_pocket = data_list_lig[i].pos_pocket - mean
 
         torch.save(self.collate(data_list_lig), self.processed_paths[0])
+        print("Finished processing.\nCalculating statistics")
 
         statistics = compute_all_statistics(
             data_list_lig,
