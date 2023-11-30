@@ -132,7 +132,7 @@ class AbstractDataModuleLigand(Mixin, LightningDataset):
             val_dataset,
             test_dataset,
             batch_size=cfg.batch_size,
-            follow_batch=["pos", "pos_pocket"],
+            follow_batch=["pos", "pos_pocket", "pocket_one_hot"],
             num_workers=cfg.num_workers,
             shuffle=True,
             pin_memory=getattr(cfg.dataset, "pin_memory", False),
