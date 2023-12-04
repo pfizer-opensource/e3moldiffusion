@@ -563,12 +563,12 @@ class Trainer(pl.LightningModule):
                 num_graphs=num_graphs,
                 verbose=inner_verbose,
                 save_traj=save_traj,
+                save_dir=save_dir,
                 ddpm=ddpm,
                 eta_ddim=eta_ddim,
                 every_k_step=every_k_step,
                 guidance_scale=guidance_scale,
                 energy_model=energy_model,
-                save_dir=save_dir,
                 fix_noise_and_nodes=fix_noise_and_nodes,
                 iteration=i,
                 guidance_steps=guidance_steps,
@@ -856,6 +856,7 @@ class Trainer(pl.LightningModule):
                 num_graphs=num_graphs,
                 verbose=inner_verbose,
                 save_traj=save_traj,
+                save_dir=save_dir,
                 ddpm=ddpm,
                 eta_ddim=eta_ddim,
                 every_k_step=every_k_step,
@@ -956,7 +957,7 @@ class Trainer(pl.LightningModule):
         every_k_step: int = 1,
         guidance_scale: float = 1.0e-4,
         energy_model=None,
-        save_dir: float = None,
+        save_dir: str = None,
         fix_noise_and_nodes: bool = False,
         iteration: int = 0,
         chain_iterator=None,
@@ -1323,14 +1324,23 @@ class Trainer(pl.LightningModule):
 
                     if r < resample_steps and timestep > 0:
                         # noise the combined pos again
-                        pos = self.sde_pos.sample_pos(
-                            t,
-                            pos,
-                            batch,
-                            remove_mean=True,
-                            cumulative=False,
-                        )[1]
+                        gamma_t, gamma_s = self.sde_pos.get_gamma(t_int=t), self.sde_pos.get_gamma(t_int=t-1)
+                        (
+                            sigma2_t_given_s,
+                            sigma_t_given_s,
+                            alpha_t_given_s,
+                        ) = self.sde_pos.sigma_and_alpha_t_given_s(gamma_t, gamma_s)
+                        bs = int(batch.max()) + 1
+                        noise_coords_true = torch.randn_like(pos)
+                        noise_coords_true = zero_mean(
+                            noise_coords_true, batch=batch, dim_size=bs, dim=0
+                        )
+                        # get signal and noise coefficients for coords
+                        pos = pos * alpha_t_given_s[batch][:, None] + sigma_t_given_s[batch][:, None] * noise_coords_true
+
                         # noise the categorical atom features again
+                        # Qtp1 = self.cat_atoms.Qt[t]
+                        # probs = torch.einsum('nj, nji -> ni', [atom_types.argmax(dim=1), Qtp1]) # iwo batch
                         atom_types = self.cat_atoms.sample_categorical(
                             t,
                             atom_types.argmax(dim=1),
@@ -1367,6 +1377,16 @@ class Trainer(pl.LightningModule):
                     batch,
                     atom_decoder=atom_decoder,
                     path=os.path.join(save_dir, f"iter_{iteration}"),
+                    i=i,
+                )
+
+                atom_decoder = self.dataset_info.atom_decoder
+                write_xyz_file_from_batch(
+                    pos_perturbed_trans,
+                    atom_types_perturbed,
+                    batch,
+                    atom_decoder=atom_decoder,
+                    path=os.path.join(save_dir, f"noised_iter_{iteration}"),
                     i=i,
                 )
         if relax_sampling:

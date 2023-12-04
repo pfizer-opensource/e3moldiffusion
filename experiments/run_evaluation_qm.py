@@ -115,7 +115,7 @@ def evaluate(
         datamodule = DataModule(hparams, evaluation=True)
     else:
         # TODO: remove this here, this is only so dataloading is quicker for debugging
-        hparams.dataset_root = "/scratch1/seumej/geom_qm/"
+        hparams.dataset_root = "/hpfs/scratch/users/seumej/geom_qm/"
         # hparams.dataset_root = "/scratch1/cremej01/data/geom"
         hparams.max_num_conformers = 1
         datamodule = DataModule(hparams)
@@ -193,7 +193,7 @@ def evaluate(
             save_dir=save_dir,
             return_molecules=True,
             verbose=True,
-            save_traj=False,
+            save_traj=True,
             inner_verbose=True,
             ddpm=ddpm,
             eta_ddim=eta_ddim,
