@@ -162,9 +162,12 @@ class EQGATEdgeGNN(nn.Module):
     ):
         source, target = edge_index
         r = pos[target] - pos[source]
+        #import pdb
+        #pdb.set_trace()
         if self.ligand_pocket_interaction:
-            mask = source != target
-            pos[mask] = pos[mask] / torch.norm(pos[mask], dim=1).unsqueeze(1)
+            # mask = source != target
+            # pos[mask] = pos[mask] / torch.norm(pos[mask], dim=1).unsqueeze(1)
+            pos = pos / torch.norm(pos, dim=1).unsqueeze(1)
             a = pos[target] * pos[source]
         else:
             a = pos[target] * pos[source]

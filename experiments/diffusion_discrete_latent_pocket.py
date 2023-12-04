@@ -1,7 +1,7 @@
 import logging
 import os
 from datetime import datetime
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 from torch_sparse import coalesce
 from experiments.data.utils import write_xyz_file
 from experiments.xtb_energy import calculate_xtb_energy
@@ -41,7 +41,12 @@ from e3moldiffusion.coordsatomsbonds import (
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
-from experiments.data.distributions import prepare_context
+from experiments.data.distributions import ConditionalDistributionNodes, prepare_context
+from experiments.data.utils import (
+    write_trajectory_as_xyz,
+    write_xyz_file,
+    write_xyz_file_from_batch,
+)
 from experiments.diffusion.utils import (
     initialize_edge_attrs_reverse,
     get_joint_edge_attrs,
@@ -90,6 +95,7 @@ class Trainer(pl.LightningModule):
         hparams: dict,
         dataset_info: AbstractDatasetInfos,
         smiles_list: list,
+        histogram: Dict,
         prop_dist=None,
         prop_norm=None,
     ):
@@ -122,6 +128,7 @@ class Trainer(pl.LightningModule):
         self.num_bond_classes = 5
 
         self.smiles_list = smiles_list
+        self.conditional_size_distribution = ConditionalDistributionNodes(histogram)
 
         empirical_num_nodes = dataset_info.n_nodes
         self.register_buffer(name="empirical_num_nodes", tensor=empirical_num_nodes)
@@ -161,7 +168,7 @@ class Trainer(pl.LightningModule):
             )
 
         self.encoder = LatentEncoderNetwork(
-            num_atom_features=self.num_atom_types,
+            num_atom_features=20,
             num_bond_types=self.num_bond_classes,
             atom_mapping=True,
             bond_mapping=False,
@@ -181,7 +188,7 @@ class Trainer(pl.LightningModule):
             out_dims=(hparams["latent_dim"], None),
         )
         
-        self.latent_reg_loss = LatentRegularizationLoss(kind='l2')
+        self.latent_reg_loss = LatentRegularizationLoss(kind='mmd')
 
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -532,19 +539,8 @@ class Trainer(pl.LightningModule):
             + self.hparams.lc_atoms * loss["atoms"]
             + self.hparams.lc_bonds * loss["bonds"]
             + self.hparams.lc_charges * loss["charges"]
-            + 0.10 * reg_loss
+            + 1.0 * reg_loss
         )
-
-        # if self.training:
-        #     final_loss.backward()
-        #     names = []
-        #     for name, param in self.named_parameters():
-        #         if param.grad is None:
-        #             names.append(name)
-        #     import pdb
-        #     if len(names) > 0:
-        #         print(names)
-        #     pdb.set_trace()
 
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
@@ -583,11 +579,8 @@ class Trainer(pl.LightningModule):
             device=pos_pocket.device,
             dtype=torch.float32,
         )
-        atom_types_pocket = F.one_hot(
-            atom_types_pocket.squeeze().long(), num_classes=self.num_atom_types
-        ).float()
         pocket_latents, intermediate_embeddings = self.encoder(
-            x=atom_types_pocket,
+            x=atom_types_pocket.float(),
             pos=pos_pocket_centered,
             edge_index_local=edge_index_local_protein,
             edge_attr_local=edge_attr_local_protein,
@@ -602,7 +595,7 @@ class Trainer(pl.LightningModule):
             intermediate_embeddings, index=data_batch_pocket, dim=0
         )
         intermediate_latents = self.latent_jk_lin(intermediate_latents)
-        z = pocket_latents + intermediate_latents
+        z = 0.5 * (pocket_latents + intermediate_latents)
         return z
 
     def forward(self, batch: Batch, t: Tensor):
@@ -619,21 +612,27 @@ class Trainer(pl.LightningModule):
         bond_edge_index, bond_edge_attr = sort_edge_index(
             edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
         )
-
+            
         # TIME EMBEDDING
         temb = t.float() / self.hparams.timesteps
         temb = temb.clamp(min=self.hparams.eps_min)
         temb = temb.unsqueeze(dim=1)
 
+        # backbone ca, node feature is amino acid identity as OHE in 20 classes
+        backbone_one_hot = batch.pocket_one_hot
+        backbone_batch = batch.pocket_one_hot_batch
+        backbone_coords = batch.pos_pocket[batch.pocket_ca_mask]
+        #import pdb
+        #pdb.set_trace()
         z = self.encode_pocket(
-            atom_types_pocket=atom_types_pocket,
-            pos_pocket=pos_pocket,
-            data_batch_pocket=data_batch_pocket,
+            atom_types_pocket=backbone_one_hot,
+            pos_pocket=backbone_coords,
+            data_batch_pocket=backbone_batch,
         )
 
         # pos_centered = pos - scatter_mean(pos, index=data_batch, dim=0)[data_batch]
 
-        pos_centered, _ = remove_mean_pocket(
+        pos_centered, pos_centered_pocket = remove_mean_pocket(
             pos, pos_pocket, data_batch, data_batch_pocket
         )
 
@@ -660,6 +659,13 @@ class Trainer(pl.LightningModule):
             num_classes=self.num_charge_classes,
             type="charges",
         )
+        
+        atom_types_pocket = F.one_hot(
+            atom_types_pocket.squeeze().long(), num_classes=self.num_atom_types
+        ).float()
+        charges_pocket = torch.zeros(
+            pos_pocket.shape[0], charges_perturbed.shape[1], dtype=torch.float32
+        ).to(self.device)
 
         # EDGES
         # Fully-connected ligand
@@ -694,8 +700,40 @@ class Trainer(pl.LightningModule):
             if not self.hparams.bond_prediction
             else None
         )
-        batch_edge_global = data_batch[edge_index_global_lig[0]]
-
+        (
+            edge_index_global,
+            edge_attr_global_perturbed,
+            batch_edge_global,
+            edge_mask,
+        ) = get_joint_edge_attrs(
+            pos_perturbed,
+            pos_centered_pocket,
+            data_batch,
+            data_batch_pocket,
+            edge_attr_global_perturbed_lig,
+            self.num_bond_classes,
+            self.device,
+        )
+        # Concatenate Ligand-Pocket
+        (
+            pos_perturbed,
+            atom_types_perturbed,
+            charges_perturbed,
+            batch_full,
+            pocket_mask,
+        ) = concat_ligand_pocket(
+            pos_perturbed,
+            pos_centered_pocket,
+            atom_types_perturbed,
+            atom_types_pocket,
+            charges_perturbed,
+            charges_pocket,
+            data_batch,
+            data_batch_pocket,
+            sorting=False,
+        )
+        
+        # Concatenate all node features
         atom_feats_in_perturbed = torch.cat(
             [atom_types_perturbed, charges_perturbed], dim=-1
         )
@@ -706,13 +744,17 @@ class Trainer(pl.LightningModule):
             t=temb,
             pos=pos_perturbed,
             edge_index_local=None,
-            edge_index_global=edge_index_global_lig,
-            edge_attr_global=edge_attr_global_perturbed_lig
+            edge_index_global=edge_index_global,
+            edge_index_global_lig=edge_index_global_lig,
+            edge_attr_global=edge_attr_global_perturbed
             if not self.hparams.bond_prediction
             else None,
-            batch=data_batch,
+            batch=batch_full,
             batch_edge_global=batch_edge_global,
             context=context,
+            pocket_mask=pocket_mask.unsqueeze(1),
+            edge_mask=edge_mask,
+            batch_lig=data_batch,
         )
 
         # Ground truth masking
@@ -740,10 +782,12 @@ class Trainer(pl.LightningModule):
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
         use_ligand_dataset_sizes: bool = False,
+        build_obabel_mol: bool = False,
         run_test_eval: bool = False,
         guidance_scale: float = 1.0e-4,
         use_energy_guidance: bool = False,
         ckpt_energy_model: str = None,
+        n_nodes_bias: int = 0,
         device: str = "cpu",
     ):
         """
@@ -764,24 +808,19 @@ class Trainer(pl.LightningModule):
         )
         molecule_list = []
         start = datetime.now()
-        for _, pocket_data in enumerate(dataloader):
+        for i, pocket_data in enumerate(dataloader):
             num_graphs = len(pocket_data.batch.bincount())
             if use_ligand_dataset_sizes:
-                num_nodes_lig = pocket_data.batch.bincount()
+                num_nodes_lig = pocket_data.batch.bincount().to(self.device)
             else:
-                num_nodes_lig = None
-            (
-                out_dict,
-                data_batch,
-                data_batch_pocket,
-                edge_index_global,
-                trajs,
-                context,
-            ) = self.reverse_sampling(
+                num_nodes_lig = self.conditional_size_distribution.sample_conditional(
+                    n1=None, n2=pocket_data.pos_pocket_batch.bincount()
+                ).to(self.device)
+                num_nodes_lig += n_nodes_bias
+            molecules = self.reverse_sampling(
                 num_graphs=num_graphs,
                 num_nodes_lig=num_nodes_lig,
                 pocket_data=pocket_data,
-                empirical_distribution_num_nodes=self.empirical_num_nodes,
                 verbose=inner_verbose,
                 save_traj=save_traj,
                 ddpm=ddpm,
@@ -789,22 +828,11 @@ class Trainer(pl.LightningModule):
                 every_k_step=every_k_step,
                 guidance_scale=guidance_scale,
                 energy_model=energy_model,
+                save_dir=save_dir,
+                build_obabel_mol=build_obabel_mol,
+                iteration=i,
             )
-            molecule_list.extend(
-                get_molecules(
-                    out_dict,
-                    data_batch,
-                    edge_index_global,
-                    self.num_atom_types,
-                    self.num_charge_classes,
-                    self.dataset_info,
-                    data_batch_pocket=None,
-                    device=self.device,
-                    mol_device=device,
-                    context=context,
-                    while_train=False,
-                )
-            )
+            molecule_list.extend(molecules)
         (
             stability_dict,
             validity_dict,
@@ -825,18 +853,13 @@ class Trainer(pl.LightningModule):
         if not run_test_eval:
             save_cond = (
                 self.validity < validity_dict["validity"]
-                and self.connected_components < statistics_dict["connected_components"]
-            ) or (
-                self.validity <= validity_dict["validity"]
                 and self.connected_components <= statistics_dict["connected_components"]
-                and self.qed < statistics_dict["QED"]
             )
         else:
             save_cond = False
         if save_cond:
             self.validity = validity_dict["validity"]
             self.connected_components = statistics_dict["connected_components"]
-            self.qed = statistics_dict["QED"]
             save_path = os.path.join(self.hparams.save_dir, "best_valid.ckpt")
             self.trainer.save_checkpoint(save_path)
 
@@ -889,24 +912,29 @@ class Trainer(pl.LightningModule):
         eta_ddim,
         relax_mol=False,
         max_relax_iter=200,
-        sanitize=False,
+        sanitize=True,
         every_k_step=1,
-        num_nodes_lig=None,
-        mol_device="cpu",
-        notebook_inference: bool = False
-    ):
-        (
-            out_dict,
-            data_batch,
-            data_batch_pocket,
-            edge_index_global,
-            trajs,
-            context,
-        ) = self.reverse_sampling(
+        fix_n_nodes=False,
+        n_nodes_bias=0,
+        build_obabel_mol=False,
+        save_dir=None,
+    ):  
+        if fix_n_nodes:
+            num_nodes_lig = pocket_data.batch.bincount().to(self.device)
+        else:
+            pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(0)
+            num_nodes_lig = (
+                self.conditional_size_distribution.sample_conditional(
+                    n1=None, n2=pocket_size
+                )
+                .repeat(num_graphs)
+                .to(self.device)
+            )
+            num_nodes_lig += n_nodes_bias
+        molecules = self.reverse_sampling(
             num_graphs=num_graphs,
             num_nodes_lig=num_nodes_lig,
             pocket_data=pocket_data,
-            empirical_distribution_num_nodes=self.empirical_num_nodes,
             verbose=inner_verbose,
             save_traj=save_traj,
             ddpm=ddpm,
@@ -914,71 +942,18 @@ class Trainer(pl.LightningModule):
             every_k_step=every_k_step,
             guidance_scale=None,
             energy_model=None,
-        )
-        molecules = get_molecules(
-            out_dict,
-            data_batch,
-            edge_index_global,
-            self.num_atom_types,
-            self.num_charge_classes,
-            self.dataset_info,
-            data_batch_pocket=None,
             relax_mol=relax_mol,
             max_relax_iter=max_relax_iter,
             sanitize=sanitize,
-            device=self.device,
-            mol_device=mol_device,
-            context=context,
-            while_train=False,
+            build_obabel_mol=build_obabel_mol,
+            save_dir=save_dir,
         )
+        return molecules
         
-        if notebook_inference:
-            return molecules
-        
-        if num_graphs > 1:
-            (
-                stability_dict,
-                validity_dict,
-                statistics_dict,
-                all_generated_smiles,
-                stable_molecules,
-                valid_molecules,
-            ) = analyze_stability_for_molecules(
-                molecule_list=molecules,
-                dataset_info=self.dataset_info,
-                smiles_train=self.smiles_list,
-                local_rank=self.local_rank,
-                return_molecules=True,
-                return_stats_per_molecule=True,
-                remove_hs=self.hparams.remove_hs,
-                device="cpu",
-            )
-
-            qed = 0
-            idx = 0
-
-            for i in range(len(valid_molecules)):
-                if qed > statistics_dict["QEDs"][i]:
-                    continue
-                else:
-                    qed = statistics_dict["QEDs"][i]
-                    idx = i
-
-            sa = statistics_dict["SAs"][idx]
-            lipinski = statistics_dict["Lipinskis"][idx]
-            diversity = statistics_dict["Diversity"]
-            print(
-                f"Found valid molecule with QED: {qed}, SA: {sa} and Lipinski: {lipinski}"
-            )
-            return [molecules[idx]], (qed, sa, lipinski, diversity)
-        else:
-            return molecules
-
     def reverse_sampling(
         self,
         num_graphs: int,
         pocket_data: Tensor,
-        empirical_distribution_num_nodes: Tensor,
         num_nodes_lig: int = None,
         verbose: bool = False,
         save_traj: bool = False,
@@ -987,56 +962,65 @@ class Trainer(pl.LightningModule):
         every_k_step: int = 1,
         guidance_scale: float = 1.0e-4,
         energy_model=None,
+        save_dir: str = None,
+        relax_mol=False,
+        max_relax_iter=200,
+        sanitize=False,
+        build_obabel_mol=False,
+        iteration: int = 0,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
+        
         pos_pocket = pocket_data.pos_pocket.to(self.device)
         batch_pocket = pocket_data.pos_pocket_batch.to(self.device)
         x_pocket = pocket_data.x_pocket.to(self.device)
-        # encode protein pocket
+        
+        # backbone ca, node feature is amino acid identity as OHE in 20 classes
+        backbone_one_hot = pocket_data.pocket_one_hot.to(self.device)
+        backbone_batch = pocket_data.pocket_one_hot_batch.to(self.device)
+        backbone_coords = pos_pocket[pocket_data.pocket_ca_mask.to(self.device)]
         z = self.encode_pocket(
-            atom_types_pocket=x_pocket,
-            pos_pocket=pos_pocket,
-            data_batch_pocket=batch_pocket,
+            atom_types_pocket=backbone_one_hot,
+            pos_pocket=backbone_coords,
+            data_batch_pocket=backbone_batch,
         )
-        if num_nodes_lig is not None:
-            batch_num_nodes = num_nodes_lig.to(self.device)
-        else:
-            batch_num_nodes = torch.multinomial(
-                input=empirical_distribution_num_nodes,
-                num_samples=num_graphs,
-                replacement=True,
-            ).to(self.device)
-            batch_num_nodes = batch_num_nodes.clamp(min=1)
-
+        
         batch = torch.arange(num_graphs, device=self.device).repeat_interleave(
-            batch_num_nodes, dim=0
+            num_nodes_lig, dim=0
         )
         bs = int(batch.max()) + 1
 
         # sample context condition
         context = None
         if self.prop_dist is not None:
-            context = self.prop_dist.sample_batch(batch_num_nodes).to(self.device)[
+            context = self.prop_dist.sample_batch(num_nodes_lig).to(self.device)[
                 batch
             ]
 
         # initialize the 0-mean point cloud from N(0, I) centered in the pocket
-        pos = torch.randn(
-            len(batch), 3, device=self.device, dtype=torch.get_default_dtype()
-        )
-        # pos = zero_mean(pos, batch=batch, dim_size=bs, dim=0)
+        pocket_cog = scatter_mean(pos_pocket, batch_pocket, dim=0)
+        pocket_cog_batch = pocket_cog[batch]
+        pos = pocket_cog_batch + torch.randn_like(pocket_cog_batch)
+        # # project to COM-free subspace
+        pos, pos_pocket = remove_mean_pocket(pos, pos_pocket, batch, batch_pocket)
         n = len(pos)
-        # CoM Protein
-        pocket_mean = scatter_mean(pos_pocket, batch_pocket, dim=0)
-
+                
         # initialize the atom-types
         atom_types = torch.multinomial(
             self.atoms_prior, num_samples=n, replacement=True
         )
         atom_types = F.one_hot(atom_types, self.num_atom_types).float()
+        atom_types_pocket = F.one_hot(
+            x_pocket.squeeze().long(), num_classes=self.num_atom_types
+        ).float()
+                
         charge_types = torch.multinomial(
             self.charges_prior, num_samples=n, replacement=True
         )
         charge_types = F.one_hot(charge_types, self.num_charge_classes).float()
+        charges_pocket = torch.zeros(
+            pos_pocket.shape[0], charge_types.shape[1], dtype=torch.float32
+        ).to(self.device)
+                
         edge_index_local = None
         edge_index_global = (
             torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
@@ -1045,8 +1029,8 @@ class Trainer(pl.LightningModule):
         edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
         if not self.hparams.bond_prediction:
             (
-                edge_attr_global,
-                edge_index_global,
+                edge_attr_global_lig,
+                edge_index_global_lig,
                 mask,
                 mask_i,
             ) = initialize_edge_attrs_reverse(
@@ -1059,12 +1043,38 @@ class Trainer(pl.LightningModule):
         else:
             edge_attr_global = None
 
-        batch_edge_global = batch[edge_index_global[0]]
+        (
+            edge_index_global,
+            edge_attr_global,
+            batch_edge_global,
+            edge_mask,
+        ) = get_joint_edge_attrs(
+            pos,
+            pos_pocket,
+            batch,
+            batch_pocket,
+            edge_attr_global_lig,
+            self.num_bond_classes,
+            self.device,
+        )
 
-        pos_traj = []
-        atom_type_traj = []
-        charge_type_traj = []
-        edge_type_traj = []
+        (
+            pos_joint,
+            atom_types_joint,
+            charge_types_joint,
+            batch_full,
+            pocket_mask,
+        ) = concat_ligand_pocket(
+            pos,
+            pos_pocket,
+            atom_types,
+            atom_types_pocket,
+            charge_types,
+            charges_pocket,
+            batch,
+            batch_pocket,
+            sorting=False,
+        )
 
         if self.hparams.continuous_param == "data":
             chain = range(0, self.hparams.timesteps)
@@ -1076,7 +1086,7 @@ class Trainer(pl.LightningModule):
         iterator = (
             tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         )
-        for timestep in iterator:
+        for i, timestep in enumerate(iterator):
             s = torch.full(
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=pos.device
             )
@@ -1085,20 +1095,24 @@ class Trainer(pl.LightningModule):
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
 
-            node_feats_in = torch.cat([atom_types, charge_types], dim=-1)
+            node_feats_in = torch.cat([atom_types_joint, charge_types_joint], dim=-1)
             out = self.model(
                 x=node_feats_in,
-                z=z,
                 t=temb,
-                pos=pos,
+                z=z,
+                pos=pos_joint,
                 edge_index_local=edge_index_local,
                 edge_index_global=edge_index_global,
+                edge_index_global_lig=edge_index_global_lig,
                 edge_attr_global=edge_attr_global,
-                batch=batch,
+                batch=batch_full,
                 batch_edge_global=batch_edge_global,
                 context=context,
+                pocket_mask=pocket_mask.unsqueeze(1),
+                edge_mask=edge_mask,
+                batch_lig=batch,
             )
-
+        
             coords_pred = out["coords_pred"].squeeze()
             atoms_pred, charges_pred = out["atoms_pred"].split(
                 [self.num_atom_types, self.num_charge_classes], dim=-1
@@ -1142,49 +1156,112 @@ class Trainer(pl.LightningModule):
             # edges
             if not self.hparams.bond_prediction:
                 (
-                    edge_attr_global,
-                    edge_index_global,
+                    edge_attr_global_lig,
+                    edge_index_global_lig,
                     mask,
                     mask_i,
                 ) = self.cat_bonds.sample_reverse_edges_categorical(
-                    edge_attr_global,
+                    edge_attr_global_lig,
                     edges_pred,
                     t,
                     mask,
                     mask_i,
                     batch=batch,
-                    edge_index_global=edge_index_global,
+                    edge_index_global=edge_index_global_lig,
                     num_classes=self.num_bond_classes,
                 )
             else:
-                edge_attr_global = edges_pred
+                edge_attr_global_lig = edges_pred
+
+            (
+                edge_index_global,
+                edge_attr_global,
+                batch_edge_global,
+                edge_mask,
+            ) = get_joint_edge_attrs(
+                pos,
+                pos_pocket,
+                batch,
+                batch_pocket,
+                edge_attr_global_lig,
+                self.num_bond_classes,
+                self.device,
+            )
+            # pos, pos_pocket = remove_mean_pocket(pos, pos_pocket, batch, batch_pocket)
+            (
+                pos_joint,
+                atom_types_joint,
+                charge_types_joint,
+                batch_full,
+                pocket_mask,
+            ) = concat_ligand_pocket(
+                pos,
+                pos_pocket,
+                atom_types,
+                atom_types_pocket,
+                charge_types,
+                charges_pocket,
+                batch,
+                batch_pocket,
+                sorting=False,
+            )
 
             if save_traj:
-                pos_ = pos
-                pos_traj.append(pos_.detach())
-                atom_type_traj.append(atom_types.detach())
-                edge_type_traj.append(edge_attr_global.detach())
-                charge_type_traj.append(charge_types.detach())
+                atom_decoder = self.dataset_info.atom_decoder
+                write_xyz_file_from_batch(
+                    pos,
+                    atom_types,
+                    batch,
+                    pos_pocket=pos_pocket,
+                    atoms_pocket=atom_types_pocket,
+                    batch_pocket=batch_pocket,
+                    joint_traj=True,
+                    atom_decoder=atom_decoder,
+                    path=os.path.join(save_dir, f"iter_{iteration}"),
+                    i=i,
+                )
 
 
         # Move generated molecule back to the original pocket position
-        pos = pos + pocket_mean[batch]
+        pos += pocket_cog_batch
+        pos_pocket += pocket_cog[batch_pocket]
 
         out_dict = {
             "coords_pred": pos,
             "coords_pocket": pos_pocket,
             "atoms_pred": atom_types,
+            "atoms_pocket": atom_types_pocket,
             "charges_pred": charge_types,
-            "bonds_pred": edge_attr_global,
+            "bonds_pred": edge_attr_global_lig,
+            "z": z
         }
-        return (
+        molecules = get_molecules(
             out_dict,
             batch,
-            batch_pocket,
-            edge_index_global,
-            [pos_traj, atom_type_traj, charge_type_traj, edge_type_traj],
-            context,
+            edge_index_global_lig,
+            self.num_atom_types,
+            self.num_charge_classes,
+            self.dataset_info,
+            data_batch_pocket=batch_pocket,
+            device=self.device,
+            mol_device="cpu",
+            context=context,
+            relax_mol=relax_mol,
+            max_relax_iter=max_relax_iter,
+            sanitize=sanitize,
+            while_train=False,
+            build_obabel_mol=build_obabel_mol,
         )
+
+        if save_traj:
+            write_trajectory_as_xyz(
+                molecules,
+                strict=False,
+                joint_traj=True,
+                path=os.path.join(save_dir, f"iter_{iteration}"),
+            )
+
+        return molecules
 
     def configure_optimizers(self):
         all_params = (

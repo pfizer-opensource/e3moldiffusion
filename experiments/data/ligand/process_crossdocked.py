@@ -100,7 +100,7 @@ def process_ligand_and_pocket(pdbfile, sdffile, dist_cutoff, ca_only, no_H):
         # full
         full_atoms = []
         full_coords = []
-
+        m = False
         for res in pocket_residues:
             for atom in res.get_atoms():
                 if atom.name == "CA":
@@ -122,8 +122,6 @@ def process_ligand_and_pocket(pdbfile, sdffile, dist_cutoff, ca_only, no_H):
         full_atoms = np.stack(full_atoms, axis=0)
         full_coords = np.stack(full_coords, axis=0)
         ca_mask = np.array(ca_mask, dtype=bool)
-        assert (sum(ca_mask) == pocket_one_hot.shape[0])
-        assert len(full_atoms) == len(full_coords)
         if no_H:
             indices_H = np.where(full_atoms == "H")
             if indices_H[0].size > 0:
@@ -132,6 +130,8 @@ def process_ligand_and_pocket(pdbfile, sdffile, dist_cutoff, ca_only, no_H):
                 full_atoms = full_atoms[mask]
                 full_coords = full_coords[mask]
                 ca_mask = ca_mask[mask]
+        assert (sum(ca_mask) == pocket_one_hot.shape[0])
+        assert len(full_atoms) == len(full_coords)
         pocket_data = {
             "pocket_coords": full_coords,
             "pocket_ids": pocket_ids,

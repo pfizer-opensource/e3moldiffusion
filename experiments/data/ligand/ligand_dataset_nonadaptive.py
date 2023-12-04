@@ -177,7 +177,7 @@ class LigandPocketDataset(InMemoryDataset):
             else:
                 if k == "pocket_one_hot":
                     pocket_one_hot_mask = data["pocket_mask"][data["pocket_ca_mask"]]
-                    sections = np.where(np.diff(pocket_one_hot_mask))[0]
+                    sections = np.where(np.diff(pocket_one_hot_mask))[0] + 1
                     mol_data["pocket_one_hot_mask"] = [torch.from_numpy(x) for x in np.split(pocket_one_hot_mask, sections)]
                     
                 mol_data[k] = [torch.from_numpy(x) for x in np.split(v, sections)]
