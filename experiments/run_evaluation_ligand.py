@@ -101,8 +101,7 @@ def evaluate(
         from experiments.diffusion_continuous import Trainer
     elif hparams.latent_dim:
         print("Using latent diffusion")
-        # from experiments.diffusion_latent_discrete import Trainer #need refactor
-        raise NotImplementedError
+        from experiments.diffusion_discrete_latent_pocket import Trainer
     else:
         print("Using discrete diffusion")
         if hparams.diffusion_pretraining:

@@ -283,6 +283,7 @@ class Trainer(pl.LightningModule):
             run_test_eval=True,
             use_ligand_dataset_sizes=self.hparams.use_ligand_dataset_sizes,
             save_dir=self.hparams.test_save_dir,
+            save_traj=self.hparams.save_traj,
             return_molecules=True,
         )
         atom_decoder = valid_molecules[0].dataset_info.atom_decoder
