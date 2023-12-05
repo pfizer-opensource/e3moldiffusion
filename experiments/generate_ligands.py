@@ -92,7 +92,8 @@ def evaluate(
     if hparams.additional_feats:
         from experiments.diffusion_discrete_pocket_addfeats import Trainer
     else:
-        from experiments.diffusion_discrete_pocket import Trainer
+        # from experiments.diffusion_discrete_pocket import Trainer
+        from experiments.diffusion_discrete_latent_pocket import Trainer
 
     # if you want bond_model_guidance, flag this here in the Trainer
     device = "cuda"

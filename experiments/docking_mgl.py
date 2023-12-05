@@ -4,6 +4,8 @@ import glob
 
 
 def pdbs_to_pdbqts(pdb_dir, pdbqt_dir, dataset):
+    if not os.path.exists(pdbqt_dir):
+        os.makedirs(pdbqt_dir)
     for file in glob.glob(os.path.join(pdb_dir, "*.pdb")):
         name = os.path.splitext(os.path.basename(file))[0]
         outfile = os.path.join(pdbqt_dir, name + ".pdbqt")

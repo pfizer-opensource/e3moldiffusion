@@ -23,6 +23,7 @@ from tqdm import tqdm
 
 from e3moldiffusion.molfeat import atom_type_config
 from experiments.molecule_utils import Molecule
+from experiments.data.ligand.process_crossdocked import amino_acid_dict, three_to_one
 
 # fmt: off
 # Atomic masses are based on:
@@ -1113,10 +1114,34 @@ def prepare_pocket(
         torch.arange(repeats, device=device), len(pocket_coord)
     ).long()
 
+    # c-alphas and residue idendity
+    pocket_one_hot = []
+    ca_mask = []
+    for res in biopython_residues:
+            for atom in res.get_atoms():
+                if atom.name == "CA":
+                        pocket_one_hot.append(
+                            np.eye(
+                                1,
+                                len(amino_acid_dict),
+                                amino_acid_dict[three_to_one.get(res.get_resname())],
+                            ).squeeze()
+                        )
+                        m = True
+                else:
+                    m = False
+                ca_mask.append(m)
+                                
+    pocket_one_hot = torch.from_numpy(np.stack(pocket_one_hot,axis=0))
+    ca_mask = torch.from_numpy(np.array(ca_mask, dtype=bool))
+    pocket_one_hot_batch = torch.arange(repeats).repeat_interleave(len(pocket_one_hot), dim=0)
     pocket = Data(
         x_pocket=pocket_types.repeat(repeats),
         pos_pocket=pocket_coord.repeat(repeats, 1),
         pos_pocket_batch=pocket_mask,
+        pocket_ca_mask=ca_mask.repeat(repeats),
+        pocket_one_hot=pocket_one_hot.repeat(repeats, 1),
+        pocket_one_hot_batch=pocket_one_hot_batch
     )
 
     return pocket
