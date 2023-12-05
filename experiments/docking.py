@@ -139,16 +139,18 @@ def calculate_qvina2_score(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("QuickVina evaluation")
-    parser.add_argument("--pdbqt_dir", type=Path, help="Receptor files in pdbqt format")
+    parser.add_argument("--pdbqt-dir", type=Path, help="Receptor files in pdbqt format")
     parser.add_argument(
-        "--sdf_dir", type=Path, default=None, help="Ligand files in sdf format"
+        "--sdf-dir", type=Path, default=None, help="Ligand files in sdf format"
     )
-    parser.add_argument("--sdf_files", type=Path, nargs="+", default=None)
-    parser.add_argument("--out_dir", type=Path)
-    parser.add_argument("--write_csv", action="store_true")
-    parser.add_argument("--write_dict", action="store_true")
+    parser.add_argument("--sdf-files", type=Path, nargs="+", default=None)
+    parser.add_argument("--out-dir", type=Path)
+    parser.add_argument("--write-csv", action="store_true")
+    parser.add_argument("--write-dict", action="store_true")
     parser.add_argument("--dataset", type=str, default="moad")
     args = parser.parse_args()
+
+    print("Starting docking...")
 
     assert (args.sdf_dir is not None) ^ (args.sdf_files is not None)
 
@@ -178,7 +180,7 @@ if __name__ == "__main__":
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
         elif args.dataset == "crossdocked":
             ligand_name = sdf_file.stem
-            receptor_name = ligand_name[:-4]
+            receptor_name = ligand_name.split("_")[0]
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
 
         # try:
@@ -207,16 +209,18 @@ if __name__ == "__main__":
     if args.write_dict:
         torch.save(results_dict, Path(args.out_dir, "qvina2_scores.pt"))
 
-    scores_fl = [np.mean(r) for r in results["scores"] if len(r) >= 1]
+    scores_mean = [np.mean(r) for r in results["scores"] if len(r) >= 1]
 
-    missing = len(results["scores"]) - len(scores_fl)
+    missing = len(results["scores"]) - len(scores_mean)
     print(f"Number of dockings evaluated with NaN: {missing}")
 
-    mean_score = np.mean(scores_fl)
-    std_score = np.std(scores_fl)
+    mean_score = np.mean(scores_mean)
+    std_score = np.std(scores_mean)
     print(f"Mean score: {mean_score}")
     print(f"Standard deviation: {std_score}")
 
-    scores_fl.sort(reverse=False)
-    mean_top10_score = np.mean(scores_fl[:10])
+    scores = np.mean(
+        [r.sort(reverse=True)[:10] for r in results["scores"] if len(r) >= 1]
+    )
+    mean_top10_score = np.mean(scores)
     print(f"Top-10 mean score: {mean_top10_score}")

@@ -1,4 +1,5 @@
 import itertools
+import logging
 from collections import Counter
 from multiprocessing import Pool
 
@@ -16,6 +17,7 @@ from experiments.sampling.utils import calculateScore
 
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
+logging.getLogger("openbabel").setLevel(logging.CRITICAL)
 
 
 class BasicMolecularMetrics(object):
@@ -242,9 +244,14 @@ class BasicMolecularMetrics(object):
             if local_rank == 0:
                 print(f"Analyzing molecule stability")
             for i, mol in enumerate(molecules):
-                mol_stable, at_stable, num_bonds = check_stability(
-                    mol, self.dataset_info
-                )
+                if mol.bond_types is None:
+                    mol_stable, at_stable, num_bonds = check_stability_without_bonds(
+                        mol, self.dataset_info
+                    )
+                else:
+                    mol_stable, at_stable, num_bonds = check_stability(
+                        mol, self.dataset_info
+                    )
                 self.mol_stable.update(value=mol_stable)
                 self.atom_stable.update(value=at_stable / num_bonds, weight=num_bonds)
                 if mol_stable:

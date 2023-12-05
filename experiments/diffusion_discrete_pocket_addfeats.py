@@ -990,22 +990,27 @@ class Trainer(pl.LightningModule):
         sanitize=True,
         every_k_step=1,
         fix_n_nodes=False,
+        vary_n_nodes=False,
         n_nodes_bias=0,
         build_obabel_mol=False,
         save_dir=None,
     ):
-        if fix_n_nodes:
-            num_nodes_lig = pocket_data.batch.bincount().to(self.device)
-        else:
-            pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(0)
-            num_nodes_lig = (
-                self.conditional_size_distribution.sample_conditional(
-                    n1=None, n2=pocket_size
-                )
-                .repeat(num_graphs)
-                .to(self.device)
+        pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(0)
+        num_nodes_lig = (
+            self.conditional_size_distribution.sample_conditional(
+                n1=None, n2=pocket_size
             )
-            num_nodes_lig += n_nodes_bias
+            .repeat(num_graphs)
+            .to(self.device)
+        )
+        if not fix_n_nodes:
+            if vary_n_nodes:
+                num_nodes_lig += torch.randint(
+                    low=0, high=n_nodes_bias, size=num_nodes_lig.size
+                )
+            else:
+                num_nodes_lig += n_nodes_bias
+
         molecules = self.reverse_sampling(
             num_graphs=num_graphs,
             num_nodes_lig=num_nodes_lig,

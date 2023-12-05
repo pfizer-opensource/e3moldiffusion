@@ -1,16 +1,23 @@
+import logging
 import tempfile
 import warnings
 
 import numpy as np
-import openbabel
 import torch
+from openbabel import openbabel
 from rdkit import Chem, RDLogger
+from rdkit.Chem.rdForceFieldHelpers import UFFHasAllMoleculeParams, UFFOptimizeMolecule
 from rdkit.Geometry import Point3D
 
 from experiments.data.utils import write_xyz_file
+from experiments.data.utils import x_map as additional_node_map
 
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
+
+ob_log = openbabel.OBMessageHandler()
+ob_log.SetOutputLevel(0)
+ob_log.StopLogging()
 
 bond_dict = [
     None,
@@ -20,18 +27,14 @@ bond_dict = [
     Chem.rdchem.BondType.AROMATIC,
 ]
 
-from rdkit.Chem.rdForceFieldHelpers import UFFHasAllMoleculeParams, UFFOptimizeMolecule
-
-from experiments.data.utils import x_map as additional_node_map
-
 
 class Molecule:
     def __init__(
         self,
         atom_types,
         positions,
-        charges,
         dataset_info,
+        charges=None,
         bond_types=None,
         rdkit_mol=None,
         atom_types_pocket=None,

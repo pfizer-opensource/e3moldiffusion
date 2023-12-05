@@ -5,12 +5,12 @@ from torch import Tensor, nn
 from torch_geometric.typing import OptTensor
 
 from e3moldiffusion.convs import (
+    EQGATConv,
     EQGATGlobalEdgeConvFinal,
     EQGATLocalConvFinal,
     TopoEdgeConvLayer,
-    EQGATConv,
 )
-from e3moldiffusion.modules import LayerNorm, AdaptiveLayerNorm, SE3Norm
+from e3moldiffusion.modules import AdaptiveLayerNorm, LayerNorm, SE3Norm
 
 
 class EQGATEnergyGNN(nn.Module):
@@ -162,11 +162,9 @@ class EQGATEdgeGNN(nn.Module):
     ):
         source, target = edge_index
         r = pos[target] - pos[source]
-        #import pdb
-        #pdb.set_trace()
+        # import pdb
+        # pdb.set_trace()
         if self.ligand_pocket_interaction:
-            # mask = source != target
-            # pos[mask] = pos[mask] / torch.norm(pos[mask], dim=1).unsqueeze(1)
             pos = pos / torch.norm(pos, dim=1).unsqueeze(1)
             a = pos[target] * pos[source]
         else:

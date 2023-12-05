@@ -1,4 +1,5 @@
 import itertools
+import logging
 from collections import Counter
 from multiprocessing import Pool
 
@@ -15,6 +16,7 @@ from experiments.sampling.utils import dihedral_distance
 
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
+logging.getLogger("openbabel").setLevel(logging.CRITICAL)
 
 
 class BasicMolecularMetrics(object):
@@ -25,6 +27,8 @@ class BasicMolecularMetrics(object):
             else dataset_info.atom_decoder
         )
         self.dataset_info = dataset_info
+
+        self.device = device
 
         self.number_samples = 0  # update based on unique generated smiles
         self.train_smiles, _ = canonicalize_list(smiles_train)
@@ -257,9 +261,16 @@ class BasicMolecularMetrics(object):
         # Atom and molecule stability
         stable_molecules = []
         if local_rank == 0:
-            print(f"Analyzing molecule stability on ...")
+            print("Analyzing molecule stability ...")
         for i, mol in enumerate(molecules):
-            mol_stable, at_stable, num_bonds = check_stability(mol, self.dataset_info)
+            if mol.bond_types is None:
+                mol_stable, at_stable, num_bonds = check_stability_without_bonds(
+                    mol, self.dataset_info
+                )
+            else:
+                mol_stable, at_stable, num_bonds = check_stability(
+                    mol, self.dataset_info
+                )
             self.mol_stable.update(value=mol_stable)
             self.atom_stable.update(value=at_stable / num_bonds, weight=num_bonds)
             if mol_stable:
@@ -325,6 +336,8 @@ class BasicMolecularMetrics(object):
             statistics_dict["QED"] = qeds
 
             self.reset()
+        else:
+            statistics_dict = {}
 
         if not return_molecules or len(valid_molecules) == 0:
             all_generated_smiles = None
@@ -351,55 +364,81 @@ class BasicMolecularMetrics(object):
             molecules, stat.atom_types, save_histogram=self.test
         )
         self.atom_types_tv(atom_types_tv)
-        edge_types_tv, bond_tv_per_class, sparsity_level = bond_types_distance(
-            molecules, stat.bond_types, save_histogram=self.test
-        )
-        print(
-            f"Sparsity level on local rank {local_rank}: {int(100 * sparsity_level)} %"
-        )
-        self.edge_types_tv(edge_types_tv)
-        charge_w1, charge_w1_per_class = charge_distance(
-            molecules, stat.charge_types, stat.atom_types, self.dataset_info
-        )
-        self.charge_w1(charge_w1)
-        valency_w1, valency_w1_per_class = valency_distance(
-            molecules, stat.valencies, stat.atom_types, self.dataset_info.atom_encoder
-        )
-        self.valency_w1(valency_w1)
-        bond_lengths_w1, bond_lengths_w1_per_type = bond_length_distance(
-            molecules, stat.bond_lengths, stat.bond_types
-        )
-        self.bond_lengths_w1(bond_lengths_w1)
-        if sparsity_level < 0.7:
-            if local_rank == 0:
-                print(f"Too many edges, skipping angle distance computation.")
-            angles_w1 = 0
-            angles_w1_per_type = [-1] * len(self.dataset_info.atom_decoder)
-        else:
-            angles_w1, angles_w1_per_type = angle_distance(
-                molecules,
-                stat.bond_angles,
-                stat.atom_types,
-                stat.valencies,
-                atom_decoder=self.dataset_info.atom_decoder,
-                save_histogram=self.test,
-            )
-        self.angles_w1(angles_w1)
 
-        dihedrals_w1, dihedrals_w1_per_type = dihedral_distance(
-            molecules, stat.dihedrals, stat.bond_types, save_histogram=self.test
-        )
-        self.dihedrals_w1(dihedrals_w1)
+        if molecules[0].charges is not None:
+            no_charges = False
+            charge_w1, charge_w1_per_class = charge_distance(
+                molecules, stat.charge_types, stat.atom_types, self.dataset_info
+            )
+            self.charge_w1(charge_w1)
+        else:
+            no_charges = True
+
+        if molecules[0].bond_types is not None:
+            no_bonds = False
+            edge_types_tv, bond_tv_per_class, sparsity_level = bond_types_distance(
+                molecules, stat.bond_types, save_histogram=self.test
+            )
+            print(
+                f"Sparsity level on local rank {local_rank}: {int(100 * sparsity_level)} %"
+            )
+            self.edge_types_tv(edge_types_tv)
+
+            valency_w1, valency_w1_per_class = valency_distance(
+                molecules,
+                stat.valencies,
+                stat.atom_types,
+                self.dataset_info.atom_encoder,
+            )
+            self.valency_w1(valency_w1)
+            bond_lengths_w1, bond_lengths_w1_per_type = bond_length_distance(
+                molecules, stat.bond_lengths, stat.bond_types
+            )
+            self.bond_lengths_w1(bond_lengths_w1)
+            if sparsity_level < 0.7:
+                if local_rank == 0:
+                    print(f"Too many edges, skipping angle distance computation.")
+                angles_w1 = 0
+                angles_w1_per_type = [-1] * len(self.dataset_info.atom_decoder)
+            else:
+                angles_w1, angles_w1_per_type = angle_distance(
+                    molecules,
+                    stat.bond_angles,
+                    stat.atom_types,
+                    stat.valencies,
+                    atom_decoder=self.dataset_info.atom_decoder,
+                    save_histogram=self.test,
+                )
+            self.angles_w1(angles_w1)
+
+            dihedrals_w1, dihedrals_w1_per_type = dihedral_distance(
+                molecules, stat.dihedrals, stat.bond_types, save_histogram=self.test
+            )
+            self.dihedrals_w1(dihedrals_w1)
+        else:
+            no_bonds = True
 
         statistics_log = {
             "sampling/NumNodesW1": self.num_nodes_w1.compute().item(),
             "sampling/AtomTypesTV": self.atom_types_tv.compute().item(),
-            "sampling/EdgeTypesTV": self.edge_types_tv.compute().item(),
-            "sampling/ChargeW1": self.charge_w1.compute().item(),
-            "sampling/ValencyW1": self.valency_w1.compute().item(),
-            "sampling/BondLengthsW1": self.bond_lengths_w1.compute().item(),
-            "sampling/AnglesW1": self.angles_w1.compute().item(),
-            "sampling/DihedralsW1": self.dihedrals_w1.compute().item(),
+            "sampling/EdgeTypesTV": self.edge_types_tv.compute().item()
+            if not no_bonds
+            else -1.0,
+            "sampling/ChargeW1": self.charge_w1.compute().item()
+            if not no_charges
+            else -1.0,
+            "sampling/ValencyW1": self.valency_w1.compute().item()
+            if not no_bonds
+            else -1.0,
+            "sampling/BondLengthsW1": self.bond_lengths_w1.compute().item()
+            if not no_bonds
+            else -1.0,
+            "sampling/AnglesW1": self.angles_w1.compute().item()
+            if not no_bonds
+            else -1.0,
+            "sampling/DihedralsW1": self.dihedrals_w1.compute().item()
+            if not no_bonds
+            else -1.0,
         }
         # if local_rank == 0:
         #     print(

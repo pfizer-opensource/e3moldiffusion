@@ -2,6 +2,7 @@ import argparse
 import math
 import os
 from glob import glob
+from itertools import zip_longest
 from os.path import dirname, exists, join
 from typing import Tuple
 
@@ -872,34 +873,39 @@ def get_molecules(
         charges_pred = out["charges_pred"] if num_charge_classes > 0 else None
 
     batch_num_nodes = data_batch.bincount().cpu().tolist()
-    pos_splits = out["coords_pred"].detach().split(batch_num_nodes, dim=0)
+    pos_splits = (
+        out["coords_pred"].detach().to(mol_device).split(batch_num_nodes, dim=0)
+    )
+
     if data_batch_pocket is not None:
         batch_num_nodes_pocket = data_batch_pocket.bincount().cpu().tolist()
         pos_pocket_splits = (
-            out["coords_pocket"].detach().split(batch_num_nodes_pocket, dim=0)
+            out["coords_pocket"]
+            .detach()
+            .to(mol_device)
+            .split(batch_num_nodes_pocket, dim=0)
         )
-        atom_types_integer_pocket = torch.argmax(out["atoms_pocket"], dim=-1)
-        atom_types_integer_split_pocket = atom_types_integer_pocket.detach().split(
+        atom_types_integer_pocket = (
+            torch.argmax(out["atoms_pocket"], dim=-1).detach().to(mol_device)
+        )
+        atom_types_integer_split_pocket = atom_types_integer_pocket.split(
             batch_num_nodes_pocket, dim=0
         )
 
-    atom_types_integer = torch.argmax(atoms_pred, dim=-1)
-    atom_types_integer_split = atom_types_integer.detach().split(batch_num_nodes, dim=0)
+    atom_types_integer = torch.argmax(atoms_pred, dim=-1).detach().to(mol_device)
+    atom_types_integer_split = atom_types_integer.split(batch_num_nodes, dim=0)
 
     if charges_pred is not None:
-        no_charges = False
-        charge_types_integer = torch.argmax(charges_pred, dim=-1)
+        charge_types_integer = (
+            torch.argmax(charges_pred, dim=-1).detach().to(mol_device)
+        )
         # offset back
         charge_types_integer = charge_types_integer - dataset_info.charge_offset
-        charge_types_integer_split = charge_types_integer.detach().split(
-            batch_num_nodes, dim=0
-        )
+        charge_types_integer_split = charge_types_integer.split(batch_num_nodes, dim=0)
     else:
-        no_charges = True
-        charge_types_integer_split = torch.zeros_like(atom_types_integer_split)
+        charge_types_integer_split = []
 
     if out["bonds_pred"] is not None:
-        no_bonds = False
         if out["bonds_pred"].shape[-1] > 5:
             out["bonds_pred"] = out["bonds_pred"][:, :5]
         n = data_batch.bincount().sum().item()
@@ -907,32 +913,37 @@ def get_molecules(
         edge_attrs_dense[
             edge_index_global_lig[0, :], edge_index_global_lig[1, :], :
         ] = out["bonds_pred"]
-        edge_attrs_dense = edge_attrs_dense.argmax(-1)
+        edge_attrs_dense = edge_attrs_dense.argmax(-1).detach().to(mol_device)
         edge_attrs_splits = get_list_of_edge_adjs(
             edge_attrs_dense, data_batch.bincount()
         )
     else:
-        no_bonds = True
-        edge_attrs_splits = torch.zeros_like(atom_types_integer_split)
+        edge_attrs_splits = []
 
     if "aromatic_pred" in out.keys() and "hybridization_pred" in out.keys():
         add_feats = True
         aromatic_feat = out["aromatic_pred"]
         hybridization_feat = out["hybridization_pred"]
-        aromatic_feat_integer = torch.argmax(aromatic_feat, dim=-1)
-        aromatic_feat_integer_split = aromatic_feat_integer.detach().split(
+        aromatic_feat_integer = (
+            torch.argmax(aromatic_feat, dim=-1).detach().to(mol_device)
+        )
+        aromatic_feat_integer_split = aromatic_feat_integer.split(
             batch_num_nodes, dim=0
         )
 
-        hybridization_feat_integer = torch.argmax(hybridization_feat, dim=-1)
-        hybridization_feat_integer_split = hybridization_feat_integer.detach().split(
+        hybridization_feat_integer = (
+            torch.argmax(hybridization_feat, dim=-1).detach().to(mol_device)
+        )
+        hybridization_feat_integer_split = hybridization_feat_integer.split(
             batch_num_nodes, dim=0
         )
     else:
         add_feats = False
 
     context_split = (
-        context.split(batch_num_nodes, dim=0) if context is not None else None
+        context.detach().to(mol_device).split(batch_num_nodes, dim=0)
+        if context is not None
+        else None
     )
 
     molecule_list = []
@@ -943,33 +954,28 @@ def get_molecules(
         charges,
         edges,
     ) in enumerate(
-        zip(
+        zip_longest(
             pos_splits,
             atom_types_integer_split,
             charge_types_integer_split,
             edge_attrs_splits,
+            fillvalue=None,
         )
     ):
         molecule = Molecule(
-            atom_types=atom_types.detach().to(mol_device),
-            positions=positions.detach().to(mol_device),
-            charges=None if no_charges else charges.detach().to(mol_device),
-            bond_types=None if no_bonds else edges.detach().to(mol_device),
-            positions_pocket=pos_pocket_splits[i].detach().to(mol_device)
+            atom_types=atom_types,
+            positions=positions,
+            charges=charges,
+            bond_types=edges,
+            positions_pocket=pos_pocket_splits[i]
             if data_batch_pocket is not None
             else None,
-            atom_types_pocket=atom_types_integer_split_pocket[i].detach().to(mol_device)
+            atom_types_pocket=atom_types_integer_split_pocket[i]
             if data_batch_pocket is not None
             else None,
-            context=context_split[i][0].detach().to(mol_device)
-            if context_split is not None
-            else None,
-            is_aromatic=aromatic_feat_integer_split[i].detach().to(mol_device)
-            if add_feats
-            else None,
-            hybridization=hybridization_feat_integer_split[i].detach().to(mol_device)
-            if add_feats
-            else None,
+            context=context_split[i][0] if context_split is not None else None,
+            is_aromatic=aromatic_feat_integer_split[i] if add_feats else None,
+            hybridization=hybridization_feat_integer_split[i] if add_feats else None,
             build_mol_with_addfeats=build_mol_with_addfeats,
             dataset_info=dataset_info,
             relax_mol=relax_mol,
