@@ -1012,10 +1012,18 @@ class Trainer(pl.LightningModule):
             self.atoms_prior, num_samples=n, replacement=True
         )
         atom_types = F.one_hot(atom_types, self.num_atom_types).float()
-        charge_types = torch.multinomial(
-            self.charges_prior, num_samples=n, replacement=True
-        )
-        charge_types = F.one_hot(charge_types, self.num_charge_classes).float()
+
+        if self.num_charge_classes > 0:
+            charge_types = torch.multinomial(
+                self.charges_prior, num_samples=n, replacement=True
+            )
+            charge_types = F.one_hot(charge_types, self.num_charge_classes).float()
+
+        # if self.trainer.global_rank == 0:
+        #     import pdb
+
+        #     pdb.set_trace()
+        # self.trainer.strategy.barrier()
 
         edge_index_local = None
         edge_index_global = (
@@ -1064,7 +1072,9 @@ class Trainer(pl.LightningModule):
             )
         else:
             edge_attr_global = None
+
         batch_edge_global = batch[edge_index_global[0]]
+
         mulliken = torch.randn(
             len(batch), 1, device=self.device, dtype=torch.get_default_dtype()
         )

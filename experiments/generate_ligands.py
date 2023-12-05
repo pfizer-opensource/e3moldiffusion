@@ -37,6 +37,7 @@ def evaluate(
     test_list,
     skip_existing,
     fix_n_nodes,
+    vary_n_nodes,
     n_nodes_bias,
     num_ligands_per_pocket,
     build_obabel_mol,
@@ -49,12 +50,15 @@ def evaluate(
     write_dict,
     write_csv,
     pdbqt_dir,
+    dataset_root=None,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
     hparams["select_train_subset"] = False
     hparams["diffusion_pretraining"] = False
     hparams["num_charge_classes"] = 6
+    if dataset_root is not None:
+        hparams["dataset_root"] = dataset_root
     hparams = dotdict(hparams)
 
     hparams.load_ckpt_from_pretrained = None
@@ -93,6 +97,8 @@ def evaluate(
         from experiments.diffusion_discrete_pocket_addfeats import Trainer
     else:
         from experiments.diffusion_discrete_pocket import Trainer
+
+    torch.cuda.empty_cache()
 
     # if you want bond_model_guidance, flag this here in the Trainer
     device = "cuda"
@@ -183,22 +189,25 @@ def evaluate(
             repeats=batch_size,
             device=device,
         )
+
         start = datetime.now()
         while len(tmp_molecules) < num_ligands_per_pocket:
-            molecules = model.generate_ligands(
-                pocket_data,
-                num_graphs=batch_size,
-                fix_n_nodes=fix_n_nodes,
-                n_nodes_bias=n_nodes_bias,
-                build_obabel_mol=build_obabel_mol,
-                inner_verbose=False,
-                save_traj=False,
-                ddpm=ddpm,
-                eta_ddim=eta_ddim,
-                relax_mol=relax_mol,
-                max_relax_iter=max_relax_iter,
-                sanitize=sanitize,
-            )
+            with torch.no_grad():
+                molecules = model.generate_ligands(
+                    pocket_data,
+                    num_graphs=batch_size,
+                    fix_n_nodes=fix_n_nodes,
+                    vary_n_nodes=vary_n_nodes,
+                    n_nodes_bias=n_nodes_bias,
+                    build_obabel_mol=build_obabel_mol,
+                    inner_verbose=False,
+                    save_traj=False,
+                    ddpm=ddpm,
+                    eta_ddim=eta_ddim,
+                    relax_mol=relax_mol,
+                    max_relax_iter=max_relax_iter,
+                    sanitize=sanitize,
+                )
             all_molecules += len(molecules)
             valid_molecules = analyze_stability_for_molecules(
                 molecule_list=molecules,
@@ -211,6 +220,9 @@ def evaluate(
                 device="cpu",
             )
             tmp_molecules.extend(valid_molecules)
+
+        torch.cuda.empty_cache()
+        del pocket_data
 
         run_time = datetime.now() - start
         print(f"\n Run time={run_time} for 100 valid molecules \n")
@@ -271,76 +283,79 @@ def evaluate(
     )
     print("Sampling finished.")
 
-    ############## DOCKING ##############
-    print("Starting docking...")
-    results = {"receptor": [], "ligand": [], "scores": []}
-    results_dict = {}
-
-    pbar = tqdm(sdf_files)
-
-    for sdf_file in pbar:
-        pbar.set_description(f"Processing {sdf_file.name}")
-
-        if dataset == "moad":
-            """
-            Ligand file names should be of the following form:
-            <receptor-name>_<pocket-id>_<some-suffix>.sdf
-            where <receptor-name> and <pocket-id> cannot contain any
-            underscores, e.g.: 1abc-bio1_pocket0_gen.sdf
-            """
-            ligand_name = sdf_file.stem
-            receptor_name, pocket_id, *suffix = ligand_name.split("_")
-            suffix = "_".join(suffix)
-            receptor_file = Path(pdbqt_dir, receptor_name + ".pdbqt")
-        elif dataset == "crossdocked":
-            ligand_name = sdf_file.stem
-            receptor_name = ligand_name.split("_")[0]
-            receptor_file = Path(pdbqt_dir, receptor_name + ".pdbqt")
-
-        # try:
-        scores, rdmols = calculate_qvina2_score(
-            receptor_file, sdf_file, save_dir, return_rdmol=True
-        )
-        # except AttributeError as e:
-        #     print(e)
-        #     continue
-        results["receptor"].append(str(receptor_file))
-        results["ligand"].append(str(sdf_file))
-        results["scores"].append(scores)
-
-        if write_dict:
-            results_dict[ligand_name] = {
-                "receptor": str(receptor_file),
-                "ligand": str(sdf_file),
-                "scores": scores,
-                "rmdols": rdmols,
-            }
-
-    if write_csv:
-        df = pd.DataFrame.from_dict(results)
-        df.to_csv(Path(save_dir, "qvina2_scores.csv"))
-
-    if write_dict:
-        torch.save(results_dict, Path(save_dir, "qvina2_scores.pt"))
-
-    scores_mean = [np.mean(r) for r in results["scores"] if len(r) >= 1]
-
     print(f"Mean statistics across all sampled ligands: {statistics_dict}")
     save_pickle(statistics_dict, os.path.join(save_dir, "statistics_dict.pickle"))
 
-    missing = len(results["scores"]) - len(scores_mean)
-    print(f"Number of dockings evaluated with NaN: {missing}")
+    # ############## DOCKING ##############
+    # print("Starting docking...")
+    # results = {"receptor": [], "ligand": [], "scores": []}
+    # results_dict = {}
 
-    mean_score = np.mean(scores_mean)
-    std_score = np.std(scores_mean)
-    print(f"Mean score: {mean_score}")
-    print(f"Standard deviation: {std_score}")
+    # pbar = tqdm(sdf_files)
 
-    scores = [
-        np.mean(r.sort(reverse=True)[:10]) for r in results["scores"] if len(r) >= 1
-    ]
-    mean_top10_score = np.mean(scores)
-    print(f"Top-10 mean score: {mean_top10_score}")
+    # for sdf_file in pbar:
+    #     pbar.set_description(f"Processing {sdf_file.name}")
+
+    #     if dataset == "moad":
+    #         """
+    #         Ligand file names should be of the following form:
+    #         <receptor-name>_<pocket-id>_<some-suffix>.sdf
+    #         where <receptor-name> and <pocket-id> cannot contain any
+    #         underscores, e.g.: 1abc-bio1_pocket0_gen.sdf
+    #         """
+    #         ligand_name = sdf_file.stem
+    #         receptor_name, pocket_id, *suffix = ligand_name.split("_")
+    #         suffix = "_".join(suffix)
+    #         receptor_file = Path(pdbqt_dir, receptor_name + ".pdbqt")
+    #     elif dataset == "crossdocked":
+    #         ligand_name = sdf_file.stem
+    #         receptor_name = ligand_name.split("_")[0]
+    #         receptor_file = Path(pdbqt_dir, receptor_name + ".pdbqt")
+
+    #     # try:
+    #     scores, rdmols = calculate_qvina2_score(
+    #         receptor_file, sdf_file, processed_sdf_dir, return_rdmol=True
+    #     )
+    #     # except AttributeError as e:
+    #     #     print(e)
+    #     #     continue
+    #     results["receptor"].append(str(receptor_file))
+    #     results["ligand"].append(str(sdf_file))
+    #     results["scores"].append(scores)
+
+    #     if write_dict:
+    #         results_dict[ligand_name] = {
+    #             "receptor": str(receptor_file),
+    #             "ligand": str(sdf_file),
+    #             "scores": scores,
+    #             "rmdols": rdmols,
+    #         }
+
+    # if write_csv:
+    #     df = pd.DataFrame.from_dict(results)
+    #     df.to_csv(Path(save_dir, "qvina2_scores.csv"))
+
+    # if write_dict:
+    #     torch.save(results_dict, Path(save_dir, "qvina2_scores.pt"))
+
+    # scores_mean = [np.mean(r) for r in results["scores"] if len(r) >= 1]
+
+    # missing = len(results["scores"]) - len(scores_mean)
+    # print(f"Number of dockings evaluated with NaN: {missing}")
+
+    # mean_score = np.mean(scores_mean)
+    # std_score = np.std(scores_mean)
+    # print(f"Mean score: {mean_score}")
+    # print(f"Standard deviation: {std_score}")
+
+    # import pdb
+
+    # pdb.set_trace()
+    # scores = np.mean(
+    #     [r.sort(reverse=True)[:10] for r in results["scores"] if len(r) >= 1]
+    # )
+    # mean_top10_score = np.mean(scores)
+    # print(f"Top-10 mean score: {mean_top10_score}")
 
 
 def get_args():
@@ -348,6 +363,8 @@ def get_args():
     parser = argparse.ArgumentParser(description='Data generation')
     parser.add_argument('--model-path', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol/best_mol_stab.ckpt", type=str,
                         help='Path to trained model')
+    parser.add_argument('--dataset-root', default=None, type=str,
+                        help='If not set it will be taken from the model ckpt, otherwise it will overwrite it in the ckpt.')
     parser.add_argument("--use-energy-guidance", default=False, action="store_true")
     parser.add_argument("--ckpt-energy-model", default=None, type=str)
     parser.add_argument('--guidance-scale', default=1.0e-4, type=float,
@@ -374,6 +391,7 @@ def get_args():
     parser.add_argument("--test-list", type=Path, default=None)
     parser.add_argument("--save-dir", type=Path)
     parser.add_argument("--fix-n-nodes", action="store_true")
+    parser.add_argument("--vary-n-nodes", action="store_true")
     parser.add_argument("--n-nodes-bias", default=0, type=int)
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--write-csv", action="store_true")
@@ -393,6 +411,7 @@ if __name__ == "__main__":
         save_dir=args.save_dir,
         skip_existing=args.skip_existing,
         fix_n_nodes=args.fix_n_nodes,
+        vary_n_nodes=args.vary_n_nodes,
         n_nodes_bias=args.n_nodes_bias,
         batch_size=args.batch_size,
         num_ligands_per_pocket=args.num_ligands_per_pocket,
@@ -405,4 +424,5 @@ if __name__ == "__main__":
         relax_mol=args.relax_mol,
         max_relax_iter=args.max_relax_iter,
         sanitize=args.sanitize,
+        dataset_root=args.dataset_root,
     )
