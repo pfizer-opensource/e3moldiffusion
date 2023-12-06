@@ -56,22 +56,23 @@ def compute_all_statistics(
     charges_dic,
     additional_feats: bool = True,
     include_force_norms: bool = False,
+    normalize=True
 ):
     num_nodes = node_counts(data_list)
-    atom_types = atom_type_counts(data_list, num_classes=len(atom_encoder))
+    atom_types = atom_type_counts(data_list, num_classes=len(atom_encoder), normalize=normalize)
     print(f"Atom types: {atom_types}")
-    bond_types = edge_counts(data_list)
+    bond_types = edge_counts(data_list, num_bond_types=5, normalize=normalize)
     print(f"Bond types: {bond_types}")
     charge_types = charge_counts(
-        data_list, num_classes=len(atom_encoder), charges_dic=charges_dic
+        data_list, num_classes=len(atom_encoder), charges_dic=charges_dic, normalize=normalize
     )
     print(f"Charge types: {charge_types}")
-    valency = valency_count(data_list, atom_encoder)
+    valency = valency_count(data_list, atom_encoder, normalize=normalize)
     print("Valency: ", valency)
 
-    bond_lengths = bond_lengths_counts(data_list)
+    bond_lengths = bond_lengths_counts(data_list, normalize=normalize)
     print("Bond lengths: ", bond_lengths)
-    angles = bond_angles(data_list, atom_encoder)
+    angles = bond_angles(data_list, atom_encoder, normalize=normalize)
     dihedrals = dihedral_angles(data_list, normalize=normalize)
 
     feats = {}
@@ -80,7 +81,7 @@ def compute_all_statistics(
         print(feats["force_norms"])
 
     if additional_feats:
-        feats.update(additional_feat_counts(data_list=data_list))
+        feats.update(additional_feat_counts(data_list=data_list, normalize=normalize))
 
     return Statistics(
         num_nodes=num_nodes,
@@ -109,7 +110,7 @@ def per_atom_force_norm(data_list):
 
 
 def additional_feat_counts(
-    data_list, keys: list = ["is_aromatic", "is_in_ring", "hybridization"]
+    data_list, keys: list = ["is_aromatic", "is_in_ring", "hybridization"], normalize=True
 ):
     print(f"Computing node counts for features = {str(keys)}")
     from experiments.data.utils import x_map
@@ -122,8 +123,9 @@ def additional_feat_counts(
             x = torch.nn.functional.one_hot(data.get(key), num_classes=num_classes)
             counts_list[i] += x.sum(dim=0).numpy()
 
-    for i in range(len(counts_list)):
-        counts_list[i] = counts_list[i] / counts_list[i].sum()
+    if normalize:
+        for i in range(len(counts_list)):
+            counts_list[i] = counts_list[i] / counts_list[i].sum()
     print("Done")
 
     results = dict()
@@ -145,19 +147,20 @@ def node_counts(data_list):
     return all_node_counts
 
 
-def atom_type_counts(data_list, num_classes):
+def atom_type_counts(data_list, num_classes, normalize=True):
     print("Computing node types distribution...")
     counts = np.zeros(num_classes)
     for data in data_list:
         x = torch.nn.functional.one_hot(data.x, num_classes=num_classes)
         counts += x.sum(dim=0).numpy()
 
-    counts = counts / counts.sum()
+    if normalize:
+        counts = counts / counts.sum()
     print("Done.")
     return counts
 
 
-def edge_counts(data_list, num_bond_types=5):
+def edge_counts(data_list, num_bond_types=5, normalize=True):
     print("Computing edge counts...")
     d = np.zeros(num_bond_types)
 
@@ -177,12 +180,12 @@ def edge_counts(data_list, num_bond_types=5):
         )
         d[0] += num_non_edges
         d[1:] += edge_types
-
-    d = d / d.sum()
+    if normalize:
+        d = d / d.sum()
     return d
 
 
-def charge_counts(data_list, num_classes, charges_dic):
+def charge_counts(data_list, num_classes, charges_dic, normalize=True):
     print("Computing charge counts...")
     d = np.zeros((num_classes, len(charges_dic)))
 
@@ -193,12 +196,13 @@ def charge_counts(data_list, num_classes, charges_dic):
 
     s = np.sum(d, axis=1, keepdims=True)
     s[s == 0] = 1
-    d = d / s
+    if normalize:
+        d = d / s
     print("Done.")
     return d
 
 
-def valency_count(data_list, atom_encoder):
+def valency_count(data_list, atom_encoder, normalize=True):
     atom_decoder = {v: k for k, v in atom_encoder.items()}
     print("Computing valency counts...")
     valencies = {atom_type: Counter() for atom_type in atom_encoder.keys()}
@@ -213,16 +217,17 @@ def valency_count(data_list, atom_encoder):
             valency = edges.sum(dim=0)
             valencies[atom_decoder[data.x[atom].item()]][valency.item()] += 1
 
-    # Normalizing the valency counts
-    for atom_type in valencies.keys():
-        s = sum(valencies[atom_type].values())
-        for valency, count in valencies[atom_type].items():
-            valencies[atom_type][valency] = count / s
+    if normalize:
+        # Normalizing the valency counts
+        for atom_type in valencies.keys():
+            s = sum(valencies[atom_type].values())
+            for valency, count in valencies[atom_type].items():
+                valencies[atom_type][valency] = count / s
     print("Done.")
     return valencies
 
 
-def bond_lengths_counts(data_list, num_bond_types=5):
+def bond_lengths_counts(data_list, num_bond_types=5, normalize=True):
     """Compute the bond lenghts separetely for each bond type."""
     print("Computing bond lengths...")
     all_bond_lenghts = {1: Counter(), 2: Counter(), 3: Counter(), 4: Counter()}
@@ -236,16 +241,17 @@ def bond_lengths_counts(data_list, num_bond_types=5):
             for d in distances_to_consider:
                 all_bond_lenghts[bond_type][d.item()] += 1
 
-    # Normalizing the bond lenghts
-    for bond_type in range(1, num_bond_types):
-        s = sum(all_bond_lenghts[bond_type].values())
-        for d, count in all_bond_lenghts[bond_type].items():
-            all_bond_lenghts[bond_type][d] = count / s
+    if normalize:
+        # Normalizing the bond lenghts
+        for bond_type in range(1, num_bond_types):
+            s = sum(all_bond_lenghts[bond_type].values())
+            for d, count in all_bond_lenghts[bond_type].items():
+                all_bond_lenghts[bond_type][d] = count / s
     print("Done.")
     return all_bond_lenghts
 
 
-def bond_angles(data_list, atom_encoder):
+def bond_angles(data_list, atom_encoder, normalize=True):
     atom_decoder = {v: k for k, v in atom_encoder.items()}
     print("Computing bond angles...")
     all_bond_angles = np.zeros((len(atom_encoder.keys()), 180 * 10 + 1))
@@ -272,10 +278,11 @@ def bond_angles(data_list, atom_encoder):
                     bin = int(torch.round(angle, decimals=1) * 10)
                     all_bond_angles[data.x[i].item(), bin] += 1
 
-    # Normalizing the angles
-    s = all_bond_angles.sum(axis=1, keepdims=True)
-    s[s == 0] = 1
-    all_bond_angles = all_bond_angles / s
+    if normalize:
+        # Normalizing the angles
+        s = all_bond_angles.sum(axis=1, keepdims=True)
+        s[s == 0] = 1
+        all_bond_angles = all_bond_angles / s
     print("Done.")
     return all_bond_angles
 
