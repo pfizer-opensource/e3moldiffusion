@@ -289,30 +289,36 @@ class BasicMolecularMetrics(object):
         }
 
         if calculate_statistics:
-            statistics_dict = self.compute_statistics(molecules, local_rank)
-            statistics_dict["connected_components"] = connected_components
+            if len(valid_smiles) <= 1000:
+                statistics_dict = self.compute_statistics(molecules, local_rank)
+                statistics_dict["connected_components"] = connected_components
+            else:
+                statistics_dict = {"connected_components": connected_components}
 
             self.number_samples = len(valid_smiles)
 
-            self.train_subset = (
-                get_random_subset(self.train_smiles, self.number_samples, seed=42)
-                if len(valid_smiles) <= len(self.train_smiles)
-                else self.train_smiles
-            )
-            similarity = self.get_bulk_similarity_with_train(valid_smiles)
-            diversity = self.get_bulk_diversity(valid_smiles)
-            if len(valid_smiles) > 0:
-                try:
-                    kl_score = self.get_kl_divergence(valid_smiles)
-                except:
-                    print("kl_score could not be calculated. Setting kl_score to -1")
+            if len(valid_smiles) <= 1000:
+                self.train_subset = (
+                    get_random_subset(self.train_smiles, self.number_samples, seed=42)
+                    if len(valid_smiles) <= len(self.train_smiles)
+                    else self.train_smiles
+                )
+                similarity = self.get_bulk_similarity_with_train(valid_smiles)
+                diversity = self.get_bulk_diversity(valid_smiles)
+                if len(valid_smiles) > 0:
+                    try:
+                        kl_score = self.get_kl_divergence(valid_smiles)
+                    except:
+                        print(
+                            "kl_score could not be calculated. Setting kl_score to -1"
+                        )
+                        kl_score = -1.0
+                else:
+                    print("No valid smiles have been generated. Setting kl_score to -1")
                     kl_score = -1.0
-            else:
-                print("No valid smiles have been generated. Setting kl_score to -1")
-                kl_score = -1.0
-            statistics_dict["bulk_similarity"] = similarity
-            statistics_dict["bulk_diversity"] = diversity
-            statistics_dict["kl_score"] = kl_score
+                statistics_dict["bulk_similarity"] = similarity
+                statistics_dict["bulk_diversity"] = diversity
+                statistics_dict["kl_score"] = kl_score
 
             if len(valid_smiles) > 0:
                 mols = get_mols_list(valid_smiles)

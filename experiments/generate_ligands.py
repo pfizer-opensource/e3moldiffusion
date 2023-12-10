@@ -62,11 +62,11 @@ def evaluate(
     hparams = dotdict(hparams)
 
     hparams.load_ckpt_from_pretrained = None
+    hparams.store_intermediate_coords = False
     hparams.load_ckpt = None
     hparams.gpus = 1
 
     print(f"Loading {hparams.dataset} Datamodule.")
-    dataset = "crossdocked"
     if hparams.use_adaptive_loader:
         print("Using adaptive dataloader")
         from experiments.data.ligand.ligand_dataset_adaptive import (
@@ -111,6 +111,7 @@ def evaluate(
         prop_norm=prop_norm,
         prop_dist=prop_dist,
         load_ckpt_from_pretrained=None,
+        store_intermediate_coords=False,
         load_ckpt=None,
         # energy_model_guidance=True if use_energy_guidance else False,
         # ckpt_energy_model=ckpt_energy_model,
@@ -241,7 +242,7 @@ def evaluate(
             smiles_train=train_smiles,
             local_rank=0,
             return_molecules=True,
-            return_stats_per_molecule=True,
+            return_stats_per_molecule=False,
             remove_hs=hparams.remove_hs,
             device="cpu",
         )

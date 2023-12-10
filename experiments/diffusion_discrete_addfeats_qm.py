@@ -138,6 +138,7 @@ class Trainer(pl.LightningModule):
                 bond_prediction=hparams["bond_prediction"],
                 property_prediction=hparams["property_prediction"],
                 coords_param=hparams["continuous_param"],
+                store_intermediate_coords=hparams["store_intermediate_coords"],
             )
 
         self.sde_pos = DiscreteDDPM(
@@ -508,6 +509,8 @@ class Trainer(pl.LightningModule):
             pred_data=pred_data,
             batch=batch.batch,
             bond_aggregation_index=out_dict["bond_aggregation_index"],
+            intermediate_coords=self.hparams.store_intermediate_coords
+            and self.training,
             weights=weights,
         )
 

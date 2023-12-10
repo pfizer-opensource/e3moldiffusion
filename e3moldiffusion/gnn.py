@@ -10,7 +10,11 @@ from e3moldiffusion.convs import (
     EQGATLocalConvFinal,
     TopoEdgeConvLayer,
 )
-from e3moldiffusion.modules import AdaptiveLayerNorm, LayerNorm, SE3Norm
+from e3moldiffusion.modules import (
+    AdaptiveLayerNorm,
+    LayerNorm,
+    SE3Norm,
+)
 
 
 class EQGATEnergyGNN(nn.Module):
@@ -81,6 +85,10 @@ class EQGATEdgeGNN(nn.Module):
         self,
         hn_dim: Tuple[int, int] = (64, 16),
         edge_dim: Optional[int] = 16,
+        num_atom_features: int = 16,
+        num_bond_types: int = 5,
+        coords_param: str = "data",
+        num_context_features: int = 0,
         cutoff_local: float = 5.0,
         num_layers: int = 5,
         latent_dim: Optional[int] = None,
@@ -93,6 +101,8 @@ class EQGATEdgeGNN(nn.Module):
         edge_mp: bool = False,
         p1: bool = True,
         use_pos_norm: bool = True,
+        property_prediction: bool = False,
+        store_intermediate_coords: bool = False,
         ligand_pocket_interaction: bool = False,
     ):
         super(EQGATEdgeGNN, self).__init__()
@@ -107,7 +117,9 @@ class EQGATEdgeGNN(nn.Module):
         self.recompute_radius_graph = recompute_radius_graph
         self.recompute_edge_attributes = recompute_edge_attributes
         self.p1 = p1
+        self.property_prediction = property_prediction
         self.ligand_pocket_interaction = ligand_pocket_interaction
+        self.store_intermediate_coords = store_intermediate_coords
 
         self.sdim, self.vdim = hn_dim
         self.edge_dim = edge_dim
@@ -209,6 +221,7 @@ class EQGATEdgeGNN(nn.Module):
         # edge_attr_xyz (distances, cosines, relative_positions, edge_features)
         # (E, E, E x 3, E x F)
 
+        pos_list = []
         for i in range(len(self.convs)):
             edge_index_in = edge_index_global
             edge_attr_in = edge_attr_global
@@ -235,10 +248,18 @@ class EQGATEdgeGNN(nn.Module):
                     sqrt=True,
                     batch=batch if self.ligand_pocket_interaction else None,
                 )
+            if self.store_intermediate_coords and self.training:
+                if i < len(self.convs) - 1:
+                    if pocket_mask is not None:
+                        pos_list.append(p[pocket_mask.squeeze(), :])
+                    else:
+                        pos_list.append(p)
+
+                    p = p.detach()
 
             e = edge_attr_global[-1]
 
-        out = {"s": s, "v": v, "e": e, "p": p}
+        out = {"s": s, "v": v, "e": e, "p": p, "p_list": pos_list}
 
         return out
 
