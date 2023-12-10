@@ -916,6 +916,7 @@ class Trainer(pl.LightningModule):
         sanitize=True,
         every_k_step=1,
         fix_n_nodes=False,
+        vary_n_nodes=None,
         n_nodes_bias=0,
         build_obabel_mol=False,
         save_dir=None,

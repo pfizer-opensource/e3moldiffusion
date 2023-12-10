@@ -94,11 +94,12 @@ def calculate_qvina2_score(
             cx, cy, cz = mol.GetConformer().GetPositions().mean(0)
 
             # run QuickVina 2
-            try:
-                os.stat("/sharedhome/cremej01/workspace/e3moldiffusion/qvina2.1")
-                PATH = "/sharedhome/cremej01/workspace/e3moldiffusion/qvina2.1"
-            except PermissionError:
-                PATH = "/hpfs/userws/let55/projects/qvina2.1"
+            PATH = "/hpfs/userws/let55/projects/qvina2.1"
+            #try:
+            #    os.stat("/sharedhome/cremej01/workspace/e3moldiffusion/qvina2.1")
+            #    PATH = "/sharedhome/cremej01/workspace/e3moldiffusion/qvina2.1"
+            #except PermissionError or FileNotFoundError:
+            #    PATH = "/hpfs/userws/let55/projects/qvina2.1"
 
             out = os.popen(
                 f"/{PATH} --receptor {receptor_pdbqt_file} "

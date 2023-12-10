@@ -41,6 +41,7 @@ def add_arguments(parser):
             "pcqm4mv2",
             "pepconf",
             "crossdocked",
+            "enamine"
         ],
     )
     parser.add_argument(

@@ -23,6 +23,7 @@ full_atom_encoder = {
     "I": 13,
     "Hg": 14,
     "Bi": 15,
+    # "C": 16 #placeholder absorbing
 }
 
 

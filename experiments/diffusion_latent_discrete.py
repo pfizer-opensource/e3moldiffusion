@@ -49,6 +49,7 @@ class Trainer(pl.LightningModule):
         smiles_list: list,
         prop_dist=None,
         prop_norm=None,
+        histogram=None,
     ):
         super().__init__()
         self.save_hyperparameters(hparams)
@@ -317,9 +318,22 @@ class Trainer(pl.LightningModule):
             device=batch.x.device,
         )
         
-        if self.hparams.use_loss_weighting:
-            weights = torch.clip(torch.exp(-t / 200), min=0.1).to(self.device)
-        else:
+        if self.hparams.loss_weighting == "snr_s_t":
+            weights = self.sde_atom_charge.snr_s_t_weighting(
+                s=t - 1, t=t, device=self.device, clamp_min=0.05, clamp_max=1.5
+            )
+        elif self.hparams.loss_weighting == "snr_t":
+            weights = self.sde_atom_charge.snr_t_weighting(
+                t=t,
+                device=self.device,
+                clamp_min=0.05,
+                clamp_max=1.5,
+            )
+        elif self.hparams.loss_weighting == "exp_t":
+            weights = self.sde_atom_charge.exp_t_weighting(t=t, device=self.device)
+        elif self.hparams.loss_weighting == "exp_t_half":
+            weights = self.sde_atom_charge.exp_t_half_weighting(t=t, device=self.device)
+        elif self.hparams.loss_weighting == "uniform":
             weights = None
             
         out_dict = self(batch=batch, t=t)
@@ -725,12 +739,14 @@ class Trainer(pl.LightningModule):
             validity_dict,
             statistics_dict,
             all_generated_smiles,
+            stable_molecules,
+            valid_molecules,
         ) = analyze_stability_for_molecules(
             molecule_list=molecule_list,
             dataset_info=dataset_info,
             smiles_train=self.smiles_list,
             local_rank=self.local_rank,
-            return_smiles=return_smiles,
+            return_molecules=return_smiles,
             device=self.device,
         )
 

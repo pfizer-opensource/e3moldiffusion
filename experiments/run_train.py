@@ -136,14 +136,15 @@ if __name__ == "__main__":
         from experiments.data.geom.geom_dataset_adaptive_qm import (
             GeomQMDataModule as DataModule,
         )
+    elif hparams.dataset == 'enamine':
+        from experiments.data.enamine.enamine_dataset import EnamineDataModule as DataModule
     else:
         raise ValueError(f"Unknown dataset: {hparams.dataset}")
 
     datamodule = DataModule(hparams)
 
     from experiments.data.data_info import GeneralInfos as DataInfos
-
-    if dataset == "aqm_qm7x":
+    if hparams.dataset == "aqm_qm7x":
         from experiments.data.aqm.aqm_dataset_nonadaptive import (
             AQMDataModule as DataModule,
         )
@@ -157,7 +158,7 @@ if __name__ == "__main__":
     train_smiles = (
         (
             list(datamodule.train_dataset.smiles)
-            if hparams.dataset != "pubchem"
+            if hparams.dataset not in ["pubchem", 'enamine']
             else None
         )
         if not hparams.select_train_subset
@@ -194,12 +195,12 @@ if __name__ == "__main__":
             print("Using discrete diffusion")
             if hparams.diffusion_pretraining:
                 if hparams.additional_feats:
-                    print("Starting pre-training on PubChem3D with additional features")
+                    print(f"Starting pre-training on {hparams.dataset} with additional features")
                     from experiments.diffusion_pretrain_discrete_addfeats import (
                         Trainer,
                     )
                 else:
-                    print("Starting pre-training on PubChem3D")
+                    print(f"Starting pre-training on {hparams.dataset}")
                     from experiments.diffusion_pretrain_discrete import Trainer
             elif (
                 dataset == "crossdocked"
