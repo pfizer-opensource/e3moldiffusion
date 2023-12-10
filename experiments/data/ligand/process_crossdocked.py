@@ -11,7 +11,6 @@ import torch
 from Bio.PDB import PDBParser
 from Bio.PDB.Polypeptide import is_aa
 from Bio.PDB.Polypeptide import protein_letters_3to1 as three_to_one
-
 from rdkit import Chem
 from scipy.ndimage import gaussian_filter
 from tqdm import tqdm
@@ -92,7 +91,7 @@ def process_ligand_and_pocket(pdbfile, sdffile, dist_cutoff, ca_only, no_H):
             "pocket_one_hot": pocket_one_hot,
             "pocket_ids": pocket_ids,
         }
-    else:        
+    else:
         # c-alphas and residue idendity
         pocket_one_hot = []
         ca_mask = []
@@ -104,21 +103,21 @@ def process_ligand_and_pocket(pdbfile, sdffile, dist_cutoff, ca_only, no_H):
         for res in pocket_residues:
             for atom in res.get_atoms():
                 if atom.name == "CA":
-                        pocket_one_hot.append(
-                            np.eye(
-                                1,
-                                len(amino_acid_dict),
-                                amino_acid_dict[three_to_one.get(res.get_resname())],
-                            ).squeeze()
-                        )
-                        m = True
+                    pocket_one_hot.append(
+                        np.eye(
+                            1,
+                            len(amino_acid_dict),
+                            amino_acid_dict[three_to_one.get(res.get_resname())],
+                        ).squeeze()
+                    )
+                    m = True
                 else:
                     m = False
                 ca_mask.append(m)
                 full_atoms.append(atom.element)
                 full_coords.append(atom.coord)
-                
-        pocket_one_hot = np.stack(pocket_one_hot,axis=0)
+
+        pocket_one_hot = np.stack(pocket_one_hot, axis=0)
         full_atoms = np.stack(full_atoms, axis=0)
         full_coords = np.stack(full_coords, axis=0)
         ca_mask = np.array(ca_mask, dtype=bool)
@@ -130,14 +129,14 @@ def process_ligand_and_pocket(pdbfile, sdffile, dist_cutoff, ca_only, no_H):
                 full_atoms = full_atoms[mask]
                 full_coords = full_coords[mask]
                 ca_mask = ca_mask[mask]
-        assert (sum(ca_mask) == pocket_one_hot.shape[0])
+        assert sum(ca_mask) == pocket_one_hot.shape[0]
         assert len(full_atoms) == len(full_coords)
         pocket_data = {
             "pocket_coords": full_coords,
             "pocket_ids": pocket_ids,
             "pocket_atoms": full_atoms,
             "pocket_one_hot": pocket_one_hot,
-            "pocket_ca_mask": ca_mask
+            "pocket_ca_mask": ca_mask,
         }
     return ligand_data, pocket_data
 
@@ -293,7 +292,7 @@ def saveall(
         pocket_atom=pocket_atom,
         pocket_mask=pocket_mask,
         pocket_one_hot=pocket_one_hot,
-        pocket_ca_mask=pocket_ca_mask
+        pocket_ca_mask=pocket_ca_mask,
     )
     return True
 
@@ -410,7 +409,7 @@ if __name__ == "__main__":
             if not args.ca_only:
                 pocket_one_hot_resids.append(pocket_data["pocket_one_hot"])
                 pocket_ca_mask.append(pocket_data["pocket_ca_mask"])
-                
+
             count_protein.append(pocket_data["pocket_coords"].shape[0])
             count_ligand.append(ligand_data["lig_coords"].shape[0])
             count_total.append(
@@ -441,7 +440,7 @@ if __name__ == "__main__":
         pocket_coords = np.concatenate(pocket_coords, axis=0)
         pocket_atom = np.concatenate(pocket_atom, axis=0)
         pocket_mask = np.concatenate(pocket_mask, axis=0)
-        
+
         if not args.ca_only:
             pocket_one_hot_resids = np.concatenate(pocket_one_hot_resids, axis=0)
             pocket_ca_mask = np.concatenate(pocket_ca_mask, axis=0)
@@ -460,7 +459,7 @@ if __name__ == "__main__":
             pocket_atom,
             pocket_mask,
             pocket_one_hot=pocket_one_hot_resids,
-            pocket_ca_mask=pocket_ca_mask
+            pocket_ca_mask=pocket_ca_mask,
         )
 
         n_samples_after[split] = len(pdb_and_mol_ids)

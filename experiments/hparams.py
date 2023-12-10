@@ -157,6 +157,9 @@ def add_arguments(parser):
     parser.add_argument(
         "--ligand-pocket-interaction", default=False, action="store_true"
     )
+    parser.add_argument(
+        "--store-intermediate-coords", default=False, action="store_true"
+    )
     parser.add_argument("--diffusion-pretraining", default=False, action="store_true")
     parser.add_argument(
         "--continuous-param", default="data", type=str, choices=["data", "noise"]

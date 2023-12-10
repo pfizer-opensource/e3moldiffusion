@@ -1,15 +1,26 @@
 import os
 import pickle
+
+import experiments.data.utils as dataset_utils
 import lmdb
-from torch.utils.data import Dataset
+import numpy as np
 import torch
-from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader
 from experiments.data.abstract_dataset import (
     AbstractDataModuleLigand,
 )
-from experiments.data.utils import load_pickle, make_splits
-from torch.utils.data import Subset
+from experiments.data.crossdocked.utils import (
+    PDBProtein,
+    parse_sdf_file,
+    torchify_dict,
+)
+from experiments.data.metrics import compute_all_statistics
+from experiments.data.utils import (
+    load_pickle,
+    save_pickle,
+)
+from torch.utils.data import Dataset, Subset
+from torch_geometric.data import Data
+from torch_geometric.loader import DataLoader
 
 FOLLOW_BATCH = (
     "protein_element",
@@ -17,12 +28,26 @@ FOLLOW_BATCH = (
     "ligand_bond_type",
 )
 from tqdm.auto import tqdm
-from experiments.data.crossdocked.utils import (
-    PDBProtein,
-    parse_sdf_file,
-    torchify_dict,
-    get_batch_connectivity_matrix,
-)
+
+full_atom_encoder = {
+    "H": 0,
+    "B": 1,
+    "C": 2,
+    "N": 3,
+    "O": 4,
+    "F": 5,
+    "Al": 6,
+    "Si": 7,
+    "P": 8,
+    "S": 9,
+    "Cl": 10,
+    "As": 11,
+    "Br": 12,
+    "I": 13,
+    "Hg": 14,
+    "Bi": 15,
+}
+atom_decoder = {v: k for k, v in full_atom_encoder.items()}
 
 
 class PocketLigandPairDataset(Dataset):
@@ -42,6 +67,20 @@ class PocketLigandPairDataset(Dataset):
         if not os.path.exists(self.processed_path):
             print(f"{self.processed_path} does not exist, begin processing data")
             self._process()
+
+        self.statistics = dataset_utils.Statistics(
+            num_nodes=load_pickle(self.processed_paths[1]),
+            atom_types=torch.from_numpy(np.load(self.processed_paths[2])),
+            bond_types=torch.from_numpy(np.load(self.processed_paths[3])),
+            charge_types=torch.from_numpy(np.load(self.processed_paths[4])),
+            valencies=load_pickle(self.processed_paths[5]),
+            bond_lengths=load_pickle(self.processed_paths[6]),
+            bond_angles=torch.from_numpy(np.load(self.processed_paths[7])),
+            is_aromatic=torch.from_numpy(np.load(self.processed_paths[8])).float(),
+            is_in_ring=torch.from_numpy(np.load(self.processed_paths[9])).float(),
+            hybridization=torch.from_numpy(np.load(self.processed_paths[10])).float(),
+        )
+        self.smiles = load_pickle(self.processed_paths[11])
 
     def _connect_db(self):
         """
@@ -194,21 +233,13 @@ class PocketLigandDataset(AbstractDataModuleLigand):
 
         self.train_smiles = self.dataset.smiles
 
-        self.idx_train, self.idx_val, self.idx_test = make_splits(
-            len(self.dataset),
-            train_size=hparams.train_size,
-            val_size=hparams.val_size,
-            test_size=hparams.test_size,
-            seed=hparams.seed,
-            filename=os.path.join(self.hparams["save_dir"], "splits.npz"),
-            splits=None,
-        )
-        print(
-            f"train {len(self.idx_train)}, val {len(self.idx_val)}, test {len(self.idx_test)}"
-        )
-        train_dataset = Subset(self.dataset, self.idx_train)
-        val_dataset = Subset(self.dataset, self.idx_val)
-        test_dataset = Subset(self.dataset, self.idx_test)
+        split_path = os.path.join(root_path, "crossdocked_pocket10_pose_split.pt")
+        split = torch.load(split_path)
+        subsets = {k: Subset(self.dataset, indices=v) for k, v in split.items()}
+
+        train_dataset = subsets["train"]
+        val_dataset = subsets["test"]
+        test_dataset = subsets["val"]
 
         self.statistics = {
             "train": train_dataset.statistics,
@@ -216,6 +247,26 @@ class PocketLigandDataset(AbstractDataModuleLigand):
             "test": test_dataset.statistics,
         }
         super().__init__(hparams, train_dataset, val_dataset, test_dataset)
+
+    def compute_statistics(self, data):
+        statistics = compute_all_statistics(
+            data,
+            full_atom_encoder,
+            charges_dic={-2: 0, -1: 1, 0: 2, 1: 3, 2: 4, 3: 5},
+            additional_feats=True,
+        )
+        save_pickle(statistics.num_nodes, self.processed_paths[1])
+        np.save(self.processed_paths[2], statistics.atom_types)
+        np.save(self.processed_paths[3], statistics.bond_types)
+        np.save(self.processed_paths[4], statistics.charge_types)
+        save_pickle(statistics.valencies, self.processed_paths[5])
+        save_pickle(statistics.bond_lengths, self.processed_paths[6])
+        np.save(self.processed_paths[7], statistics.bond_angles)
+        np.save(self.processed_paths[8], statistics.is_aromatic)
+        np.save(self.processed_paths[9], statistics.is_in_ring)
+        np.save(self.processed_paths[10], statistics.hybridization)
+
+        # save_pickle(set(all_smiles), self.processed_paths[11])
 
     def _train_dataloader(self, shuffle=True):
         dataloader = DataLoader(

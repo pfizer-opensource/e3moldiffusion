@@ -154,6 +154,7 @@ class Trainer(pl.LightningModule):
                 property_prediction=hparams["property_prediction"],
                 coords_param=hparams["continuous_param"],
                 use_pos_norm=hparams["use_pos_norm"],
+                store_intermediate_coords=hparams["store_intermediate_coords"],
             )
 
         self.sde_pos = DiscreteDDPM(
@@ -560,6 +561,8 @@ class Trainer(pl.LightningModule):
             pred_data=pred_data,
             batch=batch.batch,
             bond_aggregation_index=out_dict["bond_aggregation_index"],
+            intermediate_coords=self.hparams.store_intermediate_coords
+            and self.training,
             weights=weights,
         )
 
@@ -1006,8 +1009,8 @@ class Trainer(pl.LightningModule):
         if not fix_n_nodes:
             if vary_n_nodes:
                 num_nodes_lig += torch.randint(
-                    low=0, high=n_nodes_bias, size=num_nodes_lig.size
-                )
+                    low=0, high=n_nodes_bias, size=num_nodes_lig.size()
+                ).to(self.device)
             else:
                 num_nodes_lig += n_nodes_bias
 

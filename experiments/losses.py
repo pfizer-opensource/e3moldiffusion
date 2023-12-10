@@ -36,7 +36,10 @@ class DiffusionLoss(nn.Module):
         pred_data: Dict,
         batch: Tensor,
         bond_aggregation_index: Tensor,
+        intermediate_coords: bool = False,
         weights: Optional[Tensor] = None,
+        aux_weight: float = 0.5,
+        l1_loss: bool = False,
     ) -> Dict:
         batch_size = len(batch.unique())
         charges_loss = None
@@ -47,16 +50,39 @@ class DiffusionLoss(nn.Module):
         if weights is not None:
             assert len(weights) == batch_size
 
-            regr_loss = F.mse_loss(
-                pred_data[self.regression_key],
-                true_data[self.regression_key],
-                reduction="none",
-            ).mean(-1)
-            regr_loss = scatter_mean(regr_loss, index=batch, dim=0, dim_size=batch_size)
-            regr_loss, m = self.loss_non_nans(regr_loss, self.regression_key)
+            if intermediate_coords:
+                pos_true = true_data[self.regression_key]
+                pos_list = pred_data[self.regression_key]
+                pos_losses = (
+                    torch.nn.functional.l1_loss(
+                        pos_true[None, :, :].expand(len(pos_list), -1, -1),
+                        pos_list,
+                        reduction="none",
+                    )
+                    if l1_loss
+                    else torch.square(pos_true - pos_list)
+                )
+                pos_losses = scatter_mean(pos_losses.mean(-1), batch, -1)
+                aux_loss = pos_losses[1:].mean(0)
+                pos_loss = pos_losses[-1]
+                regr_loss = (1 - aux_weight) * pos_loss
+                regr_loss = regr_loss + aux_weight * aux_loss
+                regr_loss, m = self.loss_non_nans(regr_loss, self.regression_key)
+                regr_loss *= weights[~m]
+                regr_loss = torch.sum(regr_loss, dim=0)
+            else:
+                regr_loss = F.mse_loss(
+                    pred_data[self.regression_key],
+                    true_data[self.regression_key],
+                    reduction="none",
+                ).mean(-1)
+                regr_loss = scatter_mean(
+                    regr_loss, index=batch, dim=0, dim_size=batch_size
+                )
+                regr_loss, m = self.loss_non_nans(regr_loss, self.regression_key)
 
-            regr_loss *= weights[~m]
-            regr_loss = torch.sum(regr_loss, dim=0)
+                regr_loss *= weights[~m]
+                regr_loss = torch.sum(regr_loss, dim=0)
 
             if "mulliken" in self.modalities:
                 mulliken_loss = F.mse_loss(
