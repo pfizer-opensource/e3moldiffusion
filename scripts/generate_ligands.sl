@@ -1,6 +1,6 @@
 #!/bin/bash -l
-#SBATCH -J cut8_addfeats_ft
-#SBATCH --time=03-00:00:00
+#SBATCH -J addfeats_c5_b7
+#SBATCH --time=02-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
@@ -10,26 +10,35 @@
 #SBATCH --output=/scratch1/e3moldiffusion/slurm_logs/out_%j.out
 #SBATCH --error=/scratch1/e3moldiffusion/slurm_logs/err_%j.err
 
+echo "Job ID: $SLURM_JOB_ID"
+
 cd /sharedhome/cremej01/workspace/e3moldiffusion
 conda activate /sharedhome/cremej01/workspace/mambaforge/envs/e3moldiffusion
-echo "runnning experiment"
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-mkdir /scratch1/e3moldiffusion/logs/cdk2/docking/addfeats
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_addfeats_cutoff5_bonds7"
+output_dir="$main_dir/evaluation/docking/nodes_bias_large"
+result_file="$output_dir/finished"
+
+mkdir "$main_dir/evaluation"
+mkdir "$main_dir/evaluation/docking"
+mkdir "$output_dir"
 
 python experiments/generate_ligands.py \
-    --model-path /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff5_bonds7_addfeats/best_valid.ckpt \
-    --save-dir /scratch1/e3moldiffusion/logs/cdk2 \ ##--save-dir /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff8_bonds7_addfeats/evaluation/docking/addfeats_nodes_fix \
-    --test-dir /scratch1/cremej01/data/cdk2 \ #--test-dir /scratch1/cremej01/data/crossdocked_noH_cutoff8/test \
+    --model-path "$main_dir/best_valid.ckpt" \
+    --save-dir "$output_dir" \
+    --test-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5/test \
+    --dataset-root /scratch1/cremej01/data/crossdocked_noH_cutoff5 \
     --skip-existing \
-    --num-ligands-per-pocket 10000 \
-    --batch-size 100 \
-    --dataset-root /scratch1/cremej01/data/crossdocked_noH_cutoff8 \
+    --num-ligands-per-pocket 100 \
+    --batch-size 50 \
+    --n-nodes-bias 10
     #--fix-n-nodes
     #--vary-n-nodes \
-    --n-nodes-bias 5 
     #--build-obabel-mol \
     #--sanitize 
     #--relax-mol \
     #--max-relax-iter 500 
+
+touch result_file

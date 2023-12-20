@@ -129,6 +129,9 @@ def process_ligand_and_pocket(pdbfile, sdffile, dist_cutoff, ca_only, no_H):
                 full_atoms = full_atoms[mask]
                 full_coords = full_coords[mask]
                 ca_mask = ca_mask[mask]
+        import pdb
+
+        pdb.set_trace()
         assert sum(ca_mask) == pocket_one_hot.shape[0]
         assert len(full_atoms) == len(full_coords)
         pocket_data = {

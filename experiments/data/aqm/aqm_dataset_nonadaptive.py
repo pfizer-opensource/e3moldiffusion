@@ -1,28 +1,18 @@
-from rdkit import RDLogger
-from tqdm import tqdm
-import numpy as np
-from typing import Optional
-import torch
 from os.path import join
-from torch_geometric.data import InMemoryDataset, DataLoader
+
 import experiments.data.utils as dataset_utils
+import numpy as np
+import torch
+from experiments.data.abstract_dataset import AbstractDataModule
+from experiments.data.metrics import compute_all_statistics
 from experiments.data.utils import (
     load_pickle,
     save_pickle,
+    train_subset,
 )
-from experiments.data.abstract_dataset import AbstractDataModule
-from experiments.data.utils import train_subset
+from rdkit import RDLogger
 from torch.utils.data import Subset
-
-import os
-from experiments.data.metrics import compute_all_statistics
-from pytorch_lightning import LightningDataModule
-
-import tempfile
-from rdkit import Chem
-from torch_geometric.data.collate import collate
-from torch_geometric.data.separate import separate
-from torch_geometric.data import Data, Dataset
+from torch_geometric.data import DataLoader, InMemoryDataset
 from tqdm import tqdm
 
 full_atom_encoder = {
@@ -96,6 +86,10 @@ class AQMDataset(InMemoryDataset):
 
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
+        self.post_processing()
+
+    def post_processing(self):
+        """load statistics and smiles"""
         self.statistics = dataset_utils.Statistics(
             num_nodes=load_pickle(self.processed_paths[1]),
             atom_types=torch.from_numpy(np.load(self.processed_paths[2])),
@@ -104,11 +98,13 @@ class AQMDataset(InMemoryDataset):
             valencies=load_pickle(self.processed_paths[5]),
             bond_lengths=load_pickle(self.processed_paths[6]),
             bond_angles=torch.from_numpy(np.load(self.processed_paths[7])),
+            dihedrals=torch.from_numpy(np.load(self.processed_paths[8])).float(),
             is_aromatic=torch.from_numpy(np.load(self.processed_paths[9])).float(),
             is_in_ring=torch.from_numpy(np.load(self.processed_paths[10])).float(),
             hybridization=torch.from_numpy(np.load(self.processed_paths[11])).float(),
+            force_norms=torch.from_numpy(np.load(self.processed_paths[13])).float(),
         )
-        self.smiles = load_pickle(self.processed_paths[8])
+        self.smiles = load_pickle(self.processed_paths[12])
 
     @property
     def raw_file_names(self):
@@ -122,50 +118,57 @@ class AQMDataset(InMemoryDataset):
     @property
     def processed_file_names(self):
         h = "noh" if self.remove_h else "h"
+        confs = "all_confs"
         if self.split == "train":
             return [
-                f"train_{h}.pt",
-                f"train_n_{h}.pickle",
-                f"train_atom_types_{h}.npy",
-                f"train_bond_types_{h}.npy",
-                f"train_charges_{h}.npy",
-                f"train_valency_{h}.pickle",
-                f"train_bond_lengths_{h}.pickle",
-                f"train_angles_{h}.npy",
-                "train_smiles.pickle",
-                f"train_is_aromatic_{h}.npy",
-                f"train_is_in_ring_{h}.npy",
-                f"train_hybridization_{h}.npy",
+                f"train_{h}_{confs}.pt",
+                f"train_n_{h}_{confs}.pickle",
+                f"train_atom_types_{h}_{confs}.npy",
+                f"train_bond_types_{h}_{confs}.npy",
+                f"train_charges_{h}_{confs}.npy",
+                f"train_valency_{h}_{confs}.pickle",
+                f"train_bond_lengths_{h}_{confs}.pickle",
+                f"train_angles_{h}_{confs}.npy",
+                f"train_dihedrals_{h}_{confs}.npy",
+                f"train_is_aromatic_{h}_{confs}.npy",
+                f"train_is_in_ring_{h}_{confs}.npy",
+                f"train_hybridization_{h}_{confs}.npy",
+                f"train_smiles_{confs}.pickle",
+                f"train_fnorms_{confs}.npy",
             ]
         elif self.split == "val":
             return [
-                f"val_{h}.pt",
-                f"val_n_{h}.pickle",
-                f"val_atom_types_{h}.npy",
-                f"val_bond_types_{h}.npy",
-                f"val_charges_{h}.npy",
-                f"val_valency_{h}.pickle",
-                f"val_bond_lengths_{h}.pickle",
-                f"val_angles_{h}.npy",
-                "val_smiles.pickle",
-                f"val_is_aromatic_{h}.npy",
-                f"val_is_in_ring_{h}.npy",
-                f"val_hybridization_{h}.npy",
+                f"val_{h}_{confs}.pt",
+                f"val_n_{h}_{confs}.pickle",
+                f"val_atom_types_{h}_{confs}.npy",
+                f"val_bond_types_{h}_{confs}.npy",
+                f"val_charges_{h}_{confs}.npy",
+                f"val_valency_{h}_{confs}.pickle",
+                f"val_bond_lengths_{h}_{confs}.pickle",
+                f"val_angles_{h}_{confs}.npy",
+                f"val_dihedrals_{h}_{confs}.npy",
+                f"val_is_aromatic_{h}_{confs}.npy",
+                f"val_is_in_ring_{h}_{confs}.npy",
+                f"val_hybridization_{h}_{confs}.npy",
+                f"val_smiles_{confs}.pickle",
+                f"val_fnorms_{confs}.npy",
             ]
         else:
             return [
-                f"test_{h}.pt",
-                f"test_n_{h}.pickle",
-                f"test_atom_types_{h}.npy",
-                f"test_bond_types_{h}.npy",
-                f"test_charges_{h}.npy",
-                f"test_valency_{h}.pickle",
-                f"test_bond_lengths_{h}.pickle",
-                f"test_angles_{h}.npy",
-                "test_smiles.pickle",
-                f"test_is_aromatic_{h}.npy",
-                f"test_is_in_ring_{h}.npy",
-                f"test_hybridization_{h}.npy",
+                f"test_{h}_{confs}.pt",
+                f"test_n_{h}_{confs}.pickle",
+                f"test_atom_types_{h}_{confs}.npy",
+                f"test_bond_types_{h}_{confs}.npy",
+                f"test_charges_{h}_{confs}.npy",
+                f"test_valency_{h}_{confs}.pickle",
+                f"test_bond_lengths_{h}_{confs}.pickle",
+                f"test_angles_{h}_{confs}.npy",
+                f"test_dihedrals_{h}_{confs}.npy",
+                f"test_is_aromatic_{h}_{confs}.npy",
+                f"test_is_in_ring_{h}_{confs}.npy",
+                f"test_hybridization_{h}_{confs}.npy",
+                f"test_smiles_{confs}.pickle",
+                f"test_fnorms_{confs}.npy",
             ]
 
     def download(self):
@@ -192,6 +195,7 @@ class AQMDataset(InMemoryDataset):
             self.atom_encoder,
             charges_dic={-2: 0, -1: 1, 0: 2, 1: 3, 2: 4, 3: 5},
             additional_feats=True,
+            include_force_norms=True,
         )
         save_pickle(statistics.num_nodes, self.processed_paths[1])
         np.save(self.processed_paths[2], statistics.atom_types)
@@ -200,11 +204,12 @@ class AQMDataset(InMemoryDataset):
         save_pickle(statistics.valencies, self.processed_paths[5])
         save_pickle(statistics.bond_lengths, self.processed_paths[6])
         np.save(self.processed_paths[7], statistics.bond_angles)
-        save_pickle(set(all_smiles), self.processed_paths[8])
-
+        np.save(self.processed_paths[8], statistics.dihedrals)
         np.save(self.processed_paths[9], statistics.is_aromatic)
         np.save(self.processed_paths[10], statistics.is_in_ring)
         np.save(self.processed_paths[11], statistics.hybridization)
+        save_pickle(set(all_smiles), self.processed_paths[12])
+        np.save(self.processed_paths[13], statistics.force_norms)
 
 
 class AQMDataModule(AbstractDataModule):

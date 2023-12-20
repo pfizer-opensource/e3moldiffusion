@@ -1051,6 +1051,37 @@ def calculate_internal_pairwise_similarities(
     return similarities
 
 
+def calculate_bulk_diversity(
+    mol_list: Collection[str],
+    rdkit_fp=True,
+):
+    """
+    Computes the pairwise diversity of the provided list of smiles against itself.
+
+    Returns:
+        Mean of pairwise diversity.
+    """
+    if len(mol_list) > 10000:
+        logger.warning(
+            f"Calculating internal similarity on large set of "
+            f"RDKit molecules ({len(mol_list)})"
+        )
+
+    if rdkit_fp:
+        fps = get_rdkit_fingerprints(mol_list)
+    else:
+        fps = get_fingerprints(mol_list)
+    nfps = len(fps)
+
+    diversities = np.zeros(nfps - 1)
+
+    for i in range(1, nfps):
+        sims = DataStructs.BulkTanimotoSimilarity(fps[i], fps[:i])
+        diversities[i - 1] = np.mean([1 - sim for sim in sims])
+
+    return np.mean(diversities)
+
+
 def get_fingerprints_from_smileslist(smiles_list):
     """
     Converts the provided smiles into ECFP4 bitvectors of length 4096.
@@ -1076,6 +1107,15 @@ def get_fingerprints(mols: Iterable[Chem.Mol], radius=2, length=4096):
     Returns: a list of fingerprints
     """
     return [AllChem.GetMorganFingerprintAsBitVect(m, radius, length) for m in mols]
+
+
+def get_rdkit_fingerprints(mols: Iterable[Chem.Mol]):
+    """
+    Converts molecules to RDKit bitvectors.
+
+    Returns: a list of fingerprints
+    """
+    return [Chem.RDKFingerprint(m) for m in mols]
 
 
 def get_mols(smiles_list: Iterable[str]) -> Iterable[Chem.Mol]:

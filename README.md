@@ -9,17 +9,12 @@ mamba env create -f environment.yml
 ```
 
 ## Experiments
-Python scripts for experiments on the GEOM database are located in `geom/`.
-Currently only experiments on GEOM-Drugs database are performed.
 
-## Useful resources
-- [Denoising Diffusion Probabilistic Models (2020)](https://arxiv.org/abs/2006.11239)
- - [Score-Based Generative Modeling through Stochastic Differential Equations (2021)](https://arxiv.org/abs/2011.13456)
- - [GeoDiff: a Geometric Diffusion Model for Molecular Conformation Generation (2022)](https://arxiv.org/abs/2203.02923)
- - [Equivariant Diffusion for Molecule Generation in 3D (2022)](https://arxiv.org/abs/2203.17003)
+# AQM
+python experiments/data/aqm/split_data.py --file-path /path/to/hdf5 --out-path /path/to/processed/data
 
-## To Do's:
-1) Only 3D coordinates learning on GEOM-Drugs using variance-preserving SDE.
-2) Implement Evaluation functions to track during training instead of only the denoising loss.
-3) Try out energy-preserving score-model so the final (energy-based) model can be also be used to compare configurations.
+For property-conditioned training, specify context_mapping, properties_list and num_context_features in the configs/diffusion_aqm.yaml file (if you choose two properties like [eMBD, mPOL] num_context_features must be set to 2). 
+Important: properties in the properties_list must be ordered according to the order in the dataset (check global variable "mol_properties" in experiments/data/aqm/aqm_dataset_nonadaptive.py)
+
+python experiments/run_train.py --conf configs/diffusion_aqm.yaml --save-dir /your/save/dir --dataset aqm --dataset-root same/as/out-path/from/split_data --gpus 4 --batch-size 32
 

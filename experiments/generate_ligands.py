@@ -95,8 +95,9 @@ def evaluate(
 
     if hparams.additional_feats:
         from experiments.diffusion_discrete_pocket_addfeats import Trainer
+    elif hparams.latent_dim is None:
+        from experiments.diffusion_discrete_pocket import Trainer
     else:
-        # from experiments.diffusion_discrete_pocket import Trainer
         from experiments.diffusion_discrete_latent_pocket import Trainer
 
     torch.cuda.empty_cache()
@@ -183,6 +184,7 @@ def evaluate(
 
         all_molecules = 0
         tmp_molecules = []
+        valid_and_unique_molecules = []
 
         pocket_data = prepare_pocket(
             residues,
@@ -193,7 +195,7 @@ def evaluate(
         )
 
         start = datetime.now()
-        while len(tmp_molecules) < num_ligands_per_pocket:
+        while len(valid_and_unique_molecules) < num_ligands_per_pocket:
             with torch.no_grad():
                 molecules = model.generate_ligands(
                     pocket_data,
@@ -211,27 +213,27 @@ def evaluate(
                     sanitize=sanitize,
                 )
             all_molecules += len(molecules)
+            tmp_molecules.extend(molecules)
             valid_molecules = analyze_stability_for_molecules(
-                molecule_list=molecules,
+                molecule_list=tmp_molecules,
                 dataset_info=dataset_info,
                 smiles_train=train_smiles,
                 local_rank=0,
                 return_molecules=True,
                 calculate_statistics=False,
+                calculate_distribution_statistics=False,
                 remove_hs=hparams.remove_hs,
                 device="cpu",
             )
-            tmp_molecules.extend(valid_molecules)
+            valid_and_unique_molecules = valid_molecules.copy()
+            tmp_molecules = valid_molecules.copy()
 
-        torch.cuda.empty_cache()
         del pocket_data
-
-        run_time = datetime.now() - start
-        print(f"\n Run time={run_time} for 100 valid molecules \n")
+        torch.cuda.empty_cache()
 
         (
             _,
-            _,
+            validity_dict,
             statistics,
             _,
             _,
@@ -242,10 +244,15 @@ def evaluate(
             smiles_train=train_smiles,
             local_rank=0,
             return_molecules=True,
+            calculate_statistics=True,
+            calculate_distribution_statistics=False,
             return_stats_per_molecule=False,
             remove_hs=hparams.remove_hs,
             device="cpu",
         )
+        run_time = datetime.now() - start
+        print(f"\n Run time={run_time} for {len(valid_molecules)} valid molecules \n")
+
         statistics_dict["QED"].append(statistics["QED"])
         statistics_dict["SA"].append(statistics["SA"])
         statistics_dict["Lipinski"].append(statistics["Lipinski"])
@@ -255,7 +262,8 @@ def evaluate(
             :num_ligands_per_pocket
         ]  # we could sort them by QED, SA or whatever
 
-        write_sdf_file(sdf_out_file_raw, valid_molecules)
+        write_sdf_file(sdf_out_file_raw, valid_molecules, extract_mol=True)
+
         sdf_files.append(sdf_out_file_raw)
 
         # Time the sampling process
@@ -285,6 +293,7 @@ def evaluate(
     )
     print("Sampling finished.")
 
+    statistics_dict.update(validity_dict)
     print(f"Mean statistics across all sampled ligands: {statistics_dict}")
     save_pickle(statistics_dict, os.path.join(save_dir, "statistics_dict.pickle"))
 

@@ -37,7 +37,7 @@ vector_aggr: mean
 
 #DATA
 dataset: drugs
-dataset_root: /scratch1/cremej01/data/geom
+dataset_root: /hpfs/projects/mlcs/mlhub/e3moldiffusion/data/geom/data
 # dataset_root: /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/data
 
 # DIFFUSION
