@@ -30,6 +30,7 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         num_is_in_ring: int = 2,
         num_is_aromatic: int = 2,
         num_hybridization: int = 9,
+        is_absobing=False
     ):
         super().__init__()
 

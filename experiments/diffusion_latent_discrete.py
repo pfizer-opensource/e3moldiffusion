@@ -19,6 +19,7 @@ from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.losses import DiffusionLoss
+from experiments.data.abstract_dataset import AbstractDatasetInfos
 from experiments.molecule_utils import Molecule
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import coalesce_edges, get_list_of_edge_adjs, zero_mean
@@ -45,7 +46,7 @@ class Trainer(pl.LightningModule):
     def __init__(
         self,
         hparams: dict,
-        dataset_info: dict,
+        dataset_info: AbstractDatasetInfos,
         smiles_list: list,
         prop_dist=None,
         prop_norm=None,
@@ -368,14 +369,15 @@ class Trainer(pl.LightningModule):
         )
 
         final_loss = (
-            3.0 * loss["coords"]
-            + 0.4 * loss["atoms"]
-            + 2.0 * loss["bonds"]
-            + 1.0 * loss["charges"]
+            self.hparams.lc_coords * loss["coords"]
+            + self.hparams.lc_atoms * loss["atoms"]
+            + self.hparams.lc_bonds * loss["bonds"]
+            + self.hparams.lc_charges * loss["charges"]
         )
         
         prior_loss = self.latentloss(inputdict=out_dict.get("latent"))
-        num_nodes_loss = F.cross_entropy(out_dict["nodes"]["num_nodes_pred"], out_dict["nodes"]["num_nodes_true"])
+        num_nodes_loss = F.cross_entropy(out_dict["nodes"]["num_nodes_pred"], 
+                                         out_dict["nodes"]["num_nodes_true"])
         final_loss = final_loss + self.hparams.prior_beta * prior_loss + num_nodes_loss
 
         if torch.any(final_loss.isnan()):

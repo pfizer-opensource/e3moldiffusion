@@ -229,8 +229,10 @@ if __name__ == "__main__":
                                 Trainer,
                             )
                     else:
-                        print("Ligand-pocket training with latent protein encoding")
-                        from experiments.diffusion_discrete_latent_pocket import Trainer
+                        #print("Ligand-pocket training with latent protein encoding")
+                        #from experiments.diffusion_discrete_latent_pocket import Trainer
+                        print("Ligand-pocket training with latent ligand encoding")
+                        from experiments.diffusion_discrete_latent_pocket_ligand import Trainer
                 elif dataset == "geomqm":
                     if hparams.additional_feats and hparams.use_qm_props:
                         print("Using RDKit and QM props as additional features")

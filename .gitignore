@@ -22,7 +22,7 @@ sample_data/*
 .vscode/
 
 configs/
-#scripts/
+scripts/
 generate_ligands.sh
 # scripts/experiment*.sl
 
