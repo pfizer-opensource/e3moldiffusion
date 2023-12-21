@@ -127,6 +127,7 @@ class Trainer(pl.LightningModule):
                 self.hparams.load_ckpt_from_pretrained,
                 self.num_atom_features,
                 self.num_bond_classes,
+                hparams,
             )
             # num_params = len(self.model.state_dict())
             # for i, param in enumerate(self.model.parameters()):

@@ -29,8 +29,7 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         num_charge_types: int = 6,
         num_is_in_ring: int = 2,
         num_is_aromatic: int = 2,
-        num_hybridization: int = 9,
-        is_absobing=False
+        num_hybridization: int = 9
     ):
         super().__init__()
 
@@ -70,7 +69,7 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         self.register_buffer("Qt_bar", Qt_bar)
         self.register_buffer("Qt_bar_prev", Qt_bar_prev)
 
-    def marginal_prob(self, x0: torch.Tensor, t: torch.Tensor, cumulative: bool=True):
+    def marginal_prob(self, x0: torch.Tensor, t: torch.Tensor, cumulative: bool = True):
         """_summary_
         Computes the forward categorical posterior q(xt | x0) ~ Cat(xt, p = x0_j . Qt_bar_ji)
         Args:
@@ -181,6 +180,12 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         eps: float = 1.0e-5,
         local_rank: int = 0,
     ):
+        if torch.isnan(x0).any():
+            nans = [i for i, row in enumerate(x0) if torch.isnan(row).any()]
+            x0_reset = torch.zeros_like(x0[nans])
+            x0_reset[:, 0] = 1.0
+            x0[nans] = x0_reset
+
         reverse = self.reverse_posterior_for_every_x0(xt=xt, t=t)
         # Eq. 4 in Austin et al. (2023) "Structured Denoising Diffusion Models in Discrete State-Spaces"
         # (N, a_0, a_t-1)
@@ -249,7 +254,7 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         edge_attr_global,
         data_batch,
         return_one_hot=True,
-        cumulative=True
+        cumulative=True,
     ):
         j, i = edge_index_global
         mask = j < i
@@ -287,7 +292,14 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         return edge_attr_global_perturbed
 
     def sample_categorical(
-        self, t, x0, data_batch, dataset_info, num_classes=16, type="atoms", cumulative=True
+        self,
+        t,
+        x0,
+        data_batch,
+        dataset_info,
+        num_classes=16,
+        type="atoms",
+        cumulative=True,
     ):
         assert type in ["atoms", "charges", "ring", "aromatic", "hybridization"]
 

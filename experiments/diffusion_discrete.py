@@ -10,8 +10,8 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
-from tqdm import tqdm
 from torch_scatter import scatter_mean
+from tqdm import tqdm
 
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
@@ -26,9 +26,9 @@ from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.utils import (
     bond_guidance,
     energy_guidance,
-    initialize_edge_attrs_reverse,
     extract_func_groups_,
     extract_scaffolds_,
+    initialize_edge_attrs_reverse,
 )
 from experiments.losses import DiffusionLoss
 from experiments.sampling.analyze import analyze_stability_for_molecules
@@ -147,6 +147,7 @@ class Trainer(pl.LightningModule):
                 bond_prediction=hparams["bond_prediction"],
                 property_prediction=hparams["property_prediction"],
                 coords_param=hparams["continuous_param"],
+                store_intermediate_coords=hparams["store_intermediate_coords"],
             )
 
         self.sde_pos = DiscreteDDPM(
@@ -381,6 +382,8 @@ class Trainer(pl.LightningModule):
             pred_data=pred_data,
             batch=batch.batch,
             bond_aggregation_index=out_dict["bond_aggregation_index"],
+            intermediate_coords=self.hparams.store_intermediate_coords
+            and self.training,
             weights=weights,
         )
 
@@ -1324,7 +1327,9 @@ class Trainer(pl.LightningModule):
 
                     if r < resample_steps and timestep > 0:
                         # noise the combined pos again
-                        gamma_t, gamma_s = self.sde_pos.get_gamma(t_int=t), self.sde_pos.get_gamma(t_int=t-1)
+                        gamma_t, gamma_s = self.sde_pos.get_gamma(
+                            t_int=t
+                        ), self.sde_pos.get_gamma(t_int=t - 1)
                         (
                             sigma2_t_given_s,
                             sigma_t_given_s,
@@ -1336,7 +1341,10 @@ class Trainer(pl.LightningModule):
                             noise_coords_true, batch=batch, dim_size=bs, dim=0
                         )
                         # get signal and noise coefficients for coords
-                        pos = pos * alpha_t_given_s[batch][:, None] + sigma_t_given_s[batch][:, None] * noise_coords_true
+                        pos = (
+                            pos * alpha_t_given_s[batch][:, None]
+                            + sigma_t_given_s[batch][:, None] * noise_coords_true
+                        )
 
                         # noise the categorical atom features again
                         # Qtp1 = self.cat_atoms.Qt[t]

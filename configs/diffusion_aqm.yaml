@@ -2,21 +2,24 @@
 #load_ckpt: /hpfs/userws/cremej01/workspace/logs/aqm_new/baseline_no_t_weighting/run0/last.ckpt
 #load_ckpt_from_pretrained: /sharedhome/cremej01/workspace/logs/pubchem/x0_pretraining_0_snr_t_bs300/run0/last.ckpt
 
+bond_model_guidance: false
+use_pos_norm: true
 bond_prediction: false
+
 seed: 42
 
 # batch_size 40 without adaptive, and 200 with adaptive
-batch_size: 32
+batch_size: 200
 inference_batch_size: 70
 ema_decay: 0.999
 grad_clip_val: 10
 accum_batch: 1
 gamma: 0.99
 
-use_adaptive_loader: false
+use_adaptive_loader: true
 remove_hs: false
 
-gpus: 1
+gpus: 4
 num_epochs: 3000
 test_interval: 20
 
@@ -44,15 +47,15 @@ beta_min: 1.e-4
 beta_max: 2.e-2
 timesteps: 500
 max_time: 06:00:00:00
-loss_weighting: uniform
+loss_weighting: snr_t
 
 #CONTEXT
-context_mapping: false
-num_context_features: 0
-properties_list: [] #[DIP, HLgap, eMBD, mPOL]
+context_mapping: true
+num_context_features: 2
+properties_list: [eMBD, mPOL] #[DIP, HLgap, eMBD, mPOL]
 
 #LOGGING
-save_dir: /sharedhome/cremej01/workspace/logs/aqm/test_dip_hlgap
+save_dir: /hpfs/userws/cremej01/projects/logs/geom/pretrain_x0
 id: 0
 
 #LEARNING
@@ -61,7 +64,8 @@ lr: 2.e-4
 lr_min: 5.e-5 #used for cyclic scheduler
 lr_step_size: 5.e-5 #used for cyclic scheduler
 lr_factor: 0.75
-lr_patience: 20
+lr_patience: 50
+lr_cooldown: 0
 max_num_neighbors: 128
 weight_decay: 1.e-12
 

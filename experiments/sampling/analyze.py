@@ -139,7 +139,13 @@ class BasicMolecularMetrics(object):
             mol for i, mol in enumerate(valid_molecules) if i not in duplicate_ids
         ]
 
-        return valid_smiles, valid_molecules, connected_components, error_message
+        return (
+            valid_smiles,
+            valid_molecules,
+            connected_components,
+            duplicate_ids,
+            error_message,
+        )
 
     def compute_sanitize_validity(self, generated):
         if len(generated) < 1:
@@ -182,6 +188,7 @@ class BasicMolecularMetrics(object):
             valid_smiles,
             valid_molecules,
             connected_components,
+            duplicates,
             error_message,
         ) = self.compute_validity(generated, local_rank=local_rank)
 
@@ -192,18 +199,20 @@ class BasicMolecularMetrics(object):
 
         # Uniqueness
         if len(valid_smiles) > 0:
-            unique = list(set(valid_smiles))
             self.uniqueness.update(
-                value=len(unique) / len(valid_smiles), weight=len(valid_smiles)
+                value=1 - (len(duplicates) / len(valid_smiles)),
+                weight=len(valid_smiles),
             )
             uniqueness = self.uniqueness.compute()
 
             if self.train_smiles is not None:
                 novel = []
-                for smiles in unique:
+                for smiles in valid_smiles:
                     if smiles not in self.train_smiles:
                         novel.append(smiles)
-                self.novelty.update(value=len(novel) / len(unique), weight=len(unique))
+                self.novelty.update(
+                    value=len(novel) / len(valid_smiles), weight=len(valid_smiles)
+                )
             novelty = self.novelty.compute()
 
         num_molecules = int(self.validity_metric.weight.item())
@@ -219,6 +228,8 @@ class BasicMolecularMetrics(object):
                 f"Connected components of {num_molecules} molecules: "
                 f"{connected_components:.2f}"
             )
+            print(f"Uniqueness over {num_molecules} molecules: " f"{uniqueness:.2f}")
+            print(f"Novelty over {num_molecules} molecules: " f"{novelty:.2f}")
 
         return (
             valid_smiles,
@@ -237,6 +248,7 @@ class BasicMolecularMetrics(object):
         return_molecules=False,
         return_stats_per_molecule=False,
         calculate_statistics=True,
+        calculate_distribution_statistics=True,
     ):
         stable_molecules = []
         if not remove_hs:
@@ -289,7 +301,7 @@ class BasicMolecularMetrics(object):
         }
 
         if calculate_statistics:
-            if len(valid_smiles) <= 1000:
+            if calculate_distribution_statistics:
                 statistics_dict = self.compute_statistics(molecules, local_rank)
                 statistics_dict["connected_components"] = connected_components
             else:
@@ -320,32 +332,33 @@ class BasicMolecularMetrics(object):
                 statistics_dict["bulk_diversity"] = diversity
                 statistics_dict["kl_score"] = kl_score
 
-            if len(valid_smiles) > 0:
-                mols = get_mols_list(valid_smiles)
-                # rings = np.mean([num_rings(mol) for mol in mols])
-                # aromatic_rings = np.mean([num_aromatic_rings(mol) for mol in mols])
-                qed, sa, logp, lipinski, diversity = self.evaluate_mean(mols)
-            else:
-                print("No valid smiles have been generated. Setting scores to -1")
-                qed = -1.0
-                sa = -1.0
-                logp = -1.0
-                lipinski = -1.0
-                diversity = -1.0
-            statistics_dict["QED"] = qed
-            statistics_dict["SA"] = sa
-            statistics_dict["LogP"] = logp
-            statistics_dict["Lipinski"] = lipinski
-            statistics_dict["Diversity"] = diversity
-
-            if return_stats_per_molecule:
-                qed, sa, logp, lipinski = self.evaluate_per_mol(mols)
-                statistics_dict["QEDs"] = qed
-                statistics_dict["SAs"] = sa
-                statistics_dict["LogPs"] = logp
-                statistics_dict["Lipinskis"] = lipinski
+        if len(valid_smiles) > 0:
+            mols = get_mols_list(valid_smiles)
+            # rings = np.mean([num_rings(mol) for mol in mols])
+            # aromatic_rings = np.mean([num_aromatic_rings(mol) for mol in mols])
+            qed, sa, logp, lipinski, diversity = self.evaluate_mean(mols)
         else:
-            statistics_dict = None
+            print("No valid smiles have been generated. Setting scores to -1")
+            qed = -1.0
+            sa = -1.0
+            logp = -1.0
+            lipinski = -1.0
+            diversity = -1.0
+        if not calculate_statistics:
+            statistics_dict = {"QED": qed}
+        else:
+            statistics_dict["QED"] = qed
+        statistics_dict["SA"] = sa
+        statistics_dict["LogP"] = logp
+        statistics_dict["Lipinski"] = lipinski
+        statistics_dict["Diversity"] = diversity
+
+        if return_stats_per_molecule:
+            qed, sa, logp, lipinski = self.evaluate_per_mol(mols)
+            statistics_dict["QEDs"] = qed
+            statistics_dict["SAs"] = sa
+            statistics_dict["LogPs"] = logp
+            statistics_dict["Lipinskis"] = lipinski
 
         self.reset()
 
@@ -599,18 +612,15 @@ class BasicMolecularMetrics(object):
             QED, SA, LogP, Lipinski, and Diversity
         """
 
-        if len(rdmols) < 1:
-            return 0.0, 0.0, 0.0, 0.0, 0.0
-
-        for mol in rdmols:
-            Chem.SanitizeMol(mol)
-            assert mol is not None, "only evaluate valid molecules"
-
         qed = np.mean([self.calculate_qed(mol) for mol in rdmols])
         sa = np.mean([self.calculate_sa(mol) for mol in rdmols])
         logp = np.mean([self.calculate_logp(mol) for mol in rdmols])
         lipinski = np.mean([self.calculate_lipinski(mol) for mol in rdmols])
-        diversity = self.calculate_diversity(rdmols)
+
+        if len(rdmols) > 1000:
+            diversity = calculate_bulk_diversity(rdmols, rdkit_fp=True)
+        else:
+            diversity = self.calculate_diversity(rdmols)
 
         return qed, sa, logp, lipinski, diversity
 
@@ -644,6 +654,7 @@ def analyze_stability_for_molecules(
     remove_hs=False,
     device="cpu",
     calculate_statistics=True,
+    calculate_distribution_statistics=True,
     test=False,
 ):
     metrics = BasicMolecularMetrics(
@@ -666,6 +677,7 @@ def analyze_stability_for_molecules(
         return_stats_per_molecule=return_stats_per_molecule,
         return_molecules=return_molecules,
         calculate_statistics=calculate_statistics,
+        calculate_distribution_statistics=calculate_distribution_statistics,
     )
 
     if calculate_statistics:

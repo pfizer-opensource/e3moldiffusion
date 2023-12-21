@@ -23,8 +23,8 @@ from torch_sparse import coalesce
 from tqdm import tqdm
 
 from e3moldiffusion.molfeat import atom_type_config
-from experiments.molecule_utils import Molecule
 from experiments.data.ligand.process_crossdocked import amino_acid_dict, three_to_one
+from experiments.molecule_utils import Molecule
 
 # fmt: off
 # Atomic masses are based on:
@@ -532,7 +532,7 @@ def load_model(filepath, num_atom_features, device="cpu", **kwargs):
 
 
 def load_model_ligand(
-    filepath, num_atom_features, num_bond_classes=5, device="cpu", **kwargs
+    filepath, num_atom_features, num_bond_classes=5, device="cpu", hparams=None
 ):
     import re
 
@@ -540,6 +540,8 @@ def load_model_ligand(
     args = ckpt["hyper_parameters"]
 
     args["use_pos_norm"] = False
+    if "store_intermediate_coords" not in args.keys():
+        args["store_intermediate_coords"] = hparams.store_intermediate_coords
 
     model = create_model(args, num_atom_features, num_bond_classes)
 
@@ -582,6 +584,7 @@ def create_model(hparams, num_atom_features, num_bond_classes):
         property_prediction=hparams["property_prediction"],
         coords_param=hparams["continuous_param"],
         use_pos_norm=hparams["use_pos_norm"],
+        store_intermediate_coords=hparams["store_intermediate_coords"],
     )
     return model
 
@@ -1051,19 +1054,16 @@ def get_inp_molecules(
     return molecule_list
 
 
-def write_sdf_file(sdf_path, molecules):
-    # NOTE Changed to be compatitble with more versions of rdkit
-    # with Chem.SDWriter(str(sdf_path)) as w:
-    #    for mol in molecules:
-    #        w.write(mol)
-
+def write_sdf_file(sdf_path, molecules, extract_mol=False):
     w = Chem.SDWriter(str(sdf_path))
-    w.SetKekulize(False)
     for m in molecules:
-        if m.rdkit_mol is not None:
-            w.write(m.rdkit_mol)
-
-    # print(f'Wrote SDF file to {sdf_path}')
+        if extract_mol:
+            if m.rdkit_mol is not None:
+                w.write(m.rdkit_mol)
+        else:
+            if m is not None:
+                w.write(m)
+    w.close()
 
 
 def unbatch_data(
@@ -1124,30 +1124,32 @@ def prepare_pocket(
     pocket_one_hot = []
     ca_mask = []
     for res in biopython_residues:
-            for atom in res.get_atoms():
-                if atom.name == "CA":
-                        pocket_one_hot.append(
-                            np.eye(
-                                1,
-                                len(amino_acid_dict),
-                                amino_acid_dict[three_to_one.get(res.get_resname())],
-                            ).squeeze()
-                        )
-                        m = True
-                else:
-                    m = False
-                ca_mask.append(m)
-                                
-    pocket_one_hot = torch.from_numpy(np.stack(pocket_one_hot,axis=0))
+        for atom in res.get_atoms():
+            if atom.name == "CA":
+                pocket_one_hot.append(
+                    np.eye(
+                        1,
+                        len(amino_acid_dict),
+                        amino_acid_dict[three_to_one.get(res.get_resname())],
+                    ).squeeze()
+                )
+                m = True
+            else:
+                m = False
+            ca_mask.append(m)
+
+    pocket_one_hot = torch.from_numpy(np.stack(pocket_one_hot, axis=0))
     ca_mask = torch.from_numpy(np.array(ca_mask, dtype=bool))
-    pocket_one_hot_batch = torch.arange(repeats).repeat_interleave(len(pocket_one_hot), dim=0)
+    pocket_one_hot_batch = torch.arange(repeats).repeat_interleave(
+        len(pocket_one_hot), dim=0
+    )
     pocket = Data(
         x_pocket=pocket_types.repeat(repeats),
         pos_pocket=pocket_coord.repeat(repeats, 1),
         pos_pocket_batch=pocket_mask,
         pocket_ca_mask=ca_mask.repeat(repeats),
         pocket_one_hot=pocket_one_hot.repeat(repeats, 1),
-        pocket_one_hot_batch=pocket_one_hot_batch
+        pocket_one_hot_batch=pocket_one_hot_batch,
     )
 
     return pocket

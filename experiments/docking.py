@@ -69,69 +69,52 @@ def calculate_qvina2_score(
     scores = []
     rdmols = []  # for if return rdmols
     suppl = Chem.SDMolSupplier(str(sdf_file), sanitize=False)
+    ligand_name = sdf_file.stem
+    ligand_pdbqt_file = Path(out_dir, ligand_name + ".pdbqt")
+    out_sdf_file = Path(out_dir, ligand_name + "_out.sdf")
     for i, mol in enumerate(suppl):  # sdf file may contain several ligands
-        ligand_name = f"{sdf_file.stem}_{i}"
-        # prepare ligand
-        ligand_pdbqt_file = Path(out_dir, ligand_name + ".pdbqt")
-        out_sdf_file = Path(out_dir, ligand_name + "_out.sdf")
+        sdf_to_pdbqt(sdf_file, ligand_pdbqt_file, i)
 
-        if out_sdf_file.exists():
-            with open(out_sdf_file, "r") as f:
-                scores.append(
-                    min(
-                        [
-                            float(x.split()[2])
-                            for x in f.readlines()
-                            if x.startswith(" VINA RESULT:")
-                        ]
-                    )
-                )
+        # center box at ligand's center of mass
+        cx, cy, cz = mol.GetConformer().GetPositions().mean(0)
 
-        else:
-            sdf_to_pdbqt(sdf_file, ligand_pdbqt_file, i)
-
-            # center box at ligand's center of mass
-            cx, cy, cz = mol.GetConformer().GetPositions().mean(0)
-
-            # run QuickVina 2
+        # run QuickVina 2
+        try:
+            os.stat("/sharedhome/cremej01/workspace/e3moldiffusion/qvina2.1")
+            PATH = "/sharedhome/cremej01/workspace/e3moldiffusion/qvina2.1"
+        except PermissionError:
             PATH = "/hpfs/userws/let55/projects/qvina2.1"
-            #try:
-            #    os.stat("/sharedhome/cremej01/workspace/e3moldiffusion/qvina2.1")
-            #    PATH = "/sharedhome/cremej01/workspace/e3moldiffusion/qvina2.1"
-            #except PermissionError or FileNotFoundError:
-            #    PATH = "/hpfs/userws/let55/projects/qvina2.1"
 
-            out = os.popen(
-                f"/{PATH} --receptor {receptor_pdbqt_file} "
-                f"--ligand {ligand_pdbqt_file} "
-                f"--center_x {cx:.4f} --center_y {cy:.4f} --center_z {cz:.4f} "
-                f"--size_x {size} --size_y {size} --size_z {size} "
-                f"--exhaustiveness {exhaustiveness}",
-            ).read()
+        out = os.popen(
+            f"/{PATH} --receptor {receptor_pdbqt_file} "
+            f"--ligand {ligand_pdbqt_file} "
+            f"--center_x {cx:.4f} --center_y {cy:.4f} --center_z {cz:.4f} "
+            f"--size_x {size} --size_y {size} --size_z {size} "
+            f"--exhaustiveness {exhaustiveness}",
+        ).read()
+        # clean up
+        ligand_pdbqt_file.unlink()
+
+        if "-----+------------+----------+----------" not in out:
+            scores.append(np.nan)
+            continue
+
+        out_split = out.splitlines()
+        best_idx = out_split.index("-----+------------+----------+----------") + 1
+        best_line = out_split[best_idx].split()
+        assert best_line[0] == "1"
+        scores.append(float(best_line[1]))
+
+        out_pdbqt_file = Path(out_dir, ligand_name + "_out.pdbqt")
+        if out_pdbqt_file.exists():
+            os.popen(f"obabel {out_pdbqt_file} -O {out_sdf_file}").read()
             # clean up
-            ligand_pdbqt_file.unlink()
+            out_pdbqt_file.unlink()
 
-            if "-----+------------+----------+----------" not in out:
-                scores.append(np.nan)
-                continue
+        rdmol = Chem.SDMolSupplier(str(out_sdf_file))[0]
+        rdmols.append(rdmol)
 
-            out_split = out.splitlines()
-            best_idx = out_split.index("-----+------------+----------+----------") + 1
-            best_line = out_split[best_idx].split()
-            assert best_line[0] == "1"
-            scores.append(float(best_line[1]))
-
-            out_pdbqt_file = Path(out_dir, ligand_name + "_out.pdbqt")
-            if out_pdbqt_file.exists():
-                os.popen(f"obabel {out_pdbqt_file} -O {out_sdf_file}").read()
-
-                # clean up
-                out_pdbqt_file.unlink()
-
-        if return_rdmol:
-            rdmol = Chem.SDMolSupplier(str(out_sdf_file))[0]
-            rdmols.append(rdmol)
-
+    write_sdf_file(out_sdf_file, rdmols)
     if return_rdmol:
         return scores, rdmols
     else:
@@ -183,6 +166,10 @@ if __name__ == "__main__":
             ligand_name = sdf_file.stem
             receptor_name = ligand_name.split("_")[0]
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
+        elif args.dataset == "cdk2":
+            ligand_name = sdf_file.stem
+            receptor_name = ligand_name.split("_")[0]
+            receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
 
         # try:
         scores, rdmols = calculate_qvina2_score(
@@ -220,8 +207,8 @@ if __name__ == "__main__":
     print(f"Mean score: {mean_score}")
     print(f"Standard deviation: {std_score}")
 
-    scores = np.mean(
-        [r.sort(reverse=True)[:10] for r in results["scores"] if len(r) >= 1]
-    )
-    mean_top10_score = np.mean(scores)
-    print(f"Top-10 mean score: {mean_top10_score}")
+    # scores = np.mean(
+    #     [r.sort(reverse=True)[:10] for r in results["scores"] if len(r) >= 1]
+    # )
+    # mean_top10_score = np.mean(scores)
+    # print(f"Top-10 mean score: {mean_top10_score}")
