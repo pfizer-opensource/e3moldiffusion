@@ -118,7 +118,51 @@ class PredictionHeadEdge(nn.Module):
 
         return coords_pred, atoms_pred, bonds_pred
 
+class HiddenEdgeDistanceMLP(nn.Module):
+    def __init__(
+        self,
+        hn_dim: Tuple[int, int]
+    ) -> None:
+        super(HiddenEdgeDistanceMLP, self).__init__()
+        self.sdim, self.vdim = hn_dim
+        self.distance_mlp = nn.Sequential(
+            DenseLayer(self.sdim, 
+                       self.sdim,
+                       bias=True, 
+                       activation=nn.SiLU()),
+            DenseLayer(self.sdim, 
+                       self.sdim,
+                       bias=True, 
+                       activation=nn.SiLU()),
+            DenseLayer(self.sdim, 
+                       1,
+                       bias=True, 
+                       activation=nn.SiLU()),
+            )
+        self.reset_parameters()
 
+    def reset_parameters(self):
+        reset(self.distance_mlp)
+
+    def forward(
+        self,
+        x: Dict,
+        batch_ligand: Tensor,
+        batch_pocket: Tensor,
+        pocket_mask: Tensor,
+        ca_mask: Tensor,
+    ) -> Dict:
+        s_ligand, s_pocket = x["s"][pocket_mask.squeeze()], x["s"][~pocket_mask.squeeze()]
+        # select c-alpha representatives
+        batch_pocket = batch_pocket[ca_mask]
+        s_pocket = s_pocket[ca_mask]
+        # create cross indices between ligand and c-alpha
+        adj_cross = (batch_ligand[:, None] == batch_pocket[None, :]).nonzero().T
+        l, p = adj_cross
+        s = s_ligand[l] + s_pocket[p]
+        s = self.distance_mlp(s).squeeze(dim=-1)
+        return s
+    
 class PropertyPredictionHead(nn.Module):
     def __init__(
         self,

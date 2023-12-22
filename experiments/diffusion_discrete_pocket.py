@@ -140,6 +140,7 @@ class Trainer(pl.LightningModule):
                 coords_param=hparams["continuous_param"],
                 use_pos_norm=hparams["use_pos_norm"],
                 store_intermediate_coords=hparams["store_intermediate_coords"],
+                distance_ligand_pocket=hparams["ligand_pocket_hidden_distance"]
             )
 
         self.sde_pos = DiscreteDDPM(
@@ -207,6 +208,11 @@ class Trainer(pl.LightningModule):
             for param in self.bond_model.parameters():
                 param.requires_grad = False
             self.bond_model.eval()
+        
+        if self.hparams.ligand_pocket_distance_loss:
+            self.dist_loss = torch.nn.HuberLoss(reduction="none", delta=1.0)
+        else:
+            self.dist_loss = None
 
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
@@ -358,7 +364,7 @@ class Trainer(pl.LightningModule):
             )
 
     def _log(
-        self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, batch_size, stage
+        self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, dloss, batch_size, stage
     ):
         self.log(
             f"{stage}/loss",
@@ -404,6 +410,16 @@ class Trainer(pl.LightningModule):
             prog_bar=(stage == "train"),
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
+        
+        if self.hparams.ligand_pocket_distance_loss:
+            self.log(
+                f"{stage}/d_loss",
+                dloss,
+                on_step=True,
+                batch_size=batch_size,
+                prog_bar=(stage == "train"),
+                sync_dist=self.hparams.gpus > 1 and stage == "val",
+            )
 
     def step_fnc(self, batch, batch_idx, stage: str):
         batch.batch = batch.pos_batch
@@ -495,6 +511,24 @@ class Trainer(pl.LightningModule):
 
         #     pdb.set_trace()
 
+        if self.hparams.ligand_pocket_distance_loss:
+            coords_pocket = out_dict["distance_loss_data"]["pos_centered_pocket"]
+            ligand_i, pocket_j = out_dict["distance_loss_data"]["edge_index_cross"]
+            dloss_true = (out_dict["coords_true"][ligand_i] - coords_pocket[pocket_j]).pow(2).mean(-1)
+            dloss_pred = (out_dict["coords_pred"][ligand_i] - coords_pocket[pocket_j]).pow(2).mean(-1)
+            # geometry loss
+            dloss = self.dist_loss(dloss_true, dloss_pred).mean()
+            if self.hparams.ligand_pocket_hidden_distance:
+                d_hidden = out_dict["dist_pred"] 
+                # latent loss
+                dloss1 = self.dist_loss(dloss_true, d_hidden).mean()
+                # consistency loss between geometry and latent
+                dloss2 = self.dist_loss(dloss_pred, d_hidden).mean()
+                dloss = dloss + dloss1 + dloss2
+            final_loss = final_loss + 0.25 * dloss
+        else:
+            dloss = 0.0
+            
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
             print(f"Detected NaNs. Terminating training at epoch {self.current_epoch}")
@@ -506,6 +540,7 @@ class Trainer(pl.LightningModule):
             loss["atoms"],
             loss["charges"],
             loss["bonds"],
+            dloss,
             batch_size,
             stage,
         )
@@ -657,6 +692,8 @@ class Trainer(pl.LightningModule):
             pocket_mask=pocket_mask.unsqueeze(1),
             edge_mask=edge_mask,
             batch_lig=data_batch,
+            ca_mask=batch.pocket_ca_mask,
+            batch_pocket=batch.pos_pocket_batch
         )
 
         # if self.training and self.trainer.current_epoch > 40:
@@ -702,6 +739,16 @@ class Trainer(pl.LightningModule):
         out["charges_true"] = charges.argmax(dim=-1)
 
         out["bond_aggregation_index"] = edge_index_global_lig[1]
+        
+        if self.hparams.ligand_pocket_distance_loss:
+            # Protein Pocket Coords for Distance Loss computation
+            # Only select subset based on C-alpha representatives
+            data_batch_pocket = data_batch_pocket[batch.pocket_ca_mask]
+            # create cross indices between ligand and c-alpha
+            adj_cross = (data_batch[:, None] == data_batch_pocket[None, :]).nonzero().T        
+            out["distance_loss_data"] = {'pos_centered_pocket': pos_centered_pocket[batch.pocket_ca_mask],
+                                         'edge_index_cross': adj_cross
+                                        }
         return out
 
     @torch.no_grad()

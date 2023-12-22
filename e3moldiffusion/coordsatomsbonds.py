@@ -15,6 +15,7 @@ from e3moldiffusion.modules import (
     GatedEquivBlock,
     PredictionHeadEdge,
     PropertyPredictionHead,
+    HiddenEdgeDistanceMLP
 )
 
 
@@ -55,6 +56,7 @@ class DenoisingEdgeNetwork(nn.Module):
         coords_param: str = "data",
         ligand_pocket_interaction: bool = False,
         store_intermediate_coords: bool = False,
+        distance_ligand_pocket: bool = False
     ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
@@ -142,8 +144,14 @@ class DenoisingEdgeNetwork(nn.Module):
                 num_atom_features=num_atom_features,
                 num_bond_types=num_bond_types,
                 coords_param=coords_param,
-            )
-
+            )            
+        
+        self.distance_ligand_pocket = distance_ligand_pocket
+        if distance_ligand_pocket:
+            self.ligand_pocket_mlp = HiddenEdgeDistanceMLP(hn_dim=hn_dim)
+        else:
+            self.ligand_pocket_mlp = None
+            
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -202,6 +210,8 @@ class DenoisingEdgeNetwork(nn.Module):
         batch_lig: OptTensor = None,
         pocket_mask: OptTensor = None,
         edge_mask: OptTensor = None,
+        ca_mask: OptTensor = None,
+        batch_pocket: OptTensor = None
     ) -> Dict:
         if pocket_mask is None:
             pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
@@ -290,12 +300,23 @@ class DenoisingEdgeNetwork(nn.Module):
             pos_list.append(coords_pred)
             coords_pred = torch.stack(pos_list)
 
+        if self.distance_ligand_pocket:
+            dist_pred = self.ligand_pocket_mlp(x=out,
+                                               batch_ligand=batch_lig,
+                                               batch_pocket=batch_pocket,
+                                               pocket_mask=pocket_mask,
+                                               ca_mask=ca_mask
+                                               )
+        else:
+            dist_pred = None
+            
         out = {
             "coords_pred": coords_pred,
             "atoms_pred": atoms_pred,
             "bonds_pred": bonds_pred,
+            "dist_pred": dist_pred
         }
-
+        
         return out
 
 

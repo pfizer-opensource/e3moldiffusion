@@ -158,6 +158,12 @@ def add_arguments(parser):
         "--ligand-pocket-interaction", default=False, action="store_true"
     )
     parser.add_argument(
+        "--ligand-pocket-distance-loss", default=False, action="store_true"
+    )
+    parser.add_argument(
+        "--ligand-pocket-hidden-distance", default=False, action="store_true"
+    )
+    parser.add_argument(
         "--store-intermediate-coords", default=False, action="store_true"
     )
     parser.add_argument("--diffusion-pretraining", default=False, action="store_true")
