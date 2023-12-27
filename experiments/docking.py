@@ -7,9 +7,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from posecheck.posecheck import PoseCheck
 from rdkit import Chem
 from tqdm import tqdm
 
+from experiments.data.ligand.process_pdb import get_pdb_components, write_pdb
 from experiments.utils import write_sdf_file
 
 
@@ -56,6 +58,19 @@ def sdf_to_pdbqt(sdf_file, pdbqt_outfile, mol_id):
 def calculate_qvina2_score(
     receptor_file, sdf_file, out_dir, size=20, exhaustiveness=16, return_rdmol=False
 ):
+    """
+    Calculate the QuickVina2 score
+
+    Parameters:
+    - receptor_file (str): The receptor in pdbqt-format
+    - sdf_file (str): The ligand(s) in sdf-format
+    - out_dir (str): The directory the docked molecules shall be saved to
+
+    Returns:
+    - tuple: (docking scores, PoseCheck dictionary, RDKit molecules [docked])
+
+    """
+
     receptor_file = Path(receptor_file)
     sdf_file = Path(sdf_file)
 
@@ -68,10 +83,24 @@ def calculate_qvina2_score(
 
     scores = []
     rdmols = []  # for if return rdmols
+    clashes = []
+    strain_energies = []
+    rmsds = []
+
     suppl = Chem.SDMolSupplier(str(sdf_file), sanitize=False)
     ligand_name = sdf_file.stem
     ligand_pdbqt_file = Path(out_dir, ligand_name + ".pdbqt")
     out_sdf_file = Path(out_dir, ligand_name + "_out.sdf")
+
+    # Initialize the PoseCheck object
+    pc = PoseCheck()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        pdb_name = str(ligand_pdbqt_file).split("/")[-1].split("-")[0]
+        protein, _ = get_pdb_components(pdb_name)
+        pdb_file = write_pdb(temp_dir, protein, pdb_name)
+        pc.load_protein_from_pdb(pdb_file)
+
     for i, mol in enumerate(suppl):  # sdf file may contain several ligands
         sdf_to_pdbqt(sdf_file, ligand_pdbqt_file, i)
 
@@ -112,13 +141,28 @@ def calculate_qvina2_score(
             out_pdbqt_file.unlink()
 
         rdmol = Chem.SDMolSupplier(str(out_sdf_file))[0]
+        if rdmol is None:
+            continue
         rdmols.append(rdmol)
 
+        pc.load_ligands_from_sdf(str(out_sdf_file), add_hs=True)
+        # pc.load_ligands_from_mol(rdmol)
+        clashes.append(pc.calculate_clashes()[0])
+        strain_energies.append(pc.calculate_strain_energy()[0])
+        rmsds.append(pc.calculate_rmsd(suppl[i], rdmol))
+
+    posecheck_eval = {
+        "clashes": [np.mean(clashes), np.std(clashes)],
+        "strain_energy": [np.mean(strain_energies), np.std(strain_energies)],
+        "rmsd": [np.mean(rmsds), np.std(rmsds)],
+    }
+
     write_sdf_file(out_sdf_file, rdmols)
+
     if return_rdmol:
-        return scores, rdmols
+        return scores, posecheck_eval, rdmols
     else:
-        return scores
+        return scores, posecheck_eval
 
 
 if __name__ == "__main__":
@@ -142,6 +186,11 @@ if __name__ == "__main__":
 
     results = {"receptor": [], "ligand": [], "scores": []}
     results_dict = {}
+    posecheck_eval = {
+        "strain_energies": {"mean": [], "std": []},
+        "clashes": {"mean": [], "std": []},
+        "rmsds": {"mean": [], "std": []},
+    }
     sdf_files = (
         list(args.sdf_dir.glob("[!.]*.sdf"))
         if args.sdf_dir is not None
@@ -172,7 +221,7 @@ if __name__ == "__main__":
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
 
         # try:
-        scores, rdmols = calculate_qvina2_score(
+        scores, pose_eval, rdmols = calculate_qvina2_score(
             receptor_file, sdf_file, args.out_dir, return_rdmol=True
         )
         # except AttributeError as e:
@@ -181,6 +230,12 @@ if __name__ == "__main__":
         results["receptor"].append(str(receptor_file))
         results["ligand"].append(str(sdf_file))
         results["scores"].append(scores)
+        posecheck_eval["clashes"]["mean"].append(pose_eval["clashes"][0])
+        posecheck_eval["clashes"]["std"].append(pose_eval["clashes"][1])
+        posecheck_eval["strain_energies"]["mean"].append(pose_eval["strain_energy"][0])
+        posecheck_eval["strain_energies"]["std"].append(pose_eval["strain_energy"][1])
+        posecheck_eval["rmsds"]["mean"].append(pose_eval["rmsd"][0])
+        posecheck_eval["rmsds"]["std"].append(pose_eval["rmsd"][1])
 
         if args.write_dict:
             results_dict[ligand_name] = {
@@ -196,16 +251,34 @@ if __name__ == "__main__":
 
     if args.write_dict:
         torch.save(results_dict, Path(args.out_dir, "qvina2_scores.pt"))
+        torch.save(posecheck_eval, Path(args.out_dir, "posecheck.pt"))
 
     scores_mean = [np.mean(r) for r in results["scores"] if len(r) >= 1]
 
     missing = len(results["scores"]) - len(scores_mean)
     print(f"Number of dockings evaluated with NaN: {missing}")
 
+    # Scores
     mean_score = np.mean(scores_mean)
     std_score = np.std(scores_mean)
-    print(f"Mean score: {mean_score}")
-    print(f"Standard deviation: {std_score}")
+    print(f"Mean docking score: {mean_score}")
+    print(f"Docking score standard deviation: {std_score}")
+
+    # Clashes
+    mean_clashes = np.mean(posecheck_eval["clashes"]["mean"])
+    std_clashes = np.std(posecheck_eval["clashes"]["std"])
+    print(f"Mean clashes: {mean_clashes}")
+    print(f"Clashes standard deviation: {std_clashes}")
+    # Strain energy
+    mean_strain_e = np.mean(posecheck_eval["strain_energies"]["mean"])
+    std_strain_e = np.std(posecheck_eval["strain_energies"]["std"])
+    print(f"Mean strain_energies: {mean_strain_e}")
+    print(f"Strain_energies standard deviation: {std_strain_e}")
+    # RMSD
+    mean_rmsd = np.mean(posecheck_eval["rmsds"]["mean"])
+    std_rmsd = np.std(posecheck_eval["rmsds"]["std"])
+    print(f"Mean RMSD: {mean_rmsd}")
+    print(f"RMSD standard deviation: {std_rmsd}")
 
     # scores = np.mean(
     #     [r.sort(reverse=True)[:10] for r in results["scores"] if len(r) >= 1]

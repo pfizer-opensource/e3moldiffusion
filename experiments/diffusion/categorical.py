@@ -217,6 +217,12 @@ class CategoricalDiffusionKernel(torch.nn.Module):
         xt = edge_attr_global[mask]
         t = t[batch[mask_i]]
 
+        if torch.isnan(x0).any():
+            nans = [i for i, row in enumerate(x0) if torch.isnan(row).any()]
+            x0_reset = torch.zeros_like(x0[nans])
+            x0_reset[:, 0] = 1.0
+            x0[nans] = x0_reset
+
         reverse = self.reverse_posterior_for_every_x0(xt=xt, t=t)
         # Eq. 4 in Austin et al. (2023) "Structured Denoising Diffusion Models in Discrete State-Spaces"
         # (N, a_0, a_t-1)

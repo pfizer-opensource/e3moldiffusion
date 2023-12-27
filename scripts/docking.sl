@@ -18,7 +18,7 @@ conda activate /sharedhome/cremej01/workspace/mambaforge/envs/e3moldiffusion
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-out_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_addfeats_cutoff5_bonds7/evaluation/docking/nodes_bias_large"
+out_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_enamineft_cutoff5_bonds5_ep15/evaluation/docking/nodes_bias_large"
 
 python experiments/docking.py \
     --sdf-dir "$out_dir/raw" \

@@ -1,5 +1,6 @@
 import argparse
 import os
+import tempfile
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -9,9 +10,12 @@ import numpy as np
 import pandas as pd
 import torch
 from Bio.PDB import PDBParser
+from posebusters import PoseBusters
+from posecheck.posecheck import PoseCheck
 from tqdm import tqdm
 
 from experiments.data.distributions import DistributionProperty
+from experiments.data.ligand.process_pdb import get_pdb_components, write_pdb
 from experiments.data.utils import save_pickle
 from experiments.docking import calculate_qvina2_score
 from experiments.sampling.analyze import analyze_stability_for_molecules
@@ -20,6 +24,7 @@ from experiments.utils import prepare_pocket, write_sdf_file
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
 )
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 class dotdict(dict):
@@ -140,7 +145,15 @@ def evaluate(
     pbar = tqdm(test_files)
     time_per_pocket = {}
 
-    statistics_dict = {"QED": [], "SA": [], "Lipinski": [], "Diversity": []}
+    statistics_dict = {
+        "QED": [],
+        "SA": [],
+        "Lipinski": [],
+        "Diversity": [],
+        "Clashes": [],
+        "Strain Energies": [],
+    }
+    buster_list = []
     sdf_files = []
 
     if build_obabel_mol:
@@ -263,8 +276,45 @@ def evaluate(
         ]  # we could sort them by QED, SA or whatever
 
         write_sdf_file(sdf_out_file_raw, valid_molecules, extract_mol=True)
-
         sdf_files.append(sdf_out_file_raw)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdb_name = str(sdf_out_file_raw).split("/")[-1].split("-")[0]
+            protein, _ = get_pdb_components(pdb_name)
+            pdb_file = write_pdb(temp_dir, protein, pdb_name)
+
+            # PoseBusters
+            print("Starting evaluation with PoseBuster...")
+            buster_dict = {}
+            buster_mol = PoseBusters(config="mol")
+            buster_mol_df = buster_mol.bust([sdf_out_file_raw], None, None)
+            for metric in buster_mol_df.columns:
+                buster_dict[metric] = buster_mol_df[metric].sum() / len(
+                    buster_mol_df[metric]
+                )
+            buster_dock = PoseBusters(config="dock")
+            buster_dock_df = buster_dock.bust([sdf_out_file_raw], None, pdb_file)
+            for metric in buster_dock_df:
+                if metric not in buster_dict:
+                    buster_dict[metric] = buster_dock_df[metric].sum() / len(
+                        buster_dock_df[metric]
+                    )
+            buster_list.append(buster_dict)
+            print("Done!")
+            import pdb
+
+            pdb.set_trace()
+
+            # PoseCheck
+            print("Starting evaluation with PoseCheck...")
+            pc = PoseCheck()
+            pc.load_protein_from_pdb(pdb_file)
+            pc.load_ligands_from_sdf(str(sdf_out_file_raw), add_hs=True)
+            statistics_dict["Clashes"].append(np.mean(pc.calculate_clashes()))
+            statistics_dict["Strain Energies"].append(
+                np.mean(pc.calculate_strain_energy())
+            )
+            print("Done!")
 
         # Time the sampling process
         time_per_pocket[str(sdf_file)] = time() - t_pocket_start
@@ -281,6 +331,8 @@ def evaluate(
     statistics_dict["SA"] = np.mean(statistics_dict["SA"])
     statistics_dict["Lipinski"] = np.mean(statistics_dict["Lipinski"])
     statistics_dict["Diversity"] = np.mean(statistics_dict["Diversity"])
+    statistics_dict["Clashes"] = np.mean(statistics_dict["Clashes"])
+    statistics_dict["Strain Energies"] = np.mean(statistics_dict["Strain Energies"])
 
     with open(Path(save_dir, "pocket_times.txt"), "w") as f:
         for k, v in time_per_pocket.items():
@@ -296,6 +348,7 @@ def evaluate(
     statistics_dict.update(validity_dict)
     print(f"Mean statistics across all sampled ligands: {statistics_dict}")
     save_pickle(statistics_dict, os.path.join(save_dir, "statistics_dict.pickle"))
+    save_pickle(buster_list, os.path.join(save_dir, "posebusters.pickle"))
 
     # ############## DOCKING ##############
     # print("Starting docking...")
