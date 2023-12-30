@@ -177,9 +177,9 @@ def calculate_qvina2_score(
     posecheck_dict["Strain Energies"].append(np.mean(strain_energies))
     posecheck_dict["RMSD"].append(np.mean(rmsds))
 
-    violin_dict["clashes"].extend()
-    violin_dict["strain_energy"].extend()
-    violin_dict["rmsd"].extend()
+    violin_dict["clashes"].extend(clashes)
+    violin_dict["strain_energy"].extend(strain_energies)
+    violin_dict["rmsd"].extend(rmsds)
 
     write_sdf_file(out_sdf_file, rdmols)
 
