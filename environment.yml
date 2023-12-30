@@ -6,6 +6,7 @@ channels:
   - pytorch
   - pyg
   - nvidia
+  - mx
 dependencies:
   - python=3.10.0
   - pip
@@ -29,6 +30,7 @@ dependencies:
   - anaconda::seaborn
   - anaconda::biopython=1.81
   - conda-forge::setuptools=65.6.3
+  - mx::reduce
   - pip:
       - ase
       - lmdb

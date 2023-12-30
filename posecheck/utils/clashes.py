@@ -21,9 +21,10 @@ def count_clashes(prot: Chem.Mol, lig: Chem.Mol, tollerance: float = 0.5) -> int
     """
 
     # Check if the molecule has radicals
-    assert not has_radicals(
-        lig
-    ), "Molecule has radicals, consider removing them first. (`posecheck.utils.chem.remove_radicals()`)"
+    if has_radicals(lig):
+        print(
+            "Molecule has radicals, consider removing them first. (`posecheck.utils.chem.remove_radicals()`)"
+        )
 
     clashes = 0
 

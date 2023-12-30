@@ -1,18 +1,22 @@
 import argparse
 import os
 import re
+import shutil
 import tempfile
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
+from posebusters import PoseBusters
 from posecheck.posecheck import PoseCheck
 from rdkit import Chem
 from tqdm import tqdm
 
 from experiments.data.ligand.process_pdb import get_pdb_components, write_pdb
-from experiments.utils import write_sdf_file
+from experiments.data.utils import save_pickle
+from experiments.utils import retrieve_interactions_per_mol, write_sdf_file
 
 
 def calculate_smina_score(pdb_file, sdf_file):
@@ -56,7 +60,16 @@ def sdf_to_pdbqt(sdf_file, pdbqt_outfile, mol_id):
 
 
 def calculate_qvina2_score(
-    receptor_file, sdf_file, out_dir, size=20, exhaustiveness=16, return_rdmol=False
+    receptor_file,
+    sdf_file,
+    out_dir,
+    pdb_dir,
+    buster_dict,
+    violin_dict,
+    posecheck_dict,
+    size=20,
+    exhaustiveness=16,
+    return_rdmol=False,
 ):
     """
     Calculate the QuickVina2 score
@@ -73,6 +86,7 @@ def calculate_qvina2_score(
 
     receptor_file = Path(receptor_file)
     sdf_file = Path(sdf_file)
+    pdb_dir = Path(pdb_dir)
 
     if receptor_file.suffix == ".pdb":
         # prepare receptor, requires Python 2.7
@@ -95,11 +109,19 @@ def calculate_qvina2_score(
     # Initialize the PoseCheck object
     pc = PoseCheck()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        pdb_name = str(ligand_pdbqt_file).split("/")[-1].split("-")[0]
+    pdb_name = str(ligand_pdbqt_file).split("/")[-1].split("-")[0]
+    if pdb_dir is not None:
+        pdbs = [str(i).split("/")[-1].split(".")[0] for i in pdb_dir.glob("[!.]*.pdb")]
+    else:
+        pdbs = None
+    if pdbs is not None and pdb_name in pdbs:
+        pdb_file = os.path.join(str(pdb_dir), pdb_name + ".pdb")
+    else:
+        temp_dir = tempfile.mkdtemp()
         protein, _ = get_pdb_components(pdb_name)
         pdb_file = write_pdb(temp_dir, protein, pdb_name)
-        pc.load_protein_from_pdb(pdb_file)
+
+    pc.load_protein_from_pdb(pdb_file)
 
     for i, mol in enumerate(suppl):  # sdf file may contain several ligands
         sdf_to_pdbqt(sdf_file, ligand_pdbqt_file, i)
@@ -151,18 +173,60 @@ def calculate_qvina2_score(
         strain_energies.append(pc.calculate_strain_energy()[0])
         rmsds.append(pc.calculate_rmsd(suppl[i], rdmol))
 
-    posecheck_eval = {
-        "clashes": [np.mean(clashes), np.std(clashes)],
-        "strain_energy": [np.mean(strain_energies), np.std(strain_energies)],
-        "rmsd": [np.mean(rmsds), np.std(rmsds)],
-    }
+    posecheck_dict["Clashes"].append(np.mean(clashes))
+    posecheck_dict["Strain Energies"].append(np.mean(strain_energies))
+    posecheck_dict["RMSD"].append(np.mean(rmsds))
+
+    violin_dict["clashes"].extend()
+    violin_dict["strain_energy"].extend()
+    violin_dict["rmsd"].extend()
 
     write_sdf_file(out_sdf_file, rdmols)
 
+    # PoseBusters
+    print("Starting evaluation with PoseBusters...")
+    buster = {}
+    buster_mol = PoseBusters(config="mol")
+    buster_mol_df = buster_mol.bust([out_sdf_file], None, None)
+    for metric in buster_mol_df.columns:
+        violin_dict[metric].extend(list(buster_mol_df[metric]))
+        buster[metric] = buster_mol_df[metric].sum() / len(buster_mol_df[metric])
+    buster_dock = PoseBusters(config="dock")
+    buster_dock_df = buster_dock.bust([out_sdf_file], None, pdb_file)
+    for metric in buster_dock_df:
+        if metric not in buster:
+            violin_dict[metric].extend(list(buster_dock_df[metric]))
+            buster[metric] = buster_dock_df[metric].sum() / len(buster_dock_df[metric])
+    for k, v in buster.items():
+        buster_dict[k].append(v)
+    print("Done!")
+
+    # # PoseCheck
+    # print("Starting evaluation with PoseCheck...")
+    # pc = PoseCheck()
+    # pc.load_protein_from_pdb(pdb_file)
+    # pc.load_ligands_from_mols(rdmols, add_hs=True)
+    # interactions = pc.calculate_interactions()
+    # interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
+    #     interactions
+    # )
+    # for k, v in interactions_per_mol.items():
+    #     violin_dict[k].extend(v)
+    # for k, v in interactions_mean.items():
+    #     posecheck_dict[k].append(v["mean"])
+    # posecheck_dict["Clashes"].append(np.mean(pc.calculate_clashes()))
+    # posecheck_dict["Strain Energies"].append(np.mean(pc.calculate_strain_energy()))
+    # print("Done!")
+
+    try:
+        shutil.rmtree(temp_dir)
+    except UnboundLocalError:
+        pass
+
     if return_rdmol:
-        return scores, posecheck_eval, rdmols
+        return scores, rdmols
     else:
-        return scores, posecheck_eval
+        return scores, None
 
 
 if __name__ == "__main__":
@@ -173,6 +237,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("--sdf-files", type=Path, nargs="+", default=None)
     parser.add_argument("--out-dir", type=Path)
+    parser.add_argument(
+        "--pdb-dir",
+        type=Path,
+        default=None,
+        help="Directory where all full protein pdb files are stored. If not available, there will be calculated on the fly.",
+    )
     parser.add_argument("--write-csv", action="store_true")
     parser.add_argument("--write-dict", action="store_true")
     parser.add_argument("--dataset", type=str, default="moad")
@@ -186,11 +256,11 @@ if __name__ == "__main__":
 
     results = {"receptor": [], "ligand": [], "scores": []}
     results_dict = {}
-    posecheck_eval = {
-        "strain_energies": {"mean": [], "std": []},
-        "clashes": {"mean": [], "std": []},
-        "rmsds": {"mean": [], "std": []},
-    }
+
+    buster_dict = defaultdict(list)
+    violin_dict = defaultdict(list)
+    posecheck_dict = defaultdict(list)
+
     sdf_files = (
         list(args.sdf_dir.glob("[!.]*.sdf"))
         if args.sdf_dir is not None
@@ -221,8 +291,15 @@ if __name__ == "__main__":
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
 
         # try:
-        scores, pose_eval, rdmols = calculate_qvina2_score(
-            receptor_file, sdf_file, args.out_dir, return_rdmol=True
+        scores, rdmols = calculate_qvina2_score(
+            receptor_file,
+            sdf_file,
+            args.out_dir,
+            args.pdb_dir,
+            buster_dict,
+            violin_dict,
+            posecheck_dict,
+            return_rdmol=True,
         )
         # except AttributeError as e:
         #     print(e)
@@ -230,12 +307,6 @@ if __name__ == "__main__":
         results["receptor"].append(str(receptor_file))
         results["ligand"].append(str(sdf_file))
         results["scores"].append(scores)
-        posecheck_eval["clashes"]["mean"].append(pose_eval["clashes"][0])
-        posecheck_eval["clashes"]["std"].append(pose_eval["clashes"][1])
-        posecheck_eval["strain_energies"]["mean"].append(pose_eval["strain_energy"][0])
-        posecheck_eval["strain_energies"]["std"].append(pose_eval["strain_energy"][1])
-        posecheck_eval["rmsds"]["mean"].append(pose_eval["rmsd"][0])
-        posecheck_eval["rmsds"]["std"].append(pose_eval["rmsd"][1])
 
         if args.write_dict:
             results_dict[ligand_name] = {
@@ -251,7 +322,9 @@ if __name__ == "__main__":
 
     if args.write_dict:
         torch.save(results_dict, Path(args.out_dir, "qvina2_scores.pt"))
-        torch.save(posecheck_eval, Path(args.out_dir, "posecheck.pt"))
+        save_pickle(buster_dict, os.path.join(args.out_dir, "posebusters.pickle"))
+        save_pickle(violin_dict, os.path.join(args.out_dir, "violin_dict.pickle"))
+        save_pickle(posecheck_dict, os.path.join(args.out_dir, "posecheck.pickle"))
 
     scores_mean = [np.mean(r) for r in results["scores"] if len(r) >= 1]
 
@@ -264,21 +337,17 @@ if __name__ == "__main__":
     print(f"Mean docking score: {mean_score}")
     print(f"Docking score standard deviation: {std_score}")
 
-    # Clashes
-    mean_clashes = np.mean(posecheck_eval["clashes"]["mean"])
-    std_clashes = np.std(posecheck_eval["clashes"]["std"])
-    print(f"Mean clashes: {mean_clashes}")
-    print(f"Clashes standard deviation: {std_clashes}")
-    # Strain energy
-    mean_strain_e = np.mean(posecheck_eval["strain_energies"]["mean"])
-    std_strain_e = np.std(posecheck_eval["strain_energies"]["std"])
-    print(f"Mean strain_energies: {mean_strain_e}")
-    print(f"Strain_energies standard deviation: {std_strain_e}")
-    # RMSD
-    mean_rmsd = np.mean(posecheck_eval["rmsds"]["mean"])
-    std_rmsd = np.std(posecheck_eval["rmsds"]["std"])
-    print(f"Mean RMSD: {mean_rmsd}")
-    print(f"RMSD standard deviation: {std_rmsd}")
+    # PoseBusters
+    buster_dict = {
+        k: {"mean": np.mean(v), "std": np.std(v)} for k, v in buster_dict.items()
+    }
+    print(f"PoseBusters evaluation: {buster_dict}")
+
+    # PoseCheck
+    posecheck_dict = {
+        k: {"mean": np.mean(v), "std": np.std(v)} for k, v in posecheck_dict.items()
+    }
+    print(f"PoseCheck evaluation: {posecheck_dict}")
 
     # scores = np.mean(
     #     [r.sort(reverse=True)[:10] for r in results["scores"] if len(r) >= 1]
