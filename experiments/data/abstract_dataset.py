@@ -207,3 +207,7 @@ class AbstractDatasetInfos:
             self.hybridization = statistics["train"].hybridization
         if hasattr(statistics["train"], "numHs"):
             self.numHs = statistics["train"].numHs
+        if hasattr(statistics["train"], "is_h_donor"):
+            self.is_h_donor = statistics["train"].is_h_donor
+        if hasattr(statistics["train"], "is_h_acceptor"):
+            self.is_h_acceptor = statistics["train"].is_h_acceptor

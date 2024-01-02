@@ -110,7 +110,7 @@ def per_atom_force_norm(data_list):
 
 
 def additional_feat_counts(
-    data_list, keys: list = ["is_aromatic", "is_in_ring", "hybridization"], normalize=True
+    data_list, keys: list = ["is_aromatic", "is_in_ring", "hybridization", "is_h_donor", "is_h_acceptor"], normalize=True
 ):
     print(f"Computing node counts for features = {str(keys)}")
     from experiments.data.utils import x_map

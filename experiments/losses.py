@@ -220,6 +220,39 @@ class DiffusionLoss(nn.Module):
             else:
                 hybridization_loss = None
 
+            if "donor" in self.modalities:
+                donor_loss = F.cross_entropy(
+                    pred_data["donor"],
+                    true_data["donor"],
+                    reduction="none",
+                )
+                donor_loss = scatter_mean(
+                    donor_loss, index=batch, dim=0, dim_size=batch_size
+                )
+                donor_loss, m = self.loss_non_nans(
+                    donor_loss, "donor"
+                )
+                donor_loss *= weights[~m]
+                donor_loss = torch.sum(donor_loss, dim=0)
+            else:
+                donor_loss = None
+            
+            if "acceptor" in self.modalities:
+                acceptor_loss = F.cross_entropy(
+                    pred_data["acceptor"],
+                    true_data["acceptor"],
+                    reduction="none",
+                )
+                acceptor_loss = scatter_mean(
+                    acceptor_loss, index=batch, dim=0, dim_size=batch_size
+                )
+                acceptor_loss, m = self.loss_non_nans(
+                    acceptor_loss, "acceptor"
+                )
+                acceptor_loss *= weights[~m]
+                acceptor_loss = torch.sum(acceptor_loss, dim=0)
+            else:
+                acceptor_loss = None
         else:
             regr_loss = F.mse_loss(
                 pred_data[self.regression_key],
@@ -272,7 +305,24 @@ class DiffusionLoss(nn.Module):
                 )
             else:
                 hybridization_loss = None
-
+                
+            if "donor" in self.modalities:
+                donor_loss = F.cross_entropy(
+                    pred_data["donor"],
+                    true_data["donor"],
+                    reduction="mean",
+                )
+            else:
+                donor_loss = None
+                
+            if "acceptor" in self.modalities:
+                acceptor_loss = F.cross_entropy(
+                    pred_data["acceptor"],
+                    true_data["acceptor"],
+                    reduction="mean",
+                )
+            else:
+                acceptor_loss = None
         loss = {
             self.regression_key: regr_loss,
             "atoms": atoms_loss,
@@ -283,6 +333,8 @@ class DiffusionLoss(nn.Module):
             "hybridization": hybridization_loss,
             "mulliken": mulliken_loss,
             "wbo": wbo_loss,
+            "donor": donor_loss,
+            "acceptor": acceptor_loss
         }
 
         return loss

@@ -12,6 +12,12 @@ from rdkit import Chem, RDLogger
 from torch_geometric.data import Data
 from torch_geometric.utils import sort_edge_index, subgraph
 
+from rdkit.Chem import ChemicalFeatures
+from rdkit import RDConfig
+import os
+fdefName = os.path.join(RDConfig.RDDataDir,'BaseFeatures.fdef')
+factory = ChemicalFeatures.BuildFeatureFactory(fdefName)
+
 RDLogger.DisableLog("rdApp.*")
 
 x_map = {
@@ -28,6 +34,8 @@ x_map = {
         rdkit.Chem.rdchem.HybridizationType.SP3D2,
         rdkit.Chem.rdchem.HybridizationType.OTHER,
     ],
+    "is_h_donor": [False, True],
+    "is_h_acceptor": [False, True]
 }
 
 
@@ -78,6 +86,34 @@ def mol_to_torch_geometric(
     is_aromatic = torch.Tensor(is_aromatic).long()
     is_in_ring = torch.Tensor(is_in_ring).long()
     hybridization = torch.Tensor(sp_hybridization).long()
+    # hydrogen bond acceptor and donor
+    feats = factory.GetFeaturesForMol(mol)
+    donor_ids = []
+    acceptor_ids = []
+    for f in feats:
+        if f.GetFamily().lower() == "donor":
+            donor_ids.append(f.GetAtomIds())
+        elif f.GetFamily().lower() == "acceptor":
+            acceptor_ids.append(f.GetAtomIds())
+
+    if len(donor_ids) > 0:
+        donor_ids = np.concatenate(donor_ids)
+    else:
+        donor_ids = np.array([])
+
+    if len(acceptor_ids) > 0:
+        acceptor_ids = np.concatenate(acceptor_ids)
+    else:
+        acceptor_ids = np.array([])
+    is_acceptor = np.zeros(mol.GetNumAtoms(), dtype=np.uint8)
+    is_donor = np.zeros(mol.GetNumAtoms(), dtype=np.uint8)
+    if len(donor_ids) > 0:
+        is_donor[donor_ids] = 1
+    if len(acceptor_ids) > 0:
+        is_acceptor[acceptor_ids] = 1
+
+    is_donor = torch.from_numpy(is_donor).long()
+    is_acceptor = torch.from_numpy(is_acceptor).long()
 
     additional = {}
     if "wbo" in kwargs:
@@ -99,6 +135,8 @@ def mol_to_torch_geometric(
         smiles=smiles,
         is_aromatic=is_aromatic,
         is_in_ring=is_in_ring,
+        is_h_donor=is_donor,
+        is_h_acceptor=is_acceptor,
         hybridization=hybridization,
         mol=mol,
         **additional,
@@ -410,6 +448,8 @@ class Statistics:
         is_aromatic=None,
         hybridization=None,
         force_norms=None,
+        is_h_donor=None,
+        is_h_acceptor=None
     ):
         self.num_nodes = num_nodes
         # print("NUM NODES IN STATISTICS", num_nodes)
@@ -424,6 +464,8 @@ class Statistics:
         self.is_aromatic = is_aromatic
         self.hybridization = hybridization
         self.force_norms = force_norms
+        self.is_h_donor = is_h_donor
+        self.is_h_acceptor = is_h_acceptor
 
 
 def train_val_test_split(dset_len, train_size, val_size, test_size, seed, order=None):

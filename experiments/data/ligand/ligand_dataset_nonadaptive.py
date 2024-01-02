@@ -81,8 +81,10 @@ class LigandPocketDataset(InMemoryDataset):
             is_aromatic=torch.from_numpy(np.load(self.processed_paths[8])).float(),
             is_in_ring=torch.from_numpy(np.load(self.processed_paths[9])).float(),
             hybridization=torch.from_numpy(np.load(self.processed_paths[10])).float(),
+            is_h_donor=torch.from_numpy(np.load(self.processed_paths[11])).float(),
+            is_h_acceptor=torch.from_numpy(np.load(self.processed_paths[12])).float(),
         )
-        self.smiles = load_pickle(self.processed_paths[11])
+        self.smiles = load_pickle(self.processed_paths[13])
 
     @property
     def raw_file_names(self):
@@ -108,6 +110,8 @@ class LigandPocketDataset(InMemoryDataset):
                 f"train_is_aromatic_{h}.npy",
                 f"train_is_in_ring_{h}.npy",
                 f"train_hybridization_{h}.npy",
+                f"train_is_h_donor_{h}.npy",
+                f"train_is_h_acceptor_{h}.npy",
                 "train_smiles.pickle",
             ]
         elif self.split == "val":
@@ -123,6 +127,8 @@ class LigandPocketDataset(InMemoryDataset):
                 f"val_is_aromatic_{h}.npy",
                 f"val_is_in_ring_{h}.npy",
                 f"val_hybridization_{h}.npy",
+                f"val_is_h_donor_{h}.npy",
+                f"val_is_h_acceptor_{h}.npy",
                 "val_smiles.pickle",
             ]
         else:
@@ -138,6 +144,8 @@ class LigandPocketDataset(InMemoryDataset):
                 f"test_is_aromatic_{h}.npy",
                 f"test_is_in_ring_{h}.npy",
                 f"test_hybridization_{h}.npy",
+                f"test_is_h_donor_{h}.npy",
+                f"test_is_h_acceptor_{h}.npy",
                 "test_smiles.pickle",
             ]
 
@@ -276,9 +284,11 @@ class LigandPocketDataset(InMemoryDataset):
         np.save(self.processed_paths[7], statistics.bond_angles)
         np.save(self.processed_paths[8], statistics.is_aromatic)
         np.save(self.processed_paths[9], statistics.is_in_ring)
-        np.save(self.processed_paths[10], statistics.hybridization)
+        # is_h_donor and is_h_acceptor
+        np.save(self.processed_paths[11], statistics.is_h_donor)
+        np.save(self.processed_paths[12], statistics.is_h_acceptor)
 
-        save_pickle(set(all_smiles), self.processed_paths[11])
+        save_pickle(set(all_smiles), self.processed_paths[13])
 
 
 class LigandPocketDataModule(AbstractDataModuleLigand):
