@@ -1,4 +1,4 @@
-name: e3moldiffusion
+name: e3mol
 channels:
   - anaconda
   - conda-forge
@@ -6,6 +6,7 @@ channels:
   - pytorch
   - pyg
   - nvidia
+  - mx
 dependencies:
   - python=3.10.0
   - pip
@@ -16,18 +17,25 @@ dependencies:
   - pyg::pytorch-scatter
   - pyg::pytorch-sparse
   - pyg::pytorch-cluster
-  - conda-forge::rdkit=2023.03.2
+  - conda-forge::rdkit=2023.9.3
   - conda-forge::pytorch-lightning=2.0.6
+  - xtb
   - conda-forge::jupyter
   - conda-forge::openbabel
+  - conda-forge::prody
+  - conda-forge::prolif
+  - conda-forge::pypdb
+  - conda-forge::datamol
+  - conda-forge::py3dmol
+  - anaconda::seaborn
+  - anaconda::biopython=1.81
+  - conda-forge::setuptools=65.6.3
+  - mx::reduce
   - pip:
-      - xtb
       - ase
-      - py3Dmol
       - lmdb
       - nglview
       - rmsd
       - torch_ema
       - tensorboard
-      - biopython
-      - seaborn
+      - xtb

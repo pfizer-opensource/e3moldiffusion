@@ -1,6 +1,9 @@
 import argparse
 import os
+import shutil
+import tempfile
 import warnings
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from time import time
@@ -9,17 +12,25 @@ import numpy as np
 import pandas as pd
 import torch
 from Bio.PDB import PDBParser
+from posebusters import PoseBusters
+from posecheck.posecheck import PoseCheck
 from tqdm import tqdm
 
 from experiments.data.distributions import DistributionProperty
+from experiments.data.ligand.process_pdb import get_pdb_components, write_pdb
 from experiments.data.utils import save_pickle
 from experiments.docking import calculate_qvina2_score
 from experiments.sampling.analyze import analyze_stability_for_molecules
-from experiments.utils import prepare_pocket, write_sdf_file
+from experiments.utils import (
+    prepare_pocket,
+    retrieve_interactions_per_mol,
+    write_sdf_file,
+)
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
 )
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 class dotdict(dict):
@@ -34,6 +45,7 @@ def evaluate(
     model_path,
     save_dir,
     test_dir,
+    pdb_dir,
     test_list,
     skip_existing,
     fix_n_nodes,
@@ -113,6 +125,8 @@ def evaluate(
         prop_dist=prop_dist,
         load_ckpt_from_pretrained=None,
         store_intermediate_coords=False,
+        ligand_pocket_hidden_distance=None,
+        ligand_pocket_distance_loss=None,
         load_ckpt=None,
         # energy_model_guidance=True if use_energy_guidance else False,
         # ckpt_energy_model=ckpt_energy_model,
@@ -140,7 +154,11 @@ def evaluate(
     pbar = tqdm(test_files)
     time_per_pocket = {}
 
-    statistics_dict = {"QED": [], "SA": [], "Lipinski": [], "Diversity": []}
+    statistics_dict = defaultdict(list)
+    buster_dict = defaultdict(list)
+    violin_dict = defaultdict(list)
+    posecheck_dict = defaultdict(list)
+
     sdf_files = []
 
     if build_obabel_mol:
@@ -263,8 +281,63 @@ def evaluate(
         ]  # we could sort them by QED, SA or whatever
 
         write_sdf_file(sdf_out_file_raw, valid_molecules, extract_mol=True)
-
         sdf_files.append(sdf_out_file_raw)
+
+        pdb_name = str(sdf_out_file_raw).split("/")[-1].split("-")[0]
+        if pdb_dir is not None:
+            pdbs = [
+                str(i).split("/")[-1].split(".")[0] for i in pdb_dir.glob("[!.]*.pdb")
+            ]
+        else:
+            pdbs = None
+        if pdbs is not None and pdb_name in pdbs:
+            pdb_file = os.path.join(str(pdb_dir), pdb_name + ".pdb")
+        else:
+            temp_dir = tempfile.mkdtemp()
+            protein, _ = get_pdb_components(pdb_name)
+            pdb_file = write_pdb(temp_dir, protein, pdb_name)
+
+        # PoseBusters
+        print("Starting evaluation with PoseBusters...")
+        buster = {}
+        buster_mol = PoseBusters(config="mol")
+        buster_mol_df = buster_mol.bust([sdf_out_file_raw], None, None)
+        for metric in buster_mol_df.columns:
+            violin_dict[metric].extend(list(buster_mol_df[metric]))
+            buster[metric] = buster_mol_df[metric].sum() / len(buster_mol_df[metric])
+        buster_dock = PoseBusters(config="dock")
+        buster_dock_df = buster_dock.bust([sdf_out_file_raw], None, pdb_file)
+        for metric in buster_dock_df:
+            if metric not in buster:
+                violin_dict[metric].extend(list(buster_dock_df[metric]))
+                buster[metric] = buster_dock_df[metric].sum() / len(
+                    buster_dock_df[metric]
+                )
+        for k, v in buster.items():
+            buster_dict[k].append(v)
+        print("Done!")
+
+        # PoseCheck
+        print("Starting evaluation with PoseCheck...")
+        pc = PoseCheck()
+        pc.load_protein_from_pdb(pdb_file)
+        pc.load_ligands_from_sdf(str(sdf_out_file_raw), add_hs=True)
+        interactions = pc.calculate_interactions()
+        interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
+            interactions
+        )
+        for k, v in interactions_per_mol.items():
+            violin_dict[k].extend(v)
+        for k, v in interactions_mean.items():
+            posecheck_dict[k].append(v["mean"])
+        posecheck_dict["Clashes"].append(np.mean(pc.calculate_clashes()))
+        posecheck_dict["Strain Energies"].append(np.mean(pc.calculate_strain_energy()))
+        print("Done!")
+
+        try:
+            shutil.rmtree(temp_dir)
+        except UnboundLocalError:
+            pass
 
         # Time the sampling process
         time_per_pocket[str(sdf_file)] = time() - t_pocket_start
@@ -277,11 +350,6 @@ def evaluate(
             f"sec/mol."
         )
 
-    statistics_dict["QED"] = np.mean(statistics_dict["QED"])
-    statistics_dict["SA"] = np.mean(statistics_dict["SA"])
-    statistics_dict["Lipinski"] = np.mean(statistics_dict["Lipinski"])
-    statistics_dict["Diversity"] = np.mean(statistics_dict["Diversity"])
-
     with open(Path(save_dir, "pocket_times.txt"), "w") as f:
         for k, v in time_per_pocket.items():
             f.write(f"{k} {v}\n")
@@ -293,9 +361,23 @@ def evaluate(
     )
     print("Sampling finished.")
 
-    statistics_dict.update(validity_dict)
+    statistics_dict = {
+        k: {"mean": np.mean(v), "std": np.std(v)} for k, v in statistics_dict.items()
+    }
+    buster_dict = {
+        k: {"mean": np.mean(v), "std": np.std(v)} for k, v in buster_dict.items()
+    }
+    posecheck_dict = {
+        k: {"mean": np.mean(v), "std": np.std(v)} for k, v in posecheck_dict.items()
+    }
+
     print(f"Mean statistics across all sampled ligands: {statistics_dict}")
+    print(f"Mean PoseBusters metrics across all sampled ligands: {buster_dict}")
+    print(f"Mean PoseCheck metrics across all sampled ligands: {posecheck_dict}")
     save_pickle(statistics_dict, os.path.join(save_dir, "statistics_dict.pickle"))
+    save_pickle(buster_dict, os.path.join(save_dir, "posebusters.pickle"))
+    save_pickle(violin_dict, os.path.join(save_dir, "violin_dict.pickle"))
+    save_pickle(posecheck_dict, os.path.join(save_dir, "posecheck.pickle"))
 
     # ############## DOCKING ##############
     # print("Starting docking...")
@@ -399,6 +481,12 @@ def get_args():
     parser.add_argument('--max-relax-iter', default=200, type=int,
                             help='How many iteration steps for UFF optimization')
     parser.add_argument("--test-dir", type=Path)
+    parser.add_argument(
+        "--pdb-dir",
+        type=Path,
+        default=None,
+        help="Directory where all full protein pdb files are stored. If not available, there will be calculated on the fly.",
+    )
     parser.add_argument("--test-list", type=Path, default=None)
     parser.add_argument("--save-dir", type=Path)
     parser.add_argument("--fix-n-nodes", action="store_true")
@@ -418,6 +506,7 @@ if __name__ == "__main__":
     evaluate(
         model_path=args.model_path,
         test_dir=args.test_dir,
+        pdb_dir=args.pdb_dir,
         test_list=args.test_list,
         save_dir=args.save_dir,
         skip_existing=args.skip_existing,

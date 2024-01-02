@@ -1,6 +1,7 @@
 import argparse
 import random
 import shutil
+import subprocess
 from pathlib import Path
 from time import time
 
@@ -11,6 +12,7 @@ import torch
 from Bio.PDB import PDBParser
 from Bio.PDB.Polypeptide import is_aa
 from Bio.PDB.Polypeptide import protein_letters_3to1 as three_to_one
+from posecheck.utils.constants import REDUCE_PATH
 from rdkit import Chem
 from scipy.ndimage import gaussian_filter
 from tqdm import tqdm
@@ -30,11 +32,22 @@ atom_dict = dataset_info["atom_encoder"]
 atom_decoder = dataset_info["atom_decoder"]
 
 
-def process_ligand_and_pocket(pdbfile, sdffile, dist_cutoff, ca_only, no_H):
-    pdb_struct = PDBParser(QUIET=True).get_structure("", pdbfile)
+def process_ligand_and_pocket(
+    pdbfile, sdffile, dist_cutoff, ca_only, no_H, reduce_path=REDUCE_PATH
+):
+    if not no_H:
+        tmp_path = str(pdbfile).split(".pdb")[0] + "_tmp.pdb"
+        # Call reduce to make tmp PDB with waters
+        reduce_command = f"{reduce_path} -NOFLIP  {pdbfile} -Quiet > {tmp_path}"
+        subprocess.run(reduce_command, shell=True)
+        pdb_struct = PDBParser(QUIET=True).get_structure("", tmp_path)
+    else:
+        pdb_struct = PDBParser(QUIET=True).get_structure("", pdbfile)
 
     try:
         ligand = Chem.SDMolSupplier(str(sdffile), removeHs=no_H)[0]
+        if not no_H:
+            ligand = Chem.AddHs(ligand, addCoords=True)
     except:
         raise Exception(f"cannot read sdf mol ({sdffile})")
 
@@ -129,9 +142,7 @@ def process_ligand_and_pocket(pdbfile, sdffile, dist_cutoff, ca_only, no_H):
                 full_atoms = full_atoms[mask]
                 full_coords = full_coords[mask]
                 ca_mask = ca_mask[mask]
-        import pdb
 
-        pdb.set_trace()
         assert sum(ca_mask) == pocket_one_hot.shape[0]
         assert len(full_atoms) == len(full_coords)
         pocket_data = {

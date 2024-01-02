@@ -1,6 +1,7 @@
 import argparse
 import math
 import os
+from collections import defaultdict
 from glob import glob
 from itertools import zip_longest
 from os.path import dirname, exists, join
@@ -1224,3 +1225,22 @@ def sdfs_to_molecules(sdf_path, remove_hs=True):
                 )
                 mols.append(molecule)
     return mols
+
+
+def retrieve_interactions_per_mol(interactions_df):
+    """
+    Get a dictionary with interaction metrics per molecule
+    """
+    interactions_list = [i[-1] for i in interactions_df.columns]
+    interactions_dict = defaultdict(list)
+    for i in range(len(interactions_df)):
+        tmp_dict = defaultdict(list)
+        for k, row in enumerate(interactions_df.iloc[i, :]):
+            tmp_dict[interactions_list[k]].append(row)
+        for key, value in tmp_dict.items():
+            interactions_dict[key].append(np.sum(value))
+
+    interactions = {
+        k: {"mean": np.mean(v), "std": np.std(v)} for k, v in interactions_dict.items()
+    }
+    return interactions_dict, interactions
