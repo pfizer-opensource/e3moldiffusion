@@ -138,7 +138,7 @@ def evaluate(
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     save_dir.mkdir(exist_ok=skip_existing)
-    raw_sdf_dir = Path(save_dir, "raw")
+    raw_sdf_dir = Path(save_dir, "sampled")
     raw_sdf_dir.mkdir(exist_ok=skip_existing)
     processed_sdf_dir = Path(save_dir, "processed")
     processed_sdf_dir.mkdir(exist_ok=skip_existing)
@@ -361,6 +361,11 @@ def evaluate(
     )
     print("Sampling finished.")
 
+    save_pickle(statistics_dict, os.path.join(save_dir, "statistics_dict.pickle"))
+    save_pickle(buster_dict, os.path.join(save_dir, "posebusters_samples.pickle"))
+    save_pickle(violin_dict, os.path.join(save_dir, "violin_dict_samples.pickle"))
+    save_pickle(posecheck_dict, os.path.join(save_dir, "posecheck_samples.pickle"))
+
     statistics_dict = {
         k: {"mean": np.mean(v), "std": np.std(v)} for k, v in statistics_dict.items()
     }
@@ -374,10 +379,6 @@ def evaluate(
     print(f"Mean statistics across all sampled ligands: {statistics_dict}")
     print(f"Mean PoseBusters metrics across all sampled ligands: {buster_dict}")
     print(f"Mean PoseCheck metrics across all sampled ligands: {posecheck_dict}")
-    save_pickle(statistics_dict, os.path.join(save_dir, "statistics_dict.pickle"))
-    save_pickle(buster_dict, os.path.join(save_dir, "posebusters.pickle"))
-    save_pickle(violin_dict, os.path.join(save_dir, "violin_dict.pickle"))
-    save_pickle(posecheck_dict, os.path.join(save_dir, "posecheck.pickle"))
 
     print(f"All files saved at {save_dir}.")
 

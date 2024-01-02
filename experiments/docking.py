@@ -90,7 +90,9 @@ def calculate_qvina2_score(
 
     if receptor_file.suffix == ".pdb":
         # prepare receptor, requires Python 2.7
-        receptor_pdbqt_file = Path(out_dir, receptor_file.stem + ".pdbqt")
+        receptor_pdbqt_file = Path(
+            os.path.join(out_dir, "docked"), receptor_file.stem + ".pdbqt"
+        )
         os.popen(f"prepare_receptor4.py -r {receptor_file} -O {receptor_pdbqt_file}")
     else:
         receptor_pdbqt_file = receptor_file
@@ -236,7 +238,7 @@ if __name__ == "__main__":
         "--sdf-dir", type=Path, default=None, help="Ligand files in sdf format"
     )
     parser.add_argument("--sdf-files", type=Path, nargs="+", default=None)
-    parser.add_argument("--out-dir", type=Path)
+    parser.add_argument("--save-dir", type=Path)
     parser.add_argument(
         "--pdb-dir",
         type=Path,
@@ -251,8 +253,6 @@ if __name__ == "__main__":
     print("Starting docking...")
 
     assert (args.sdf_dir is not None) ^ (args.sdf_files is not None)
-
-    args.out_dir.mkdir(exist_ok=True)
 
     results = {"receptor": [], "ligand": [], "scores": []}
     results_dict = {}
@@ -294,7 +294,7 @@ if __name__ == "__main__":
         scores, rdmols = calculate_qvina2_score(
             receptor_file,
             sdf_file,
-            args.out_dir,
+            args.save_dir,
             args.pdb_dir,
             buster_dict,
             violin_dict,
@@ -318,13 +318,19 @@ if __name__ == "__main__":
 
     if args.write_csv:
         df = pd.DataFrame.from_dict(results)
-        df.to_csv(Path(args.out_dir, "qvina2_scores.csv"))
+        df.to_csv(Path(args.save_dir, "qvina2_scores.csv"))
 
     if args.write_dict:
-        torch.save(results_dict, Path(args.out_dir, "qvina2_scores.pt"))
-        save_pickle(buster_dict, os.path.join(args.out_dir, "posebusters.pickle"))
-        save_pickle(violin_dict, os.path.join(args.out_dir, "violin_dict.pickle"))
-        save_pickle(posecheck_dict, os.path.join(args.out_dir, "posecheck.pickle"))
+        torch.save(results_dict, Path(args.save_dir, "qvina2_scores.pt"))
+        save_pickle(
+            buster_dict, os.path.join(args.save_dir, "posebusters_docked.pickle")
+        )
+        save_pickle(
+            violin_dict, os.path.join(args.save_dir, "violin_dict_docked.pickle")
+        )
+        save_pickle(
+            posecheck_dict, os.path.join(args.save_dir, "posecheck_docked.pickle")
+        )
 
     scores_mean = [np.mean(r) for r in results["scores"] if len(r) >= 1]
 
@@ -349,7 +355,7 @@ if __name__ == "__main__":
     }
     print(f"PoseCheck evaluation: {posecheck_dict}")
 
-    print(f"All files saved at {args.out_dir}.")
+    print(f"All files saved at {args.save_dir}.")
 
     # scores = np.mean(
     #     [r.sort(reverse=True)[:10] for r in results["scores"] if len(r) >= 1]
