@@ -1,8 +1,6 @@
 name: e3mol
 channels:
-  - anaconda
   - conda-forge
-  - defaults
   - pytorch
   - pyg
   - nvidia
@@ -12,6 +10,7 @@ dependencies:
   - pip
   - notebook
   - matplotlib
+  - xtb
   - pytorch::pytorch=2.0.1
   - pyg::pyg=2.3.0
   - pyg::pytorch-scatter
@@ -19,7 +18,6 @@ dependencies:
   - pyg::pytorch-cluster
   - conda-forge::rdkit=2023.9.3
   - conda-forge::pytorch-lightning=2.0.6
-  - xtb
   - conda-forge::jupyter
   - conda-forge::openbabel
   - conda-forge::prody
@@ -27,8 +25,8 @@ dependencies:
   - conda-forge::pypdb
   - conda-forge::datamol
   - conda-forge::py3dmol
-  - anaconda::seaborn
-  - anaconda::biopython=1.81
+  - conda-forge::seaborn
+  - conda-forge::biopython=1.81
   - conda-forge::setuptools=65.6.3
   - mx::reduce
   - pip:
