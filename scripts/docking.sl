@@ -1,6 +1,6 @@
 #!/bin/bash -l
-#SBATCH -J nodes_fix_addfeats
-#SBATCH --time=01-00:00:00
+#SBATCH -J dock
+#SBATCH --time=02-00:00:00
 #SBATCH --nodes=1
 #SBATCH --partition=ondemand-cpu-c48
 #SBATCH --ntasks=1
@@ -18,12 +18,13 @@ conda activate /sharedhome/cremej01/workspace/mambaforge/envs/e3moldiffusion
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-out_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_enamineft_cutoff5_bonds5_ep15/evaluation/docking/nodes_bias_large"
+out_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_enamineft_cutoff5_bonds5_ep10/evaluation/docking/nodes_bias_large"
 
 python experiments/docking.py \
     --sdf-dir "$out_dir/raw" \
     --out-dir "$out_dir/processed" \
     --pdbqt-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5/test/pdbqt \
+    --pdb-dir /scratch1/cremej01/data/crossdocked_pdbs \
     --dataset crossdocked \
     --write-csv \
     --write-dict

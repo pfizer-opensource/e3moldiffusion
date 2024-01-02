@@ -1,6 +1,7 @@
 import os
 import pickle
 import subprocess
+import tempfile
 from functools import lru_cache
 from typing import List, Union
 
@@ -57,8 +58,9 @@ def load_protein_from_pdb(pdb_path: str, reduce_path: str = REDUCE_PATH):
     Returns:
         plf.Molecule: The loaded protein as a prolif.Molecule.
     """
-    tmp_path = pdb_path.split(".pdb")[0] + "_tmp.pdb"
 
+    temp_file = tempfile.NamedTemporaryFile()
+    tmp_path = temp_file.name + ".pdb"
     # Call reduce to make tmp PDB with waters
     reduce_command = f"{reduce_path} -NOFLIP  {pdb_path} -Quiet > {tmp_path}"
     subprocess.run(reduce_command, shell=True)
@@ -127,8 +129,9 @@ def load_mols_from_sdf(sdf_path: str, add_hs: bool = True) -> Union[plf.Molecule
     Returns:
         Union[plf.Molecule, List]: The loaded ligand as a prolif.Molecule, or an empty list if no molecule could be loaded.
     """
-    tmp_path = sdf_path.split(".sdf")[0] + "_tmp.sdf"
 
+    temp_file = tempfile.NamedTemporaryFile()
+    tmp_path = temp_file.name + ".sdf"
     # Load molecules from the SDF file
     mols = dm.read_sdf(sdf_path)
 
@@ -145,6 +148,7 @@ def load_mols_from_sdf(sdf_path: str, add_hs: bool = True) -> Union[plf.Molecule
     # Write the molecules to a temporary file
     dm.to_sdf(mols, tmp_path)
     ligs = load_sdf_prolif(tmp_path)
+
     os.remove(tmp_path)
 
     # Turn into list

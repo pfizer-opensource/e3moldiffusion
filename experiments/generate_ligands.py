@@ -379,6 +379,8 @@ def evaluate(
     save_pickle(violin_dict, os.path.join(save_dir, "violin_dict.pickle"))
     save_pickle(posecheck_dict, os.path.join(save_dir, "posecheck.pickle"))
 
+    print(f"All files saved at {save_dir}.")
+
     # ############## DOCKING ##############
     # print("Starting docking...")
     # results = {"receptor": [], "ligand": [], "scores": []}

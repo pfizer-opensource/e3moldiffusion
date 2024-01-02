@@ -6,10 +6,12 @@
 #FOR TEST EVAL
 save_xyz: true
 calculate_energy: true
-num_test_graphs: 10000
+num_test_graphs: 1000
 inference_batch_size: 8
 use_ligand_dataset_sizes: true
 test_save_dir: /scratch1/e3moldiffusion/logs/crossdocked/test
+
+remove_hs: False
 
 ligand_pocket_interaction: true
 use_pos_norm: false
@@ -26,7 +28,6 @@ accum_batch: 1
 gamma: 0.99
 
 use_adaptive_loader: false
-remove_hs: true
 
 gpus: 4
 num_epochs: 301
@@ -45,7 +46,7 @@ vector_aggr: mean
 
 #DATA
 dataset: crossdocked
-dataset_root: /scratch1/cremej01/data/crossdocked_noH_cutoff5
+dataset_root: /scratch1/cremej01/data/crossdocked_H_cutoff5
 # dataset_root: /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/data
 
 # DIFFUSION

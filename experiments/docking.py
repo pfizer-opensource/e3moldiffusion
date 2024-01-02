@@ -349,6 +349,8 @@ if __name__ == "__main__":
     }
     print(f"PoseCheck evaluation: {posecheck_dict}")
 
+    print(f"All files saved at {args.out_dir}.")
+
     # scores = np.mean(
     #     [r.sort(reverse=True)[:10] for r in results["scores"] if len(r) >= 1]
     # )
