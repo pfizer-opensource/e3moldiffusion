@@ -548,7 +548,6 @@ class Trainer(pl.LightningModule):
             final_loss = final_loss[~final_loss.isnan()]
             print(f"Detected NaNs. Terminating training at epoch {self.current_epoch}")
             exit()
-            
         self._log(
             final_loss,
             loss["coords"],

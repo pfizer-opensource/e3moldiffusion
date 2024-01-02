@@ -140,7 +140,7 @@ class Trainer(pl.LightningModule):
                 coords_param=hparams["continuous_param"],
                 use_pos_norm=hparams["use_pos_norm"],
                 store_intermediate_coords=hparams["store_intermediate_coords"],
-                distance_ligand_pocket=hparams["ligand_pocket_hidden_distance"]
+                distance_ligand_pocket=hparams["ligand_pocket_hidden_distance"] if "ligand_pocket_hidden_distance" in hparams.keys() else False
             )
 
         self.sde_pos = DiscreteDDPM(
@@ -1092,6 +1092,8 @@ class Trainer(pl.LightningModule):
                 pocket_mask=pocket_mask.unsqueeze(1),
                 edge_mask=edge_mask,
                 batch_lig=batch,
+                ca_mask=pocket_data.pocket_ca_mask.to(self.device),
+                batch_pocket=pocket_data.pos_pocket_batch.to(self.device)
             )
 
             coords_pred = out["coords_pred"].squeeze()

@@ -98,7 +98,7 @@ def evaluate(
     elif hparams.latent_dim is None:
         from experiments.diffusion_discrete_pocket import Trainer
     else:
-        from experiments.diffusion_discrete_latent_pocket import Trainer
+        from experiments.diffusion_discrete_latent_pocket_ligand import Trainer
 
     torch.cuda.empty_cache()
 
