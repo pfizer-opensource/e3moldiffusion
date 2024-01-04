@@ -88,6 +88,8 @@ class Trainer(pl.LightningModule):
         is_aromatic_distribution = dataset_info.is_aromatic.float()
         is_ring_distribution = dataset_info.is_in_ring.float()
         hybridization_distribution = dataset_info.hybridization.float()
+        is_donor_distribution = dataset_info.is_h_donor.float()
+        is_acceptor_distribution = dataset_info.is_h_acceptor.float()
 
         self.register_buffer("atoms_prior", atom_types_distribution.clone())
         self.register_buffer("bonds_prior", bond_types_distribution.clone())
@@ -95,9 +97,12 @@ class Trainer(pl.LightningModule):
         self.register_buffer("is_aromatic_prior", is_aromatic_distribution.clone())
         self.register_buffer("is_in_ring_prior", is_ring_distribution.clone())
         self.register_buffer("hybridization_prior", hybridization_distribution.clone())
+        self.register_buffer("is_donor_prior", is_donor_distribution.clone())
+        self.register_buffer("is_acceptor_prior", is_acceptor_distribution.clone())
 
         self.num_is_aromatic = self.num_is_in_ring = 2
         self.num_hybridization = 9
+        self.num_is_donor = self.num_is_acceptor = 2
 
         self.hparams.num_atom_types = dataset_info.input_dims.X
         self.num_charge_classes = dataset_info.input_dims.C
@@ -113,6 +118,8 @@ class Trainer(pl.LightningModule):
             + self.num_is_aromatic
             + self.num_is_in_ring
             + self.num_hybridization
+            + self.num_is_donor
+            * self.num_is_acceptor
         )
         self.num_bond_classes = self.hparams.num_bond_classes
 
@@ -156,6 +163,7 @@ class Trainer(pl.LightningModule):
                 coords_param=hparams["continuous_param"],
                 use_pos_norm=hparams["use_pos_norm"],
                 store_intermediate_coords=hparams["store_intermediate_coords"],
+                distance_ligand_pocket=hparams["ligand_pocket_hidden_distance"] if "ligand_pocket_hidden_distance" in hparams.keys() else False
             )
 
         self.sde_pos = DiscreteDDPM(
@@ -225,6 +233,16 @@ class Trainer(pl.LightningModule):
             alphas=self.sde_atom_charge.alphas.clone(),
             num_hybridization=self.num_hybridization,
         )
+        self.cat_donor = CategoricalDiffusionKernel(
+            terminal_distribution=is_donor_distribution,
+            alphas=self.sde_atom_charge.alphas.clone(),
+            num_is_donor=self.num_is_donor,
+        )
+        self.cat_acceptor = CategoricalDiffusionKernel(
+            terminal_distribution=is_acceptor_distribution,
+            alphas=self.sde_atom_charge.alphas.clone(),
+            num_is_acceptor=self.num_is_acceptor,
+        )
 
         self.diffusion_loss = DiffusionLoss(
             modalities=[
@@ -235,8 +253,10 @@ class Trainer(pl.LightningModule):
                 "ring",
                 "aromatic",
                 "hybridization",
+                "donor",
+                "acceptor"
             ],
-            param=["data"] * 7,
+            param=["data"] * 9,
         )
 
         if self.hparams.bond_model_guidance:
@@ -247,6 +267,11 @@ class Trainer(pl.LightningModule):
             for param in self.bond_model.parameters():
                 param.requires_grad = False
             self.bond_model.eval()
+        
+        if self.hparams.ligand_pocket_distance_loss:
+            self.dist_loss = torch.nn.HuberLoss(reduction="none", delta=1.0)
+        else:
+            self.dist_loss = None
 
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
@@ -407,6 +432,9 @@ class Trainer(pl.LightningModule):
         ring_loss,
         aromatic_loss,
         hybridization_loss,
+        donor_loss,
+        acceptor_loss,
+        dloss,
         batch_size,
         stage,
     ):
@@ -479,6 +507,31 @@ class Trainer(pl.LightningModule):
             prog_bar=(stage == "train"),
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
+        self.log(
+            f"{stage}/donor_loss",
+            donor_loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage == "train"),
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+        )
+        self.log(
+            f"{stage}/acceptor_loss",
+            acceptor_loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage == "train"),
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+        )
+        if self.hparams.ligand_pocket_distance_loss:
+            self.log(
+                f"{stage}/d_loss",
+                dloss,
+                on_step=True,
+                batch_size=batch_size,
+                prog_bar=(stage == "train"),
+                sync_dist=self.hparams.gpus > 1 and stage == "val",
+            )
 
     def step_fnc(self, batch, batch_idx, stage: str):
         batch_size = int(batch.batch.max()) + 1
@@ -525,6 +578,8 @@ class Trainer(pl.LightningModule):
             "ring": out_dict["ring_true"],
             "aromatic": out_dict["aromatic_true"],
             "hybridization": out_dict["hybridization_true"],
+            "donor": out_dict["donor_true"],
+            "acceptor": out_dict["acceptor_true"],
         }
 
         coords_pred = out_dict["coords_pred"]
@@ -535,6 +590,8 @@ class Trainer(pl.LightningModule):
             ring_pred,
             aromatic_pred,
             hybridization_pred,
+            donor_pred,
+            acceptor_pred
         ) = atoms_pred.split(
             [
                 self.num_atom_types,
@@ -542,6 +599,8 @@ class Trainer(pl.LightningModule):
                 self.num_is_in_ring,
                 self.num_is_aromatic,
                 self.num_hybridization,
+                self.num_is_donor,
+                self.num_is_acceptor
             ],
             dim=-1,
         )
@@ -555,6 +614,8 @@ class Trainer(pl.LightningModule):
             "ring": ring_pred,
             "aromatic": aromatic_pred,
             "hybridization": hybridization_pred,
+            "donor": donor_pred,
+            "acceptor": acceptor_pred
         }
 
         loss = self.diffusion_loss(
@@ -575,7 +636,28 @@ class Trainer(pl.LightningModule):
             + 0.5 * loss["ring"]
             + 0.7 * loss["aromatic"]
             + 1.0 * loss["hybridization"]
+            + 1.0 * loss["donor"]
+            + 1.0 * loss["acceptor"]
         )
+        
+        if self.hparams.ligand_pocket_distance_loss:
+            coords_pocket = out_dict["distance_loss_data"]["pos_centered_pocket"]
+            ligand_i, pocket_j = out_dict["distance_loss_data"]["edge_index_cross"]
+            dloss_true = (out_dict["coords_true"][ligand_i] - coords_pocket[pocket_j]).pow(2).sum(-1).sqrt()
+            dloss_pred = (out_dict["coords_pred"][ligand_i] - coords_pocket[pocket_j]).pow(2).sum(-1).sqrt()
+            # geometry loss
+            dloss = self.dist_loss(dloss_true, dloss_pred).mean()
+            if self.hparams.ligand_pocket_hidden_distance:
+                d_hidden = out_dict["dist_pred"] 
+                # latent loss
+                dloss1 = self.dist_loss(dloss_true, d_hidden).mean()
+                # consistency loss between geometry and latent
+                dloss2 = self.dist_loss(dloss_pred, d_hidden).mean()
+                dloss = dloss + dloss1 + dloss2
+            final_loss = final_loss + 1.0 * dloss
+        else:
+            dloss = 0.0
+            
 
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
@@ -591,6 +673,9 @@ class Trainer(pl.LightningModule):
             loss["ring"],
             loss["aromatic"],
             loss["hybridization"],
+            loss["donor"],
+            loss["acceptor"],
+            dloss,
             batch_size,
             stage,
         )
@@ -615,6 +700,8 @@ class Trainer(pl.LightningModule):
         ring_feat = batch.is_in_ring
         aromatic_feat = batch.is_aromatic
         hybridization_feat = batch.hybridization
+        donor_feat = batch.is_h_donor
+        acceptor_feat = batch.is_h_acceptor
 
         # TIME EMBEDDING
         temb = t.float() / self.hparams.timesteps
@@ -729,6 +816,28 @@ class Trainer(pl.LightningModule):
             num_classes=self.num_hybridization,
             type="hybridization",
         )
+        (
+            donor_feat,
+            donor_feat_perturbed,
+        ) = self.cat_donor.sample_categorical(
+            t,
+            donor_feat,
+            data_batch,
+            self.dataset_info,
+            num_classes=self.num_is_donor,
+            type="donor",
+        )
+        (
+            acceptor_feat,
+            acceptor_feat_perturbed,
+        ) = self.cat_acceptor.sample_categorical(
+            t,
+            acceptor_feat,
+            data_batch,
+            self.dataset_info,
+            num_classes=self.num_is_acceptor,
+            type="acceptor",
+        )
         # Concatenate all node features
         atom_feats_in_perturbed = torch.cat(
             [
@@ -737,6 +846,8 @@ class Trainer(pl.LightningModule):
                 ring_feat_perturbed,
                 aromatic_feat_perturbed,
                 hybridization_feat_perturbed,
+                donor_feat_perturbed,
+                acceptor_feat_perturbed
             ],
             dim=-1,
         )
@@ -755,6 +866,12 @@ class Trainer(pl.LightningModule):
         hybridization_feat_pocket = torch.zeros(
             pos_pocket.shape[0], self.num_hybridization, dtype=torch.float32
         ).to(self.device)
+        donor_feat_pocket = torch.zeros(
+            pos_pocket.shape[0], self.num_is_donor, dtype=torch.float32
+        ).to(self.device)
+        acceptor_feat_pocket = torch.zeros(
+            pos_pocket.shape[0], self.num_is_acceptor, dtype=torch.float32
+        ).to(self.device)
         atom_feats_in_pocket = torch.cat(
             [
                 atom_types_pocket,
@@ -762,6 +879,8 @@ class Trainer(pl.LightningModule):
                 ring_feat_pocket,
                 aromatic_feat_pocket,
                 hybridization_feat_pocket,
+                donor_feat_pocket,
+                acceptor_feat_pocket
             ],
             dim=-1,
         )
@@ -797,6 +916,8 @@ class Trainer(pl.LightningModule):
             pocket_mask=pocket_mask.unsqueeze(1),
             edge_mask=edge_mask,
             batch_lig=data_batch,
+            ca_mask=batch.pocket_ca_mask,
+            batch_pocket=batch.pos_pocket_batch
         )
 
         # if self.training and self.trainer.current_epoch > 40:
@@ -843,8 +964,19 @@ class Trainer(pl.LightningModule):
         out["ring_true"] = ring_feat.argmax(dim=-1)
         out["aromatic_true"] = aromatic_feat.argmax(dim=-1)
         out["hybridization_true"] = hybridization_feat.argmax(dim=-1)
+        out["donor_true"] = donor_feat.argmax(dim=-1)
+        out["acceptor_true"] = acceptor_feat.argmax(dim=-1)
 
         out["bond_aggregation_index"] = edge_index_global_lig[1]
+        if self.hparams.ligand_pocket_distance_loss:
+            # Protein Pocket Coords for Distance Loss computation
+            # Only select subset based on C-alpha representatives
+            data_batch_pocket = data_batch_pocket[batch.pocket_ca_mask]
+            # create cross indices between ligand and c-alpha
+            adj_cross = (data_batch[:, None] == data_batch_pocket[None, :]).nonzero().T        
+            out["distance_loss_data"] = {'pos_centered_pocket': pos_centered_pocket[batch.pocket_ca_mask],
+                                         'edge_index_cross': adj_cross
+                                        }
         return out
 
     @torch.no_grad()
@@ -1109,6 +1241,18 @@ class Trainer(pl.LightningModule):
         hybridization_feat = F.one_hot(
             hybridization_feat, self.num_hybridization
         ).float()
+        
+        # h-donor
+        donor_feat = torch.multinomial(
+            self.is_donor_prior, num_samples=n, replacement=True
+        )
+        donor_feat = F.one_hot(donor_feat, self.num_is_donor).float()
+        
+        # h-acceptor
+        acceptor_feat = torch.multinomial(
+            self.is_acceptor_prior, num_samples=n, replacement=True
+        )
+        acceptor_feat = F.one_hot(acceptor_feat, self.num_is_acceptor).float()
 
         # edge_index_local = radius_graph(x=pos,
         #                                r=self.hparams.cutoff_local,
@@ -1164,6 +1308,12 @@ class Trainer(pl.LightningModule):
         hybridization_feat_pocket = torch.zeros(
             pos_pocket.shape[0], self.num_hybridization, dtype=torch.float32
         ).to(self.device)
+        donor_feat_pocket = torch.zeros(
+            pos_pocket.shape[0], self.num_is_donor, dtype=torch.float32
+        ).to(self.device)
+        acceptor_feat_pocket = torch.zeros(
+            pos_pocket.shape[0], self.num_is_acceptor, dtype=torch.float32
+        ).to(self.device)
 
         atom_feats_in_perturbed = torch.cat(
             [
@@ -1172,6 +1322,8 @@ class Trainer(pl.LightningModule):
                 ring_feat,
                 aromatic_feat,
                 hybridization_feat,
+                donor_feat,
+                acceptor_feat
             ],
             dim=-1,
         )
@@ -1182,6 +1334,8 @@ class Trainer(pl.LightningModule):
                 ring_feat_pocket,
                 aromatic_feat_pocket,
                 hybridization_feat_pocket,
+                donor_feat_pocket,
+                acceptor_feat_pocket
             ],
             dim=-1,
         )
@@ -1233,6 +1387,8 @@ class Trainer(pl.LightningModule):
                 pocket_mask=pocket_mask.unsqueeze(1),
                 edge_mask=edge_mask,
                 batch_lig=batch,
+                ca_mask=pocket_data.pocket_ca_mask.to(self.device),
+                batch_pocket=pocket_data.pos_pocket_batch.to(self.device)
             )
 
             coords_pred = out["coords_pred"].squeeze()
@@ -1242,6 +1398,8 @@ class Trainer(pl.LightningModule):
                 ring_pred,
                 aromatic_pred,
                 hybridization_pred,
+                donor_pred,
+                acceptor_pred,
             ) = out["atoms_pred"].split(
                 [
                     self.num_atom_types,
@@ -1249,6 +1407,8 @@ class Trainer(pl.LightningModule):
                     self.num_is_in_ring,
                     self.num_is_aromatic,
                     self.num_hybridization,
+                    self.num_is_donor,
+                    self.num_is_acceptor,
                 ],
                 dim=-1,
             )
@@ -1260,6 +1420,8 @@ class Trainer(pl.LightningModule):
             ring_pred = ring_pred.softmax(dim=-1)
             aromatic_pred = aromatic_pred.softmax(dim=-1)
             hybridization_pred = hybridization_pred.softmax(dim=-1)
+            donor_pred = donor_pred.softmax(dim=-1)
+            acceptor_pred = acceptor_pred.softmax(dim=-1)
 
             if ddpm:
                 if self.hparams.noise_scheduler == "adaptive":
@@ -1311,7 +1473,18 @@ class Trainer(pl.LightningModule):
                 t=t[batch],
                 num_classes=self.num_hybridization,
             )
-
+            donor_feat = self.cat_donor.sample_reverse_categorical(
+                xt=donor_feat,
+                x0=donor_pred,
+                t=t[batch],
+                num_classes=self.num_is_donor,
+            )
+            acceptor_feat = self.cat_acceptor.sample_reverse_categorical(
+                xt=acceptor_feat,
+                x0=acceptor_pred,
+                t=t[batch],
+                num_classes=self.num_is_acceptor,
+            )
             # edges
             if not self.hparams.bond_prediction:
                 (
@@ -1355,6 +1528,8 @@ class Trainer(pl.LightningModule):
                     ring_feat,
                     aromatic_feat,
                     hybridization_feat,
+                    donor_feat,
+                    acceptor_feat
                 ],
                 dim=-1,
             )
@@ -1400,6 +1575,8 @@ class Trainer(pl.LightningModule):
             "bonds_pred": edge_attr_global_lig,
             "aromatic_pred": aromatic_feat,
             "hybridization_pred": hybridization_feat,
+            "donor_pred": donor_feat,
+            "acceptor_pred": acceptor_feat,
         }
         molecules = get_molecules(
             out_dict,

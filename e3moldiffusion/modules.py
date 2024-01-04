@@ -127,17 +127,17 @@ class HiddenEdgeDistanceMLP(nn.Module):
         self.sdim, self.vdim = hn_dim
         self.distance_mlp = nn.Sequential(
             DenseLayer(self.sdim, 
-                       self.sdim,
+                       self.sdim // 2,
                        bias=True, 
                        activation=nn.SiLU()),
-            DenseLayer(self.sdim, 
-                       self.sdim,
+            DenseLayer(self.sdim // 2, 
+                       self.sdim // 4,
                        bias=True, 
                        activation=nn.SiLU()),
-            DenseLayer(self.sdim, 
+            DenseLayer(self.sdim // 4, 
                        1,
-                       bias=True, 
-                       activation=nn.SiLU()),
+                       bias=True,
+                       activation=nn.ReLU()),
             )
         self.reset_parameters()
 

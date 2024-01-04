@@ -514,8 +514,8 @@ class Trainer(pl.LightningModule):
         if self.hparams.ligand_pocket_distance_loss:
             coords_pocket = out_dict["distance_loss_data"]["pos_centered_pocket"]
             ligand_i, pocket_j = out_dict["distance_loss_data"]["edge_index_cross"]
-            dloss_true = (out_dict["coords_true"][ligand_i] - coords_pocket[pocket_j]).pow(2).mean(-1)
-            dloss_pred = (out_dict["coords_pred"][ligand_i] - coords_pocket[pocket_j]).pow(2).mean(-1)
+            dloss_true = (out_dict["coords_true"][ligand_i] - coords_pocket[pocket_j]).pow(2).sum(-1).sqrt()
+            dloss_pred = (out_dict["coords_pred"][ligand_i] - coords_pocket[pocket_j]).pow(2).sum(-1).sqrt()
             # geometry loss
             dloss = self.dist_loss(dloss_true, dloss_pred).mean()
             if self.hparams.ligand_pocket_hidden_distance:
@@ -525,7 +525,7 @@ class Trainer(pl.LightningModule):
                 # consistency loss between geometry and latent
                 dloss2 = self.dist_loss(dloss_pred, d_hidden).mean()
                 dloss = dloss + dloss1 + dloss2
-            final_loss = final_loss + 0.25 * dloss
+            final_loss = final_loss + 1.0 * dloss
         else:
             dloss = 0.0
             
