@@ -47,7 +47,7 @@ def aggregate(args):
         score_dict = aggregate_dicts(score_dicts)
         remove_dicts(score_dicts)
 
-    buster_dicts = glob(os.path.join(args.files_dir, f"*_posebusters_{type}.pickle"))
+    buster_dicts = glob(os.path.join(args.files_dir, f"*_posebusters_{name}.pickle"))
     buster_dict = aggregate_dicts(buster_dicts)
     remove_dicts(buster_dicts)
 

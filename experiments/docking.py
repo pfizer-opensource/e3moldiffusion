@@ -158,7 +158,9 @@ def calculate_qvina2_score(
         assert best_line[0] == "1"
         scores.append(float(best_line[1]))
 
-        out_pdbqt_file = Path(out_dir, ligand_name + "_out.pdbqt")
+        out_pdbqt_file = Path(
+            os.path.join(out_dir, "docked"), ligand_name + "_out.pdbqt"
+        )
         if out_pdbqt_file.exists():
             os.popen(f"obabel {out_pdbqt_file} -O {out_sdf_file}").read()
             # clean up

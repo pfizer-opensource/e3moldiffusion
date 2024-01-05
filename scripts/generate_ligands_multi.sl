@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J ArrayJob
+#SBATCH -J SampleArray
 #SBATCH --time=2-00:00:00
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
@@ -16,7 +16,7 @@ source activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff5_bonds7_addfeats"
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_enamineft_cutoff5_bonds5_ep10"
 output_dir="$main_dir/evaluation/docking/nodes_bias_large_multi"
 
 mkdir "$main_dir/evaluation"
@@ -30,7 +30,7 @@ python experiments/generate_ligands_multi.py \
     --save-dir "$output_dir" \
     --test-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5/test \
     --pdb-dir /scratch1/cremej01/data/crossdocked_pdbs \
-    --dataset-root /scratch1/cremej01/data/crossdocked_noH_cutoff5 \
+    --dataset-root /scratch1/e3moldiffusion/data/crossdocked/crossdocked_5A_new \
     --skip-existing \
     --num-ligands-per-pocket 100 \
     --batch-size 50 \

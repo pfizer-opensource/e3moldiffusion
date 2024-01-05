@@ -8,6 +8,12 @@ Best installed using mamba.
 mamba env create -f environment.yml
 ```
 
+## Data
+
+```bash
+python experiments/data/ligand/process_crossdocked.py --basedir /path/to/crossdocked_pocket10-folder --outdir /your/data/folder --no-H --dist-cutoff 5
+```
+
 ## Experiments
 
 # Pocket-conditioned diffusion training
@@ -53,7 +59,7 @@ sbatch scripts/generate_ligands_multi.sl
 ```
 
 **IMPORTANT: Set #SBATCH --array=1-<num_gpus> in line 10 and -eq <num_gpus> in line 45.**
-** ** Modify the file path in scripts/aggregate_results.sl. After ligands are processed, experiments/aggregate_results.py is called to merge the evaluation results.**
+**Modify the file path in scripts/aggregate_results.sl. After ligands are processed, experiments/aggregate_results.py is called to merge the evaluation results.**
 
 
 # Docking of generated ligands (on multiple nodes using SLURM's job array)
@@ -74,7 +80,7 @@ sbatch scripts/docking_multi.sl
 ```
 
 **IMPORTANT: Set #SBATCH --array=1-<num_cpus> in line 9 and -eq <num_cpus> in line 35.**
-** Modify the file path in scripts/aggregate_results_dock.sl. After ligands are docked, experiments/aggregate_results.py is called to merge the evaluation results.**
+**Modify the file path in scripts/aggregate_results_dock.sl. After ligands are docked, experiments/aggregate_results.py is called to merge the evaluation results.**
 
 
 
