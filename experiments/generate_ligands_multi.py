@@ -9,17 +9,14 @@ from pathlib import Path
 from time import time
 
 import numpy as np
-import pandas as pd
 import torch
 from Bio.PDB import PDBParser
 from posebusters import PoseBusters
 from posecheck.posecheck import PoseCheck
-from tqdm import tqdm
 
 from experiments.data.distributions import DistributionProperty
 from experiments.data.ligand.process_pdb import get_pdb_components, write_pdb
 from experiments.data.utils import save_pickle
-from experiments.docking import calculate_qvina2_score
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import (
     prepare_pocket,
@@ -42,6 +39,8 @@ class dotdict(dict):
 
 
 def evaluate(
+    mp_index,
+    num_gpus,
     model_path,
     save_dir,
     test_dir,
@@ -59,9 +58,6 @@ def evaluate(
     relax_mol,
     max_relax_iter,
     sanitize,
-    write_dict,
-    write_csv,
-    pdbqt_dir,
     dataset_root=None,
 ):
     # load hyperparameter
@@ -149,7 +145,6 @@ def evaluate(
             test_list = set(f.read().split(","))
         test_files = [x for x in test_files if x.stem in test_list]
 
-    pbar = tqdm(test_files)
     time_per_pocket = {}
 
     statistics_dict = defaultdict(list)
@@ -164,7 +159,14 @@ def evaluate(
             "Sampled molecules will be built with OpenBabel (without bond information)!"
         )
     print("\nStarting sampling...\n")
-    for sdf_file in pbar:
+
+    split_len = len(test_files) // num_gpus
+    rng = np.arange(0, len(test_files))
+    rng = rng[mp_index * split_len : (mp_index + 1) * split_len]
+
+    test_files = [file for i, file in enumerate(test_files) if i in rng]
+
+    for sdf_file in test_files:
         ligand_name = sdf_file.stem
 
         pdb_name, pocket_id, *suffix = ligand_name.split("_")
@@ -172,12 +174,6 @@ def evaluate(
         txt_file = Path(sdf_file.parent, f"{ligand_name}.txt")
         sdf_out_file_raw = Path(raw_sdf_dir, f"{ligand_name}_gen.sdf")
         time_file = Path(times_dir, f"{ligand_name}.txt")
-
-        if skip_existing and time_file.exists() and sdf_out_file_raw.exists():
-            with open(time_file, "r") as f:
-                time_per_pocket[str(sdf_file)] = float(f.read().split()[1])
-
-            continue
 
         t_pocket_start = time()
 
@@ -336,12 +332,6 @@ def evaluate(
         with open(time_file, "w") as f:
             f.write(f"{str(sdf_file)} {time_per_pocket[str(sdf_file)]}")
 
-        pbar.set_description(
-            f"Last processed: {ligand_name}. "
-            f"{(time() - t_pocket_start) / all_molecules:.2f} "
-            f"sec/mol."
-        )
-
     with open(Path(save_dir, "pocket_times.txt"), "w") as f:
         for k, v in time_per_pocket.items():
             f.write(f"{k} {v}\n")
@@ -353,104 +343,28 @@ def evaluate(
     )
     print("Sampling finished.")
 
-    save_pickle(statistics_dict, os.path.join(save_dir, "statistics_dict.pickle"))
-    save_pickle(buster_dict, os.path.join(save_dir, "posebusters_samples.pickle"))
-    save_pickle(violin_dict, os.path.join(save_dir, "violin_dict_samples.pickle"))
-    save_pickle(posecheck_dict, os.path.join(save_dir, "posecheck_samples.pickle"))
-
-    statistics_dict = {
-        k: {"mean": np.mean(v), "std": np.std(v)} for k, v in statistics_dict.items()
-    }
-    buster_dict = {
-        k: {"mean": np.mean(v), "std": np.std(v)} for k, v in buster_dict.items()
-    }
-    posecheck_dict = {
-        k: {"mean": np.mean(v), "std": np.std(v)} for k, v in posecheck_dict.items()
-    }
-
-    print(f"Mean statistics across all sampled ligands: {statistics_dict}")
-    print(f"Mean PoseBusters metrics across all sampled ligands: {buster_dict}")
-    print(f"Mean PoseCheck metrics across all sampled ligands: {posecheck_dict}")
-
-    print(f"All files saved at {save_dir}.")
-
-    # ############## DOCKING ##############
-    # print("Starting docking...")
-    # results = {"receptor": [], "ligand": [], "scores": []}
-    # results_dict = {}
-
-    # pbar = tqdm(sdf_files)
-
-    # for sdf_file in pbar:
-    #     pbar.set_description(f"Processing {sdf_file.name}")
-
-    #     if dataset == "moad":
-    #         """
-    #         Ligand file names should be of the following form:
-    #         <receptor-name>_<pocket-id>_<some-suffix>.sdf
-    #         where <receptor-name> and <pocket-id> cannot contain any
-    #         underscores, e.g.: 1abc-bio1_pocket0_gen.sdf
-    #         """
-    #         ligand_name = sdf_file.stem
-    #         receptor_name, pocket_id, *suffix = ligand_name.split("_")
-    #         suffix = "_".join(suffix)
-    #         receptor_file = Path(pdbqt_dir, receptor_name + ".pdbqt")
-    #     elif dataset == "crossdocked":
-    #         ligand_name = sdf_file.stem
-    #         receptor_name = ligand_name.split("_")[0]
-    #         receptor_file = Path(pdbqt_dir, receptor_name + ".pdbqt")
-
-    #     # try:
-    #     scores, rdmols = calculate_qvina2_score(
-    #         receptor_file, sdf_file, processed_sdf_dir, return_rdmol=True
-    #     )
-    #     # except AttributeError as e:
-    #     #     print(e)
-    #     #     continue
-    #     results["receptor"].append(str(receptor_file))
-    #     results["ligand"].append(str(sdf_file))
-    #     results["scores"].append(scores)
-
-    #     if write_dict:
-    #         results_dict[ligand_name] = {
-    #             "receptor": str(receptor_file),
-    #             "ligand": str(sdf_file),
-    #             "scores": scores,
-    #             "rmdols": rdmols,
-    #         }
-
-    # if write_csv:
-    #     df = pd.DataFrame.from_dict(results)
-    #     df.to_csv(Path(save_dir, "qvina2_scores.csv"))
-
-    # if write_dict:
-    #     torch.save(results_dict, Path(save_dir, "qvina2_scores.pt"))
-
-    # scores_mean = [np.mean(r) for r in results["scores"] if len(r) >= 1]
-
-    # missing = len(results["scores"]) - len(scores_mean)
-    # print(f"Number of dockings evaluated with NaN: {missing}")
-
-    # mean_score = np.mean(scores_mean)
-    # std_score = np.std(scores_mean)
-    # print(f"Mean score: {mean_score}")
-    # print(f"Standard deviation: {std_score}")
-
-    # import pdb
-
-    # pdb.set_trace()
-    # scores = np.mean(
-    #     [r.sort(reverse=True)[:10] for r in results["scores"] if len(r) >= 1]
-    # )
-    # mean_top10_score = np.mean(scores)
-    # print(f"Top-10 mean score: {mean_top10_score}")
+    save_pickle(
+        statistics_dict, os.path.join(save_dir, f"{mp_index}_statistics_dict.pickle")
+    )
+    save_pickle(
+        buster_dict, os.path.join(save_dir, f"{mp_index}_posebusters_samples.pickle")
+    )
+    save_pickle(
+        violin_dict, os.path.join(save_dir, f"{mp_index}_violin_dict_samples.pickle")
+    )
+    save_pickle(
+        posecheck_dict, os.path.join(save_dir, f"{mp_index}_posecheck_samples.pickle")
+    )
 
 
 def get_args():
     # fmt: off
     parser = argparse.ArgumentParser(description='Data generation')
+    parser.add_argument('--mp-index', default=0, type=int)
+    parser.add_argument("--num-gpus", default=8, type=int)
     parser.add_argument('--model-path', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol/best_mol_stab.ckpt", type=str,
                         help='Path to trained model')
+    parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument('--dataset-root', default=None, type=str,
                         help='If not set it will be taken from the model ckpt, otherwise it will overwrite it in the ckpt.')
     parser.add_argument("--use-energy-guidance", default=False, action="store_true")
@@ -487,10 +401,6 @@ def get_args():
     parser.add_argument("--fix-n-nodes", action="store_true")
     parser.add_argument("--vary-n-nodes", action="store_true")
     parser.add_argument("--n-nodes-bias", default=0, type=int)
-    parser.add_argument("--skip-existing", action="store_true")
-    parser.add_argument("--write-csv", action="store_true")
-    parser.add_argument("--write-dict", action="store_true")
-    parser.add_argument("--pdbqt-dir", type=Path, help="Receptor files in pdbqt format")
     args = parser.parse_args()
     return args
 
@@ -499,12 +409,14 @@ if __name__ == "__main__":
     args = get_args()
     # Evaluate negative log-likelihood for the test partitions
     evaluate(
+        mp_index=args.mp_index,
+        num_gpus=args.num_gpus,
         model_path=args.model_path,
         test_dir=args.test_dir,
         pdb_dir=args.pdb_dir,
         test_list=args.test_list,
-        save_dir=args.save_dir,
         skip_existing=args.skip_existing,
+        save_dir=args.save_dir,
         fix_n_nodes=args.fix_n_nodes,
         vary_n_nodes=args.vary_n_nodes,
         n_nodes_bias=args.n_nodes_bias,
@@ -513,9 +425,6 @@ if __name__ == "__main__":
         build_obabel_mol=args.build_obabel_mol,
         ddpm=not args.ddim,
         eta_ddim=args.eta_ddim,
-        write_dict=args.write_dict,
-        write_csv=args.write_csv,
-        pdbqt_dir=args.pdbqt_dir,
         relax_mol=args.relax_mol,
         max_relax_iter=args.max_relax_iter,
         sanitize=args.sanitize,
