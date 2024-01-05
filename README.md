@@ -22,6 +22,7 @@ In general, we assume a single or many ground truth ligands docked to protein(s)
 To evaluate the sampled ligands using PoseBusters/PoseCheck, we need the full protein information, which we can get by:
 
 experiments/data/ligand/fetch_pdb_files.py:
+
     - files-dir: Path the sdf files (ligands). The general naming convention is that every ligand sdf file starts with the name of the protein it's docked to followed by "-", e.g., "4erw-[...]". The script extracts the full protein pdb file, here 4erw.pdb
     - save-dir: Wherever you want to save the pdb files
 
@@ -35,6 +36,7 @@ python experiments/data/ligand/fetch_pdb_files.py --files-dir /path/to/sdf_files
 Assuming we want to sample de novo ligands given multiple pockets, the sampling can be started on multiple GPU nodes:
 
 Modify scripts/generate_ligands_multi.sl:
+
     - num-gpus: Number of GPU nodes you want to use (number of test files divided by num-gpus; see IMPORTANT note below)
     - model-path: Set the path to the trained model (normally save_dir/best_valid.ckpt)
     - save-dir: Where the sampled molecules as SDF files shall be saved
@@ -50,8 +52,8 @@ Modify scripts/generate_ligands_multi.sl:
 sbatch scripts/generate_ligands_multi.sl
 ```
 
-IMPORTANT: Set #SBATCH --array=1-<num_gpus> in line 10 and -eq <num_gpus> in line 45
-After all ligands are processed, experiments/aggregate_results.py is called to merge the evaluation results.
+**IMPORTANT: Set #SBATCH --array=1-<num_gpus> in line 10 and -eq <num_gpus> in line 45
+After all ligands are processed, experiments/aggregate_results.py is called to merge the evaluation results.**
 
 
 # Docking of generated ligands (on multiple nodes using SLURM's job array)
@@ -59,6 +61,7 @@ After all ligands are processed, experiments/aggregate_results.py is called to m
 As soon ligands are generated for multiple pockets, we can start docking.
 
 Modify scripts/docking_multi.sl:
+
     - num-cpus: Number of CPU nodes you want to use (number of generated sdf files divided by num-cpus; see IMPORTANT note below)
      -sdf-dir: Path to the generated ligands 
      -save-dir Path where all evaluations are saved at
@@ -70,8 +73,8 @@ Modify scripts/docking_multi.sl:
 sbatch scripts/docking_multi.sl
 ```
 
-IMPORTANT: Set #SBATCH --array=1-<num_cpus> in line 9 and -eq <num_gpus> in line 35
-After all ligands are docked, experiments/aggregate_results.py is called to merge the evaluation results.
+**IMPORTANT: Set #SBATCH --array=1-<num_cpus> in line 9 and -eq <num_gpus> in line 35
+After all ligands are docked, experiments/aggregate_results.py is called to merge the evaluation results.**
 
 
 
