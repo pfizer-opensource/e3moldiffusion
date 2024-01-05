@@ -73,8 +73,8 @@ Modify scripts/docking_multi.sl:
 sbatch scripts/docking_multi.sl
 ```
 
-**IMPORTANT: Set #SBATCH --array=1-<num_cpus> in line 9 and -eq <num_gpus> in line 35
-After all ligands are docked, experiments/aggregate_results.py is called to merge the evaluation results.**
+**IMPORTANT: Set #SBATCH --array=1-<num_cpus> in line 9 and -eq <num_cpus> in line 35.
+After ligands are docked, experiments/aggregate_results.py is called to merge the evaluation results.**
 
 
 
