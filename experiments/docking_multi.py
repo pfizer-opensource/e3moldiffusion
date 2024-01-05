@@ -103,8 +103,8 @@ def calculate_qvina2_score(
 
     suppl = Chem.SDMolSupplier(str(sdf_file), sanitize=False)
     ligand_name = sdf_file.stem
-    ligand_pdbqt_file = Path(out_dir, ligand_name + ".pdbqt")
-    out_sdf_file = Path(out_dir, ligand_name + "_out.sdf")
+    ligand_pdbqt_file = Path(os.path.join(out_dir, "docked"), ligand_name + ".pdbqt")
+    out_sdf_file = Path(os.path.join(out_dir, "docked"), ligand_name + "_out.sdf")
 
     # Initialize the PoseCheck object
     pc = PoseCheck()

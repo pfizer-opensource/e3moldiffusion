@@ -23,7 +23,7 @@ To evaluate the sampled ligands using PoseBusters/PoseCheck, we need the full pr
 
 experiments/data/ligand/fetch_pdb_files.py:
 
-    - files-dir: Path the sdf files (ligands). The general naming convention is that every ligand sdf file starts with the name of the protein it's docked to followed by "-", e.g., "4erw-[...]". The script extracts the full protein pdb file, here 4erw.pdb
+    - files-dir: Path to the sdf files (ligands). The general naming convention is that every ligand sdf file starts with the name of the protein it's docked to followed by "-", e.g., "4erw-[...]". The script extracts the full protein pdb file, here 4erw.pdb
     - save-dir: Wherever you want to save the pdb files
 
 ```bash
@@ -52,8 +52,8 @@ Modify scripts/generate_ligands_multi.sl:
 sbatch scripts/generate_ligands_multi.sl
 ```
 
-**IMPORTANT: Set #SBATCH --array=1-<num_gpus> in line 10 and -eq <num_gpus> in line 45
-After all ligands are processed, experiments/aggregate_results.py is called to merge the evaluation results.**
+**IMPORTANT: Set #SBATCH --array=1-<num_gpus> in line 10 and -eq <num_gpus> in line 45.
+After ligands are processed, experiments/aggregate_results.py is called to merge the evaluation results.**
 
 
 # Docking of generated ligands (on multiple nodes using SLURM's job array)

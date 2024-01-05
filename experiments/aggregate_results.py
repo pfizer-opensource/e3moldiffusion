@@ -25,8 +25,12 @@ def aggregate_dicts(dicts):
         d = load_pickle(dict)
         for k, v in d.items():
             total_dict[k].extend(v)
-        os.remove(dict)
     return total_dict
+
+
+def remove_dicts(dicts):
+    for dict in dicts:
+        os.remove(dict)
 
 
 def aggregate(args):
@@ -37,18 +41,23 @@ def aggregate(args):
             os.path.join(args.files_dir, "*_statistics_dict.pickle")
         )
         statistics_dict = aggregate_dicts(statistics_dicts)
+        remove_dicts(statistics_dicts)
     else:
         score_dicts = glob(os.path.join(args.files_dir, "*_qvina2_scores.pickle"))
         score_dict = aggregate_dicts(score_dicts)
+        remove_dicts(score_dicts)
 
     buster_dicts = glob(os.path.join(args.files_dir, f"*_posebusters_{type}.pickle"))
     buster_dict = aggregate_dicts(buster_dicts)
+    remove_dicts(buster_dicts)
 
     violin_dicts = glob(os.path.join(args.files_dir, f"*_violin_dict_{name}.pickle"))
     violin_dict = aggregate_dicts(violin_dicts)
+    remove_dicts(violin_dicts)
 
     posecheck_dicts = glob(os.path.join(args.files_dir, f"*_posecheck_{name}.pickle"))
     posecheck_dict = aggregate_dicts(posecheck_dicts)
+    remove_dicts(posecheck_dicts)
 
     if not args.docked:
         save_pickle(
