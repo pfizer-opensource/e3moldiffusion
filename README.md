@@ -52,8 +52,8 @@ Modify scripts/generate_ligands_multi.sl:
 sbatch scripts/generate_ligands_multi.sl
 ```
 
-**IMPORTANT: Set #SBATCH --array=1-<num_gpus> in line 10 and -eq <num_gpus> in line 45.
-After ligands are processed, experiments/aggregate_results.py is called to merge the evaluation results.**
+**IMPORTANT: Set #SBATCH --array=1-<num_gpus> in line 10 and -eq <num_gpus> in line 45.**
+** ** Modify the file path in scripts/aggregate_results.sl. After ligands are processed, experiments/aggregate_results.py is called to merge the evaluation results.**
 
 
 # Docking of generated ligands (on multiple nodes using SLURM's job array)
@@ -73,8 +73,8 @@ Modify scripts/docking_multi.sl:
 sbatch scripts/docking_multi.sl
 ```
 
-**IMPORTANT: Set #SBATCH --array=1-<num_cpus> in line 9 and -eq <num_cpus> in line 35.
-After ligands are docked, experiments/aggregate_results.py is called to merge the evaluation results.**
+**IMPORTANT: Set #SBATCH --array=1-<num_cpus> in line 9 and -eq <num_cpus> in line 35.**
+** Modify the file path in scripts/aggregate_results_dock.sl. After ligands are docked, experiments/aggregate_results.py is called to merge the evaluation results.**
 
 
 
