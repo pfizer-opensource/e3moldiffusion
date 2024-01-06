@@ -323,7 +323,9 @@ def evaluate(
         for k, v in interactions_mean.items():
             posecheck_dict[k].append(v["mean"])
         posecheck_dict["Clashes"].append(np.mean(pc.calculate_clashes()))
-        posecheck_dict["Strain Energies"].append(np.mean(pc.calculate_strain_energy()))
+        posecheck_dict["Strain Energies"].append(
+            np.nanmean(pc.calculate_strain_energy())
+        )
         print("Done!")
 
         try:
@@ -354,9 +356,9 @@ def evaluate(
     print("Sampling finished.")
 
     save_pickle(statistics_dict, os.path.join(save_dir, "statistics_dict.pickle"))
-    save_pickle(buster_dict, os.path.join(save_dir, "posebusters_samples.pickle"))
-    save_pickle(violin_dict, os.path.join(save_dir, "violin_dict_samples.pickle"))
-    save_pickle(posecheck_dict, os.path.join(save_dir, "posecheck_samples.pickle"))
+    save_pickle(buster_dict, os.path.join(save_dir, "posebusters_sampled.pickle"))
+    save_pickle(violin_dict, os.path.join(save_dir, "violin_dict_sampled.pickle"))
+    save_pickle(posecheck_dict, os.path.join(save_dir, "posecheck_sampled.pickle"))
 
     statistics_dict = {
         k: {"mean": np.mean(v), "std": np.std(v)} for k, v in statistics_dict.items()

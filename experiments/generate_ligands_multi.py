@@ -319,7 +319,9 @@ def evaluate(
         for k, v in interactions_mean.items():
             posecheck_dict[k].append(v["mean"])
         posecheck_dict["Clashes"].append(np.mean(pc.calculate_clashes()))
-        posecheck_dict["Strain Energies"].append(np.mean(pc.calculate_strain_energy()))
+        posecheck_dict["Strain Energies"].append(
+            np.nanmean(pc.calculate_strain_energy())
+        )
         print("Done!")
 
         try:
@@ -347,13 +349,13 @@ def evaluate(
         statistics_dict, os.path.join(save_dir, f"{mp_index}_statistics_dict.pickle")
     )
     save_pickle(
-        buster_dict, os.path.join(save_dir, f"{mp_index}_posebusters_samples.pickle")
+        buster_dict, os.path.join(save_dir, f"{mp_index}_posebusters_sampled.pickle")
     )
     save_pickle(
-        violin_dict, os.path.join(save_dir, f"{mp_index}_violin_dict_samples.pickle")
+        violin_dict, os.path.join(save_dir, f"{mp_index}_violin_dict_sampled.pickle")
     )
     save_pickle(
-        posecheck_dict, os.path.join(save_dir, f"{mp_index}_posecheck_samples.pickle")
+        posecheck_dict, os.path.join(save_dir, f"{mp_index}_posecheck_sampled.pickle")
     )
 
 

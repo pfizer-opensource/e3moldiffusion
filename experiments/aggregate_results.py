@@ -34,7 +34,7 @@ def remove_dicts(dicts):
 
 
 def aggregate(args):
-    name = "samples" if not args.docked else "docked"
+    name = "sampled" if not args.docked else "docked"
 
     if not args.docked:
         statistics_dicts = glob(
@@ -61,7 +61,9 @@ def aggregate(args):
 
     if not args.docked:
         save_pickle(
-            statistics_dict, os.path.join(args.files_dir, "statistics_dict.pickle")
+            statistics_dict,
+            os.path.join(args.files_dir, "statistics_dict.pickle"),
+            exist_ok=False,
         )
         statistics_dict = {
             k: {"mean": np.mean(v), "std": np.std(v)}
@@ -70,17 +72,30 @@ def aggregate(args):
         print(f"Mean statistics across all sampled ligands: {statistics_dict}")
     else:
         df = pd.DataFrame.from_dict(score_dict)
-        df.to_csv(Path(args.files_dir, "qvina2_scores.csv"))
+        try:
+            df.to_csv(Path(args.files_dir, "qvina2_scores.csv"), mode="x")
+        except FileExistsError:
+            pass
         scores_mean = [np.mean(r) for r in score_dict["scores"] if len(r) >= 1]
         mean_score = np.mean(scores_mean)
         std_score = np.std(scores_mean)
         print(f"Mean docking score: {mean_score}")
         print(f"Docking score standard deviation: {std_score}")
 
-    save_pickle(buster_dict, os.path.join(args.files_dir, f"posebusters_{name}.pickle"))
-    save_pickle(violin_dict, os.path.join(args.files_dir, f"violin_dict_{name}.pickle"))
     save_pickle(
-        posecheck_dict, os.path.join(args.files_dir, f"posecheck_{name}.pickle")
+        buster_dict,
+        os.path.join(args.files_dir, f"posebusters_{name}.pickle"),
+        exist_ok=False,
+    )
+    save_pickle(
+        violin_dict,
+        os.path.join(args.files_dir, f"violin_dict_{name}.pickle"),
+        exist_ok=False,
+    )
+    save_pickle(
+        posecheck_dict,
+        os.path.join(args.files_dir, f"posecheck_{name}.pickle"),
+        exist_ok=False,
     )
 
     buster_dict = {

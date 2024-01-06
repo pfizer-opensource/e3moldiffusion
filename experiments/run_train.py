@@ -4,7 +4,7 @@ from argparse import ArgumentParser
 
 import numpy as np
 import pytorch_lightning as pl
-import torch.nn.functional as F
+from callbacks.ema import ExponentialMovingAverage
 from pytorch_lightning.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
@@ -12,8 +12,6 @@ from pytorch_lightning.callbacks import (
     TQDMProgressBar,
 )
 from pytorch_lightning.loggers import TensorBoardLogger
-
-from callbacks.ema import ExponentialMovingAverage
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
@@ -106,8 +104,8 @@ if __name__ == "__main__":
             from experiments.data.pubchem.pubchem_dataset_nonadaptive import (
                 PubChemDataModule as DataModule,
             )
-    elif hparams.dataset == "crossdocked":
-        dataset = "crossdocked"
+    elif hparams.dataset == "crossdocked" or hparams.dataset == "bindingmoad":
+        dataset = hparams.dataset
         if hparams.use_adaptive_loader:
             print("Using adaptive dataloader")
             from experiments.data.ligand.ligand_dataset_adaptive import (
@@ -136,14 +134,17 @@ if __name__ == "__main__":
         from experiments.data.geom.geom_dataset_adaptive_qm import (
             GeomQMDataModule as DataModule,
         )
-    elif hparams.dataset == 'enamine':
-        from experiments.data.enamine.enamine_dataset import EnamineDataModule as DataModule
+    elif hparams.dataset == "enamine":
+        from experiments.data.enamine.enamine_dataset import (
+            EnamineDataModule as DataModule,
+        )
     else:
         raise ValueError(f"Unknown dataset: {hparams.dataset}")
 
     datamodule = DataModule(hparams)
 
     from experiments.data.data_info import GeneralInfos as DataInfos
+
     if hparams.dataset == "aqm_qm7x":
         from experiments.data.aqm.aqm_dataset_nonadaptive import (
             AQMDataModule as DataModule,
@@ -158,7 +159,7 @@ if __name__ == "__main__":
     train_smiles = (
         (
             list(datamodule.train_dataset.smiles)
-            if hparams.dataset not in ["pubchem", 'enamine']
+            if hparams.dataset not in ["pubchem", "enamine"]
             else None
         )
         if not hparams.select_train_subset
@@ -175,7 +176,11 @@ if __name__ == "__main__":
     histogram = None
 
     if not hparams.energy_training and not hparams.property_training:
-        if hparams.continuous and dataset != "crossdocked":
+        if (
+            hparams.continuous
+            and dataset != "crossdocked"
+            and dataset != "bindningmoad"
+        ):
             print("Using continuous diffusion")
             if hparams.diffusion_pretraining:
                 print("Starting pre-training")
@@ -188,14 +193,18 @@ if __name__ == "__main__":
         elif hparams.property_prediction:
             print("Starting property prediction model via discrete diffusion")
             from experiments.diffusion_discrete import Trainer
-        elif hparams.latent_dim and hparams.dataset != "crossdocked":
+        elif (
+            hparams.latent_dim and dataset != "crossdocked" and dataset != "bindingmoad"
+        ):
             print("Using latent diffusion")
             from experiments.diffusion_latent_discrete import Trainer
         else:
             print("Using discrete diffusion")
             if hparams.diffusion_pretraining:
                 if hparams.additional_feats:
-                    print(f"Starting pre-training on {hparams.dataset} with additional features")
+                    print(
+                        f"Starting pre-training on {hparams.dataset} with additional features"
+                    )
                     from experiments.diffusion_pretrain_discrete_addfeats import (
                         Trainer,
                     )
@@ -204,6 +213,7 @@ if __name__ == "__main__":
                     from experiments.diffusion_pretrain_discrete import Trainer
             elif (
                 dataset == "crossdocked"
+                or dataset == "bindingmoad"
                 and hparams.additional_feats
                 and not hparams.use_qm_props
             ):
@@ -217,7 +227,7 @@ if __name__ == "__main__":
                     Trainer,
                 )
             else:
-                if dataset == "crossdocked":
+                if dataset == "crossdocked" or dataset == "bindingmoad":
                     histogram = os.path.join(
                         hparams.dataset_root, "size_distribution.npy"
                     )
@@ -232,10 +242,12 @@ if __name__ == "__main__":
                                 Trainer,
                             )
                     else:
-                        #print("Ligand-pocket training with latent protein encoding")
-                        #from experiments.diffusion_discrete_latent_pocket import Trainer
+                        # print("Ligand-pocket training with latent protein encoding")
+                        # from experiments.diffusion_discrete_latent_pocket import Trainer
                         print("Ligand-pocket training with latent ligand encoding")
-                        from experiments.diffusion_discrete_latent_pocket_ligand import Trainer
+                        from experiments.diffusion_discrete_latent_pocket_ligand import (
+                            Trainer,
+                        )
                 elif dataset == "geomqm":
                     if hparams.additional_feats and hparams.use_qm_props:
                         print("Using RDKit and QM props as additional features")
