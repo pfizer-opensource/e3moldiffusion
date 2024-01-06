@@ -209,8 +209,11 @@ if __name__ == "__main__":
             ):
                 histogram = os.path.join(hparams.dataset_root, "size_distribution.npy")
                 histogram = np.load(histogram).tolist()
-                print("Ligand-pocket training using additional features")
-                from experiments.diffusion_discrete_pocket_addfeats import (
+                print("Ligand-pocket training using additional features (reduced, only h-bond acceptor and donor)")
+                #from experiments.diffusion_discrete_pocket_addfeats import (
+                #    Trainer,
+                #)
+                from experiments.diffusion_discrete_pocket_addfeats_reduced import (
                     Trainer,
                 )
             else:
