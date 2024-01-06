@@ -15,7 +15,7 @@ source activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff5_bonds7_addfeats"
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff5_bonds7"
 output_dir="$main_dir/evaluation/docking/nodes_bias_large_multi"
 
 mkdir "$output_dir/docked"
@@ -31,7 +31,8 @@ python experiments/docking_multi.py \
     --write-csv \
     --write-dict
 
+# wait
 
-if [ "${SLURM_ARRAY_TASK_ID}" -eq 20 ]; then
-    sbatch scripts/aggregate_results_dock.sl
-fi
+# python experiments/aggregate_results.py \
+#     --files-dir "$output_dir" \
+#     --docked

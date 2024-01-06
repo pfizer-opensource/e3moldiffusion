@@ -19,6 +19,13 @@ from experiments.data.ligand.constants import (
 )
 
 
+def rdmol_to_smiles(rdmol):
+    mol = Chem.Mol(rdmol)
+    Chem.RemoveStereochemistry(mol)
+    mol = Chem.RemoveHs(mol)
+    return Chem.MolToSmiles(mol)
+
+
 def get_bond_order(atom1, atom2, distance):
     distance = 100 * distance  # We change the metric
 

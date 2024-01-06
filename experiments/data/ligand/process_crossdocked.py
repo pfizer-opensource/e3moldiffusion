@@ -432,20 +432,20 @@ if __name__ == "__main__":
             )
             count += 1
 
-            if split in {"val", "test"}:
-                # Copy PDB file
-                new_rec_name = Path(pdbfile).stem.replace("_", "-")
-                pdb_file_out = Path(pdb_sdf_dir, f"{new_rec_name}.pdb")
-                shutil.copy(pdbfile, pdb_file_out)
+            # if split in {"val", "test"}:
+            # Copy PDB file
+            new_rec_name = Path(pdbfile).stem.replace("_", "-")
+            pdb_file_out = Path(pdb_sdf_dir, f"{new_rec_name}.pdb")
+            shutil.copy(pdbfile, pdb_file_out)
 
-                # Copy SDF file
-                new_lig_name = new_rec_name + "_" + Path(sdffile).stem.replace("_", "-")
-                sdf_file_out = Path(pdb_sdf_dir, f"{new_lig_name}.sdf")
-                shutil.copy(sdffile, sdf_file_out)
+            # Copy SDF file
+            new_lig_name = new_rec_name + "_" + Path(sdffile).stem.replace("_", "-")
+            sdf_file_out = Path(pdb_sdf_dir, f"{new_lig_name}.sdf")
+            shutil.copy(sdffile, sdf_file_out)
 
-                # specify pocket residues
-                with open(Path(pdb_sdf_dir, f"{new_lig_name}.txt"), "w") as f:
-                    f.write(" ".join(pocket_data["pocket_ids"]))
+            # specify pocket residues
+            with open(Path(pdb_sdf_dir, f"{new_lig_name}.txt"), "w") as f:
+                f.write(" ".join(pocket_data["pocket_ids"]))
 
         lig_coords = np.concatenate(lig_coords, axis=0)
         lig_atom = np.concatenate(lig_atom, axis=0)

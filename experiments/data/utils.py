@@ -8,14 +8,12 @@ import rmsd
 import torch
 from openbabel import pybel
 from pytorch_lightning.utilities import rank_zero_warn
-from rdkit import Chem, RDLogger
+from rdkit import Chem, RDConfig, RDLogger
+from rdkit.Chem import ChemicalFeatures
 from torch_geometric.data import Data
 from torch_geometric.utils import sort_edge_index, subgraph
 
-from rdkit.Chem import ChemicalFeatures
-from rdkit import RDConfig
-import os
-fdefName = os.path.join(RDConfig.RDDataDir,'BaseFeatures.fdef')
+fdefName = os.path.join(RDConfig.RDDataDir, "BaseFeatures.fdef")
 factory = ChemicalFeatures.BuildFeatureFactory(fdefName)
 
 RDLogger.DisableLog("rdApp.*")
@@ -35,7 +33,7 @@ x_map = {
         rdkit.Chem.rdchem.HybridizationType.OTHER,
     ],
     "is_h_donor": [False, True],
-    "is_h_acceptor": [False, True]
+    "is_h_acceptor": [False, True],
 }
 
 
@@ -176,9 +174,14 @@ def remove_hydrogens(data: Data):
     return newdata
 
 
-def save_pickle(array, path):
-    with open(path, "wb") as f:
-        pickle.dump(array, f)
+def save_pickle(array, path, exist_ok=True):
+    if exist_ok:
+        with open(path, "wb") as f:
+            pickle.dump(array, f)
+    else:
+        if not os.path.exists(path):
+            with open(path, "wb") as f:
+                pickle.dump(array, f)
 
 
 def load_pickle(path):
@@ -318,16 +321,6 @@ def write_trajectory_as_xyz(
             molecules[i].trajectory = None
 
 
-def save_pickle(array, path):
-    with open(path, "wb") as f:
-        pickle.dump(array, f)
-
-
-def load_pickle(path):
-    with open(path, "rb") as f:
-        return pickle.load(f)
-
-
 def get_rdkit_mol(fname_xyz):
     mol = next(pybel.readfile("xyz", fname_xyz))
     mol = Chem.MolFromPDBBlock(
@@ -449,7 +442,7 @@ class Statistics:
         hybridization=None,
         force_norms=None,
         is_h_donor=None,
-        is_h_acceptor=None
+        is_h_acceptor=None,
     ):
         self.num_nodes = num_nodes
         # print("NUM NODES IN STATISTICS", num_nodes)

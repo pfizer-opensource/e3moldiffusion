@@ -1,29 +1,45 @@
 import argparse
 import random
+import subprocess
 import warnings
 from collections import defaultdict
 from pathlib import Path
 from time import time
 
+import constants
 import numpy as np
 import torch
-from Bio.PDB import PDBIO, PDBParser
+import utils
+from Bio.PDB import PDBIO, PDBParser, Select
 from Bio.PDB.Polypeptide import is_aa, three_to_one
+from constants import covalent_radii, dataset_params
+from geometry_utils import get_bb_transform
 from openbabel import openbabel
+from posecheck.utils.constants import REDUCE_PATH
 from rdkit import Chem
 from rdkit.Chem import QED
+from rdkit.Geometry import Point3D
 from scipy.ndimage import gaussian_filter
 from tqdm import tqdm
 
-from experiments.data.ligand import constants, utils
-from experiments.data.ligand.constants import covalent_radii, dataset_params
-from experiments.data.ligand.geometry_utils import get_bb_transform
-from experiments.data.ligand.molecule_builder import build_molecule
+from experiments.data.ligand import constants
+from experiments.data.ligand.constants import (
+    atom_decoder_int,
+    covalent_radii,
+    dataset_params,
+)
+from experiments.data.ligand.molecule_builder import build_molecule, rdmol_to_smiles
 
 dataset_info = dataset_params["bindingmoad"]
 amino_acid_dict = dataset_info["aa_encoder"]
 atom_dict = dataset_info["atom_encoder"]
+aa_atom_encoder = dataset_info["aa_atom_encoder"]
 atom_decoder = dataset_info["atom_decoder"]
+
+
+class Model0(Select):
+    def accept_model(self, model):
+        return model.id == 0
 
 
 def read_label_file(csv_path):
@@ -187,6 +203,7 @@ def process_ligand_and_pocket(
     ligand_resi,
     dist_cutoff,
     ca_only,
+    no_H,
     compute_quaternion=False,
 ):
     try:
@@ -205,25 +222,24 @@ def process_ligand_and_pocket(
 
     # remove H atoms if not in atom_dict, other atom types that aren't allowed
     # should stay so that the entire ligand can be removed from the dataset
-    lig_atoms = [
-        a
-        for a in ligand.get_atoms()
-        if (a.element.capitalize() in atom_dict or a.element != "H")
-    ]
-    lig_coords = np.array([a.get_coord() for a in lig_atoms])
+    lig_atoms = [a.element.capitalize() for a in ligand.get_atoms()]
+    lig_coords = np.array([a.get_coord() for a in ligand.get_atoms()], dtype=np.float64)
 
-    try:
-        lig_one_hot = np.stack(
-            [
-                np.eye(1, len(atom_dict), atom_dict[a.element.capitalize()]).squeeze()
-                for a in lig_atoms
-            ]
-        )
-    except KeyError as e:
-        raise KeyError(
-            f"Ligand atom {e} not in atom dict ({pdbfile}, "
-            f"{ligand_name}:{ligand_chain}:{ligand_resi})"
-        )
+    rdmol = Chem.RWMol()
+    for element, coord in zip(lig_atoms, lig_coords):
+        atom_idx = rdmol.AddAtom(Chem.Atom(element))
+        pos = Point3D(coord[0], coord[1], coord[2])
+        rdmol.GetConformer().SetAtomPosition(atom_idx, pos)
+    ligand = rdmol.GetMol()
+
+    if not no_H:
+        ligand = Chem.AddHs(ligand, addCoords=True)
+
+    ligand_data = {
+        "lig_coords": lig_coords,
+        "lig_atoms": lig_atoms,
+        "lig_mol": ligand,
+    }
 
     # Find interacting pocket residues based on distance cutoff
     pocket_residues = []
@@ -253,6 +269,8 @@ def process_ligand_and_pocket(
     else:
         c_alpha = ca_xyz
 
+    pocket_ids = [f"{res.parent.id}:{res.id[1]}" for res in pocket_residues]
+
     if ca_only:
         pocket_coords = c_alpha
         try:
@@ -271,40 +289,60 @@ def process_ligand_and_pocket(
                 f"{e} not in amino acid dict ({pdbfile}, "
                 f"{ligand_name}:{ligand_chain}:{ligand_resi})"
             )
+        pocket_data = {
+            "pocket_coords": pocket_coords,
+            "pocket_one_hot": pocket_one_hot,
+            "pocket_ids": pocket_ids,
+        }
     else:
-        pocket_atoms = [
-            a
-            for res in pocket_residues
-            for a in res.get_atoms()
-            if (a.element.capitalize() in atom_dict or a.element != "H")
-        ]
-        pocket_coords = np.array([a.get_coord() for a in pocket_atoms])
-        try:
-            pocket_one_hot = np.stack(
-                [
-                    np.eye(
-                        1, len(atom_dict), atom_dict[a.element.capitalize()]
-                    ).squeeze()
-                    for a in pocket_atoms
-                ]
-            )
-        except KeyError as e:
-            raise KeyError(
-                f"Pocket atom {e} not in atom dict ({pdbfile}, "
-                f"{ligand_name}:{ligand_chain}:{ligand_resi})"
-            )
+        # c-alphas and residue idendity
+        pocket_one_hot = []
+        ca_mask = []
 
-    pocket_ids = [f"{res.parent.id}:{res.id[1]}" for res in pocket_residues]
+        # full
+        full_atoms = []
+        full_coords = []
+        m = False
+        for res in pocket_residues:
+            for atom in res.get_atoms():
+                if atom.name == "CA":
+                    pocket_one_hot.append(
+                        np.eye(
+                            1,
+                            len(amino_acid_dict),
+                            amino_acid_dict[three_to_one.get(res.get_resname())],
+                        ).squeeze()
+                    )
+                    m = True
+                else:
+                    m = False
+                ca_mask.append(m)
+                full_atoms.append(atom.element)
+                full_coords.append(atom.coord)
 
-    ligand_data = {
-        "lig_coords": lig_coords,
-        "lig_one_hot": lig_one_hot,
-    }
-    pocket_data = {
-        "pocket_ca": pocket_coords,
-        "pocket_one_hot": pocket_one_hot,
-        "pocket_ids": pocket_ids,
-    }
+        pocket_one_hot = np.stack(pocket_one_hot, axis=0)
+        full_atoms = np.stack(full_atoms, axis=0)
+        full_coords = np.stack(full_coords, axis=0)
+        ca_mask = np.array(ca_mask, dtype=bool)
+        if no_H:
+            indices_H = np.where(full_atoms == "H")
+            if indices_H[0].size > 0:
+                mask = np.ones(full_atoms.size, dtype=bool)
+                mask[indices_H] = False
+                full_atoms = full_atoms[mask]
+                full_coords = full_coords[mask]
+                ca_mask = ca_mask[mask]
+
+        assert sum(ca_mask) == pocket_one_hot.shape[0]
+        assert len(full_atoms) == len(full_coords)
+        pocket_data = {
+            "pocket_coords": full_coords,
+            "pocket_ids": pocket_ids,
+            "pocket_atoms": full_atoms,
+            "pocket_one_hot": pocket_one_hot,
+            "pocket_ca_mask": ca_mask,
+        }
+
     if compute_quaternion:
         pocket_data["pocket_quaternion"] = quaternion
     return ligand_data, pocket_data
@@ -331,7 +369,7 @@ def compute_smiles(positions, one_hot, mask):
         except ValueError:
             continue
 
-        mol = Chem.MolToSmiles(mol)
+        mol = rdmol_to_smiles(mol)
         if mol is not None:
             mols_smiles.append(mol)
         pbar.set_description(f"{len(mols_smiles)}/{i + 1} successful")
@@ -441,7 +479,7 @@ def saveall(
     lig_coords,
     lig_one_hot,
     lig_mask,
-    pocket_c_alpha,
+    pocket_coords,
     pocket_quaternion,
     pocket_one_hot,
     pocket_mask,
@@ -452,7 +490,7 @@ def saveall(
         lig_coords=lig_coords,
         lig_one_hot=lig_one_hot,
         lig_mask=lig_mask,
-        pocket_c_alpha=pocket_c_alpha,
+        pocket_coords=pocket_coords,
         pocket_quaternion=pocket_quaternion,
         pocket_one_hot=pocket_one_hot,
         pocket_mask=pocket_mask,
@@ -464,15 +502,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--basedir", type=Path)
     parser.add_argument("--outdir", type=Path, default=None)
-    parser.add_argument("--qed_thresh", type=float, default=0.3)
-    parser.add_argument("--max_occurences", type=int, default=50)
-    parser.add_argument("--num_val", type=int, default=300)
-    parser.add_argument("--num_test", type=int, default=300)
-    parser.add_argument("--dist_cutoff", type=float, default=8.0)
-    parser.add_argument("--ca_only", action="store_true")
-    parser.add_argument("--random_seed", type=int, default=42)
+    parser.add_argument("--qed-thresh", type=float, default=0.3)
+    parser.add_argument("--max-occurences", type=int, default=50)
+    parser.add_argument("--num-val", type=int, default=300)
+    parser.add_argument("--num-test", type=int, default=300)
+    parser.add_argument("--dist-cutoff", type=float, default=8.0)
+    parser.add_argument("--no-H", action="store_true")
+    parser.add_argument("--ca-only", action="store_true")
+    parser.add_argument("--random-seed", type=int, default=42)
     parser.add_argument("--make-split", action="store_true")
     args = parser.parse_args()
+
+    reduce_path = REDUCE_PATH
 
     pdbdir = args.basedir / "BindingMOAD_2020/"
 
@@ -520,11 +561,13 @@ if __name__ == "__main__":
         lig_coords = []
         lig_one_hot = []
         lig_mask = []
-        pocket_c_alpha = []
-        # pocket_quaternion = []
+        pocket_coords = []
         pocket_one_hot = []
+        pocket_one_hot_resids = []
+        pocket_ca_mask = []
         pocket_mask = []
         pdb_and_mol_ids = []
+        receptors = []
         count = 0
 
         pdb_sdf_dir = processed_dir / split
@@ -545,7 +588,16 @@ if __name__ == "__main__":
                     if len(pair_dict[p]) == len(pdb_successful):
                         continue
 
-                    pdb_struct = PDBParser(QUIET=True).get_structure("", pdbfile)
+                    if not args.no_H:
+                        tmp_path = str(pdbfile).split(".pdb")[0] + "_tmp.pdb"
+                        # Call reduce to make tmp PDB with waters
+                        reduce_command = (
+                            f"{reduce_path} -NOFLIP  {pdbfile} -Quiet > {tmp_path}"
+                        )
+                        subprocess.run(reduce_command, shell=True)
+                        pdb_struct = PDBParser(QUIET=True).get_structure("", tmp_path)
+                    else:
+                        pdb_struct = PDBParser(QUIET=True).get_structure("", pdbfile)
                     struct_copy = pdb_struct.copy()
 
                     n_bio_successful = 0
@@ -563,6 +615,7 @@ if __name__ == "__main__":
                                 ligand_name,
                                 ligand_chain,
                                 ligand_resi,
+                                no_H=args.no_H,
                                 dist_cutoff=args.dist_cutoff,
                                 ca_only=args.ca_only,
                             )
@@ -573,27 +626,30 @@ if __name__ == "__main__":
                             IndexError,
                             ValueError,
                         ) as e:
-                            # print(type(e).__name__, e)
+                            print(type(e).__name__, e)
                             continue
 
                         pdb_and_mol_ids.append(f"{p}_{m[0]}")
+                        receptors.append(pdbfile.name)
                         lig_coords.append(ligand_data["lig_coords"])
-                        lig_one_hot.append(ligand_data["lig_one_hot"])
                         lig_mask.append(count * np.ones(len(ligand_data["lig_coords"])))
-                        pocket_c_alpha.append(pocket_data["pocket_ca"])
+                        pocket_coords.append(pocket_data["pocket_coords"])
                         # pocket_quaternion.append(
                         #     pocket_data['pocket_quaternion'])
-                        pocket_one_hot.append(pocket_data["pocket_one_hot"])
                         pocket_mask.append(
-                            count * np.ones(len(pocket_data["pocket_ca"]))
+                            count * np.ones(len(pocket_data["pocket_coords"]))
                         )
+                        if not args.ca_only:
+                            pocket_one_hot_resids.append(pocket_data["pocket_one_hot"])
+                            pocket_ca_mask.append(pocket_data["pocket_ca_mask"])
                         count += 1
 
                         pdb_successful.add(m[0])
                         n_bio_successful += 1
 
                         # Save additional files for affinity analysis
-                        if split in {"val", "test"}:
+                        # if split in {"val", "test"}:
+                        if split in {"val", "test", "train"}:
                             # remove ligand from receptor
                             try:
                                 struct_copy[0][ligand_chain].detach_child(
@@ -621,7 +677,7 @@ if __name__ == "__main__":
                             obConversion.ReadFile(mol, str(xyz_file))
                             xyz_file.unlink()
 
-                            name = f"{p}_{pdbfile.suffix[1:]}_{m[0]}"
+                            name = f"{p}-{pdbfile.suffix[1:]}_{m[0]}"
                             sdf_file = Path(pdb_sdf_dir, f"{name}.sdf")
                             obConversion.WriteFile(mol, str(sdf_file))
 
@@ -629,14 +685,15 @@ if __name__ == "__main__":
                             with open(Path(pdb_sdf_dir, f"{name}.txt"), "w") as f:
                                 f.write(" ".join(pocket_data["pocket_ids"]))
 
-                    if split in {"val", "test"} and n_bio_successful > 0:
+                    # if split in {"val", "test"} and n_bio_successful > 0:
+                    if split in {"val", "test", "train"} and n_bio_successful > 0:
                         # create receptor PDB file
                         pdb_file_out = Path(
-                            pdb_sdf_dir, f"{p}_{pdbfile.suffix[1:]}.pdb"
+                            pdb_sdf_dir, f"{p}-{pdbfile.suffix[1:]}.pdb"
                         )
                         io = PDBIO()
                         io.set_structure(struct_copy)
-                        io.save(str(pdb_file_out))
+                        io.save(str(pdb_file_out), select=Model0())
 
                 pbar.update(len(pair_dict[p]))
                 num_failed += len(pair_dict[p]) - len(pdb_successful)
@@ -645,23 +702,26 @@ if __name__ == "__main__":
         lig_coords = np.concatenate(lig_coords, axis=0)
         lig_one_hot = np.concatenate(lig_one_hot, axis=0)
         lig_mask = np.concatenate(lig_mask, axis=0)
-        pocket_c_alpha = np.concatenate(pocket_c_alpha, axis=0)
-        # pocket_quaternion = np.concatenate(pocket_quaternion, axis=0)
-        pocket_one_hot = np.concatenate(pocket_one_hot, axis=0)
+        pocket_coords = np.concatenate(pocket_coords, axis=0)
         pocket_mask = np.concatenate(pocket_mask, axis=0)
+        if not args.ca_only:
+            pocket_one_hot_resids = np.concatenate(pocket_one_hot_resids, axis=0)
+            pocket_ca_mask = np.concatenate(pocket_ca_mask, axis=0)
+        else:
+            pocket_one_hot_resids = np.array([])
+            pocket_ca_mask = np.array([])
 
-        # saveall(processed_dir / f'{split}.npz', pdb_and_mol_ids, lig_coords,
-        #         lig_one_hot, lig_mask, pocket_c_alpha, pocket_quaternion,
-        #         pocket_one_hot, pocket_mask)
         np.savez(
             processed_dir / f"{split}.npz",
             names=pdb_and_mol_ids,
+            receptors=receptors,
             lig_coords=lig_coords,
             lig_one_hot=lig_one_hot,
             lig_mask=lig_mask,
-            pocket_c_alpha=pocket_c_alpha,
-            pocket_one_hot=pocket_one_hot,
+            pocket_coords=pocket_coords,
             pocket_mask=pocket_mask,
+            pocket_one_hot=pocket_one_hot_resids,
+            pocket_ca_mask=pocket_ca_mask,
         )
 
         n_samples_after[split] = len(pdb_and_mol_ids)
@@ -674,11 +734,11 @@ if __name__ == "__main__":
         lig_mask = data["lig_mask"]
         pocket_mask = data["pocket_mask"]
         lig_coords = data["lig_coords"]
-        lig_one_hot = data["lig_one_hot"]
-        pocket_one_hot = data["pocket_one_hot"]
+        lig_atom = data["lig_atom"]
+        pocket_atom = data["pocket_atom"]
 
     # Compute SMILES for all training examples
-    train_smiles = compute_smiles(lig_coords, lig_one_hot, lig_mask)
+    train_smiles = compute_smiles(lig_coords, lig_atom, lig_mask)
     np.save(processed_dir / "train_smiles.npy", train_smiles)
 
     # Joint histogram of number of ligand and pocket nodes
@@ -693,7 +753,7 @@ if __name__ == "__main__":
 
     # Get histograms of ligand and pocket node types
     atom_hist, aa_hist = get_type_histograms(
-        lig_one_hot, pocket_one_hot, atom_dict, amino_acid_dict
+        lig_atom, pocket_atom, atom_dict, aa_atom_encoder
     )
 
     # Create summary string

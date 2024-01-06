@@ -43,6 +43,7 @@ python experiments/generate_ligands_multi.py \
     #--relax-mol \
     #--max-relax-iter 500 
 
-if [ "${SLURM_ARRAY_TASK_ID}" -eq 8 ]; then
-    sbatch scripts/aggregate_results.sh
-fi
+# wait
+
+# python experiments/aggregate_results.py \
+#     --files-dir "$output_dir"
