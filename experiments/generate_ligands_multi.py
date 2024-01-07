@@ -21,6 +21,7 @@ from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import (
     prepare_pocket,
     retrieve_interactions_per_mol,
+    split_list,
     write_sdf_file,
 )
 
@@ -160,11 +161,7 @@ def evaluate(
         )
     print("\nStarting sampling...\n")
 
-    split_len = len(test_files) // num_gpus
-    rng = np.arange(0, len(test_files))
-    rng = rng[mp_index * split_len : (mp_index + 1) * split_len]
-
-    test_files = [file for i, file in enumerate(test_files) if i in rng]
+    test_files = split_list(test_files, num_gpus)[mp_index - 1]
 
     for sdf_file in test_files:
         ligand_name = sdf_file.stem

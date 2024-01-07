@@ -171,19 +171,19 @@ def calculate_qvina2_score(
             continue
         rdmols.append(rdmol)
 
-        pc.load_ligands_from_sdf(str(out_sdf_file), add_hs=True)
-        # pc.load_ligands_from_mol(rdmol)
-        clashes.append(pc.calculate_clashes()[0])
-        strain_energies.append(pc.calculate_strain_energy()[0])
-        rmsds.append(pc.calculate_rmsd(suppl[i], rdmol))
+    #     pc.load_ligands_from_sdf(str(out_sdf_file), add_hs=True)
+    #     # pc.load_ligands_from_mol(rdmol)
+    #     clashes.append(pc.calculate_clashes()[0])
+    #     strain_energies.append(pc.calculate_strain_energy()[0])
+    #     rmsds.append(pc.calculate_rmsd(suppl[i], rdmol))
 
-    posecheck_dict["Clashes"].append(np.mean(clashes))
-    posecheck_dict["Strain Energies"].append(np.nanmean(strain_energies))
-    posecheck_dict["RMSD"].append(np.mean(rmsds))
+    # posecheck_dict["Clashes"].append(np.mean(clashes))
+    # posecheck_dict["Strain Energies"].append(np.nanmean(strain_energies))
+    # posecheck_dict["RMSD"].append(np.mean(rmsds))
 
-    violin_dict["clashes"].extend(clashes)
-    violin_dict["strain_energy"].extend(strain_energies)
-    violin_dict["rmsd"].extend(rmsds)
+    # violin_dict["clashes"].extend(clashes)
+    # violin_dict["strain_energy"].extend(strain_energies)
+    # violin_dict["rmsd"].extend(rmsds)
 
     write_sdf_file(out_sdf_file, rdmols)
 
@@ -205,22 +205,22 @@ def calculate_qvina2_score(
         buster_dict[k].append(v)
     print("Done!")
 
-    # # PoseCheck
-    # print("Starting evaluation with PoseCheck...")
-    # pc = PoseCheck()
-    # pc.load_protein_from_pdb(pdb_file)
-    # pc.load_ligands_from_mols(rdmols, add_hs=True)
-    # interactions = pc.calculate_interactions()
-    # interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
-    #     interactions
-    # )
-    # for k, v in interactions_per_mol.items():
-    #     violin_dict[k].extend(v)
-    # for k, v in interactions_mean.items():
-    #     posecheck_dict[k].append(v["mean"])
-    # posecheck_dict["Clashes"].append(np.mean(pc.calculate_clashes()))
-    # posecheck_dict["Strain Energies"].append(np.mean(pc.calculate_strain_energy()))
-    # print("Done!")
+    # PoseCheck
+    print("Starting evaluation with PoseCheck...")
+    pc = PoseCheck()
+    pc.load_protein_from_pdb(pdb_file)
+    pc.load_ligands_from_sdf(out_sdf_file, add_hs=True)
+    interactions = pc.calculate_interactions()
+    interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
+        interactions
+    )
+    for k, v in interactions_per_mol.items():
+        violin_dict[k].extend(v)
+    for k, v in interactions_mean.items():
+        posecheck_dict[k].append(v["mean"])
+    posecheck_dict["Clashes"].append(np.mean(pc.calculate_clashes()))
+    posecheck_dict["Strain Energies"].append(np.mean(pc.calculate_strain_energy()))
+    print("Done!")
 
     try:
         shutil.rmtree(temp_dir)
@@ -324,6 +324,7 @@ if __name__ == "__main__":
 
     if args.write_dict:
         torch.save(results_dict, Path(args.save_dir, "qvina2_scores.pt"))
+        save_pickle(results, os.path.join(args.save_dir, "qvina2_scores.pickle"))
         save_pickle(
             buster_dict, os.path.join(args.save_dir, "posebusters_docked.pickle")
         )
@@ -359,8 +360,7 @@ if __name__ == "__main__":
 
     print(f"All files saved at {args.save_dir}.")
 
-    # scores = np.mean(
-    #     [r.sort(reverse=True)[:10] for r in results["scores"] if len(r) >= 1]
-    # )
-    # mean_top10_score = np.mean(scores)
-    # print(f"Top-10 mean score: {mean_top10_score}")
+    mean_top10_score = np.mean(
+        [sorted(r)[:10] for r in results["scores"] if len(r) >= 1]
+    )
+    print(f"Top-10 mean score: {mean_top10_score}")

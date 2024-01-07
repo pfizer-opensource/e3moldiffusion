@@ -1244,3 +1244,15 @@ def retrieve_interactions_per_mol(interactions_df):
         k: {"mean": np.mean(v), "std": np.std(v)} for k, v in interactions_dict.items()
     }
     return interactions_dict, interactions
+
+
+def split_list(data, num_chunks):
+    chunk_size = len(data) // num_chunks
+    remainder = len(data) % num_chunks
+    chunks = []
+    start = 0
+    for i in range(num_chunks):
+        chunk_end = start + chunk_size + (1 if i < remainder else 0)
+        chunks.append(data[start:chunk_end])
+        start = chunk_end
+    return chunks

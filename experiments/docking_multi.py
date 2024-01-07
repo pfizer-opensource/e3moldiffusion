@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 from experiments.data.ligand.process_pdb import get_pdb_components, write_pdb
 from experiments.data.utils import save_pickle
-from experiments.utils import retrieve_interactions_per_mol, write_sdf_file
+from experiments.utils import retrieve_interactions_per_mol, split_list, write_sdf_file
 
 
 def calculate_smina_score(pdb_file, sdf_file):
@@ -169,19 +169,19 @@ def calculate_qvina2_score(
             continue
         rdmols.append(rdmol)
 
-        pc.load_ligands_from_sdf(str(out_sdf_file), add_hs=True)
-        # pc.load_ligands_from_mol(rdmol)
-        clashes.append(pc.calculate_clashes()[0])
-        strain_energies.append(pc.calculate_strain_energy()[0])
-        rmsds.append(pc.calculate_rmsd(suppl[i], rdmol))
+    #     pc.load_ligands_from_sdf(str(out_sdf_file), add_hs=True)
+    #     # pc.load_ligands_from_mol(rdmol)
+    #     clashes.append(pc.calculate_clashes()[0])
+    #     strain_energies.append(pc.calculate_strain_energy()[0])
+    #     rmsds.append(pc.calculate_rmsd(suppl[i], rdmol))
 
-    posecheck_dict["Clashes"].append(np.mean(clashes))
-    posecheck_dict["Strain Energies"].append(np.nanmean(strain_energies))
-    posecheck_dict["RMSD"].append(np.mean(rmsds))
+    # posecheck_dict["Clashes"].append(np.mean(clashes))
+    # posecheck_dict["Strain Energies"].append(np.nanmean(strain_energies))
+    # posecheck_dict["RMSD"].append(np.mean(rmsds))
 
-    violin_dict["clashes"].extend(clashes)
-    violin_dict["strain_energy"].extend(strain_energies)
-    violin_dict["rmsd"].extend(rmsds)
+    # violin_dict["clashes"].extend(clashes)
+    # violin_dict["strain_energy"].extend(strain_energies)
+    # violin_dict["rmsd"].extend(rmsds)
 
     write_sdf_file(out_sdf_file, rdmols)
 
@@ -189,12 +189,12 @@ def calculate_qvina2_score(
     print("Starting evaluation with PoseBusters...")
     buster = {}
     buster_mol = PoseBusters(config="mol")
-    buster_mol_df = buster_mol.bust([out_sdf_file], None, None)
+    buster_mol_df = buster_mol.bust([str(out_sdf_file)], None, None)
     for metric in buster_mol_df.columns:
         violin_dict[metric].extend(list(buster_mol_df[metric]))
         buster[metric] = buster_mol_df[metric].sum() / len(buster_mol_df[metric])
     buster_dock = PoseBusters(config="dock")
-    buster_dock_df = buster_dock.bust([out_sdf_file], None, pdb_file)
+    buster_dock_df = buster_dock.bust([str(out_sdf_file)], None, pdb_file)
     for metric in buster_dock_df:
         if metric not in buster:
             violin_dict[metric].extend(list(buster_dock_df[metric]))
@@ -203,22 +203,22 @@ def calculate_qvina2_score(
         buster_dict[k].append(v)
     print("Done!")
 
-    # # PoseCheck
-    # print("Starting evaluation with PoseCheck...")
-    # pc = PoseCheck()
-    # pc.load_protein_from_pdb(pdb_file)
-    # pc.load_ligands_from_mols(rdmols, add_hs=True)
-    # interactions = pc.calculate_interactions()
-    # interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
-    #     interactions
-    # )
-    # for k, v in interactions_per_mol.items():
-    #     violin_dict[k].extend(v)
-    # for k, v in interactions_mean.items():
-    #     posecheck_dict[k].append(v["mean"])
-    # posecheck_dict["Clashes"].append(np.mean(pc.calculate_clashes()))
-    # posecheck_dict["Strain Energies"].append(np.mean(pc.calculate_strain_energy()))
-    # print("Done!")
+    # PoseCheck
+    print("Starting evaluation with PoseCheck...")
+    pc = PoseCheck()
+    pc.load_protein_from_pdb(pdb_file)
+    pc.load_ligands_from_sdf(str(out_sdf_file), add_hs=True)
+    interactions = pc.calculate_interactions()
+    interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
+        interactions
+    )
+    for k, v in interactions_per_mol.items():
+        violin_dict[k].extend(v)
+    for k, v in interactions_mean.items():
+        posecheck_dict[k].append(v["mean"])
+    posecheck_dict["Clashes"].append(np.mean(pc.calculate_clashes()))
+    posecheck_dict["Strain Energies"].append(np.mean(pc.calculate_strain_energy()))
+    print("Done!")
 
     try:
         shutil.rmtree(temp_dir)
@@ -269,10 +269,7 @@ if __name__ == "__main__":
         else args.sdf_files
     )
 
-    split_len = len(sdf_files) // args.num_cpus
-    rng = np.arange(0, len(sdf_files))
-    rng = rng[args.mp_index * split_len : (args.mp_index + 1) * split_len]
-    sdf_files = [file for i, file in enumerate(sdf_files) if i in rng]
+    sdf_files = split_list(sdf_files, args.num_cpus)[args.mp_index - 1]
 
     pbar = tqdm(sdf_files)
     for sdf_file in pbar:

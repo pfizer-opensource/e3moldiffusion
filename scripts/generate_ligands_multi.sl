@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=12
 #SBATCH --partition=ondemand-8xv100m32-1a
 #SBATCH --gres=gpu:1
-#SBATCH --array=1-8
+#SBATCH --array=1-7
 #SBATCH --output=/scratch1/e3moldiffusion/slurm_logs/array_run_%j.out
 #SBATCH --error=/scratch1/e3moldiffusion/slurm_logs/array_run_%j.err
 
@@ -17,7 +17,7 @@ source activate e3mol
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
 main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_enamineft_cutoff5_bonds5_ep10"
-output_dir="$main_dir/evaluation/docking/nodes_bias_large_multi"
+output_dir="$main_dir/evaluation/docking/nodes_bias_large"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
@@ -34,7 +34,6 @@ python experiments/generate_ligands_multi.py \
     --skip-existing \
     --num-ligands-per-pocket 100 \
     --batch-size 50 \
-    --vary-n-nodes \
     --n-nodes-bias 10
     #--fix-n-nodes
     #--vary-n-nodes \
@@ -43,7 +42,13 @@ python experiments/generate_ligands_multi.py \
     #--relax-mol \
     #--max-relax-iter 500 
 
-# wait
+execute_aggregate_script() {
+    python experiments/aggregate_results.py \
+        --files-dir "$output_dir"
+}
+afterarray() {
+    execute_aggregate_script
+}
+afterarray_dependency=$(sbatch --parsable --dependency=afterok:$SLURM_JOB_ID --wrap="afterarray")
 
-# python experiments/aggregate_results.py \
-#     --files-dir "$output_dir"
+wait $afterarray_dependency

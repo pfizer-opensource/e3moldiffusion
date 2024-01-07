@@ -2,10 +2,8 @@ import argparse
 import os
 from collections import defaultdict
 from glob import glob
-from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
 from experiments.data.utils import load_pickle, save_pickle
 
@@ -71,16 +69,20 @@ def aggregate(args):
         }
         print(f"Mean statistics across all sampled ligands: {statistics_dict}")
     else:
-        df = pd.DataFrame.from_dict(score_dict)
-        try:
-            df.to_csv(Path(args.files_dir, "qvina2_scores.csv"), mode="x")
-        except FileExistsError:
-            pass
+        save_pickle(
+            score_dict,
+            os.path.join(args.files_dir, "qvina2_scores.pickle"),
+            exist_ok=False,
+        )
         scores_mean = [np.mean(r) for r in score_dict["scores"] if len(r) >= 1]
         mean_score = np.mean(scores_mean)
         std_score = np.std(scores_mean)
         print(f"Mean docking score: {mean_score}")
         print(f"Docking score standard deviation: {std_score}")
+        mean_top10_score = np.mean(
+            [sorted(r)[:10] for r in score_dict["scores"] if len(r) >= 1]
+        )
+        print(f"Top-10 mean score: {mean_top10_score}")
 
     save_pickle(
         buster_dict,
