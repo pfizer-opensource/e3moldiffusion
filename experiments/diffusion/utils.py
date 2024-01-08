@@ -109,6 +109,7 @@ def get_joint_edge_attrs(
         edge_attr_global,
         batch_edge_global,
         edge_mask,
+        edge_mask_pocket,
     )
 
 

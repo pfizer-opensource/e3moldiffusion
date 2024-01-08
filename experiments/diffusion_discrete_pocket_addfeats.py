@@ -118,8 +118,7 @@ class Trainer(pl.LightningModule):
             + self.num_is_aromatic
             + self.num_is_in_ring
             + self.num_hybridization
-            + self.num_is_donor
-            * self.num_is_acceptor
+            + self.num_is_donor * self.num_is_acceptor
         )
         self.num_bond_classes = self.hparams.num_bond_classes
 
@@ -163,7 +162,9 @@ class Trainer(pl.LightningModule):
                 coords_param=hparams["continuous_param"],
                 use_pos_norm=hparams["use_pos_norm"],
                 store_intermediate_coords=hparams["store_intermediate_coords"],
-                distance_ligand_pocket=hparams["ligand_pocket_hidden_distance"] if "ligand_pocket_hidden_distance" in hparams.keys() else False
+                distance_ligand_pocket=hparams["ligand_pocket_hidden_distance"]
+                if "ligand_pocket_hidden_distance" in hparams.keys()
+                else False,
             )
 
         self.sde_pos = DiscreteDDPM(
@@ -254,7 +255,7 @@ class Trainer(pl.LightningModule):
                 "aromatic",
                 "hybridization",
                 "donor",
-                "acceptor"
+                "acceptor",
             ],
             param=["data"] * 9,
         )
@@ -267,7 +268,7 @@ class Trainer(pl.LightningModule):
             for param in self.bond_model.parameters():
                 param.requires_grad = False
             self.bond_model.eval()
-        
+
         if self.hparams.ligand_pocket_distance_loss:
             self.dist_loss = torch.nn.HuberLoss(reduction="none", delta=1.0)
         else:
@@ -591,7 +592,7 @@ class Trainer(pl.LightningModule):
             aromatic_pred,
             hybridization_pred,
             donor_pred,
-            acceptor_pred
+            acceptor_pred,
         ) = atoms_pred.split(
             [
                 self.num_atom_types,
@@ -600,7 +601,7 @@ class Trainer(pl.LightningModule):
                 self.num_is_aromatic,
                 self.num_hybridization,
                 self.num_is_donor,
-                self.num_is_acceptor
+                self.num_is_acceptor,
             ],
             dim=-1,
         )
@@ -615,7 +616,7 @@ class Trainer(pl.LightningModule):
             "aromatic": aromatic_pred,
             "hybridization": hybridization_pred,
             "donor": donor_pred,
-            "acceptor": acceptor_pred
+            "acceptor": acceptor_pred,
         }
 
         loss = self.diffusion_loss(
@@ -639,16 +640,26 @@ class Trainer(pl.LightningModule):
             + 1.0 * loss["donor"]
             + 1.0 * loss["acceptor"]
         )
-        
+
         if self.hparams.ligand_pocket_distance_loss:
             coords_pocket = out_dict["distance_loss_data"]["pos_centered_pocket"]
             ligand_i, pocket_j = out_dict["distance_loss_data"]["edge_index_cross"]
-            dloss_true = (out_dict["coords_true"][ligand_i] - coords_pocket[pocket_j]).pow(2).sum(-1).sqrt()
-            dloss_pred = (out_dict["coords_pred"][ligand_i] - coords_pocket[pocket_j]).pow(2).sum(-1).sqrt()
+            dloss_true = (
+                (out_dict["coords_true"][ligand_i] - coords_pocket[pocket_j])
+                .pow(2)
+                .sum(-1)
+                .sqrt()
+            )
+            dloss_pred = (
+                (out_dict["coords_pred"][ligand_i] - coords_pocket[pocket_j])
+                .pow(2)
+                .sum(-1)
+                .sqrt()
+            )
             # geometry loss
             dloss = self.dist_loss(dloss_true, dloss_pred).mean()
             if self.hparams.ligand_pocket_hidden_distance:
-                d_hidden = out_dict["dist_pred"] 
+                d_hidden = out_dict["dist_pred"]
                 # latent loss
                 dloss1 = self.dist_loss(dloss_true, d_hidden).mean()
                 # consistency loss between geometry and latent
@@ -657,7 +668,6 @@ class Trainer(pl.LightningModule):
             final_loss = final_loss + 1.0 * dloss
         else:
             dloss = 0.0
-            
 
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
@@ -777,6 +787,7 @@ class Trainer(pl.LightningModule):
             edge_attr_global_perturbed,
             batch_edge_global,
             edge_mask,
+            edge_mask_pocket,
         ) = get_joint_edge_attrs(
             pos_perturbed,
             pos_centered_pocket,
@@ -847,7 +858,7 @@ class Trainer(pl.LightningModule):
                 aromatic_feat_perturbed,
                 hybridization_feat_perturbed,
                 donor_feat_perturbed,
-                acceptor_feat_perturbed
+                acceptor_feat_perturbed,
             ],
             dim=-1,
         )
@@ -880,7 +891,7 @@ class Trainer(pl.LightningModule):
                 aromatic_feat_pocket,
                 hybridization_feat_pocket,
                 donor_feat_pocket,
-                acceptor_feat_pocket
+                acceptor_feat_pocket,
             ],
             dim=-1,
         )
@@ -915,9 +926,10 @@ class Trainer(pl.LightningModule):
             context=context,
             pocket_mask=pocket_mask.unsqueeze(1),
             edge_mask=edge_mask,
+            edge_mask_pocket=edge_mask_pocket,
             batch_lig=data_batch,
             ca_mask=batch.pocket_ca_mask,
-            batch_pocket=batch.pos_pocket_batch
+            batch_pocket=batch.pos_pocket_batch,
         )
 
         # if self.training and self.trainer.current_epoch > 40:
@@ -973,10 +985,11 @@ class Trainer(pl.LightningModule):
             # Only select subset based on C-alpha representatives
             data_batch_pocket = data_batch_pocket[batch.pocket_ca_mask]
             # create cross indices between ligand and c-alpha
-            adj_cross = (data_batch[:, None] == data_batch_pocket[None, :]).nonzero().T        
-            out["distance_loss_data"] = {'pos_centered_pocket': pos_centered_pocket[batch.pocket_ca_mask],
-                                         'edge_index_cross': adj_cross
-                                        }
+            adj_cross = (data_batch[:, None] == data_batch_pocket[None, :]).nonzero().T
+            out["distance_loss_data"] = {
+                "pos_centered_pocket": pos_centered_pocket[batch.pocket_ca_mask],
+                "edge_index_cross": adj_cross,
+            }
         return out
 
     @torch.no_grad()
@@ -1241,13 +1254,13 @@ class Trainer(pl.LightningModule):
         hybridization_feat = F.one_hot(
             hybridization_feat, self.num_hybridization
         ).float()
-        
+
         # h-donor
         donor_feat = torch.multinomial(
             self.is_donor_prior, num_samples=n, replacement=True
         )
         donor_feat = F.one_hot(donor_feat, self.num_is_donor).float()
-        
+
         # h-acceptor
         acceptor_feat = torch.multinomial(
             self.is_acceptor_prior, num_samples=n, replacement=True
@@ -1284,6 +1297,7 @@ class Trainer(pl.LightningModule):
             edge_attr_global,
             batch_edge_global,
             edge_mask,
+            edge_mask_pocket,
         ) = get_joint_edge_attrs(
             pos,
             pos_pocket,
@@ -1323,7 +1337,7 @@ class Trainer(pl.LightningModule):
                 aromatic_feat,
                 hybridization_feat,
                 donor_feat,
-                acceptor_feat
+                acceptor_feat,
             ],
             dim=-1,
         )
@@ -1335,7 +1349,7 @@ class Trainer(pl.LightningModule):
                 aromatic_feat_pocket,
                 hybridization_feat_pocket,
                 donor_feat_pocket,
-                acceptor_feat_pocket
+                acceptor_feat_pocket,
             ],
             dim=-1,
         )
@@ -1386,9 +1400,10 @@ class Trainer(pl.LightningModule):
                 context=context,
                 pocket_mask=pocket_mask.unsqueeze(1),
                 edge_mask=edge_mask,
+                edge_mask_pocket=edge_mask_pocket,
                 batch_lig=batch,
                 ca_mask=pocket_data.pocket_ca_mask.to(self.device),
-                batch_pocket=pocket_data.pos_pocket_batch.to(self.device)
+                batch_pocket=pocket_data.pos_pocket_batch.to(self.device),
             )
 
             coords_pred = out["coords_pred"].squeeze()
@@ -1510,6 +1525,7 @@ class Trainer(pl.LightningModule):
                 edge_attr_global,
                 batch_edge_global,
                 edge_mask,
+                edge_mask_pocket,
             ) = get_joint_edge_attrs(
                 pos,
                 pos_pocket,
@@ -1529,7 +1545,7 @@ class Trainer(pl.LightningModule):
                     aromatic_feat,
                     hybridization_feat,
                     donor_feat,
-                    acceptor_feat
+                    acceptor_feat,
                 ],
                 dim=-1,
             )

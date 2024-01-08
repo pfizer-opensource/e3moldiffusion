@@ -7,9 +7,9 @@
 #SBATCH --cpus-per-task=12
 #SBATCH --partition=ondemand-8xv100m32-1a
 #SBATCH --gres=gpu:1
-#SBATCH --array=1-7
-#SBATCH --output=/scratch1/e3moldiffusion/slurm_logs/array_run_%j.out
-#SBATCH --error=/scratch1/e3moldiffusion/slurm_logs/array_run_%j.err
+#SBATCH --array=1-8
+#SBATCH --output=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.out
+#SBATCH --error=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.err
 
 cd /sharedhome/cremej01/workspace/e3moldiffusion
 source activate e3mol
@@ -23,9 +23,11 @@ mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
 mkdir "$output_dir"
 
+num_gpus=8
+
 python experiments/generate_ligands_multi.py \
     --mp-index "${SLURM_ARRAY_TASK_ID}" \
-    --num-gpus 8 \
+    --num-gpus "$num_gpus" \
     --model-path "$main_dir/best_valid.ckpt" \
     --save-dir "$output_dir" \
     --test-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5/test \
@@ -42,13 +44,13 @@ python experiments/generate_ligands_multi.py \
     #--relax-mol \
     #--max-relax-iter 500 
 
-execute_aggregate_script() {
-    python experiments/aggregate_results.py \
-        --files-dir "$output_dir"
-}
-afterarray() {
-    execute_aggregate_script
-}
-afterarray_dependency=$(sbatch --parsable --dependency=afterok:$SLURM_JOB_ID --wrap="afterarray")
+# for ((i=1; i<="$num_gpus"; i++)); do
+#     file="${i}_posebusters_sampled.pickle"
+    
+#     while [ ! -f "$file" ]; do
+#         sleep 5  # Adjust the interval between checks as needed
+#     done
+# done
 
-wait $afterarray_dependency
+# python experiments/aggregate_results.py \
+#     --files-dir "$output_dir"

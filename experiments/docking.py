@@ -218,8 +218,12 @@ def calculate_qvina2_score(
         violin_dict[k].extend(v)
     for k, v in interactions_mean.items():
         posecheck_dict[k].append(v["mean"])
-    posecheck_dict["Clashes"].append(np.mean(pc.calculate_clashes()))
-    posecheck_dict["Strain Energies"].append(np.mean(pc.calculate_strain_energy()))
+    clashes = pc.calculate_clashes()
+    strain_energies = pc.calculate_strain_energy()
+    violin_dict["Clashes"].extend(clashes)
+    violin_dict["Strain Energies"].extend(strain_energies)
+    posecheck_dict["Clashes"].append(np.mean(clashes))
+    posecheck_dict["Strain Energies"].append(np.nanmean(strain_energies))
     print("Done!")
 
     try:

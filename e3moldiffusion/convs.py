@@ -1,15 +1,15 @@
-from typing import Optional, Tuple
 import math
+from typing import Optional, Tuple
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
-from torch_geometric.nn import MessagePassing
+from torch_geometric.nn import MessagePassing, knn_graph
 from torch_geometric.nn.inits import reset
 from torch_geometric.typing import OptTensor
-from torch_sparse import SparseTensor
 from torch_scatter import scatter
 from torch_scatter.composite import scatter_softmax
-from torch_geometric.nn import knn_graph
+from torch_sparse import SparseTensor
 
 from e3moldiffusion.modules import DenseLayer, GatedEquivBlock, SE3Norm
 
@@ -303,7 +303,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         input_edge_dim = 2 * self.si + edge_dim + 2 + 2
 
         self.edge_net = nn.Sequential(
-            DenseLayer(input_edge_dim, self.si, bias=True, activation=nn.SiLU()),
+            DenseLayer(input_edge_dim, self.si, bias=True, activation=nn.ReLU()),
             DenseLayer(
                 self.si, self.v_mul * self.vi + self.si + 1 + edge_dim, bias=True
             ),
@@ -445,6 +445,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         batch: Tensor,
         batch_lig: Tensor = None,
         pocket_mask: Tensor = None,
+        edge_mask_pocket: Tensor = None,
     ):
         s, v, p = x
         d, a, r, e = edge_attr
@@ -478,7 +479,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
             )
         else:
             p = p + mp * pocket_mask if pocket_mask is not None else p + mp
-        e = F.silu(me + e)
+        e = F.relu(me + e)
         e = self.edge_post(e)
 
         ms, mv = self.update_net(x=(s, v))
