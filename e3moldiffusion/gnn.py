@@ -14,8 +14,10 @@ from e3moldiffusion.modules import (
     AdaptiveLayerNorm,
     LayerNorm,
     SE3Norm,
+    DenseLayer
 )
-
+import torch.nn.functional as F
+from torch_geometric.nn import radius_graph
 
 class EQGATEnergyGNN(nn.Module):
     def __init__(
@@ -440,7 +442,7 @@ class EQGATEdgeLocalGlobalGNN(nn.Module):
 
 class EQGATLocalGNN(nn.Module):
     """_summary_
-    EQGAT GNN Network updating node-level scalar, vectors.
+    EQGAT GNN Network updating node-level scalar, vectors and potentially coordinates.
     Args:
         nn (_type_): _description_
     """
@@ -454,6 +456,8 @@ class EQGATLocalGNN(nn.Module):
         use_cross_product: bool = False,
         vector_aggr: str = "mean",
         intermediate_outs: bool = False,
+        use_pos_norm: bool = True,
+        coords_update: bool = False
     ):
         super(EQGATLocalGNN, self).__init__()
 
@@ -476,6 +480,8 @@ class EQGATLocalGNN(nn.Module):
                     use_mlp_update=i < (num_layers - 1),
                     vector_aggr=vector_aggr,
                     use_cross_product=use_cross_product,
+                    use_pos_norm=use_pos_norm,
+                    coords_update=coords_update,
                 )
             )
 
@@ -520,19 +526,178 @@ class EQGATLocalGNN(nn.Module):
                 edge_index=edge_index_in,
                 edge_attr=edge_attr_in,
             )
-            s, v = out["s"], out["v"]
+            s, v, p  = out["s"], out["v"], out["p"]
 
             if self.intermediate_outs:
                 results.append(s)
 
-        out = {"s": s, "v": v}
+        out = {"s": s, "v": v, "p": p if self.coords_update else None}
 
         if self.intermediate_outs:
             return out, results
         else:
             return out
 
+class EQGATDynamicLocalEdge(nn.Module):
+    """_summary_
+    EQGAT GNN Network updating node-level scalar, vectors and coordinates on the node level
+    and all fully-connected edges
+    After each iteration, the radius graph is computed again.
+    Args:
+        nn (_type_): _description_
+    """
 
+    def __init__(
+        self,
+        hn_dim: Tuple[int, int] = (64, 16),
+        edge_dim: Optional[int] = 16,
+        cutoff_local: float = 5.0,
+        num_layers: int = 5,
+        use_cross_product: bool = False,
+        vector_aggr: str = "mean",
+        intermediate_outs: bool = False,
+        use_pos_norm: bool = False,
+    ):
+        super(EQGATDynamicLocalEdge, self).__init__()
+
+        self.num_layers = num_layers
+        self.cutoff_local = cutoff_local
+
+        self.sdim, self.vdim = hn_dim
+        self.edge_dim = edge_dim
+
+        convs = []
+        self.intermediate_outs = intermediate_outs
+
+        for i in range(num_layers):
+            convs.append(
+                EQGATLocalConvFinal(
+                    in_dims=hn_dim,
+                    out_dims=hn_dim,
+                    edge_dim=edge_dim,
+                    has_v_in=i > 0,
+                    use_mlp_update=i < (num_layers - 1),
+                    vector_aggr=vector_aggr,
+                    use_cross_product=use_cross_product,
+                    use_pos_norm=use_pos_norm,
+                    coords_update=True,
+                )
+            )
+
+        self.convs = nn.ModuleList(convs)
+        self.norms = nn.ModuleList([LayerNorm(dims=hn_dim) for _ in range(num_layers)])
+        self.edge_pre = nn.ModuleList([DenseLayer(hn_dim[0], edge_dim) for _ in range(num_layers)])
+        self.edge_post = nn.ModuleList([DenseLayer(edge_dim, edge_dim) for _ in range(num_layers)])
+        
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        for conv, norm, a, b in zip(self.convs, self.norms, self.edge_pre, self.edge_post):
+            conv.reset_parameters()
+            norm.reset_parameters()
+            a.reset_parameters()
+            b.reset_parameters()
+            
+    def calculate_edge_attrs(
+        self,
+        edge_index: Tensor,
+        edge_attr: OptTensor,
+        pos: Tensor,
+        sqrt: bool = True
+    ):
+        source, target = edge_index
+        r = pos[target] - pos[source]
+        pos = pos / torch.norm(pos, dim=1).unsqueeze(1)
+        a = pos[target] * pos[source]
+        a = a.sum(-1)
+        d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6)
+        if sqrt:
+            d = d.sqrt()
+        r_norm = torch.div(r, (1.0 + d.unsqueeze(-1)))
+        edge_attr = (d, a, r_norm, edge_attr)
+        return edge_attr
+    
+    def to_dense_edge_tensor(self, edge_index, edge_attr, num_nodes):
+        E = torch.zeros(
+            num_nodes,
+            num_nodes,
+            edge_attr.size(-1),
+            device=edge_attr.device,
+            dtype=edge_attr.dtype,
+        )
+        E[edge_index[0], edge_index[1], :] = edge_attr
+        return E
+
+    def from_dense_edge_tensor(self, edge_index, E):
+        return E[edge_index[0], edge_index[1], :]
+
+    def forward(
+        self,
+        s: Tensor,
+        v: Tensor,
+        p: Tensor,
+        edge_index_global: Tensor,
+        edge_attr_global: Tuple[Tensor],
+        batch: Tensor = None,
+        batch_lig=None,
+        pocket_mask=None,
+    ) -> Dict:
+        
+        if self.intermediate_outs:
+            results = []
+        else:
+            results = None
+
+        n = s.size(0)
+        E = self.to_dense_edge_tensor(edge_index=edge_index_global,
+                                      edge_attr=edge_attr_global, 
+                                      num_nodes=n
+                                      )
+        for i in range(len(self.convs)):
+            edge_index_in = radius_graph(x=p,
+                                    r=self.cutoff_local,
+                                    batch=batch,
+                                    max_num_neighbors=32
+                                    )
+            local_mask = torch.ones((edge_index_in.size(-1), 1), device=s.device)
+            local_mask = self.to_dense_edge_tensor(edge_index=edge_index_in,
+                                                   edge_attr=local_mask, num_nodes=n)
+            edge_attr_in = self.from_dense_edge_tensor(edge_index=edge_index_in, E=E)
+            s, v = self.norms[i](x={"s": s, "v": v}, batch=batch)
+            
+            edge_attr_in = self.calculate_edge_attrs(edge_index=edge_index_in,
+                                                     edge_attr=edge_attr_in, 
+                                                     pos=p,
+                                                     sqrt=True)
+            
+            out = self.convs[i](
+                x=(s, v, p),
+                batch=batch,
+                edge_index=edge_index_in,
+                edge_attr=edge_attr_in,
+                batch_lig=batch_lig,
+                pocket_mask=pocket_mask
+            )
+            edge_attr_in = edge_attr_in[-1]  
+            s, v, p  = out["s"], out["v"], out["p"]
+            f = self.edge_pre[i](s)
+            e = F.silu(f[edge_index_in[0]] + f[edge_index_in[1]])
+            e = self.edge_post[i](edge_attr_in + e)
+            EE = self.to_dense_edge_tensor(edge_index=edge_index_in, edge_attr=e, num_nodes=n)
+            E = (1.0 - local_mask) * E + local_mask * EE
+            if self.intermediate_outs:
+                results.append(s)
+
+        e = E[edge_index_global[0], edge_index_global[1], :]
+        
+        out = {"s": s, "v": v, "e": e, "p": p}
+
+        if self.intermediate_outs:
+            return out, results
+        else:
+            return out
+        
+        
 class TopoEdgeGNN(nn.Module):
     def __init__(
         self,

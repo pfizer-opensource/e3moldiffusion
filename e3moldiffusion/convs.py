@@ -600,13 +600,20 @@ class EQGATLocalConvFinal(MessagePassing):
         use_mlp_update: bool = True,
         vector_aggr: str = "mean",
         use_cross_product: bool = False,
+        use_pos_norm: bool = False,
+        coords_update: bool = False
     ):
         super(EQGATLocalConvFinal, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
         )
 
         assert edge_dim is not None
-
+        self.use_pos_norm = use_pos_norm
+        self.coords_update = coords_update
+        if coords_update:
+            p = 1
+        else:
+            p = 0
         self.vector_aggr = vector_aggr
         self.in_dims = in_dims
         self.si, self.vi = in_dims
@@ -626,7 +633,7 @@ class EQGATLocalConvFinal(MessagePassing):
             DenseLayer(
                 2 * self.si + edge_dim + 2 + 2, self.si, bias=True, activation=nn.SiLU()
             ),
-            DenseLayer(self.si, self.v_mul * self.vi + self.si, bias=True),
+            DenseLayer(self.si, self.v_mul * self.vi + self.si + p, bias=True),
         )
         self.scalar_net = DenseLayer(self.si, self.si, bias=True)
         self.update_net = GatedEquivBlock(
@@ -652,21 +659,26 @@ class EQGATLocalConvFinal(MessagePassing):
         edge_index: Tensor,
         edge_attr: Tuple[Tensor, Tensor, Tensor, Tensor],
         batch: Tensor,
+        batch_lig: Tensor = None,
+        pocket_mask: Tensor = None,
     ):
         s, v, p = x
-        d, a, r, e = edge_attr
+        # d, a, r, e = edge_attr
 
-        ms, mv = self.propagate(
+        ms, mv, mp = self.propagate(
             sa=s,
             sb=self.scalar_net(s),
             va=v,
             vb=self.vector_net(v),
             p=p,
-            edge_attr=(d, a, r, e),
+            edge_attr=edge_attr,
             edge_index=edge_index,
             dim_size=s.size(0),
         )
-
+        
+        if self.coords_update:
+            p = p + mp * pocket_mask if pocket_mask is not None else p + mp
+            
         s = ms + s
         v = mv + v
 
@@ -675,20 +687,26 @@ class EQGATLocalConvFinal(MessagePassing):
         s = ms + s
         v = mv + v
 
-        out = {"s": s, "v": v, "p": p, "e": e}
+        out = {"s": s, "v": v, "p": p}
         return out
 
     def aggregate(
         self,
-        inputs: Tuple[Tensor, Tensor],
+        inputs: Tuple[Tensor, Tensor, Tensor],
         index: Tensor,
         dim_size: Optional[int] = None,
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor, Tensor, OptTensor]:
         s = scatter(inputs[0], index=index, dim=0, reduce="add", dim_size=dim_size)
         v = scatter(
             inputs[1], index=index, dim=0, reduce=self.vector_aggr, dim_size=dim_size
         )
-        return s, v
+        if self.coords_update:
+            p = scatter(
+                inputs[2], index=index, dim=0, reduce=self.vector_aggr, dim_size=dim_size
+            )
+        else:
+            p = None
+        return s, v, p
 
     def message(
         self,
@@ -709,24 +727,39 @@ class EQGATLocalConvFinal(MessagePassing):
         de0 = d.view(-1, 1)
         a0 = a.view(-1, 1)
 
-        d_i, d_j = (
-            torch.pow(p_i, 2).sum(-1, keepdim=True).clamp(min=1e-6).sqrt(),
-            torch.pow(p_j, 2).sum(-1, keepdim=True).clamp(min=1e-6).sqrt(),
-        )
+        if self.use_pos_norm:
+            d_i, d_j = (
+                torch.pow(p_i, 2).sum(-1, keepdim=True).clamp(min=1e-6).sqrt(),
+                torch.pow(p_j, 2).sum(-1, keepdim=True).clamp(min=1e-6).sqrt(),
+            )
+        else:
+             d_i, d_j = torch.zeros_like(a0), torch.zeros_like(a0)
         aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e, d_i, d_j], dim=-1)
         aij = self.edge_net(aij)
 
-        if self.has_v_in:
-            aij, vij0 = aij.split([self.si, self.v_mul * self.vi], dim=-1)
-            vij0 = vij0.unsqueeze(1)
-            if self.use_cross_product:
-                vij0, vij1, vij2 = vij0.chunk(3, dim=-1)
+        if not self.coords_update:
+            if self.has_v_in:
+                aij, vij0 = aij.split([self.si, self.v_mul * self.vi], dim=-1)
+                vij0 = vij0.unsqueeze(1)
+                if self.use_cross_product:
+                    vij0, vij1, vij2 = vij0.chunk(3, dim=-1)
+                else:
+                    vij0, vij1 = vij0.chunk(2, dim=-1)
             else:
-                vij0, vij1 = vij0.chunk(2, dim=-1)
+                aij, vij0 = aij.split([self.si, self.vi], dim=-1)
+                vij0 = vij0.unsqueeze(1)
+            c = None
         else:
-            aij, vij0 = aij.split([self.si, self.vi], dim=-1)
-            vij0 = vij0.unsqueeze(1)
-
+            if self.has_v_in:
+                aij, vij0, c = aij.split([self.si, self.v_mul * self.vi, 1], dim=-1)
+                vij0 = vij0.unsqueeze(1)
+                if self.use_cross_product:
+                    vij0, vij1, vij2 = vij0.chunk(3, dim=-1)
+                else:
+                    vij0, vij1 = vij0.chunk(2, dim=-1)
+            else:
+                aij, vij0, c = aij.split([self.si, self.vi, 1], dim=-1)
+                vij0 = vij0.unsqueeze(1)
         # feature attention
         aij = scatter_softmax(aij, index=index, dim=0, dim_size=dim_size)
         ns_j = aij * sb_j
@@ -742,8 +775,14 @@ class EQGATLocalConvFinal(MessagePassing):
                 nv_j = nv0_j + nv1_j
         else:
             nv_j = nv0_j
-
-        return ns_j, nv_j
+            
+        if self.coords_update:
+            # p_j_n = c.tanh() * (p_j - p_i)
+            r = (p_j - p_i) / ((p_j - p_i).pow(2).sum(dim=-1).clamp(min=1e-4).sqrt().unsqueeze(-1) + 1.0)
+            p_j_n = c * r            
+        else:
+            p_j_n = p_j
+        return ns_j, nv_j, p_j_n
 
 
 # Topological Conv without 3d coords

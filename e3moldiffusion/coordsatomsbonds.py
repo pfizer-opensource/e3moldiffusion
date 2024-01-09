@@ -9,7 +9,7 @@ from torch_geometric.typing import OptTensor
 from torch_geometric.utils import softmax
 from torch_scatter import scatter_add, scatter_mean
 
-from e3moldiffusion.gnn import EQGATEdgeGNN, EQGATEnergyGNN, EQGATLocalGNN
+from e3moldiffusion.gnn import EQGATEdgeGNN, EQGATEnergyGNN, EQGATLocalGNN, EQGATDynamicLocalEdge
 from e3moldiffusion.modules import (
     DenseLayer,
     GatedEquivBlock,
@@ -108,30 +108,43 @@ class DenoisingEdgeNetwork(nn.Module):
         else:
             latent_dim_ = None
 
-        self.gnn = EQGATEdgeGNN(
-            hn_dim=hn_dim,
-            cutoff_local=cutoff_local,
-            num_atom_features=num_atom_features,
-            num_bond_types=num_bond_types,
-            coords_param=coords_param,
-            num_context_features=num_context_features,
-            property_prediction=property_prediction,
-            edge_dim=edge_dim,
-            latent_dim=latent_dim_,
-            num_layers=num_layers,
-            use_cross_product=use_cross_product,
-            vector_aggr=vector_aggr,
-            fully_connected=fully_connected,
-            local_global_model=local_global_model,
-            recompute_radius_graph=recompute_radius_graph,
-            recompute_edge_attributes=recompute_edge_attributes,
-            edge_mp=edge_mp,
-            p1=p1,
-            use_pos_norm=use_pos_norm,
-            ligand_pocket_interaction=ligand_pocket_interaction,
-            store_intermediate_coords=store_intermediate_coords,
-        )
-
+        self.dynamic = True
+        
+        if not self.dynamic:
+            self.gnn = EQGATEdgeGNN(
+                hn_dim=hn_dim,
+                cutoff_local=cutoff_local,
+                num_atom_features=num_atom_features,
+                num_bond_types=num_bond_types,
+                coords_param=coords_param,
+                num_context_features=num_context_features,
+                property_prediction=property_prediction,
+                edge_dim=edge_dim,
+                latent_dim=latent_dim_,
+                num_layers=num_layers,
+                use_cross_product=use_cross_product,
+                vector_aggr=vector_aggr,
+                fully_connected=fully_connected,
+                local_global_model=local_global_model,
+                recompute_radius_graph=recompute_radius_graph,
+                recompute_edge_attributes=recompute_edge_attributes,
+                edge_mp=edge_mp,
+                p1=p1,
+                use_pos_norm=use_pos_norm,
+                ligand_pocket_interaction=ligand_pocket_interaction,
+                store_intermediate_coords=store_intermediate_coords,
+            )
+        else:
+            self.gnn = EQGATDynamicLocalEdge(
+                hn_dim=hn_dim,
+                edge_dim=edge_dim,
+                cutoff_local=cutoff_local,
+                num_layers=num_layers,
+                use_cross_product=use_cross_product,
+                intermediate_outs=False,
+                use_pos_norm=False
+            )
+            
         if property_prediction:
             self.prediction_head = PropertyPredictionHead(
                 hn_dim=hn_dim,
@@ -258,32 +271,43 @@ class DenoisingEdgeNetwork(nn.Module):
         #    edge_attr_local_transformed = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local_transformed, pos=pos)
         # else:
         #    edge_attr_local_transformed = (None, None, None)
-
-        # global
-        edge_attr_global_transformed = self.calculate_edge_attrs(
-            edge_index=edge_index_global,
-            edge_attr=edge_attr_global_transformed,
-            pos=pos,
-            sqrt=True,
-            batch=batch if self.ligand_pocket_interaction else None,
-        )
-
+        
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
-
-        out = self.gnn(
-            s=s,
-            v=v,
-            p=pos,
-            z=z,
-            edge_index_local=None,
-            edge_attr_local=(None, None, None),
-            edge_index_global=edge_index_global,
-            edge_attr_global=edge_attr_global_transformed,
-            batch=batch,
-            context=cemb,
-            batch_lig=batch_lig,
-            pocket_mask=pocket_mask,
-        )
+        if not self.dynamic:
+            # global
+            edge_attr_global_transformed = self.calculate_edge_attrs(
+                edge_index=edge_index_global,
+                edge_attr=edge_attr_global_transformed,
+                pos=pos,
+                sqrt=True,
+                batch=batch if self.ligand_pocket_interaction else None,
+            )
+            
+            out = self.gnn(
+                s=s,
+                v=v,
+                p=pos,
+                z=z,
+                edge_index_local=None,
+                edge_attr_local=(None, None, None),
+                edge_index_global=edge_index_global,
+                edge_attr_global=edge_attr_global_transformed,
+                batch=batch,
+                context=cemb,
+                batch_lig=batch_lig,
+                pocket_mask=pocket_mask,
+            )
+        else:
+            out = self.gnn(
+                s=s, 
+                v=v,
+                p=pos,
+                edge_index_global=edge_index_global,
+                edge_attr_global=edge_attr_global_transformed,
+                batch=batch,
+                batch_lig=batch_lig,
+                pocket_mask=pocket_mask,
+            )
 
         coords_pred, atoms_pred, bonds_pred = self.prediction_head(
             x=out,
