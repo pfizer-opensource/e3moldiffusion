@@ -1,15 +1,15 @@
-from typing import Optional, Tuple
 import math
+from typing import Optional, Tuple
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
-from torch_geometric.nn import MessagePassing
+from torch_geometric.nn import MessagePassing, knn_graph
 from torch_geometric.nn.inits import reset
 from torch_geometric.typing import OptTensor
-from torch_sparse import SparseTensor
 from torch_scatter import scatter
 from torch_scatter.composite import scatter_softmax
-from torch_geometric.nn import knn_graph
+from torch_sparse import SparseTensor
 
 from e3moldiffusion.modules import DenseLayer, GatedEquivBlock, SE3Norm
 
@@ -445,6 +445,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         batch: Tensor,
         batch_lig: Tensor = None,
         pocket_mask: Tensor = None,
+        edge_mask_pocket: Tensor = None,
     ):
         s, v, p = x
         d, a, r, e = edge_attr

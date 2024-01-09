@@ -171,32 +171,18 @@ def calculate_qvina2_score(
             continue
         rdmols.append(rdmol)
 
-    #     pc.load_ligands_from_sdf(str(out_sdf_file), add_hs=True)
-    #     # pc.load_ligands_from_mol(rdmol)
-    #     clashes.append(pc.calculate_clashes()[0])
-    #     strain_energies.append(pc.calculate_strain_energy()[0])
-    #     rmsds.append(pc.calculate_rmsd(suppl[i], rdmol))
-
-    # posecheck_dict["Clashes"].append(np.mean(clashes))
-    # posecheck_dict["Strain Energies"].append(np.nanmean(strain_energies))
-    # posecheck_dict["RMSD"].append(np.mean(rmsds))
-
-    # violin_dict["clashes"].extend(clashes)
-    # violin_dict["strain_energy"].extend(strain_energies)
-    # violin_dict["rmsd"].extend(rmsds)
-
     write_sdf_file(out_sdf_file, rdmols)
 
     # PoseBusters
     print("Starting evaluation with PoseBusters...")
     buster = {}
     buster_mol = PoseBusters(config="mol")
-    buster_mol_df = buster_mol.bust([out_sdf_file], None, None)
+    buster_mol_df = buster_mol.bust([str(out_sdf_file)], None, None)
     for metric in buster_mol_df.columns:
         violin_dict[metric].extend(list(buster_mol_df[metric]))
         buster[metric] = buster_mol_df[metric].sum() / len(buster_mol_df[metric])
     buster_dock = PoseBusters(config="dock")
-    buster_dock_df = buster_dock.bust([out_sdf_file], None, pdb_file)
+    buster_dock_df = buster_dock.bust([str(out_sdf_file)], None, str(pdb_file))
     for metric in buster_dock_df:
         if metric not in buster:
             violin_dict[metric].extend(list(buster_dock_df[metric]))
@@ -208,8 +194,8 @@ def calculate_qvina2_score(
     # PoseCheck
     print("Starting evaluation with PoseCheck...")
     pc = PoseCheck()
-    pc.load_protein_from_pdb(pdb_file)
-    pc.load_ligands_from_sdf(out_sdf_file, add_hs=True)
+    pc.load_protein_from_pdb(str(pdb_file))
+    pc.load_ligands_from_mols(rdmols, add_hs=True)
     interactions = pc.calculate_interactions()
     interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
         interactions
@@ -218,8 +204,12 @@ def calculate_qvina2_score(
         violin_dict[k].extend(v)
     for k, v in interactions_mean.items():
         posecheck_dict[k].append(v["mean"])
-    posecheck_dict["Clashes"].append(np.mean(pc.calculate_clashes()))
-    posecheck_dict["Strain Energies"].append(np.mean(pc.calculate_strain_energy()))
+    clashes = pc.calculate_clashes()
+    strain_energies = pc.calculate_strain_energy()
+    violin_dict["Clashes"].extend(clashes)
+    violin_dict["Strain Energies"].extend(strain_energies)
+    posecheck_dict["Clashes"].append(np.mean(clashes))
+    posecheck_dict["Strain Energies"].append(np.nanmedian(strain_energies))
     print("Done!")
 
     try:

@@ -58,10 +58,10 @@ def sdf_to_pdbqt(sdf_file, pdbqt_outfile, mol_id):
 
 
 def calculate_qvina2_score(
+    pdb_file,
     receptor_file,
     sdf_file,
     out_dir,
-    pdb_dir,
     buster_dict,
     violin_dict,
     posecheck_dict,
@@ -84,7 +84,7 @@ def calculate_qvina2_score(
 
     receptor_file = Path(receptor_file)
     sdf_file = Path(sdf_file)
-    pdb_dir = Path(pdb_dir)
+    pdb_file = Path(pdb_file)
 
     if receptor_file.suffix == ".pdb":
         # prepare receptor, requires Python 2.7
@@ -97,31 +97,23 @@ def calculate_qvina2_score(
 
     scores = []
     rdmols = []  # for if return rdmols
-    clashes = []
-    strain_energies = []
-    rmsds = []
 
     suppl = Chem.SDMolSupplier(str(sdf_file), sanitize=False)
     ligand_name = sdf_file.stem
     ligand_pdbqt_file = Path(os.path.join(out_dir, "docked"), ligand_name + ".pdbqt")
     out_sdf_file = Path(os.path.join(out_dir, "docked"), ligand_name + "_out.sdf")
 
-    # Initialize the PoseCheck object
-    pc = PoseCheck()
-
-    pdb_name = str(ligand_pdbqt_file).split("/")[-1].split("-")[0]
-    if pdb_dir is not None:
-        pdbs = [str(i).split("/")[-1].split(".")[0] for i in pdb_dir.glob("[!.]*.pdb")]
-    else:
-        pdbs = None
-    if pdbs is not None and pdb_name in pdbs:
-        pdb_file = os.path.join(str(pdb_dir), pdb_name + ".pdb")
-    else:
-        temp_dir = tempfile.mkdtemp()
-        protein, _ = get_pdb_components(pdb_name)
-        pdb_file = write_pdb(temp_dir, protein, pdb_name)
-
-    pc.load_protein_from_pdb(pdb_file)
+    # pdb_name = str(ligand_pdbqt_file).split("/")[-1].split("-")[0]
+    # if pdb_dir is not None:
+    #     pdbs = [str(i).split("/")[-1].split(".")[0] for i in pdb_dir.glob("[!.]*.pdb")]
+    # else:
+    #     pdbs = None
+    # if pdbs is not None and pdb_name in pdbs:
+    #     pdb_file = os.path.join(str(pdb_dir), pdb_name + ".pdb")
+    # else:
+    #     # temp_dir = tempfile.mkdtemp()
+    #     # protein, _ = get_pdb_components(pdb_name)
+    #     # pdb_file = write_pdb(temp_dir, protein, pdb_name)
 
     for i, mol in enumerate(suppl):  # sdf file may contain several ligands
         sdf_to_pdbqt(sdf_file, ligand_pdbqt_file, i)
@@ -169,20 +161,6 @@ def calculate_qvina2_score(
             continue
         rdmols.append(rdmol)
 
-    #     pc.load_ligands_from_sdf(str(out_sdf_file), add_hs=True)
-    #     # pc.load_ligands_from_mol(rdmol)
-    #     clashes.append(pc.calculate_clashes()[0])
-    #     strain_energies.append(pc.calculate_strain_energy()[0])
-    #     rmsds.append(pc.calculate_rmsd(suppl[i], rdmol))
-
-    # posecheck_dict["Clashes"].append(np.mean(clashes))
-    # posecheck_dict["Strain Energies"].append(np.nanmean(strain_energies))
-    # posecheck_dict["RMSD"].append(np.mean(rmsds))
-
-    # violin_dict["clashes"].extend(clashes)
-    # violin_dict["strain_energy"].extend(strain_energies)
-    # violin_dict["rmsd"].extend(rmsds)
-
     write_sdf_file(out_sdf_file, rdmols)
 
     # PoseBusters
@@ -194,7 +172,7 @@ def calculate_qvina2_score(
         violin_dict[metric].extend(list(buster_mol_df[metric]))
         buster[metric] = buster_mol_df[metric].sum() / len(buster_mol_df[metric])
     buster_dock = PoseBusters(config="dock")
-    buster_dock_df = buster_dock.bust([str(out_sdf_file)], None, pdb_file)
+    buster_dock_df = buster_dock.bust([str(out_sdf_file)], None, str(pdb_file))
     for metric in buster_dock_df:
         if metric not in buster:
             violin_dict[metric].extend(list(buster_dock_df[metric]))
@@ -206,8 +184,8 @@ def calculate_qvina2_score(
     # PoseCheck
     print("Starting evaluation with PoseCheck...")
     pc = PoseCheck()
-    pc.load_protein_from_pdb(pdb_file)
-    pc.load_ligands_from_sdf(str(out_sdf_file), add_hs=True)
+    pc.load_protein_from_pdb(str(pdb_file))
+    pc.load_ligands_from_mols(rdmols, add_hs=True)
     interactions = pc.calculate_interactions()
     interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
         interactions
@@ -216,14 +194,18 @@ def calculate_qvina2_score(
         violin_dict[k].extend(v)
     for k, v in interactions_mean.items():
         posecheck_dict[k].append(v["mean"])
-    posecheck_dict["Clashes"].append(np.mean(pc.calculate_clashes()))
-    posecheck_dict["Strain Energies"].append(np.mean(pc.calculate_strain_energy()))
+    clashes = pc.calculate_clashes()
+    strain_energies = pc.calculate_strain_energy()
+    violin_dict["Clashes"].extend(clashes)
+    violin_dict["Strain Energies"].extend(strain_energies)
+    posecheck_dict["Clashes"].append(np.mean(clashes))
+    posecheck_dict["Strain Energies"].append(np.nanmedian(strain_energies))
     print("Done!")
 
-    try:
-        shutil.rmtree(temp_dir)
-    except UnboundLocalError:
-        pass
+    # try:
+    #     shutil.rmtree(temp_dir)
+    # except UnboundLocalError:
+    #     pass
 
     if return_rdmol:
         return scores, rdmols
@@ -269,6 +251,9 @@ if __name__ == "__main__":
         else args.sdf_files
     )
 
+    assert np.sum([len(i) for i in split_list(sdf_files, args.num_cpus)]) == len(
+        sdf_files
+    )
     sdf_files = split_list(sdf_files, args.num_cpus)[args.mp_index - 1]
 
     pbar = tqdm(sdf_files)
@@ -286,21 +271,24 @@ if __name__ == "__main__":
             receptor_name, pocket_id, *suffix = ligand_name.split("_")
             suffix = "_".join(suffix)
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
+            pdb_file = Path(args.pdb_dir, receptor_name + ".pdb")
         elif args.dataset == "crossdocked":
             ligand_name = sdf_file.stem
             receptor_name = ligand_name.split("_")[0]
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
+            pdb_file = Path(args.pdb_dir, receptor_name + ".pdb")
         elif args.dataset == "cdk2":
             ligand_name = sdf_file.stem
             receptor_name = ligand_name.split("_")[0]
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
+            pdb_file = Path(args.pdb_dir, receptor_name + ".pdb")
 
         # try:
         scores, rdmols = calculate_qvina2_score(
+            pdb_file,
             receptor_file,
             sdf_file,
             args.save_dir,
-            args.pdb_dir,
             buster_dict,
             violin_dict,
             posecheck_dict,

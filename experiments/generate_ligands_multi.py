@@ -162,7 +162,11 @@ def evaluate(
         )
     print("\nStarting sampling...\n")
 
+    assert np.sum([len(i) for i in split_list(test_files, num_gpus)]) == len(test_files)
+
     test_files = split_list(test_files, num_gpus)[mp_index - 1]
+
+    print(f"Processing {len(test_files)} SDF files on job index {mp_index}.")
 
     for sdf_file in test_files:
         ligand_name = sdf_file.stem
@@ -269,19 +273,19 @@ def evaluate(
         write_sdf_file(sdf_out_file_raw, valid_molecules, extract_mol=True)
         sdf_files.append(sdf_out_file_raw)
 
-        pdb_name = str(sdf_out_file_raw).split("/")[-1].split("-")[0]
-        if pdb_dir is not None:
-            pdbs = [
-                str(i).split("/")[-1].split(".")[0] for i in pdb_dir.glob("[!.]*.pdb")
-            ]
-        else:
-            pdbs = None
-        if pdbs is not None and pdb_name in pdbs:
-            pdb_file = os.path.join(str(pdb_dir), pdb_name + ".pdb")
-        else:
-            temp_dir = tempfile.mkdtemp()
-            protein, _ = get_pdb_components(pdb_name)
-            pdb_file = write_pdb(temp_dir, protein, pdb_name)
+        # pdb_name = str(sdf_out_file_raw).split("/")[-1].split("-")[0]
+        # if pdb_dir is not None:
+        #     pdbs = [
+        #         str(i).split("/")[-1].split(".")[0] for i in pdb_dir.glob("[!.]*.pdb")
+        #     ]
+        # else:
+        #     pdbs = None
+        # if pdbs is not None and pdb_name in pdbs:
+        #     pdb_file = os.path.join(str(pdb_dir), pdb_name + ".pdb")
+        # else:
+        #     temp_dir = tempfile.mkdtemp()
+        #     protein, _ = get_pdb_components(pdb_name)
+        #     pdb_file = write_pdb(temp_dir, protein, pdb_name)
 
         # PoseBusters
         print("Starting evaluation with PoseBusters...")
@@ -292,7 +296,7 @@ def evaluate(
             violin_dict[metric].extend(list(buster_mol_df[metric]))
             buster[metric] = buster_mol_df[metric].sum() / len(buster_mol_df[metric])
         buster_dock = PoseBusters(config="dock")
-        buster_dock_df = buster_dock.bust([sdf_out_file_raw], None, pdb_file)
+        buster_dock_df = buster_dock.bust([sdf_out_file_raw], None, str(pdb_file))
         for metric in buster_dock_df:
             if metric not in buster:
                 violin_dict[metric].extend(list(buster_dock_df[metric]))
@@ -306,7 +310,7 @@ def evaluate(
         # PoseCheck
         print("Starting evaluation with PoseCheck...")
         pc = PoseCheck()
-        pc.load_protein_from_pdb(pdb_file)
+        pc.load_protein_from_pdb(str(pdb_file))
         pc.load_ligands_from_sdf(str(sdf_out_file_raw), add_hs=True)
         interactions = pc.calculate_interactions()
         interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
@@ -316,16 +320,18 @@ def evaluate(
             violin_dict[k].extend(v)
         for k, v in interactions_mean.items():
             posecheck_dict[k].append(v["mean"])
-        posecheck_dict["Clashes"].append(np.mean(pc.calculate_clashes()))
-        posecheck_dict["Strain Energies"].append(
-            np.nanmean(pc.calculate_strain_energy())
-        )
+        clashes = pc.calculate_clashes()
+        strain_energies = pc.calculate_strain_energy()
+        violin_dict["Clashes"].extend(clashes)
+        violin_dict["Strain Energies"].extend(strain_energies)
+        posecheck_dict["Clashes"].append(np.mean(clashes))
+        posecheck_dict["Strain Energies"].append(np.nanmedian(strain_energies))
         print("Done!")
 
-        try:
-            shutil.rmtree(temp_dir)
-        except UnboundLocalError:
-            pass
+        # try:
+        #     shutil.rmtree(temp_dir)
+        # except UnboundLocalError:
+        #     pass
 
         # Time the sampling process
         time_per_pocket[str(sdf_file)] = time() - t_pocket_start

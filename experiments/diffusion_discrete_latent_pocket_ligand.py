@@ -1,36 +1,19 @@
 import logging
 import os
-from datetime import datetime
-from typing import Optional, List, Tuple, Dict
-from torch_sparse import coalesce
-from experiments.data.utils import write_xyz_file
-from experiments.xtb_energy import calculate_xtb_energy
 import pickle
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
 import pandas as pd
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
-from torch_scatter import scatter_mean
-from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
-from e3moldiffusion.modules import DenseLayer, GatedEquivBlock
-from e3moldiffusion.molfeat import get_bond_feature_dims
-from experiments.data.abstract_dataset import AbstractDatasetInfos
-from experiments.diffusion.categorical import CategoricalDiffusionKernel
-from experiments.diffusion.continuous import DiscreteDDPM
-from experiments.losses import DiffusionLoss
-from experiments.molecule_utils import Molecule
-from experiments.sampling.analyze import analyze_stability_for_molecules
-from experiments.utils import (
-    load_model_ligand,
-    remove_mean_pocket,
-    concat_ligand_pocket,
-    get_molecules,
-    get_inp_molecules,
-)
 from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.nn import radius_graph
-from torch_geometric.utils import dense_to_sparse, sort_edge_index, remove_self_loops
+from torch_geometric.utils import dense_to_sparse, remove_self_loops, sort_edge_index
+from torch_scatter import scatter_mean
+from torch_sparse import coalesce
 from tqdm import tqdm
 
 from e3moldiffusion.coordsatomsbonds import (
@@ -38,32 +21,41 @@ from e3moldiffusion.coordsatomsbonds import (
     LatentEncoderNetwork,
     SoftMaxAttentionAggregation,
 )
+from e3moldiffusion.latent import compute_mmd
+from e3moldiffusion.modules import DenseLayer, GatedEquivBlock
 from e3moldiffusion.molfeat import get_bond_feature_dims
-from experiments.diffusion.continuous import DiscreteDDPM
-from experiments.diffusion.categorical import CategoricalDiffusionKernel
+from experiments.data.abstract_dataset import AbstractDatasetInfos
 from experiments.data.distributions import ConditionalDistributionNodes, prepare_context
 from experiments.data.utils import (
     write_trajectory_as_xyz,
     write_xyz_file,
     write_xyz_file_from_batch,
 )
+from experiments.diffusion.categorical import CategoricalDiffusionKernel
+from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.utils import (
-    initialize_edge_attrs_reverse,
-    get_joint_edge_attrs,
     bond_guidance,
     energy_guidance,
+    get_joint_edge_attrs,
+    initialize_edge_attrs_reverse,
 )
+from experiments.losses import DiffusionLoss
 from experiments.molecule_utils import Molecule
+from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import (
     coalesce_edges,
+    concat_ligand_pocket,
+    get_inp_molecules,
     get_list_of_edge_adjs,
-    zero_mean,
-    load_model,
+    get_molecules,
     load_bond_model,
     load_energy_model,
+    load_model,
+    load_model_ligand,
+    remove_mean_pocket,
+    zero_mean,
 )
-from experiments.sampling.analyze import analyze_stability_for_molecules
-from e3moldiffusion.latent import compute_mmd
+from experiments.xtb_energy import calculate_xtb_energy
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(
@@ -77,7 +69,7 @@ BOND_FEATURE_DIMS = get_bond_feature_dims()[0]
 
 from e3moldiffusion.latent import LatentCache, PriorLatentLoss, get_latent_model
 
-         
+
 class Trainer(pl.LightningModule):
     def __init__(
         self,
@@ -172,15 +164,15 @@ class Trainer(pl.LightningModule):
         self.graph_pooling = SoftMaxAttentionAggregation(dim=hparams["latent_dim"])
 
         self.max_nodes = dataset_info.max_n_nodes
-        
+
         m = 2 if hparams["latentmodel"] == "vae" else 1
-        
+
         self.mu_logvar_z = DenseLayer(hparams["latent_dim"], m * hparams["latent_dim"])
         self.node_z = DenseLayer(hparams["latent_dim"], self.max_nodes)
-        
+
         self.latentloss = PriorLatentLoss(kind=hparams.get("latentmodel"))
         self.latentmodel = get_latent_model(hparams)
-        
+
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
             beta_max=hparams["beta_max"],
@@ -396,7 +388,16 @@ class Trainer(pl.LightningModule):
             )
 
     def _log(
-        self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, prior_loss, num_nodes_loss, batch_size, stage
+        self,
+        loss,
+        coords_loss,
+        atoms_loss,
+        charges_loss,
+        bonds_loss,
+        prior_loss,
+        num_nodes_loss,
+        batch_size,
+        stage,
     ):
         self.log(
             f"{stage}/loss",
@@ -532,16 +533,17 @@ class Trainer(pl.LightningModule):
         )
 
         prior_loss = self.latentloss(inputdict=out_dict.get("latent"))
-        num_nodes_loss = F.cross_entropy(out_dict["nodes"]["num_nodes_pred"], 
-                                         out_dict["nodes"]["num_nodes_true"])
-        
+        num_nodes_loss = F.cross_entropy(
+            out_dict["nodes"]["num_nodes_pred"], out_dict["nodes"]["num_nodes_true"]
+        )
+
         final_loss = (
             self.hparams.lc_coords * loss["coords"]
             + self.hparams.lc_atoms * loss["atoms"]
             + self.hparams.lc_bonds * loss["bonds"]
             + self.hparams.lc_charges * loss["charges"]
         )
-                
+
         final_loss = final_loss + self.hparams.prior_beta * prior_loss + num_nodes_loss
 
         if torch.any(final_loss.isnan()):
@@ -562,7 +564,9 @@ class Trainer(pl.LightningModule):
 
         return final_loss
 
-    def encode_ligand(self, pos, atom_types, data_batch, bond_edge_index, bond_edge_attr):
+    def encode_ligand(
+        self, pos, atom_types, data_batch, bond_edge_index, bond_edge_attr
+    ):
         bs = len(data_batch.unique())
         # latent encoder
         edge_index_local = radius_graph(
@@ -608,14 +612,14 @@ class Trainer(pl.LightningModule):
         bond_edge_index, bond_edge_attr = sort_edge_index(
             edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
         )
-            
+
         # TIME EMBEDDING
         temb = t.float() / self.hparams.timesteps
         temb = temb.clamp(min=self.hparams.eps_min)
         temb = temb.unsqueeze(dim=1)
 
         z = self.encode_ligand(
-             pos, atom_types, data_batch, bond_edge_index, bond_edge_attr
+            pos, atom_types, data_batch, bond_edge_index, bond_edge_attr
         )
         # latent prior model
         if self.hparams.latentmodel == "diffusion":
@@ -640,7 +644,14 @@ class Trainer(pl.LightningModule):
             mu, logvar = z.chunk(2, dim=-1)
             z = mu + torch.exp(0.5 * logvar) * torch.randn_like(mu)
             zpred = w = delta_log_pw = None
-        latentdict =  {"z_true": z, "z_pred": zpred, "mu": mu, "logvar": logvar, "w": w, "delta_log_pw": delta_log_pw}  
+        latentdict = {
+            "z_true": z,
+            "z_pred": zpred,
+            "mu": mu,
+            "logvar": logvar,
+            "w": w,
+            "delta_log_pw": delta_log_pw,
+        }
         pred_num_nodes = self.node_z(z)
         true_num_nodes = batch.batch.bincount()
 
@@ -671,7 +682,7 @@ class Trainer(pl.LightningModule):
             num_classes=self.num_charge_classes,
             type="charges",
         )
-        
+
         atom_types_pocket = F.one_hot(
             atom_types_pocket.squeeze().long(), num_classes=self.num_atom_types
         ).float()
@@ -717,6 +728,7 @@ class Trainer(pl.LightningModule):
             edge_attr_global_perturbed,
             batch_edge_global,
             edge_mask,
+            edge_mask_pocket,
         ) = get_joint_edge_attrs(
             pos_perturbed,
             pos_centered_pocket,
@@ -744,7 +756,7 @@ class Trainer(pl.LightningModule):
             data_batch_pocket,
             sorting=False,
         )
-        
+
         # Concatenate all node features
         atom_feats_in_perturbed = torch.cat(
             [atom_types_perturbed, charges_perturbed], dim=-1
@@ -766,6 +778,7 @@ class Trainer(pl.LightningModule):
             context=context,
             pocket_mask=pocket_mask.unsqueeze(1),
             edge_mask=edge_mask,
+            edge_mask_pocket=edge_mask_pocket,
             batch_lig=data_batch,
         )
 
@@ -778,8 +791,11 @@ class Trainer(pl.LightningModule):
 
         out["bond_aggregation_index"] = edge_index_global_lig[1]
         out["latent"] = latentdict
-        out["nodes"] = {"num_nodes_pred": pred_num_nodes, "num_nodes_true": true_num_nodes - 1}
-        
+        out["nodes"] = {
+            "num_nodes_pred": pred_num_nodes,
+            "num_nodes_true": true_num_nodes - 1,
+        }
+
         return out
 
     @torch.no_grad()
@@ -845,7 +861,7 @@ class Trainer(pl.LightningModule):
                 save_dir=save_dir,
                 build_obabel_mol=build_obabel_mol,
                 iteration=i,
-                encode_ligand=True
+                encode_ligand=True,
             )
             molecule_list.extend(molecules)
         (
@@ -934,7 +950,7 @@ class Trainer(pl.LightningModule):
         n_nodes_bias=0,
         build_obabel_mol=False,
         save_dir=None,
-    ):  
+    ):
         if fix_n_nodes:
             num_nodes_lig = pocket_data.batch.bincount().to(self.device)
         else:
@@ -963,14 +979,13 @@ class Trainer(pl.LightningModule):
             sanitize=sanitize,
             build_obabel_mol=build_obabel_mol,
             save_dir=save_dir,
-            encode_ligand=True
+            encode_ligand=True,
         )
         return molecules
-    
+
     def sample_prior_z(self, bs, device):
-        
         z = torch.randn(bs, self.hparams.latent_dim, device=device)
-        
+
         if self.hparams.latentmodel == "diffusion":
             chain = range(self.hparams.timesteps)
             iterator = reversed(chain)
@@ -978,12 +993,14 @@ class Trainer(pl.LightningModule):
                 s = torch.full(
                     size=(bs,), fill_value=timestep, dtype=torch.long, device=device
                 )
-                t = s + 1 
+                t = s + 1
                 temb = t / self.hparams.timesteps
                 temb = temb.unsqueeze(dim=1)
                 z_pred = self.latentmodel.forward(z, temb)
                 if self.hparams.noise_scheduler == "adaptive":
-                    sigma_sq_ratio = self.sde_pos.get_sigma_pos_sq_ratio(s_int=s, t_int=t)
+                    sigma_sq_ratio = self.sde_pos.get_sigma_pos_sq_ratio(
+                        s_int=s, t_int=t
+                    )
                     z_t_prefactor = (
                         self.sde_pos.get_alpha_pos_ts(t_int=t, s_int=s) * sigma_sq_ratio
                     ).unsqueeze(-1)
@@ -1019,9 +1036,7 @@ class Trainer(pl.LightningModule):
 
                     mean = (
                         sqrt_alphas * one_m_alphas_cumprod_prev * z
-                        + sqrt_alphas_cumprod_prev
-                        * one_m_alphas
-                        * z_pred
+                        + sqrt_alphas_cumprod_prev * one_m_alphas * z_pred
                     )
                     mean = (1.0 / sigmas2t) * mean
                     std = rev_sigma
@@ -1029,9 +1044,9 @@ class Trainer(pl.LightningModule):
                     z = mean + std * noise
         elif self.hparams.latentmodel == "nflow":
             z = self.latentmodel.g(z).view(bs, -1)
-      
+
         return z
-    
+
     def reverse_sampling(
         self,
         num_graphs: int,
@@ -1050,15 +1065,14 @@ class Trainer(pl.LightningModule):
         sanitize=False,
         build_obabel_mol=False,
         iteration: int = 0,
-        encode_ligand: bool = False
+        encode_ligand: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
-        
         pos_pocket = pocket_data.pos_pocket.to(self.device)
         batch_pocket = pocket_data.pos_pocket_batch.to(self.device)
         x_pocket = pocket_data.x_pocket.to(self.device)
-        
+
         bs = num_graphs
-        
+
         if encode_ligand:
             # encode ligand
             atom_types: Tensor = pocket_data.x.to(self.device)
@@ -1070,31 +1084,38 @@ class Trainer(pl.LightningModule):
             data_batch_pocket: Tensor = pocket_data.pos_pocket_batch.to(self.device)
             bond_edge_index = pocket_data.edge_index.to(self.device)
             bond_edge_attr = pocket_data.edge_attr.to(self.device)
-            context = pocket_data.context.to(self.device) if self.hparams.context_mapping else None
+            context = (
+                pocket_data.context.to(self.device)
+                if self.hparams.context_mapping
+                else None
+            )
             bond_edge_index, bond_edge_attr = sort_edge_index(
                 edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
             )
             z = self.encode_ligand(
-                pos.to(self.device), 
+                pos.to(self.device),
                 atom_types.to(self.device),
                 data_batch.to(self.device),
-                bond_edge_index.to(self.device), 
-                bond_edge_attr.to(self.device)
+                bond_edge_index.to(self.device),
+                bond_edge_attr.to(self.device),
             )
             batch_num_nodes = pocket_data.batch.bincount().to(self.device)
         else:
             z = self.sample_prior_z(bs, self.device)
-            if self.hparams.latentmodel == "diffusion" or self.hparams.latentmodel == "nflow": 
+            if (
+                self.hparams.latentmodel == "diffusion"
+                or self.hparams.latentmodel == "nflow"
+            ):
                 batch_num_nodes = self.node_z(z).argmax(-1) + 1
                 batch_num_nodes = batch_num_nodes.detach().long()
             else:
                 batch_num_nodes = pocket_data.batch.bincount().to(self.device)
-                #batch_num_nodes = self.conditional_size_distribution.sample_conditional(
+                # batch_num_nodes = self.conditional_size_distribution.sample_conditional(
                 #    n1=None, n2=pocket_data.pos_pocket_batch.bincount()
-                #).to(self.device)
-        
+                # ).to(self.device)
+
         num_nodes_lig = batch_num_nodes
-           
+
         batch = torch.arange(num_graphs, device=self.device).repeat_interleave(
             num_nodes_lig, dim=0
         )
@@ -1103,9 +1124,7 @@ class Trainer(pl.LightningModule):
         # sample context condition
         context = None
         if self.prop_dist is not None:
-            context = self.prop_dist.sample_batch(num_nodes_lig).to(self.device)[
-                batch
-            ]
+            context = self.prop_dist.sample_batch(num_nodes_lig).to(self.device)[batch]
 
         # initialize the 0-mean point cloud from N(0, I) centered in the pocket
         pocket_cog = scatter_mean(pos_pocket, batch_pocket, dim=0)
@@ -1114,7 +1133,7 @@ class Trainer(pl.LightningModule):
         # # project to COM-free subspace
         pos, pos_pocket = remove_mean_pocket(pos, pos_pocket, batch, batch_pocket)
         n = len(pos)
-                
+
         # initialize the atom-types
         atom_types = torch.multinomial(
             self.atoms_prior, num_samples=n, replacement=True
@@ -1123,7 +1142,7 @@ class Trainer(pl.LightningModule):
         atom_types_pocket = F.one_hot(
             x_pocket.squeeze().long(), num_classes=self.num_atom_types
         ).float()
-                
+
         charge_types = torch.multinomial(
             self.charges_prior, num_samples=n, replacement=True
         )
@@ -1131,7 +1150,7 @@ class Trainer(pl.LightningModule):
         charges_pocket = torch.zeros(
             pos_pocket.shape[0], charge_types.shape[1], dtype=torch.float32
         ).to(self.device)
-                
+
         edge_index_local = None
         edge_index_global = (
             torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
@@ -1159,6 +1178,7 @@ class Trainer(pl.LightningModule):
             edge_attr_global,
             batch_edge_global,
             edge_mask,
+            edge_mask_pocket,
         ) = get_joint_edge_attrs(
             pos,
             pos_pocket,
@@ -1221,9 +1241,10 @@ class Trainer(pl.LightningModule):
                 context=context,
                 pocket_mask=pocket_mask.unsqueeze(1),
                 edge_mask=edge_mask,
+                edge_mask_pocket=edge_mask_pocket,
                 batch_lig=batch,
             )
-        
+
             coords_pred = out["coords_pred"].squeeze()
             atoms_pred, charges_pred = out["atoms_pred"].split(
                 [self.num_atom_types, self.num_charge_classes], dim=-1
@@ -1289,6 +1310,7 @@ class Trainer(pl.LightningModule):
                 edge_attr_global,
                 batch_edge_global,
                 edge_mask,
+                edge_mask_pocket,
             ) = get_joint_edge_attrs(
                 pos,
                 pos_pocket,
@@ -1332,7 +1354,6 @@ class Trainer(pl.LightningModule):
                     i=i,
                 )
 
-
         # Move generated molecule back to the original pocket position
         pos += pocket_cog_batch
         pos_pocket += pocket_cog[batch_pocket]
@@ -1344,7 +1365,7 @@ class Trainer(pl.LightningModule):
             "atoms_pocket": atom_types_pocket,
             "charges_pred": charge_types,
             "bonds_pred": edge_attr_global_lig,
-            "z": z
+            "z": z,
         }
         molecules = get_molecules(
             out_dict,

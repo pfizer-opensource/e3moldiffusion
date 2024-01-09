@@ -9,7 +9,6 @@ import datamol as dm
 import MDAnalysis as mda
 import openbabel as ob
 import prolif as plf
-import rdkit.Chem as Chem
 from rdkit import Chem
 
 from posecheck.utils.chem import remove_radicals
@@ -182,6 +181,8 @@ def load_mols_from_rdkit(
     # Add hydrogens to the molecules
     if add_hs:
         mol_list = [Chem.AddHs(m, addCoords=True) for m in mol_list if m is not None]
+
+    mol_list = [remove_radicals(mol) for mol in mol_list]
 
     # Check if any molecules were loaded
     if len(mol_list) == 0:
