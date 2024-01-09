@@ -303,7 +303,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         input_edge_dim = 2 * self.si + edge_dim + 2 + 2
 
         self.edge_net = nn.Sequential(
-            DenseLayer(input_edge_dim, self.si, bias=True, activation=nn.ReLU()),
+            DenseLayer(input_edge_dim, self.si, bias=True, activation=nn.SiLU()),
             DenseLayer(
                 self.si, self.v_mul * self.vi + self.si + 1 + edge_dim, bias=True
             ),
@@ -479,7 +479,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
             )
         else:
             p = p + mp * pocket_mask if pocket_mask is not None else p + mp
-        e = F.relu(me + e)
+        e = F.silu(me + e)
         e = self.edge_post(e)
 
         ms, mv = self.update_net(x=(s, v))

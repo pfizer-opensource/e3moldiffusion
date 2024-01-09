@@ -324,7 +324,7 @@ def evaluate(
         violin_dict["Clashes"].extend(clashes)
         violin_dict["Strain Energies"].extend(strain_energies)
         posecheck_dict["Clashes"].append(np.mean(clashes))
-        posecheck_dict["Strain Energies"].append(np.nanmean(strain_energies))
+        posecheck_dict["Strain Energies"].append(np.nanmedian(strain_energies))
         print("Done!")
 
         # try:

@@ -5,7 +5,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=12G
 #SBATCH --cpus-per-task=12
-#SBATCH --partition=ondemand-8xv100m32-1a
+#SBATCH --partition=ondemand-8xv100m32-1b
 #SBATCH --gres=gpu:1
 #SBATCH --array=1-8
 #SBATCH --output=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.out
@@ -17,7 +17,7 @@ source activate e3mol
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
 main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_enamineft_cutoff5_bonds5_ep10"
-output_dir="$main_dir/evaluation/docking/nodes_bias_large"
+output_dir="$main_dir/evaluation/docking/nodes_bias_large_vary"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
@@ -31,11 +31,11 @@ python experiments/generate_ligands_multi.py \
     --model-path "$main_dir/best_valid.ckpt" \
     --save-dir "$output_dir" \
     --test-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5/test \
-    --pdb-dir /scratch1/cremej01/data/crossdocked_pdbs \
     --dataset-root /scratch1/e3moldiffusion/data/crossdocked/crossdocked_5A_new \
     --skip-existing \
     --num-ligands-per-pocket 100 \
     --batch-size 50 \
+    --vary-n-nodes \
     --n-nodes-bias 10
     #--fix-n-nodes
     #--vary-n-nodes \
