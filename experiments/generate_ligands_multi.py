@@ -104,6 +104,7 @@ def evaluate(
 
     if hparams.additional_feats:
         from experiments.diffusion_discrete_pocket_addfeats import Trainer
+        # from experiments.diffusion_discrete_pocket_addfeats_reduced import Trainer
     elif hparams.latent_dim is None:
         from experiments.diffusion_discrete_pocket import Trainer
     else:
