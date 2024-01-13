@@ -11,12 +11,14 @@ from time import time
 import numpy as np
 import torch
 from Bio.PDB import PDBParser
+from copy import deepcopy
+from torch_geometric.data import Batch
 from posebusters import PoseBusters
 from posecheck.posecheck import PoseCheck
-
+from rdkit import Chem
 from experiments.data.distributions import DistributionProperty
 from experiments.data.ligand.process_pdb import get_pdb_components, write_pdb
-from experiments.data.utils import save_pickle
+from experiments.data.utils import save_pickle, mol_to_torch_geometric
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import (
     prepare_pocket,
@@ -60,6 +62,7 @@ def evaluate(
     max_relax_iter,
     sanitize,
     dataset_root=None,
+    encode_ligand=False
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -201,7 +204,24 @@ def evaluate(
             repeats=batch_size,
             device=device,
         )
-
+        
+        if encode_ligand:
+            suppl = Chem.SDMolSupplier(str(sdf_file))
+            mol = []
+            for m in suppl:
+                mol.append(m)
+            assert len(mol) == 1
+            mol = mol[0]
+            ligand_data = mol_to_torch_geometric(mol,
+                                                 dataset_info.atom_encoder,
+                                                 smiles=Chem.MolToSmiles(mol), 
+                                                 remove_hydrogens=hparams.remove_hs,
+                                                 cog_proj=False
+                                                )
+            ligand_data = Batch.from_data_list([deepcopy(ligand_data) for _ in range(batch_size)])
+            for name, tensor in ligand_data.to_dict().items():
+                pocket_data.__setattr__(name, tensor)
+            
         start = datetime.now()
         while len(valid_and_unique_molecules) < num_ligands_per_pocket:
             with torch.no_grad():
@@ -396,6 +416,7 @@ def get_args():
     parser.add_argument('--max-relax-iter', default=200, type=int,
                             help='How many iteration steps for UFF optimization')
     parser.add_argument("--test-dir", type=Path)
+    parser.add_argument("--encode-ligand", default=False, action="store_true")
     parser.add_argument(
         "--pdb-dir",
         type=Path,
@@ -435,4 +456,5 @@ if __name__ == "__main__":
         max_relax_iter=args.max_relax_iter,
         sanitize=args.sanitize,
         dataset_root=args.dataset_root,
+        encode_ligand=args.encode_ligand
     )

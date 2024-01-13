@@ -979,7 +979,7 @@ class Trainer(pl.LightningModule):
             sanitize=sanitize,
             build_obabel_mol=build_obabel_mol,
             save_dir=save_dir,
-            encode_ligand=True,
+            encode_ligand=True,   # note this is hardcoded as true for our use-case on conditioning. (evaluation but also inference)
         )
         return molecules
 
