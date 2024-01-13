@@ -9,7 +9,7 @@ from torch_geometric.typing import OptTensor
 from torch_geometric.utils import softmax
 from torch_scatter import scatter_add, scatter_mean
 
-from e3moldiffusion.gnn import EQGATEdgeGNN, EQGATEnergyGNN, EQGATLocalGNN, EQGATDynamicLocalEdge
+from e3moldiffusion.gnn import EQGATEdgeGNN, EQGATEnergyGNN, EQGATLocalGNN, EQGATDynamicLocalEdge, MixGNN
 from e3moldiffusion.modules import (
     DenseLayer,
     GatedEquivBlock,
@@ -108,7 +108,7 @@ class DenoisingEdgeNetwork(nn.Module):
         else:
             latent_dim_ = None
 
-        self.dynamic = True
+        self.dynamic = False
         
         if not self.dynamic:
             self.gnn = EQGATEdgeGNN(
@@ -135,14 +135,16 @@ class DenoisingEdgeNetwork(nn.Module):
                 store_intermediate_coords=store_intermediate_coords,
             )
         else:
-            self.gnn = EQGATDynamicLocalEdge(
+            self.gnn = MixGNN(
                 hn_dim=hn_dim,
                 edge_dim=edge_dim,
                 cutoff_local=cutoff_local,
                 num_layers=num_layers,
-                use_cross_product=use_cross_product,
-                intermediate_outs=False,
-                use_pos_norm=False
+                latent_dim=latent_dim_,
+                rbf_dim=20,
+                vector_aggr=vector_aggr,
+                property_prediction=property_prediction,
+                store_intermediate_coords=store_intermediate_coords,
             )
             
         if property_prediction:
@@ -307,7 +309,6 @@ class DenoisingEdgeNetwork(nn.Module):
                 edge_index_global=edge_index_global,
                 edge_attr_global=edge_attr_global_transformed,
                 batch=batch,
-                batch_lig=batch_lig,
                 pocket_mask=pocket_mask,
             )
 
@@ -323,8 +324,9 @@ class DenoisingEdgeNetwork(nn.Module):
 
         if self.store_intermediate_coords and self.training:
             pos_list = out["p_list"]
+            assert len(pos_list) > 0
             pos_list.append(coords_pred)
-            coords_pred = torch.stack(pos_list)
+            coords_pred = torch.stack(pos_list, dim=0)  # [num_layers, N, 3]
 
         if self.distance_ligand_pocket:
             dist_pred = self.ligand_pocket_mlp(

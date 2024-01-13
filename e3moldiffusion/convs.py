@@ -786,6 +786,183 @@ class EQGATLocalConvFinal(MessagePassing):
         return ns_j, nv_j, p_j_n
 
 
+###############
+class ConvLayer(MessagePassing):
+    def __init__(
+        self,
+        in_dims: Tuple[int, Optional[int]],
+        out_dims: Tuple[int, Optional[int]],
+        edge_dim: Optional[int],
+        eps: float = 1e-6,
+        has_v_in: bool = False,
+        use_mlp_update: bool = True,
+        vector_aggr: str = "mean",
+        cutoff=None,
+        rbf_dim=None
+    ):
+        super(ConvLayer, self).__init__(
+            node_dim=0, aggr=None, flow="source_to_target"
+        )
+        self.edge_dim = edge_dim if edge_dim else 0
+        use_cross_product=False
+        self.use_cross_product = use_cross_product
+        self.rbf_dim = rbf_dim       
+        self.cutoff = cutoff
+        if cutoff is None:
+            self.rbf = None
+            self.damp = None
+            self.ddim = 1
+        else:
+            self.rbf = BesselExpansion(cutoff, K=rbf_dim)
+            self.damp = PolynomialCutoff(cutoff, p=6)
+            self.ddim = rbf_dim
+            
+        self.vector_aggr = vector_aggr
+        self.in_dims = in_dims
+        self.si, self.vi = in_dims
+        self.out_dims = out_dims
+        self.so, self.vo = out_dims
+        self.has_v_in = has_v_in
+        self.silu = nn.SiLU()
+        if has_v_in:
+            self.vector_net = DenseLayer(self.vi, self.vi, bias=False)
+            self.v_mul = 3 if use_cross_product else 2
+        else:
+            self.v_mul = 1
+            self.vector_net = nn.Identity()
+
+        self.edge_net = nn.Sequential(
+            DenseLayer(
+                2 * self.si + edge_dim + 1 + self.ddim, self.si, bias=True, activation=nn.SiLU()
+            ),
+            DenseLayer(self.si, self.v_mul * self.vi + self.si + 1, bias=True),
+        )
+        self.scalar_net = DenseLayer(self.si, self.si, bias=True)
+        self.update_net = GatedEquivBlock(
+            in_dims=(self.si, self.vi),
+            hs_dim=self.si,
+            hv_dim=self.vi,
+            out_dims=(self.so, self.vo),
+            norm_eps=eps,
+            use_mlp=use_mlp_update,
+        )
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        reset(self.edge_net)
+        if self.has_v_in:
+            reset(self.vector_net)
+        reset(self.scalar_net)
+        reset(self.update_net)
+
+    def forward(
+        self,
+        x: Tuple[Tensor, Tensor, Tensor],
+        edge_index: Tensor,
+        edge_attr: Tuple[Tensor, Tensor, Tensor, Tensor],
+        pocket_mask: Tensor = None,
+    ):
+        s, v, p = x
+        # d, a, r, e = edge_attr
+
+        ms, mv, mp = self.propagate(
+            sa=s,
+            sb=self.scalar_net(s),
+            va=v,
+            vb=self.vector_net(v),
+            p=p,
+            edge_attr=edge_attr,
+            edge_index=edge_index,
+            dim_size=s.size(0),
+        )
+        
+        p = p + mp * pocket_mask if pocket_mask is not None else p + mp    
+        s = ms + s
+        v = mv + v
+
+        ms, mv = self.update_net(x=(s, v))
+
+        s = ms + s
+        v = mv + v
+
+        out = {"s": s, "v": v, "p": p}
+        return out
+
+    def aggregate(
+        self,
+        inputs: Tuple[Tensor, Tensor, Tensor],
+        index: Tensor,
+        dim_size: Optional[int] = None,
+    ) -> Tuple[Tensor, Tensor, Tensor, OptTensor]:
+        s = scatter(inputs[0], index=index, dim=0, reduce="add", dim_size=dim_size)
+        v = scatter(
+            inputs[1], index=index, dim=0, reduce=self.vector_aggr, dim_size=dim_size
+        )
+        p = scatter(
+            inputs[2], index=index, dim=0, reduce=self.vector_aggr, dim_size=dim_size
+        )
+        return s, v, p
+
+    def message(
+        self,
+        sa_i: Tensor,
+        sa_j: Tensor,
+        sb_j: Tensor,
+        va_i: Tensor,
+        va_j: Tensor,
+        vb_j: Tensor,
+        p_i: Tensor,
+        p_j: Tensor,
+        index: Tensor,
+        edge_attr: Tuple[Tensor, Tensor, Tensor, Tensor],
+        dim_size: Optional[int],
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        
+        d, a, r, e = edge_attr
+
+        if self.rbf is None:
+            de0 = d.view(-1, 1)
+        else:
+            de0 = self.rbf(d)
+            de0 = self.damp(d).view(-1, 1) * de0
+            
+        a0 = a.view(-1, 1)
+        aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e], dim=-1)
+        aij = self.edge_net(aij)
+
+        if self.has_v_in:
+            aij, vij0, c = aij.split([self.si, self.v_mul * self.vi, 1], dim=-1)
+            vij0 = vij0.unsqueeze(1)
+            if self.use_cross_product:
+                vij0, vij1, vij2 = vij0.chunk(3, dim=-1)
+            else:
+                vij0, vij1 = vij0.chunk(2, dim=-1)
+        else:
+            aij, vij0, c = aij.split([self.si, self.vi, 1], dim=-1)
+            vij0 = vij0.unsqueeze(1)
+        # feature attention
+        aij = scatter_softmax(aij, index=index, dim=0, dim_size=dim_size)
+        ns_j = aij * sb_j
+        nv0_j = r.unsqueeze(-1) * vij0
+
+        if self.has_v_in:
+            nv1_j = vij1 * vb_j
+            if self.use_cross_product:
+                v_ij_cross = cross_product(va_i, va_j, dim=1)
+                nv2_j = vij2 * v_ij_cross
+                nv_j = nv0_j + nv1_j + nv2_j
+            else:
+                nv_j = nv0_j + nv1_j
+        else:
+            nv_j = nv0_j
+        
+        # pji = (p_j - p_i)
+        pji = r
+        p_j_n = c * pji            
+ 
+        return ns_j, nv_j, p_j_n
+
+
 # Topological Conv without 3d coords
 class TopoEdgeConvLayer(MessagePassing):
     def __init__(self, in_dim: int, out_dim: int, edge_dim: int, aggr: str = "mean"):

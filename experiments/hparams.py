@@ -92,7 +92,7 @@ def add_arguments(parser):
     parser.add_argument("--local-global-model", default=False, action="store_true")
     parser.add_argument("--local-edge-attrs", default=False, action="store_true")
     parser.add_argument("--use-cross-product", default=False, action="store_true")
-    parser.add_argument("--cutoff-local", default=7.0, type=float)
+    parser.add_argument("--cutoff-local", default=5.0, type=float)
     parser.add_argument("--cutoff-global", default=10.0, type=float)
     parser.add_argument("--energy-training", default=False, action="store_true")
     parser.add_argument("--property-training", default=False, action="store_true")

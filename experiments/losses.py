@@ -38,7 +38,7 @@ class DiffusionLoss(nn.Module):
         bond_aggregation_index: Tensor,
         intermediate_coords: bool = False,
         weights: Optional[Tensor] = None,
-        aux_weight: float = 0.5,
+        aux_weight: float = 1.0,
         l1_loss: bool = False,
     ) -> Dict:
         batch_size = len(batch.unique())
@@ -52,7 +52,7 @@ class DiffusionLoss(nn.Module):
 
             if intermediate_coords:
                 pos_true = true_data[self.regression_key]
-                pos_list = pred_data[self.regression_key]
+                pos_list = pred_data[self.regression_key] # tensor of shape [num_layers, N, 3] where the last element on first axis is the final coords prediction
                 pos_losses = (
                     torch.nn.functional.l1_loss(
                         pos_true[None, :, :].expand(len(pos_list), -1, -1),
@@ -60,13 +60,14 @@ class DiffusionLoss(nn.Module):
                         reduction="none",
                     )
                     if l1_loss
-                    else torch.square(pos_true - pos_list)
+                    else torch.square(pos_true.unsqueeze(0) - pos_list)
                 )
-                pos_losses = scatter_mean(pos_losses.mean(-1), batch, -1)
-                aux_loss = pos_losses[1:].mean(0)
+                pos_losses = pos_losses.mean(-1) # [num_layers, N]
+                pos_losses = scatter_mean(pos_losses, batch, -1)
+                # [num_layers, bs]
+                aux_loss = pos_losses[:-1].mean(0)
                 pos_loss = pos_losses[-1]
-                regr_loss = (1 - aux_weight) * pos_loss
-                regr_loss = regr_loss + aux_weight * aux_loss
+                regr_loss = pos_loss + aux_weight * aux_loss
                 regr_loss, m = self.loss_non_nans(regr_loss, self.regression_key)
                 regr_loss *= weights[~m]
                 regr_loss = torch.sum(regr_loss, dim=0)
