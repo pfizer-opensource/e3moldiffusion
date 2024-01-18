@@ -43,6 +43,7 @@ def mol_to_torch_geometric(
     smiles,
     remove_hydrogens: bool = False,
     cog_proj: bool = True,
+    add_ad=True,
     **kwargs,
 ):
     if remove_hydrogens:
@@ -84,34 +85,37 @@ def mol_to_torch_geometric(
     is_aromatic = torch.Tensor(is_aromatic).long()
     is_in_ring = torch.Tensor(is_in_ring).long()
     hybridization = torch.Tensor(sp_hybridization).long()
-    # hydrogen bond acceptor and donor
-    feats = factory.GetFeaturesForMol(mol)
-    donor_ids = []
-    acceptor_ids = []
-    for f in feats:
-        if f.GetFamily().lower() == "donor":
-            donor_ids.append(f.GetAtomIds())
-        elif f.GetFamily().lower() == "acceptor":
-            acceptor_ids.append(f.GetAtomIds())
+    if add_ad:
+        # hydrogen bond acceptor and donor
+        feats = factory.GetFeaturesForMol(mol)
+        donor_ids = []
+        acceptor_ids = []
+        for f in feats:
+            if f.GetFamily().lower() == "donor":
+                donor_ids.append(f.GetAtomIds())
+            elif f.GetFamily().lower() == "acceptor":
+                acceptor_ids.append(f.GetAtomIds())
 
-    if len(donor_ids) > 0:
-        donor_ids = np.concatenate(donor_ids)
+        if len(donor_ids) > 0:
+            donor_ids = np.concatenate(donor_ids)
+        else:
+            donor_ids = np.array([])
+
+        if len(acceptor_ids) > 0:
+            acceptor_ids = np.concatenate(acceptor_ids)
+        else:
+            acceptor_ids = np.array([])
+        is_acceptor = np.zeros(mol.GetNumAtoms(), dtype=np.uint8)
+        is_donor = np.zeros(mol.GetNumAtoms(), dtype=np.uint8)
+        if len(donor_ids) > 0:
+            is_donor[donor_ids] = 1
+        if len(acceptor_ids) > 0:
+            is_acceptor[acceptor_ids] = 1
+
+        is_donor = torch.from_numpy(is_donor).long()
+        is_acceptor = torch.from_numpy(is_acceptor).long()
     else:
-        donor_ids = np.array([])
-
-    if len(acceptor_ids) > 0:
-        acceptor_ids = np.concatenate(acceptor_ids)
-    else:
-        acceptor_ids = np.array([])
-    is_acceptor = np.zeros(mol.GetNumAtoms(), dtype=np.uint8)
-    is_donor = np.zeros(mol.GetNumAtoms(), dtype=np.uint8)
-    if len(donor_ids) > 0:
-        is_donor[donor_ids] = 1
-    if len(acceptor_ids) > 0:
-        is_acceptor[acceptor_ids] = 1
-
-    is_donor = torch.from_numpy(is_donor).long()
-    is_acceptor = torch.from_numpy(is_acceptor).long()
+        is_donor = is_acceptor = None
 
     additional = {}
     if "wbo" in kwargs:

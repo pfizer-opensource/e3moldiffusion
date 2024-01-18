@@ -460,7 +460,7 @@ class EQGATLocalGNN(nn.Module):
         use_cross_product: bool = False,
         vector_aggr: str = "mean",
         intermediate_outs: bool = False,
-        use_pos_norm: bool = True,
+        use_pos_norm: bool = False,
         coords_update: bool = False
     ):
         super(EQGATLocalGNN, self).__init__()
@@ -473,7 +473,7 @@ class EQGATLocalGNN(nn.Module):
 
         convs = []
         self.intermediate_outs = intermediate_outs
-
+        self.coords_update = coords_update 
         for i in range(num_layers):
             convs.append(
                 EQGATLocalConvFinal(

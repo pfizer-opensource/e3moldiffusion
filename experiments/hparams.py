@@ -166,6 +166,9 @@ def add_arguments(parser):
     parser.add_argument(
         "--store-intermediate-coords", default=False, action="store_true"
     )
+    parser.add_argument(
+        "--intermediate-outs", default=False, action="store_true", help="If latent node embeddings should be stored. Defaults to False"
+    )
     parser.add_argument("--diffusion-pretraining", default=False, action="store_true")
     parser.add_argument(
         "--continuous-param", default="data", type=str, choices=["data", "noise"]

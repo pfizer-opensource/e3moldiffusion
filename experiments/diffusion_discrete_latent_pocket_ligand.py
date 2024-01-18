@@ -147,7 +147,9 @@ class Trainer(pl.LightningModule):
                 coords_param=hparams["continuous_param"],
                 use_pos_norm=hparams["use_pos_norm"],
             )
-
+            
+        self.max_nodes = dataset_info.max_n_nodes
+        
         self.encoder = LatentEncoderNetwork(
             num_atom_features=self.num_atom_types,
             num_bond_types=self.num_bond_classes,
@@ -156,22 +158,20 @@ class Trainer(pl.LightningModule):
             hn_dim=(hparams["sdim_latent"], hparams["vdim_latent"]),
             num_layers=hparams["num_layers_latent"],
             vector_aggr=hparams["vector_aggr"],
+            intermediate_outs=hparams["intermediate_outs"],
+            use_pos_norm=hparams["use_pos_norm"],   # for old checkpoint to start sampling.
         )
         self.latent_lin = GatedEquivBlock(
             in_dims=(hparams["sdim_latent"], hparams["vdim_latent"]),
             out_dims=(hparams["latent_dim"], None),
         )
         self.graph_pooling = SoftMaxAttentionAggregation(dim=hparams["latent_dim"])
-
-        self.max_nodes = dataset_info.max_n_nodes
-
         m = 2 if hparams["latentmodel"] == "vae" else 1
-
         self.mu_logvar_z = DenseLayer(hparams["latent_dim"], m * hparams["latent_dim"])
         self.node_z = DenseLayer(hparams["latent_dim"], self.max_nodes)
+        self.latentmodel = get_latent_model(hparams)
 
         self.latentloss = PriorLatentLoss(kind=hparams.get("latentmodel"))
-        self.latentmodel = get_latent_model(hparams)
 
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -366,6 +366,7 @@ class Trainer(pl.LightningModule):
                 ddpm=True,
                 every_k_step=1,
                 device="cuda",
+                use_ligand_dataset_sizes=True,
             )
             self.i += 1
             self.log(
@@ -811,7 +812,7 @@ class Trainer(pl.LightningModule):
         ddpm: bool = True,
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
-        use_ligand_dataset_sizes: bool = False,
+        use_ligand_dataset_sizes: bool = True,
         build_obabel_mol: bool = False,
         run_test_eval: bool = False,
         guidance_scale: float = 1.0e-4,
@@ -953,6 +954,12 @@ class Trainer(pl.LightningModule):
     ):
         if fix_n_nodes:
             num_nodes_lig = pocket_data.batch.bincount().to(self.device)
+            if vary_n_nodes:
+                num_nodes_lig += torch.randint(
+                    low=0, high=n_nodes_bias, size=num_nodes_lig.size()
+                ).to(self.device)
+            else:
+                num_nodes_lig += n_nodes_bias
         else:
             pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(0)
             num_nodes_lig = (
@@ -962,7 +969,13 @@ class Trainer(pl.LightningModule):
                 .repeat(num_graphs)
                 .to(self.device)
             )
-            num_nodes_lig += n_nodes_bias
+            if vary_n_nodes:
+                num_nodes_lig += torch.randint(
+                    low=0, high=n_nodes_bias, size=num_nodes_lig.size()
+                ).to(self.device)
+            else:
+                num_nodes_lig += n_nodes_bias
+            
         molecules = self.reverse_sampling(
             num_graphs=num_graphs,
             num_nodes_lig=num_nodes_lig,
@@ -1114,7 +1127,8 @@ class Trainer(pl.LightningModule):
                 #    n1=None, n2=pocket_data.pos_pocket_batch.bincount()
                 # ).to(self.device)
 
-        num_nodes_lig = batch_num_nodes
+        if num_nodes_lig is None:
+            num_nodes_lig = batch_num_nodes
 
         batch = torch.arange(num_graphs, device=self.device).repeat_interleave(
             num_nodes_lig, dim=0

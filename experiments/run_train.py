@@ -194,23 +194,27 @@ if __name__ == "__main__":
             print("Starting property prediction model via discrete diffusion")
             from experiments.diffusion_discrete import Trainer
         elif (
-            hparams.latent_dim and dataset != "crossdocked" and dataset != "bindingmoad"
+            hparams.latent_dim and hparams.dataset != "crossdocked" and hparams.dataset != "bindingmoad" and hparams.dataset != "enamine"
         ):
             print("Using latent diffusion")
             from experiments.diffusion_latent_discrete import Trainer
         else:
             print("Using discrete diffusion")
             if hparams.diffusion_pretraining:
-                if hparams.additional_feats:
-                    print(
-                        f"Starting pre-training on {hparams.dataset} with additional features"
-                    )
-                    from experiments.diffusion_pretrain_discrete_addfeats import (
-                        Trainer,
-                    )
+                if hparams.latent_dim is None:
+                    if hparams.additional_feats:
+                        print(
+                            f"Starting pre-training on {hparams.dataset} with additional features"
+                        )
+                        from experiments.diffusion_pretrain_discrete_addfeats import (
+                            Trainer,
+                        )
+                    else:
+                        print(f"Starting pre-training on {hparams.dataset}")
+                        from experiments.diffusion_pretrain_discrete import Trainer
                 else:
-                    print(f"Starting pre-training on {hparams.dataset}")
-                    from experiments.diffusion_pretrain_discrete import Trainer
+                    print(f"Starting pre-training on {hparams.dataset} with latent shape conditioned encoding")
+                    from experiments.diffusion_pretrain_latent_discrete import Trainer
             elif (
                 dataset == "crossdocked"
                 or dataset == "bindingmoad"

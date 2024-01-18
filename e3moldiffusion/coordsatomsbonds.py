@@ -363,6 +363,7 @@ class LatentEncoderNetwork(nn.Module):
         atom_mapping: bool = True,
         bond_mapping: bool = True,
         intermediate_outs: bool = False,
+        use_pos_norm: bool = False
     ) -> None:
         super(LatentEncoderNetwork, self).__init__()
 
@@ -386,6 +387,8 @@ class LatentEncoderNetwork(nn.Module):
             use_cross_product=use_cross_product,
             vector_aggr=vector_aggr,
             intermediate_outs=intermediate_outs,
+            use_pos_norm=use_pos_norm,
+            coords_update=False
         )
 
         self.intermediate_outs = intermediate_outs

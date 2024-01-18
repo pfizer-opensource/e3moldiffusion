@@ -98,7 +98,6 @@ class Trainer(pl.LightningModule):
             recompute_edge_attributes=True,
             recompute_radius_graph=False,
         )
-
         self.encoder = LatentEncoderNetwork(
             num_atom_features=self.num_atom_types,
             num_bond_types=self.num_bond_classes,
@@ -107,6 +106,8 @@ class Trainer(pl.LightningModule):
             hn_dim=(hparams["sdim_latent"], hparams["vdim_latent"]),
             num_layers=hparams["num_layers_latent"],
             vector_aggr=hparams["vector_aggr"],
+            intermediate_outs=hparams["intermediate_outs"],
+            use_pos_norm=hparams["use_pos_norm"],
         )
         self.latent_lin = GatedEquivBlock(
             in_dims=(hparams["sdim_latent"], hparams["vdim_latent"]),
@@ -167,7 +168,8 @@ class Trainer(pl.LightningModule):
         )
 
         self.diffusion_loss = DiffusionLoss(
-            modalities=["coords", "atoms", "charges", "bonds"]
+            modalities=["coords", "atoms", "charges", "bonds"],
+            param=["data", "data", "data", "data"],
         )
 
     def training_step(self, batch, batch_idx):
@@ -407,27 +409,10 @@ class Trainer(pl.LightningModule):
                 
         return final_loss
 
-    def forward(self, batch: Batch, t: Tensor):
-        atom_types: Tensor = batch.x
-        pos: Tensor = batch.pos
-        charges: Tensor = batch.charges
-        data_batch: Tensor = batch.batch
-        bond_edge_index = batch.edge_index
-        bond_edge_attr = batch.edge_attr
-        bs = int(data_batch.max()) + 1
-
-        temb = t.float() / self.hparams.timesteps
-        temb = temb.clamp(min=self.hparams.eps_min)
-        temb = temb.unsqueeze(dim=1)
-
-        bond_edge_index, bond_edge_attr = sort_edge_index(
-            edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
-        )
-
-        atom_types = F.one_hot(
-            atom_types.squeeze().long(), num_classes=self.num_atom_types
-        ).float()
-
+    def encode_ligand(
+        self, pos, atom_types, data_batch, bond_edge_index, bond_edge_attr
+    ):
+        bs = len(data_batch.unique())
         # latent encoder
         edge_index_local = radius_graph(
             x=pos,
@@ -447,7 +432,7 @@ class Trainer(pl.LightningModule):
         ).float()
 
         latent_out = self.encoder(
-            x=atom_types,
+            x=F.one_hot(atom_types.long(), num_classes=self.num_atom_types).float(),
             pos=pos,
             edge_index_local=edge_index_local,
             edge_attr_local=edge_attr_local,
@@ -456,7 +441,30 @@ class Trainer(pl.LightningModule):
         latent_out, _ = self.latent_lin(x=(latent_out["s"], latent_out["v"]))
         z = self.graph_pooling(latent_out, data_batch, dim=0, dim_size=bs)
         z = self.mu_logvar_z(z)
-        
+        return z
+    
+    def forward(self, batch: Batch, t: Tensor):
+        atom_types: Tensor = batch.x
+        pos: Tensor = batch.pos
+        charges: Tensor = batch.charges
+        data_batch: Tensor = batch.batch
+        bond_edge_index = batch.edge_index
+        bond_edge_attr = batch.edge_attr
+        bs = int(data_batch.max()) + 1
+
+        temb = t.float() / self.hparams.timesteps
+        temb = temb.clamp(min=self.hparams.eps_min)
+        temb = temb.unsqueeze(dim=1)
+
+        bond_edge_index, bond_edge_attr = sort_edge_index(
+            edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
+        )
+        pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
+
+        # latent encoder
+        z = self.encode_ligand(
+            pos_centered, atom_types, data_batch, bond_edge_index, bond_edge_attr
+        )
         # latent prior model
         if self.hparams.latentmodel == "diffusion":
             # train the latent score network
@@ -510,73 +518,35 @@ class Trainer(pl.LightningModule):
         edge_index_global, edge_attr_global = sort_edge_index(
             edge_index=edge_index_global, edge_attr=edge_attr_global, sort_by_row=False
         )
-
-        j, i = edge_index_global
-        mask = j < i
-        mask_i = i[mask]
-        mask_j = j[mask]
-        edge_attr_triu = edge_attr_global[mask]
-        edge_attr_triu_ohe = F.one_hot(
-            edge_attr_triu, num_classes=self.num_bond_classes
-        ).float()
-        t_edge = t[data_batch[mask_i]]
-        probs = self.cat_bonds.marginal_prob(edge_attr_triu_ohe, t=t_edge)
-        edges_t_given_0 = probs.multinomial(
-            1,
-        ).squeeze()
-        j = torch.concat([mask_j, mask_i])
-        i = torch.concat([mask_i, mask_j])
-        edge_index_global_perturbed = torch.stack([j, i], dim=0)
-        edge_attr_global_perturbed = torch.concat(
-            [edges_t_given_0, edges_t_given_0], dim=0
-        )
-        edge_index_global_perturbed, edge_attr_global_perturbed = sort_edge_index(
-            edge_index=edge_index_global_perturbed,
-            edge_attr=edge_attr_global_perturbed,
-            sort_by_row=False,
-        )
-
-        edge_attr_global_perturbed = F.one_hot(
-            edge_attr_global_perturbed, num_classes=self.num_bond_classes
-        ).float()
-
-        # Coords: point cloud in R^3
-        # sample noise for coords and recenter
-        noise_coords_true = torch.randn_like(pos)
-        noise_coords_true = zero_mean(
-            noise_coords_true, batch=data_batch, dim_size=bs, dim=0
-        )
-        # center the true point cloud
-        pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
-        # get signal and noise coefficients for coords
-        mean_coords, std_coords = self.sde_pos.marginal_prob(
-            x=pos_centered, t=t[data_batch]
-        )
-        # perturb coords
-        pos_perturbed = mean_coords + std_coords * noise_coords_true
-
-        # one-hot-encode atom types
-        probs = self.cat_atoms.marginal_prob(atom_types.float(), t[data_batch])
-        atom_types_perturbed = probs.multinomial(
-            1,
-        ).squeeze()
-        atom_types_perturbed = F.one_hot(
-            atom_types_perturbed, num_classes=self.num_atom_types
-        ).float()
-
-        # one-hot-encode charges
-        # offset
-        charges = self.dataset_info.one_hot_charges(charges)
-        probs = self.cat_charges.marginal_prob(charges.float(), t[data_batch])
-        charges_perturbed = probs.multinomial(
-            1,
-        ).squeeze()
-        charges_perturbed = F.one_hot(
-            charges_perturbed, num_classes=self.num_charge_classes
-        ).float()
-
         batch_edge_global = data_batch[edge_index_global[0]]
 
+        # SAMPLING
+        noise_coords_true, pos_perturbed = self.sde_pos.sample_pos(
+            t, pos_centered, data_batch
+        )
+        atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
+            t,
+            atom_types,
+            data_batch,
+            self.dataset_info,
+            num_classes=self.num_atom_types,
+            type="atoms",
+        )
+        charges, charges_perturbed = self.cat_charges.sample_categorical(
+            t,
+            charges,
+            data_batch,
+            self.dataset_info,
+            num_classes=self.num_charge_classes,
+            type="charges",
+        )
+        edge_attr_global_perturbed = (
+            self.cat_bonds.sample_edges_categorical(
+                t, edge_index_global, edge_attr_global, data_batch
+            )
+            if not self.hparams.bond_prediction
+            else None
+        )
         atom_feats_in_perturbed = torch.cat(
             [atom_types_perturbed, charges_perturbed], dim=-1
         )

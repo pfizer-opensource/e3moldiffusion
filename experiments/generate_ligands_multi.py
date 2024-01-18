@@ -62,7 +62,10 @@ def evaluate(
     max_relax_iter,
     sanitize,
     dataset_root=None,
-    encode_ligand=False
+    encode_ligand=False,
+    omit_pose_buster=False,
+    omit_pose_check=False,
+    max_tries: int = 10,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -216,14 +219,15 @@ def evaluate(
                                                  dataset_info.atom_encoder,
                                                  smiles=Chem.MolToSmiles(mol), 
                                                  remove_hydrogens=hparams.remove_hs,
-                                                 cog_proj=False
+                                                 cog_proj=True  # only for processing the ligand-shape encode
                                                 )
             ligand_data = Batch.from_data_list([deepcopy(ligand_data) for _ in range(batch_size)])
             for name, tensor in ligand_data.to_dict().items():
                 pocket_data.__setattr__(name, tensor)
             
         start = datetime.now()
-        while len(valid_and_unique_molecules) < num_ligands_per_pocket:
+        tries = 0
+        while len(valid_and_unique_molecules) < num_ligands_per_pocket or tries < max_tries:
             with torch.no_grad():
                 molecules = model.generate_ligands(
                     pocket_data,
@@ -255,7 +259,10 @@ def evaluate(
             )
             valid_and_unique_molecules = valid_molecules.copy()
             tmp_molecules = valid_molecules.copy()
-
+            tries += 1
+            if tries == max_tries:
+                print(f"Maximum of {max_tries} sampling tries are exceeded. Aborting while loop.")
+                
         del pocket_data
         torch.cuda.empty_cache()
 
@@ -307,47 +314,49 @@ def evaluate(
         #     protein, _ = get_pdb_components(pdb_name)
         #     pdb_file = write_pdb(temp_dir, protein, pdb_name)
 
-        # PoseBusters
-        print("Starting evaluation with PoseBusters...")
-        buster = {}
-        buster_mol = PoseBusters(config="mol")
-        buster_mol_df = buster_mol.bust([sdf_out_file_raw], None, None)
-        for metric in buster_mol_df.columns:
-            violin_dict[metric].extend(list(buster_mol_df[metric]))
-            buster[metric] = buster_mol_df[metric].sum() / len(buster_mol_df[metric])
-        buster_dock = PoseBusters(config="dock")
-        buster_dock_df = buster_dock.bust([sdf_out_file_raw], None, str(pdb_file))
-        for metric in buster_dock_df:
-            if metric not in buster:
-                violin_dict[metric].extend(list(buster_dock_df[metric]))
-                buster[metric] = buster_dock_df[metric].sum() / len(
-                    buster_dock_df[metric]
-                )
-        for k, v in buster.items():
-            buster_dict[k].append(v)
-        print("Done!")
-
-        # PoseCheck
-        print("Starting evaluation with PoseCheck...")
-        pc = PoseCheck()
-        pc.load_protein_from_pdb(str(pdb_file))
-        pc.load_ligands_from_sdf(str(sdf_out_file_raw), add_hs=True)
-        interactions = pc.calculate_interactions()
-        interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
-            interactions
-        )
-        for k, v in interactions_per_mol.items():
-            violin_dict[k].extend(v)
-        for k, v in interactions_mean.items():
-            posecheck_dict[k].append(v["mean"])
-        clashes = pc.calculate_clashes()
-        strain_energies = pc.calculate_strain_energy()
-        violin_dict["Clashes"].extend(clashes)
-        violin_dict["Strain Energies"].extend(strain_energies)
-        posecheck_dict["Clashes"].append(np.mean(clashes))
-        posecheck_dict["Strain Energies"].append(np.nanmedian(strain_energies))
-        print("Done!")
-
+        if not omit_pose_buster:
+            # PoseBusters
+            print("Starting evaluation with PoseBusters...")
+            buster = {}
+            buster_mol = PoseBusters(config="mol")
+            buster_mol_df = buster_mol.bust([sdf_out_file_raw], None, None)
+            for metric in buster_mol_df.columns:
+                violin_dict[metric].extend(list(buster_mol_df[metric]))
+                buster[metric] = buster_mol_df[metric].sum() / len(buster_mol_df[metric])
+            buster_dock = PoseBusters(config="dock")
+            buster_dock_df = buster_dock.bust([sdf_out_file_raw], None, str(pdb_file))
+            for metric in buster_dock_df:
+                if metric not in buster:
+                    violin_dict[metric].extend(list(buster_dock_df[metric]))
+                    buster[metric] = buster_dock_df[metric].sum() / len(
+                        buster_dock_df[metric]
+                    )
+            for k, v in buster.items():
+                buster_dict[k].append(v)
+            print("Done!")
+    
+        if not omit_pose_check:
+            # PoseCheck
+            print("Starting evaluation with PoseCheck...")
+            pc = PoseCheck()
+            pc.load_protein_from_pdb(str(pdb_file))
+            pc.load_ligands_from_sdf(str(sdf_out_file_raw), add_hs=True)
+            interactions = pc.calculate_interactions()
+            interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
+                interactions
+            )
+            for k, v in interactions_per_mol.items():
+                violin_dict[k].extend(v)
+            for k, v in interactions_mean.items():
+                posecheck_dict[k].append(v["mean"])
+            clashes = pc.calculate_clashes()
+            strain_energies = pc.calculate_strain_energy()
+            violin_dict["Clashes"].extend(clashes)
+            violin_dict["Strain Energies"].extend(strain_energies)
+            posecheck_dict["Clashes"].append(np.mean(clashes))
+            posecheck_dict["Strain Energies"].append(np.nanmedian(strain_energies))
+            print("Done!")
+            
         # try:
         #     shutil.rmtree(temp_dir)
         # except UnboundLocalError:
@@ -417,6 +426,7 @@ def get_args():
                             help='How many iteration steps for UFF optimization')
     parser.add_argument("--test-dir", type=Path)
     parser.add_argument("--encode-ligand", default=False, action="store_true")
+    parser.add_argument("--max-tries", default=5, type=int)
     parser.add_argument(
         "--pdb-dir",
         type=Path,
@@ -428,6 +438,9 @@ def get_args():
     parser.add_argument("--fix-n-nodes", action="store_true")
     parser.add_argument("--vary-n-nodes", action="store_true")
     parser.add_argument("--n-nodes-bias", default=0, type=int)
+    parser.add_argument("--omit-pose-buster", default=False, action="store_true")
+    parser.add_argument("--omit-pose-check", default=False, action="store_true")
+
     args = parser.parse_args()
     return args
 
@@ -456,5 +469,8 @@ if __name__ == "__main__":
         max_relax_iter=args.max_relax_iter,
         sanitize=args.sanitize,
         dataset_root=args.dataset_root,
-        encode_ligand=args.encode_ligand
+        encode_ligand=args.encode_ligand,
+        omit_pose_buster=args.omit_pose_buster,
+        omit_pose_check=args.omit_pose_check,
+        max_tries=args.max_tries,
     )
