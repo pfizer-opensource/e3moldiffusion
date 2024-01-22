@@ -4,6 +4,7 @@ import re
 import shutil
 import tempfile
 from collections import defaultdict
+from glob import glob
 from pathlib import Path
 
 import numpy as np
@@ -250,6 +251,8 @@ if __name__ == "__main__":
         if args.sdf_dir is not None
         else args.sdf_files
     )
+
+    # assert len(sdf_files) == len(glob(os.path.join(args.pdb_dir, ".pdb")))
 
     assert np.sum([len(i) for i in split_list(sdf_files, args.num_cpus)]) == len(
         sdf_files

@@ -1,10 +1,14 @@
 import itertools
 import logging
+import os
+import random
+import tempfile
 from collections import Counter
 from multiprocessing import Pool
 
 import numpy as np
 import torch
+from posebusters import PoseBusters
 from rdkit import Chem, RDLogger
 from rdkit.Chem import QED, Crippen, Descriptors, Lipinski
 from rdkit.Chem.QED import qed
@@ -14,6 +18,7 @@ from tqdm import tqdm
 
 from experiments.sampling.utils import *
 from experiments.sampling.utils import calculateScore
+from experiments.utils import write_sdf_file
 
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
@@ -249,6 +254,8 @@ class BasicMolecularMetrics(object):
         return_stats_per_molecule=False,
         calculate_statistics=True,
         calculate_distribution_statistics=True,
+        filter_by_posebusters=False,
+        pdb_file=None,
     ):
         stable_molecules = []
         if not remove_hs:
@@ -287,6 +294,11 @@ class BasicMolecularMetrics(object):
             connected_components,
         ) = self.evaluate(molecules, local_rank=local_rank)
         # Save in any case in the graphs folder
+
+        if filter_by_posebusters:
+            valid_smiles, valid_molecules = self.evaluate_posebusters(
+                valid_smiles, valid_molecules, pdb_file
+            )
 
         sanitize_validity = self.compute_sanitize_validity(molecules)
 
@@ -643,6 +655,40 @@ class BasicMolecularMetrics(object):
 
         return qed, sa, logp, lipinski
 
+    def evaluate_posebusters(self, smiles, rdmols, pdb_file):
+        # PoseBusters
+        print("Starting evaluation with PoseBusters...")
+        temp_file = tempfile.NamedTemporaryFile(
+            suffix=f"{random.randint(0, 100000)}.sdf", delete=False
+        )
+        temp_path = temp_file.name
+        write_sdf_file(temp_path, rdmols, extract_mol=True)
+
+        valid_mols = []
+        valid_smiles = []
+        buster_mol = PoseBusters(config="mol")
+        buster_mol_df = buster_mol.bust(temp_path, None, None)
+        buster_dock = PoseBusters(config="dock")
+        buster_dock_df = buster_dock.bust(temp_path, None, str(pdb_file))
+        for metric in buster_dock_df:
+            if metric not in buster_mol_df:
+                buster_mol_df[metric] = buster_dock_df[metric]
+
+        for i in range(len(buster_mol_df)):
+            row = buster_mol_df.iloc[i]
+            if row.sum() == len(row):
+                valid_mols.append(rdmols[i])
+                valid_smiles.append(smiles[i])
+
+        print(
+            f"{len(smiles) - len(valid_smiles)} of {len(smiles)} molecules failed PoseBusters check."
+        )
+
+        temp_file.close()
+        os.remove(temp_path)
+
+        return valid_smiles, valid_mols
+
 
 def analyze_stability_for_molecules(
     molecule_list,
@@ -656,6 +702,8 @@ def analyze_stability_for_molecules(
     calculate_statistics=True,
     calculate_distribution_statistics=True,
     test=False,
+    filter_by_posebusters=False,
+    pdb_file=None,
 ):
     metrics = BasicMolecularMetrics(
         dataset_info,
@@ -678,6 +726,8 @@ def analyze_stability_for_molecules(
         return_molecules=return_molecules,
         calculate_statistics=calculate_statistics,
         calculate_distribution_statistics=calculate_distribution_statistics,
+        filter_by_posebusters=filter_by_posebusters,
+        pdb_file=pdb_file,
     )
 
     if calculate_statistics:

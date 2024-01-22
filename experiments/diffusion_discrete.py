@@ -535,6 +535,8 @@ class Trainer(pl.LightningModule):
         ckpt_energy_model: str = None,
         save_traj: bool = False,
         fix_noise_and_nodes: bool = False,
+        num_nodes: int = None,
+        fixed_context: list = None,
         guidance_steps: int = 100,
         optimization: str = "minimize",
         relax_sampling: bool = False,
@@ -562,6 +564,12 @@ class Trainer(pl.LightningModule):
 
         molecule_list = []
         for i, num_graphs in enumerate(l):
+            if num_nodes is not None:
+                fixed_num_nodes = (
+                    torch.tensor(num_nodes).repeat(num_graphs).to(self.device)
+                )
+            else:
+                fixed_num_nodes = None
             molecules = self.reverse_sampling(
                 num_graphs=num_graphs,
                 verbose=inner_verbose,
@@ -573,6 +581,8 @@ class Trainer(pl.LightningModule):
                 guidance_scale=guidance_scale,
                 energy_model=energy_model,
                 fix_noise_and_nodes=fix_noise_and_nodes,
+                num_nodes=fixed_num_nodes,
+                fixed_context=fixed_context,
                 iteration=i,
                 guidance_steps=guidance_steps,
                 optimization=optimization,
@@ -670,6 +680,8 @@ class Trainer(pl.LightningModule):
         ckpt_energy_model: str = None,
         save_traj: bool = False,
         fix_noise_and_nodes: bool = False,
+        fixed_context: float = None,
+        num_nodes: int = None,
         guidance_steps: int = 100,
         optimization: str = "minimize",
         relax_sampling: bool = False,
@@ -699,17 +711,25 @@ class Trainer(pl.LightningModule):
                     print(f"Creating {ngraphs} graphs in {l} batches")
             molecule_list = []
             for num_graphs in l:
+                if num_nodes is not None:
+                    fixed_num_nodes = (
+                        torch.tensor(num_nodes).repeat(num_graphs).to(self.device)
+                    )
+                else:
+                    fixed_num_nodes = None
                 molecules = self.reverse_sampling(
                     num_graphs=num_graphs,
                     verbose=inner_verbose,
                     save_traj=save_traj,
+                    save_dir=save_dir,
                     ddpm=ddpm,
                     eta_ddim=eta_ddim,
                     every_k_step=every_k_step,
                     guidance_scale=guidance_scale,
                     energy_model=energy_model,
-                    save_dir=save_dir,
                     fix_noise_and_nodes=fix_noise_and_nodes,
+                    num_nodes=fixed_num_nodes,
+                    fixed_context=fixed_context,
                     iteration=i,
                     guidance_steps=guidance_steps,
                     optimization=optimization,
@@ -972,9 +992,10 @@ class Trainer(pl.LightningModule):
         scaffold_hopping: bool = False,
         batch_data: Tensor = None,
         num_nodes: Tensor = None,
+        fixed_context: float = None,
         resample_steps: int = 1,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
-        if scaffold_elaboration | scaffold_hopping:
+        if num_nodes is not None:
             batch_num_nodes = num_nodes
         elif not fix_noise_and_nodes:
             batch_num_nodes = torch.multinomial(
@@ -994,7 +1015,6 @@ class Trainer(pl.LightningModule):
                 .repeat(num_graphs)
                 .to(self.device)
             )
-
         batch_num_nodes = batch_num_nodes.clamp(min=1)
         batch = torch.arange(num_graphs, device=self.device).repeat_interleave(
             batch_num_nodes, dim=0
@@ -1006,11 +1026,20 @@ class Trainer(pl.LightningModule):
             alphas = self.sde_pos.alphas_cumprod[t]
 
         # sample context condition
-        context = None
         if self.prop_dist is not None:
-            context = self.prop_dist.sample_batch(batch_num_nodes).to(self.device)[
-                batch
-            ]
+            if fixed_context is not None:
+                fixed_context = (
+                    torch.tensor(fixed_context).unsqueeze(0).repeat(num_graphs, 1)
+                )
+                context = self.prop_dist.sample_fixed(fixed_context).to(self.device)[
+                    batch
+                ]
+            else:
+                context = self.prop_dist.sample_batch(batch_num_nodes).to(self.device)[
+                    batch
+                ]
+        else:
+            context = None
 
         # initialiaze the 0-mean point cloud from N(0, I)
         pos = torch.randn(

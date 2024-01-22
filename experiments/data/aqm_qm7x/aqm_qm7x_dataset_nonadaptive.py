@@ -1,17 +1,18 @@
-from rdkit import RDLogger
-from tqdm import tqdm
-import numpy as np
-from typing import Optional
-import torch
-from torch_geometric.data import InMemoryDataset, DataLoader
+from os.path import join
+
 import experiments.data.utils as dataset_utils
+import numpy as np
+import torch
+from experiments.data.abstract_dataset import AbstractDataModule
+from experiments.data.metrics import compute_all_statistics
 from experiments.data.utils import (
     load_pickle,
     save_pickle,
+    train_subset,
 )
-from experiments.data.metrics import compute_all_statistics
-from pytorch_lightning import LightningDataModule
-
+from rdkit import RDLogger
+from torch.utils.data import Subset
+from torch_geometric.data import DataLoader, InMemoryDataset
 from tqdm import tqdm
 
 full_atom_encoder = {
@@ -51,18 +52,20 @@ mol_properties = [
     "eXC",
     "eXX",
     "mPOL",
+    "mC6",
 ]
 
 atomic_energies_dict = {
-    1: -13.643321054,
-    6: -1027.610746263,
-    7: -1484.276217092,
-    8: -2039.751675679,
-    9: -3139.751675679,
-    15: -9283.015861995,
-    16: -10828.726222083,
-    17: -12516.462339357,
+    1: -13.6414041617373,
+    6: -1027.60791501338,
+    7: -1484.27481908749,
+    8: -2039.75030551381,
+    9: -2710.54734320680,
+    15: -9283.01120605055,
+    16: -10828.7228945312,
+    17: -12516.4600457922,
 }
+
 atomic_numbers = [1, 6, 7, 8, 9, 15, 16, 17]
 convert_z_to_x = {k: i for i, k in enumerate(atomic_numbers)}
 
@@ -85,6 +88,10 @@ class AQMQM7XDataset(InMemoryDataset):
 
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
+        self.post_processing()
+
+    def post_processing(self):
+        """load statistics and smiles"""
         self.statistics = dataset_utils.Statistics(
             num_nodes=load_pickle(self.processed_paths[1]),
             atom_types=torch.from_numpy(np.load(self.processed_paths[2])),
@@ -93,11 +100,12 @@ class AQMQM7XDataset(InMemoryDataset):
             valencies=load_pickle(self.processed_paths[5]),
             bond_lengths=load_pickle(self.processed_paths[6]),
             bond_angles=torch.from_numpy(np.load(self.processed_paths[7])),
+            dihedrals=torch.from_numpy(np.load(self.processed_paths[8])).float(),
             is_aromatic=torch.from_numpy(np.load(self.processed_paths[9])).float(),
             is_in_ring=torch.from_numpy(np.load(self.processed_paths[10])).float(),
             hybridization=torch.from_numpy(np.load(self.processed_paths[11])).float(),
         )
-        self.smiles = load_pickle(self.processed_paths[8])
+        self.smiles = load_pickle(self.processed_paths[12])
 
     @property
     def raw_file_names(self):
@@ -111,50 +119,54 @@ class AQMQM7XDataset(InMemoryDataset):
     @property
     def processed_file_names(self):
         h = "noh" if self.remove_h else "h"
+        confs = "all_confs"
         if self.split == "train":
             return [
-                f"train_{h}.pt",
-                f"train_n_{h}.pickle",
-                f"train_atom_types_{h}.npy",
-                f"train_bond_types_{h}.npy",
-                f"train_charges_{h}.npy",
-                f"train_valency_{h}.pickle",
-                f"train_bond_lengths_{h}.pickle",
-                f"train_angles_{h}.npy",
-                "train_smiles.pickle",
-                f"train_is_aromatic_{h}.npy",
-                f"train_is_in_ring_{h}.npy",
-                f"train_hybridization_{h}.npy",
+                f"train_{h}_{confs}.pt",
+                f"train_n_{h}_{confs}.pickle",
+                f"train_atom_types_{h}_{confs}.npy",
+                f"train_bond_types_{h}_{confs}.npy",
+                f"train_charges_{h}_{confs}.npy",
+                f"train_valency_{h}_{confs}.pickle",
+                f"train_bond_lengths_{h}_{confs}.pickle",
+                f"train_angles_{h}_{confs}.npy",
+                f"train_dihedrals_{h}_{confs}.npy",
+                f"train_is_aromatic_{h}_{confs}.npy",
+                f"train_is_in_ring_{h}_{confs}.npy",
+                f"train_hybridization_{h}_{confs}.npy",
+                f"train_smiles_{confs}.pickle",
             ]
         elif self.split == "val":
             return [
-                f"val_{h}.pt",
-                f"val_n_{h}.pickle",
-                f"val_atom_types_{h}.npy",
-                f"val_bond_types_{h}.npy",
-                f"val_charges_{h}.npy",
-                f"val_valency_{h}.pickle",
-                f"val_bond_lengths_{h}.pickle",
-                f"val_angles_{h}.npy",
-                "val_smiles.pickle",
-                f"val_is_aromatic_{h}.npy",
-                f"val_is_in_ring_{h}.npy",
-                f"val_hybridization_{h}.npy",
+                f"val_{h}_{confs}.pt",
+                f"val_n_{h}_{confs}.pickle",
+                f"val_atom_types_{h}_{confs}.npy",
+                f"val_bond_types_{h}_{confs}.npy",
+                f"val_charges_{h}_{confs}.npy",
+                f"val_valency_{h}_{confs}.pickle",
+                f"val_bond_lengths_{h}_{confs}.pickle",
+                f"val_angles_{h}_{confs}.npy",
+                f"val_dihedrals_{h}_{confs}.npy",
+                f"val_is_aromatic_{h}_{confs}.npy",
+                f"val_is_in_ring_{h}_{confs}.npy",
+                f"val_hybridization_{h}_{confs}.npy",
+                f"val_smiles_{confs}.pickle",
             ]
         else:
             return [
-                f"test_{h}.pt",
-                f"test_n_{h}.pickle",
-                f"test_atom_types_{h}.npy",
-                f"test_bond_types_{h}.npy",
-                f"test_charges_{h}.npy",
-                f"test_valency_{h}.pickle",
-                f"test_bond_lengths_{h}.pickle",
-                f"test_angles_{h}.npy",
-                "test_smiles.pickle",
-                f"test_is_aromatic_{h}.npy",
-                f"test_is_in_ring_{h}.npy",
-                f"test_hybridization_{h}.npy",
+                f"test_{h}_{confs}.pt",
+                f"test_n_{h}_{confs}.pickle",
+                f"test_atom_types_{h}_{confs}.npy",
+                f"test_bond_types_{h}_{confs}.npy",
+                f"test_charges_{h}_{confs}.npy",
+                f"test_valency_{h}_{confs}.pickle",
+                f"test_bond_lengths_{h}_{confs}.pickle",
+                f"test_angles_{h}_{confs}.npy",
+                f"test_dihedrals_{h}_{confs}.npy",
+                f"test_is_aromatic_{h}_{confs}.npy",
+                f"test_is_in_ring_{h}_{confs}.npy",
+                f"test_hybridization_{h}_{confs}.npy",
+                f"test_smiles_{confs}.pickle",
             ]
 
     def download(self):
@@ -181,6 +193,7 @@ class AQMQM7XDataset(InMemoryDataset):
             self.atom_encoder,
             charges_dic={-2: 0, -1: 1, 0: 2, 1: 3, 2: 4, 3: 5},
             additional_feats=True,
+            include_force_norms=False,
         )
         save_pickle(statistics.num_nodes, self.processed_paths[1])
         np.save(self.processed_paths[2], statistics.atom_types)
@@ -189,17 +202,15 @@ class AQMQM7XDataset(InMemoryDataset):
         save_pickle(statistics.valencies, self.processed_paths[5])
         save_pickle(statistics.bond_lengths, self.processed_paths[6])
         np.save(self.processed_paths[7], statistics.bond_angles)
-        save_pickle(set(all_smiles), self.processed_paths[8])
-
+        np.save(self.processed_paths[8], statistics.dihedrals)
         np.save(self.processed_paths[9], statistics.is_aromatic)
         np.save(self.processed_paths[10], statistics.is_in_ring)
         np.save(self.processed_paths[11], statistics.hybridization)
+        save_pickle(set(all_smiles), self.processed_paths[12])
 
 
-class AQMQM7XDataModule(LightningDataModule):
+class AQMQM7XDataModule(AbstractDataModule):
     def __init__(self, cfg):
-        super().__init__()
-
         self.save_hyperparameters(cfg)
         self.datadir = cfg.dataset_root
         root_path = cfg.dataset_root
@@ -223,22 +234,17 @@ class AQMQM7XDataModule(LightningDataModule):
             "val": val_dataset.statistics,
             "test": test_dataset.statistics,
         }
+        if cfg.select_train_subset:
+            self.idx_train = train_subset(
+                dset_len=len(train_dataset),
+                train_size=cfg.train_size,
+                seed=cfg.seed,
+                filename=join(cfg.save_dir, "splits.npz"),
+            )
+            self.train_smiles = train_dataset.smiles
+            train_dataset = Subset(train_dataset, self.idx_train)
 
-    def setup(self, stage: Optional[str] = None) -> None:
-        train_dataset = AQMQM7XDataset(
-            root=self.cfg.dataset_root, split="train", remove_h=self.cfg.remove_hs
-        )
-        val_dataset = AQMQM7XDataset(
-            root=self.cfg.dataset_root, split="val", remove_h=self.cfg.remove_hs
-        )
-        test_dataset = AQMQM7XDataset(
-            root=self.cfg.dataset_root, split="test", remove_h=self.cfg.remove_hs
-        )
-
-        if stage == "fit" or stage is None:
-            self.train_dataset = train_dataset
-            self.val_dataset = val_dataset
-            self.test_dataset = test_dataset
+        super().__init__(cfg, train_dataset, val_dataset, test_dataset)
 
     def train_dataloader(self, shuffle=True):
         dataloader = DataLoader(
@@ -274,7 +280,7 @@ class AQMQM7XDataModule(LightningDataModule):
         return dataloader
 
     def compute_mean_mad(self, properties_list):
-        if self.hparams["dataset"] == "aqm":
+        if self.hparams["dataset"] == "aqm_qm7x":
             dataloader = self.get_dataloader(self.train_dataset, "val")
             return self.compute_mean_mad_from_dataloader(dataloader, properties_list)
         elif (

@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import warnings
 from collections import defaultdict
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from time import time
@@ -11,14 +12,14 @@ from time import time
 import numpy as np
 import torch
 from Bio.PDB import PDBParser
-from copy import deepcopy
-from torch_geometric.data import Batch
 from posebusters import PoseBusters
 from posecheck.posecheck import PoseCheck
 from rdkit import Chem
+from torch_geometric.data import Batch
+
 from experiments.data.distributions import DistributionProperty
 from experiments.data.ligand.process_pdb import get_pdb_components, write_pdb
-from experiments.data.utils import save_pickle, mol_to_torch_geometric
+from experiments.data.utils import mol_to_torch_geometric, save_pickle
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import (
     prepare_pocket,
@@ -61,11 +62,12 @@ def evaluate(
     relax_mol,
     max_relax_iter,
     sanitize,
+    filter_by_posebusters,
+    max_sample_iter,
     dataset_root=None,
     encode_ligand=False,
     omit_pose_buster=False,
     omit_pose_check=False,
-    max_tries: int = 10,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -110,6 +112,7 @@ def evaluate(
 
     if hparams.additional_feats:
         from experiments.diffusion_discrete_pocket_addfeats import Trainer
+
         # from experiments.diffusion_discrete_pocket_addfeats_reduced import Trainer
     elif hparams.latent_dim is None:
         from experiments.diffusion_discrete_pocket import Trainer
@@ -207,7 +210,7 @@ def evaluate(
             repeats=batch_size,
             device=device,
         )
-        
+
         if encode_ligand:
             suppl = Chem.SDMolSupplier(str(sdf_file))
             mol = []
@@ -215,19 +218,27 @@ def evaluate(
                 mol.append(m)
             assert len(mol) == 1
             mol = mol[0]
-            ligand_data = mol_to_torch_geometric(mol,
-                                                 dataset_info.atom_encoder,
-                                                 smiles=Chem.MolToSmiles(mol), 
-                                                 remove_hydrogens=hparams.remove_hs,
-                                                 cog_proj=True  # only for processing the ligand-shape encode
-                                                )
-            ligand_data = Batch.from_data_list([deepcopy(ligand_data) for _ in range(batch_size)])
+            ligand_data = mol_to_torch_geometric(
+                mol,
+                dataset_info.atom_encoder,
+                smiles=Chem.MolToSmiles(mol),
+                remove_hydrogens=hparams.remove_hs,
+                cog_proj=True,  # only for processing the ligand-shape encode
+            )
+            ligand_data = Batch.from_data_list(
+                [deepcopy(ligand_data) for _ in range(batch_size)]
+            )
             for name, tensor in ligand_data.to_dict().items():
                 pocket_data.__setattr__(name, tensor)
-            
+
         start = datetime.now()
-        tries = 0
-        while len(valid_and_unique_molecules) < num_ligands_per_pocket or tries < max_tries:
+
+        k = 0
+        while (
+            len(valid_and_unique_molecules) < num_ligands_per_pocket
+            and k <= max_sample_iter
+        ):
+            k += 1
             with torch.no_grad():
                 molecules = model.generate_ligands(
                     pocket_data,
@@ -254,15 +265,64 @@ def evaluate(
                 return_molecules=True,
                 calculate_statistics=False,
                 calculate_distribution_statistics=False,
+                filter_by_posebusters=filter_by_posebusters,
+                pdb_file=pdb_file,
                 remove_hs=hparams.remove_hs,
                 device="cpu",
             )
             valid_and_unique_molecules = valid_molecules.copy()
             tmp_molecules = valid_molecules.copy()
-            tries += 1
-            if tries == max_tries:
-                print(f"Maximum of {max_tries} sampling tries are exceeded. Aborting while loop.")
-                
+
+        if (
+            len(valid_and_unique_molecules) < num_ligands_per_pocket
+            and filter_by_posebusters
+        ):
+            k = 0
+            while (
+                len(valid_and_unique_molecules) < num_ligands_per_pocket
+                and k <= max_sample_iter
+            ):
+                k += 1
+                with torch.no_grad():
+                    molecules = model.generate_ligands(
+                        pocket_data,
+                        num_graphs=batch_size,
+                        fix_n_nodes=fix_n_nodes,
+                        vary_n_nodes=vary_n_nodes,
+                        n_nodes_bias=n_nodes_bias,
+                        build_obabel_mol=build_obabel_mol,
+                        inner_verbose=False,
+                        save_traj=False,
+                        ddpm=ddpm,
+                        eta_ddim=eta_ddim,
+                        relax_mol=relax_mol,
+                        max_relax_iter=max_relax_iter,
+                        sanitize=sanitize,
+                    )
+                all_molecules += len(molecules)
+                tmp_molecules.extend(molecules)
+                valid_molecules = analyze_stability_for_molecules(
+                    molecule_list=tmp_molecules,
+                    dataset_info=dataset_info,
+                    smiles_train=train_smiles,
+                    local_rank=0,
+                    return_molecules=True,
+                    calculate_statistics=False,
+                    calculate_distribution_statistics=False,
+                    filter_by_posebusters=False,
+                    pdb_file=pdb_file,
+                    remove_hs=hparams.remove_hs,
+                    device="cpu",
+                )
+                valid_and_unique_molecules = valid_molecules.copy()
+                tmp_molecules = valid_molecules.copy()
+
+        if len(valid_and_unique_molecules) < num_ligands_per_pocket:
+            print(
+                "Reached {max_sample_iter} sampling iterations, but could not find {num_ligands_per_pocket} for pdb file {pdb_file}. Abort."
+            )
+            break
+
         del pocket_data
         torch.cuda.empty_cache()
 
@@ -314,15 +374,17 @@ def evaluate(
         #     protein, _ = get_pdb_components(pdb_name)
         #     pdb_file = write_pdb(temp_dir, protein, pdb_name)
 
-        if not omit_pose_buster:
-            # PoseBusters
+        # PoseBusters
+        if not filter_by_posebusters:
             print("Starting evaluation with PoseBusters...")
             buster = {}
             buster_mol = PoseBusters(config="mol")
             buster_mol_df = buster_mol.bust([sdf_out_file_raw], None, None)
             for metric in buster_mol_df.columns:
                 violin_dict[metric].extend(list(buster_mol_df[metric]))
-                buster[metric] = buster_mol_df[metric].sum() / len(buster_mol_df[metric])
+                buster[metric] = buster_mol_df[metric].sum() / len(
+                    buster_mol_df[metric]
+                )
             buster_dock = PoseBusters(config="dock")
             buster_dock_df = buster_dock.bust([sdf_out_file_raw], None, str(pdb_file))
             for metric in buster_dock_df:
@@ -334,29 +396,28 @@ def evaluate(
             for k, v in buster.items():
                 buster_dict[k].append(v)
             print("Done!")
-    
-        if not omit_pose_check:
-            # PoseCheck
-            print("Starting evaluation with PoseCheck...")
-            pc = PoseCheck()
-            pc.load_protein_from_pdb(str(pdb_file))
-            pc.load_ligands_from_sdf(str(sdf_out_file_raw), add_hs=True)
-            interactions = pc.calculate_interactions()
-            interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
-                interactions
-            )
-            for k, v in interactions_per_mol.items():
-                violin_dict[k].extend(v)
-            for k, v in interactions_mean.items():
-                posecheck_dict[k].append(v["mean"])
-            clashes = pc.calculate_clashes()
-            strain_energies = pc.calculate_strain_energy()
-            violin_dict["Clashes"].extend(clashes)
-            violin_dict["Strain Energies"].extend(strain_energies)
-            posecheck_dict["Clashes"].append(np.mean(clashes))
-            posecheck_dict["Strain Energies"].append(np.nanmedian(strain_energies))
-            print("Done!")
-            
+
+        # PoseCheck
+        print("Starting evaluation with PoseCheck...")
+        pc = PoseCheck()
+        pc.load_protein_from_pdb(str(pdb_file))
+        pc.load_ligands_from_sdf(str(sdf_out_file_raw), add_hs=True)
+        interactions = pc.calculate_interactions()
+        interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
+            interactions
+        )
+        for k, v in interactions_per_mol.items():
+            violin_dict[k].extend(v)
+        for k, v in interactions_mean.items():
+            posecheck_dict[k].append(v["mean"])
+        clashes = pc.calculate_clashes()
+        strain_energies = pc.calculate_strain_energy()
+        violin_dict["Clashes"].extend(clashes)
+        violin_dict["Strain Energies"].extend(strain_energies)
+        posecheck_dict["Clashes"].append(np.mean(clashes))
+        posecheck_dict["Strain Energies"].append(np.nanmedian(strain_energies))
+        print("Done!")
+
         # try:
         #     shutil.rmtree(temp_dir)
         # except UnboundLocalError:
@@ -381,9 +442,11 @@ def evaluate(
     save_pickle(
         statistics_dict, os.path.join(save_dir, f"{mp_index}_statistics_dict.pickle")
     )
-    save_pickle(
-        buster_dict, os.path.join(save_dir, f"{mp_index}_posebusters_sampled.pickle")
-    )
+    if not filter_by_posebusters:
+        save_pickle(
+            buster_dict,
+            os.path.join(save_dir, f"{mp_index}_posebusters_sampled.pickle"),
+        )
     save_pickle(
         violin_dict, os.path.join(save_dir, f"{mp_index}_violin_dict_sampled.pickle")
     )
@@ -424,6 +487,8 @@ def get_args():
     parser.add_argument("--sanitize", default=False, action="store_true")
     parser.add_argument('--max-relax-iter', default=200, type=int,
                             help='How many iteration steps for UFF optimization')
+    parser.add_argument('--max-sample-iter', default=20, type=int,
+                            help='How many iteration steps for UFF optimization')
     parser.add_argument("--test-dir", type=Path)
     parser.add_argument("--encode-ligand", default=False, action="store_true")
     parser.add_argument("--max-tries", default=5, type=int)
@@ -438,6 +503,7 @@ def get_args():
     parser.add_argument("--fix-n-nodes", action="store_true")
     parser.add_argument("--vary-n-nodes", action="store_true")
     parser.add_argument("--n-nodes-bias", default=0, type=int)
+    parser.add_argument("--filter-by-posebusters", action="store_true")
     parser.add_argument("--omit-pose-buster", default=False, action="store_true")
     parser.add_argument("--omit-pose-check", default=False, action="store_true")
 
@@ -472,5 +538,6 @@ if __name__ == "__main__":
         encode_ligand=args.encode_ligand,
         omit_pose_buster=args.omit_pose_buster,
         omit_pose_check=args.omit_pose_check,
-        max_tries=args.max_tries,
+        filter_by_posebusters=args.filter_by_posebusters,
+        max_sample_iter=args.max_sample_iter,
     )

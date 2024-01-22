@@ -48,6 +48,10 @@ def evaluate(
     T=500,
     relax_sampling=True,
     relax_steps=10,
+    num_nodes=None,
+    fix_noise_and_nodes=False,
+    fixed_context=None,
+    generate_ngraphs_valid=False,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -55,6 +59,8 @@ def evaluate(
     hparams["diffusion_pretraining"] = False
     hparams = dotdict(hparams)
     hparams.num_charge_classes = 6
+
+    hparams.dataset_root = "/scratch1/cremej01/data/aqm"
 
     hparams.load_ckpt_from_pretrained = None
     hparams.gpus = 1
@@ -114,10 +120,6 @@ def evaluate(
     if dataset == "pubchem":
         datamodule = DataModule(hparams, evaluation=True)
     else:
-        # TODO: remove this here, this is only so dataloading is quicker for debugging
-        hparams.dataset_root = "/hpfs/scratch/users/seumej/geom_qm/"
-        # hparams.dataset_root = "/scratch1/cremej01/data/geom"
-        hparams.max_num_conformers = 1
         datamodule = DataModule(hparams)
 
     from experiments.data.data_info import GeneralInfos as DataInfos
@@ -188,7 +190,11 @@ def evaluate(
         assert (
             scaffold_elaboration != scaffold_hopping
         ), "Either scaffold elaboration or scaffold hopping can be used at a time"
-        results_dict, generated_smiles, stable_molecules = model.run_fixed_substructure_evaluation(
+        (
+            results_dict,
+            generated_smiles,
+            stable_molecules,
+        ) = model.run_fixed_substructure_evaluation(
             dataset_info=model.dataset_info,
             save_dir=save_dir,
             return_molecules=True,
@@ -213,6 +219,26 @@ def evaluate(
             relax_sampling=relax_sampling,
             relax_steps=relax_steps,
         )
+    elif generate_ngraphs_valid:
+        results_dict, generated_smiles, stable_molecules = model.generate_valid_samples(
+            dataset_info=model.dataset_info,
+            ngraphs=ngraphs,
+            bs=batch_size,
+            return_molecules=True,
+            verbose=True,
+            inner_verbose=True,
+            save_dir=save_dir,
+            ddpm=ddpm,
+            eta_ddim=eta_ddim,
+            guidance_scale=guidance_scale,
+            ckpt_energy_model=ckpt_energy_model,
+            use_energy_guidance=use_energy_guidance,
+            fix_noise_and_nodes=fix_noise_and_nodes,
+            num_nodes=num_nodes,
+            fixed_context=fixed_context,
+            device="cpu",
+        )
+
     else:
         results_dict, generated_smiles, stable_molecules = model.run_evaluation(
             step=step,
@@ -229,6 +255,9 @@ def evaluate(
             guidance_scale=guidance_scale,
             ckpt_energy_model=ckpt_energy_model,
             use_energy_guidance=use_energy_guidance,
+            fix_noise_and_nodes=fix_noise_and_nodes,
+            num_nodes=num_nodes,
+            fixed_context=fixed_context,
             device="cpu",
         )
 
@@ -247,7 +276,8 @@ def evaluate(
                     prop_dist.normalizer[key]["mad"],
                 )
                 prop = mol.context[j] * mad + mean
-                mol.context = float(prop)
+                if len(hparams.properties_list) == 1:
+                    mol.context = float(prop)
             try:
                 charge = mol.charges.sum().item()
                 results = xtb_calculate(
@@ -309,7 +339,10 @@ def evaluate(
                         prop_dist.normalizer[key]["mean"],
                         prop_dist.normalizer[key]["mad"],
                     )
-                    prop = stable_molecules[i].context[j] * mad + mean
+                    if len(hparams.properties_list) > 1:
+                        prop = stable_molecules[i].context[j] * mad + mean
+                    else:
+                        prop = stable_molecules[i].context * mad + mean
                     tmp.append(float(prop))
                 context.append(tmp)
 
@@ -416,6 +449,8 @@ def get_args():
                         help='Whether or not to store generated molecules in xyz files')
     parser.add_argument('--calculate-props', default=False, action="store_true",
                         help='Whether or not to calculate xTB properties')
+    parser.add_argument('--generate-ngraphs-valid', default=False, action="store_true",
+                        help='Sample as long as N valid molecules are sampled')
     parser.add_argument('--ngraphs', default=70, type=int,
                             help='How many graphs to sample. Defaults to 5000')
     parser.add_argument('--batch-size', default=70, type=int,
@@ -426,6 +461,12 @@ def get_args():
                         help='How to scale the std of noise in the reverse posterior. \
                             Can also be used for DDPM to track a deterministic trajectory. \
                             Defaults to 1.0')
+    parser.add_argument('--fix-noise-and-nodes', default=False, action="store_true",
+                        help='Whether or not to fix noise, e.g., for interpolation or guidance')
+    parser.add_argument('--num-nodes', default=None, type=int,
+                            help='Number of pre-defined nodes per molecule to sample')
+    parser.add_argument('--fixed-context', default=None, nargs="+", type=float,
+                            help='List of fixed property values')
     parser.add_argument('--scaffold-elaboration', default=False, action="store_true", help="Run scaffold elaboration")
     parser.add_argument('--scaffold-hopping', default=False, action="store_true", help="Run scaffold hopping")
     parser.add_argument('--resample-steps', default=1, type=int, help="Number of resampling steps for scaffold elaboration/hopping")
@@ -465,4 +506,8 @@ if __name__ == "__main__":
         T=args.T,
         relax_sampling=args.relax_sampling,
         relax_steps=args.relax_steps,
+        fix_noise_and_nodes=args.fix_noise_and_nodes,
+        num_nodes=args.num_nodes,
+        fixed_context=args.fixed_context,
+        generate_ngraphs_valid=args.generate_ngraphs_valid,
     )

@@ -192,6 +192,22 @@ class DistributionProperty:
         mad = self.normalizer[prop]["mad"]
         return (tensor - mean) / mad
 
+    def sample_fixed(self, values):
+        vals = []
+        if len(self.properties) > 1:
+            for i, prop in enumerate(self.properties):
+                val = values[:, i]
+                val = self.normalize_tensor(val, prop)
+                vals.append(val)
+            vals = torch.stack(vals, dim=1)
+        else:
+            assert len(self.properties) == len(
+                values[0]
+            ), "Multiple property values given, but model is trained on a single property!"
+            prop = self.properties[0]
+            vals = self.normalize_tensor(values, prop)
+        return vals
+
     def sample(self, n_nodes=19):
         vals = []
         for prop in self.properties:

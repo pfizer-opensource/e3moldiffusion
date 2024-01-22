@@ -35,8 +35,8 @@ local_global_model: false
 vector_aggr: mean
 
 #DATA
-dataset: aqm
-dataset_root: /scratch1/cremej01/data/aqm
+dataset: aqm_qm7x
+dataset_root: /scratch1/cremej01/data/aqm_qm7x
 
 # DIFFUSION
 additional_feats: false
@@ -52,7 +52,7 @@ loss_weighting: snr_t
 #CONTEXT
 context_mapping: true
 num_context_features: 2
-properties_list: [eMBD, mPOL] #[DIP, HLgap, eMBD, mPOL]
+properties_list: [mPOL] #[DIP, HLgap, eMBD, mPOL]
 
 #LOGGING
 save_dir: /hpfs/userws/cremej01/projects/logs/geom/pretrain_x0

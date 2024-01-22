@@ -24,7 +24,7 @@ python experiments/run_train.py --conf configs/diffusion_crossdocked.yaml --save
 
 # Pre-process pdb files
 
-In general, we assume a single or many ground truth ligands docked to protein(s) given, from which the binding site can be extracted. 
+In general, we assume a single or many ground truth ligands docked to protein(s) given, from which the binding site can be extracted. Otherwise the binding site must be found first.
 To evaluate the sampled ligands using PoseBusters/PoseCheck, we need the full protein information, which we can get by:
 
 experiments/data/ligand/fetch_pdb_files.py:
@@ -58,9 +58,11 @@ Modify scripts/generate_ligands_multi.sl:
 sbatch scripts/generate_ligands_multi.sl
 ```
 
-**IMPORTANT: Set #SBATCH --array=1-<num_gpus> in line 10 and -eq <num_gpus> in line 45.**
-**Modify the file path in scripts/aggregate_results.sl. After ligands are processed, experiments/aggregate_results.py is called to merge the evaluation results.**
+After sampling is finished, aggregate the results from all jobs:
 
+```bash
+python experiments/aggregate_results.py --files-dir /your/sampling/save_dir --docked
+```
 
 # Docking of generated ligands (on multiple nodes using SLURM's job array)
 
@@ -79,10 +81,10 @@ Modify scripts/docking_multi.sl:
 sbatch scripts/docking_multi.sl
 ```
 
-**IMPORTANT: Set #SBATCH --array=1-<num_cpus> in line 9 and -eq <num_cpus> in line 35.**
-**Modify the file path in scripts/aggregate_results_dock.sl. After ligands are docked, experiments/aggregate_results.py is called to merge the evaluation results.**
-
-
+After docking is finished, aggregate the results from all jobs:
+```bash
+python experiments/aggregate_results.py --files-dir /your/docking/save_dir --docked
+```
 
 # AQM
 python experiments/data/aqm/split_data.py --file-path /path/to/hdf5 --out-path /path/to/processed/data

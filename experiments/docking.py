@@ -4,6 +4,7 @@ import re
 import shutil
 import tempfile
 from collections import defaultdict
+from glob import glob
 from pathlib import Path
 
 import numpy as np
@@ -60,10 +61,10 @@ def sdf_to_pdbqt(sdf_file, pdbqt_outfile, mol_id):
 
 
 def calculate_qvina2_score(
+    pdb_file,
     receptor_file,
     sdf_file,
     out_dir,
-    pdb_dir,
     buster_dict,
     violin_dict,
     posecheck_dict,
@@ -86,7 +87,7 @@ def calculate_qvina2_score(
 
     receptor_file = Path(receptor_file)
     sdf_file = Path(sdf_file)
-    pdb_dir = Path(pdb_dir)
+    pdb_file = Path(pdb_file)
 
     if receptor_file.suffix == ".pdb":
         # prepare receptor, requires Python 2.7
@@ -99,31 +100,23 @@ def calculate_qvina2_score(
 
     scores = []
     rdmols = []  # for if return rdmols
-    clashes = []
-    strain_energies = []
-    rmsds = []
 
     suppl = Chem.SDMolSupplier(str(sdf_file), sanitize=False)
     ligand_name = sdf_file.stem
     ligand_pdbqt_file = Path(os.path.join(out_dir, "docked"), ligand_name + ".pdbqt")
     out_sdf_file = Path(os.path.join(out_dir, "docked"), ligand_name + "_out.sdf")
 
-    # Initialize the PoseCheck object
-    pc = PoseCheck()
-
-    pdb_name = str(ligand_pdbqt_file).split("/")[-1].split("-")[0]
-    if pdb_dir is not None:
-        pdbs = [str(i).split("/")[-1].split(".")[0] for i in pdb_dir.glob("[!.]*.pdb")]
-    else:
-        pdbs = None
-    if pdbs is not None and pdb_name in pdbs:
-        pdb_file = os.path.join(str(pdb_dir), pdb_name + ".pdb")
-    else:
-        temp_dir = tempfile.mkdtemp()
-        protein, _ = get_pdb_components(pdb_name)
-        pdb_file = write_pdb(temp_dir, protein, pdb_name)
-
-    pc.load_protein_from_pdb(pdb_file)
+    # pdb_name = str(ligand_pdbqt_file).split("/")[-1].split("-")[0]
+    # if pdb_dir is not None:
+    #     pdbs = [str(i).split("/")[-1].split(".")[0] for i in pdb_dir.glob("[!.]*.pdb")]
+    # else:
+    #     pdbs = None
+    # if pdbs is not None and pdb_name in pdbs:
+    #     pdb_file = os.path.join(str(pdb_dir), pdb_name + ".pdb")
+    # else:
+    #     # temp_dir = tempfile.mkdtemp()
+    #     # protein, _ = get_pdb_components(pdb_name)
+    #     # pdb_file = write_pdb(temp_dir, protein, pdb_name)
 
     for i, mol in enumerate(suppl):  # sdf file may contain several ligands
         sdf_to_pdbqt(sdf_file, ligand_pdbqt_file, i)
@@ -212,10 +205,10 @@ def calculate_qvina2_score(
     posecheck_dict["Strain Energies"].append(np.nanmedian(strain_energies))
     print("Done!")
 
-    try:
-        shutil.rmtree(temp_dir)
-    except UnboundLocalError:
-        pass
+    # try:
+    #     shutil.rmtree(temp_dir)
+    # except UnboundLocalError:
+    #     pass
 
     if return_rdmol:
         return scores, rdmols
@@ -228,6 +221,12 @@ if __name__ == "__main__":
     parser.add_argument("--pdbqt-dir", type=Path, help="Receptor files in pdbqt format")
     parser.add_argument(
         "--sdf-dir", type=Path, default=None, help="Ligand files in sdf format"
+    )
+    parser.add_argument(
+        "--pdb-dir",
+        type=Path,
+        default=None,
+        help="Directory where all full protein pdb files are stored. If not available, there will be calculated on the fly.",
     )
     parser.add_argument("--sdf-files", type=Path, nargs="+", default=None)
     parser.add_argument("--save-dir", type=Path)
@@ -258,6 +257,9 @@ if __name__ == "__main__":
         if args.sdf_dir is not None
         else args.sdf_files
     )
+
+    assert len(sdf_files) == len(glob(os.path.join(args.pdb_dir, ".pdb")))
+
     pbar = tqdm(sdf_files)
     for sdf_file in pbar:
         pbar.set_description(f"Processing {sdf_file.name}")
@@ -273,21 +275,24 @@ if __name__ == "__main__":
             receptor_name, pocket_id, *suffix = ligand_name.split("_")
             suffix = "_".join(suffix)
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
+            pdb_file = Path(args.pdb_dir, receptor_name + ".pdb")
         elif args.dataset == "crossdocked":
             ligand_name = sdf_file.stem
             receptor_name = ligand_name.split("_")[0]
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
+            pdb_file = Path(args.pdb_dir, receptor_name + ".pdb")
         elif args.dataset == "cdk2":
             ligand_name = sdf_file.stem
             receptor_name = ligand_name.split("_")[0]
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
+            pdb_file = Path(args.pdb_dir, receptor_name + ".pdb")
 
         # try:
         scores, rdmols = calculate_qvina2_score(
+            pdb_file,
             receptor_file,
             sdf_file,
             args.save_dir,
-            args.pdb_dir,
             buster_dict,
             violin_dict,
             posecheck_dict,

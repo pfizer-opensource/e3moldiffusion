@@ -15,18 +15,19 @@ source activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff5_bonds7"
-output_dir="$main_dir/evaluation/docking/nodes_bias_large_vary"
-
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_enamineft_cutoff5_bonds5_ep10"
+output_dir="$main_dir/evaluation/docking/nodes_bias_small"
 mkdir "$output_dir/docked"
+
+num_cpus=20
 
 python experiments/docking_multi.py \
     --mp-index "${SLURM_ARRAY_TASK_ID}" \
-    --num-cpus 20 \
+    --num-cpus "$num_cpus" \
     --sdf-dir "$output_dir/sampled" \
     --save-dir "$output_dir" \
     --pdbqt-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5/test/pdbqt \
-    --pdb-dir /scratch1/cremej01/data/crossdocked_pdbs \
+    --pdb-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5/test \
     --dataset crossdocked \
     --write-csv \
     --write-dict
