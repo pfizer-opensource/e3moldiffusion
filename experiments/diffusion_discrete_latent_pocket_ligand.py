@@ -54,6 +54,7 @@ from experiments.utils import (
     load_model_ligand,
     remove_mean_pocket,
     zero_mean,
+    load_latent_encoder
 )
 from experiments.xtb_energy import calculate_xtb_energy
 
@@ -150,26 +151,32 @@ class Trainer(pl.LightningModule):
             
         self.max_nodes = dataset_info.max_n_nodes
         
-        self.encoder = LatentEncoderNetwork(
-            num_atom_features=self.num_atom_types,
-            num_bond_types=self.num_bond_classes,
-            edge_dim=hparams["edim_latent"],
-            cutoff_local=hparams["cutoff_local"],
-            hn_dim=(hparams["sdim_latent"], hparams["vdim_latent"]),
-            num_layers=hparams["num_layers_latent"],
-            vector_aggr=hparams["vector_aggr"],
-            intermediate_outs=hparams["intermediate_outs"],
-            use_pos_norm=hparams["use_pos_norm"],   # for old checkpoint to start sampling.
-        )
-        self.latent_lin = GatedEquivBlock(
-            in_dims=(hparams["sdim_latent"], hparams["vdim_latent"]),
-            out_dims=(hparams["latent_dim"], None),
-        )
-        self.graph_pooling = SoftMaxAttentionAggregation(dim=hparams["latent_dim"])
-        m = 2 if hparams["latentmodel"] == "vae" else 1
-        self.mu_logvar_z = DenseLayer(hparams["latent_dim"], m * hparams["latent_dim"])
-        self.node_z = DenseLayer(hparams["latent_dim"], self.max_nodes)
-        self.latentmodel = get_latent_model(hparams)
+        if self.hparams.load_ckpt_from_pretrained is not None:
+            self.encoder, self.latent_lin, \
+            self.graph_pooling, self.mu_logvar_z, \
+            self.node_z, self.latentmodel = load_latent_encoder(filepath=self.hparams.load_ckpt_from_pretrained,
+                                                                max_n_nodes=self.max_nodes)
+        else:
+            self.encoder = LatentEncoderNetwork(
+                num_atom_features=self.num_atom_types,
+                num_bond_types=self.num_bond_classes,
+                edge_dim=hparams["edim_latent"],
+                cutoff_local=hparams["cutoff_local"],
+                hn_dim=(hparams["sdim_latent"], hparams["vdim_latent"]),
+                num_layers=hparams["num_layers_latent"],
+                vector_aggr=hparams["vector_aggr"],
+                intermediate_outs=hparams["intermediate_outs"],
+                use_pos_norm=hparams["use_pos_norm"],   # for old checkpoint to start sampling.
+            )
+            self.latent_lin = GatedEquivBlock(
+                in_dims=(hparams["sdim_latent"], hparams["vdim_latent"]),
+                out_dims=(hparams["latent_dim"], None),
+            )
+            self.graph_pooling = SoftMaxAttentionAggregation(dim=hparams["latent_dim"])
+            m = 2 if hparams["latentmodel"] == "vae" else 1
+            self.mu_logvar_z = DenseLayer(hparams["latent_dim"], m * hparams["latent_dim"])
+            self.node_z = DenseLayer(hparams["latent_dim"], self.max_nodes)
+            self.latentmodel = get_latent_model(hparams)
 
         self.latentloss = PriorLatentLoss(kind=hparams.get("latentmodel"))
 

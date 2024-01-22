@@ -66,8 +66,6 @@ def evaluate(
     max_sample_iter,
     dataset_root=None,
     encode_ligand=False,
-    omit_pose_buster=False,
-    omit_pose_check=False,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -491,7 +489,6 @@ def get_args():
                             help='How many iteration steps for UFF optimization')
     parser.add_argument("--test-dir", type=Path)
     parser.add_argument("--encode-ligand", default=False, action="store_true")
-    parser.add_argument("--max-tries", default=5, type=int)
     parser.add_argument(
         "--pdb-dir",
         type=Path,
@@ -504,8 +501,6 @@ def get_args():
     parser.add_argument("--vary-n-nodes", action="store_true")
     parser.add_argument("--n-nodes-bias", default=0, type=int)
     parser.add_argument("--filter-by-posebusters", action="store_true")
-    parser.add_argument("--omit-pose-buster", default=False, action="store_true")
-    parser.add_argument("--omit-pose-check", default=False, action="store_true")
 
     args = parser.parse_args()
     return args
@@ -536,8 +531,6 @@ if __name__ == "__main__":
         sanitize=args.sanitize,
         dataset_root=args.dataset_root,
         encode_ligand=args.encode_ligand,
-        omit_pose_buster=args.omit_pose_buster,
-        omit_pose_check=args.omit_pose_check,
         filter_by_posebusters=args.filter_by_posebusters,
         max_sample_iter=args.max_sample_iter,
     )

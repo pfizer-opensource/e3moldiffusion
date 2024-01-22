@@ -6,6 +6,7 @@ from glob import glob
 from itertools import zip_longest
 from os.path import dirname, exists, join
 from typing import Tuple
+import re
 
 import numpy as np
 import torch
@@ -562,7 +563,7 @@ def load_model_ligand(
 
 def _get_state_dict(ckpt, namestr):
     out = {
-        k: v
+        ".".join(k.split(".")[1:]): v
         for k, v in ckpt["state_dict"].items()
         if k.split(".")[0] == namestr
     }
@@ -599,7 +600,7 @@ def load_latent_encoder(
     latent_lin.load_state_dict(state_dicts["latent_lin"])
     graph_pooling.load_state_dict(state_dicts["graph_pooling"])
     mu_logvar_z.load_state_dict(state_dicts["mu_logvar_z"])
-    node_z.load_state_dict(state_dicts["node_z"])
+    # node_z.load_state_dict(state_dicts["node_z"])
     if len(state_dicts["latentmodel"]) != 0:
         latentmodel = latentmodel.load_state_dict(state_dicts["latentmodel"])
 
@@ -610,7 +611,7 @@ def create_model(hparams, num_atom_features, num_bond_classes):
     model = DenoisingEdgeNetwork(
         hn_dim=(hparams["sdim"], hparams["vdim"]),
         num_layers=hparams["num_layers"],
-        latent_dim=None,
+        latent_dim=hparams["latent_dim"],
         use_cross_product=hparams["use_cross_product"],
         num_atom_features=num_atom_features,
         num_bond_types=num_bond_classes,

@@ -216,12 +216,10 @@ if __name__ == "__main__":
                     print(f"Starting pre-training on {hparams.dataset} with latent shape conditioned encoding")
                     from experiments.diffusion_pretrain_latent_discrete import Trainer
             elif (
-                dataset == "crossdocked"
-                or dataset == "bindingmoad"
+                (dataset == "crossdocked" or dataset == "bindingmoad")
                 and hparams.additional_feats
                 and not hparams.use_qm_props
-            ):  
-                print(dataset, hparams.additional_feats, hparams.use_qm_props)
+            ):
                 histogram = os.path.join(hparams.dataset_root, "size_distribution.npy")
                 histogram = np.load(histogram).tolist()
                 print("Ligand-pocket training using additional features (reduced, only h-bond acceptor and donor)")
