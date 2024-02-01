@@ -11,7 +11,9 @@ inference_batch_size: 8
 use_ligand_dataset_sizes: true
 test_save_dir: /scratch1/e3moldiffusion/logs/crossdocked/test
 
-remove_hs: False
+remove_hs: true
+
+joint_property_prediction: false
 
 ligand_pocket_interaction: true
 use_pos_norm: false
@@ -46,8 +48,7 @@ vector_aggr: mean
 
 #DATA
 dataset: crossdocked
-dataset_root: /scratch1/cremej01/data/crossdocked_H_cutoff5
-# dataset_root: /hpfs/userws/let55/projects/e3moldiffusion/experiments/geom/data
+dataset_root: /scratch1/cremej01/data/crossdocked_noH_cutoff5_new
 
 # DIFFUSION
 additional_feats: false

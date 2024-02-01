@@ -1,12 +1,12 @@
 import argparse
 import math
 import os
+import re
 from collections import defaultdict
 from glob import glob
 from itertools import zip_longest
 from os.path import dirname, exists, join
 from typing import Tuple
-import re
 
 import numpy as np
 import torch
@@ -561,6 +561,7 @@ def load_model_ligand(
     model.load_state_dict(state_dict)
     return model.to(device)
 
+
 def _get_state_dict(ckpt, namestr):
     out = {
         ".".join(k.split(".")[1:]): v
@@ -569,16 +570,21 @@ def _get_state_dict(ckpt, namestr):
     }
     return out
 
-def load_latent_encoder(
-    filepath, max_n_nodes, device="cpu"
-):
+
+def load_latent_encoder(filepath, max_n_nodes, device="cpu"):
     import re
 
     ckpt = torch.load(filepath, map_location="cpu")
     args = ckpt["hyper_parameters"]
 
-    (encoder, latent_lin, graph_pooling,
-     mu_logvar_z, node_z, latentmodel) = create_encoder_model(args, max_n_nodes)
+    (
+        encoder,
+        latent_lin,
+        graph_pooling,
+        mu_logvar_z,
+        node_z,
+        latentmodel,
+    ) = create_encoder_model(args, max_n_nodes)
 
     state_dict_encoder = {
         re.sub(r"^encoder\.", "", k): v
@@ -590,13 +596,13 @@ def load_latent_encoder(
         for k, v in state_dict_encoder.items()
         if not any(x in k for x in ["prior", "sde", "cat", "posnorm", "se3norm"])
     }
-    
+
     encoder.load_state_dict(state_dict_encoder)
     encoder = encoder.to(device)
-    
+
     rest_keys = ["latent_lin", "graph_pooling", "mu_logvar_z", "node_z", "latentmodel"]
     state_dicts = {namestr: _get_state_dict(ckpt, namestr) for namestr in rest_keys}
-    
+
     latent_lin.load_state_dict(state_dicts["latent_lin"])
     graph_pooling.load_state_dict(state_dicts["graph_pooling"])
     mu_logvar_z.load_state_dict(state_dicts["mu_logvar_z"])
@@ -606,8 +612,10 @@ def load_latent_encoder(
 
     return encoder, latent_lin, graph_pooling, mu_logvar_z, node_z, latentmodel
 
+
 def create_model(hparams, num_atom_features, num_bond_classes):
     from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
+
     model = DenoisingEdgeNetwork(
         hn_dim=(hparams["sdim"], hparams["vdim"]),
         num_layers=hparams["num_layers"],
@@ -633,10 +641,14 @@ def create_model(hparams, num_atom_features, num_bond_classes):
     )
     return model
 
+
 def create_encoder_model(hparams, max_n_nodes):
-    from e3moldiffusion.coordsatomsbonds import LatentEncoderNetwork, SoftMaxAttentionAggregation
-    from e3moldiffusion.modules import DenseLayer, GatedEquivBlock
+    from e3moldiffusion.coordsatomsbonds import (
+        LatentEncoderNetwork,
+        SoftMaxAttentionAggregation,
+    )
     from e3moldiffusion.latent import LatentCache, PriorLatentLoss, get_latent_model
+    from e3moldiffusion.modules import DenseLayer, GatedEquivBlock
 
     encoder = LatentEncoderNetwork(
         num_atom_features=hparams["num_atom_types"],
@@ -649,11 +661,11 @@ def create_encoder_model(hparams, max_n_nodes):
         intermediate_outs=hparams["intermediate_outs"],
         use_pos_norm=hparams["use_pos_norm"],
     )
-    
+
     latent_lin = GatedEquivBlock(
-            in_dims=(hparams["sdim_latent"], hparams["vdim_latent"]),
-            out_dims=(hparams["latent_dim"], None),
-        )
+        in_dims=(hparams["sdim_latent"], hparams["vdim_latent"]),
+        out_dims=(hparams["latent_dim"], None),
+    )
     m = 2 if hparams["latentmodel"] == "vae" else 1
     graph_pooling = SoftMaxAttentionAggregation(dim=hparams["latent_dim"])
     mu_logvar_z = DenseLayer(hparams["latent_dim"], m * hparams["latent_dim"])
@@ -661,6 +673,7 @@ def create_encoder_model(hparams, max_n_nodes):
     latentmodel = get_latent_model(hparams)
 
     return (encoder, latent_lin, graph_pooling, mu_logvar_z, node_z, latentmodel)
+
 
 def load_energy_model(filepath, num_atom_features, device="cpu"):
     import re
@@ -1163,7 +1176,12 @@ def unbatch_data(
 
 
 def prepare_pocket(
-    biopython_residues, full_atom_encoder, no_H=True, repeats=1, device="cuda"
+    biopython_residues,
+    full_atom_encoder,
+    ligand_sdf=None,
+    no_H=True,
+    repeats=1,
+    device="cuda",
 ):
     pocket_atoms = [
         a
@@ -1224,6 +1242,16 @@ def prepare_pocket(
         pocket_one_hot=pocket_one_hot.repeat(repeats, 1),
         pocket_one_hot_batch=pocket_one_hot_batch,
     )
+    if ligand_sdf is not None:
+        ligand = Chem.SDMolSupplier(str(ligand_sdf), sanitize=False)[0]
+        batch = (
+            torch.cat(
+                [torch.tensor([i] * ligand.GetNumAtoms()) for i in range(repeats)]
+            )
+            .long()
+            .to(device)
+        )
+        pocket.batch = batch
 
     return pocket
 

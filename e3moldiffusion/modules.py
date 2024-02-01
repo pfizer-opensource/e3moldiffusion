@@ -18,10 +18,13 @@ class PredictionHeadEdge(nn.Module):
         num_atom_features: int,
         num_bond_types: int = 5,
         coords_param: str = "data",
+        joint_property_prediction: bool = False,
     ) -> None:
         super(PredictionHeadEdge, self).__init__()
         self.sdim, self.vdim = hn_dim
         self.num_atom_features = num_atom_features
+        self.coords_param = coords_param
+        self.joint_property_prediction = joint_property_prediction
 
         self.shared_mapping = DenseLayer(
             self.sdim, self.sdim, bias=True, activation=nn.SiLU()
@@ -39,8 +42,10 @@ class PredictionHeadEdge(nn.Module):
         self.atoms_lin = DenseLayer(
             in_features=self.sdim, out_features=num_atom_features, bias=True
         )
-
-        self.coords_param = coords_param
+        if self.joint_property_prediction:
+            self.property_mlp = DenseLayer(
+                in_features=self.sdim, out_features=1, bias=True, activation=nn.ReLU()
+            )
 
         self.reset_parameters()
 
@@ -50,6 +55,8 @@ class PredictionHeadEdge(nn.Module):
         self.atoms_lin.reset_parameters()
         self.bonds_lin_0.reset_parameters()
         self.bonds_lin_1.reset_parameters()
+        if self.joint_property_prediction:
+            self.property_mlp.reset_parameters()
 
     def forward(
         self,
@@ -66,6 +73,14 @@ class PredictionHeadEdge(nn.Module):
 
         coords_pred = self.coords_lin(v).squeeze()
         atoms_pred = self.atoms_lin(s)
+        if self.joint_property_prediction:
+            batch_size = len(batch.bincount())
+            property_pred = self.property_mlp(s)
+            property_pred = scatter_add(
+                property_pred, index=batch, dim=0, dim_size=batch_size
+            )
+        else:
+            property_pred = None
 
         if batch_lig is not None and pocket_mask is not None:
             s = (s * pocket_mask)[pocket_mask.squeeze(), :]
@@ -116,29 +131,18 @@ class PredictionHeadEdge(nn.Module):
         bonds_pred = F.silu(self.bonds_lin_0(edge))
         bonds_pred = self.bonds_lin_1(bonds_pred)
 
-        return coords_pred, atoms_pred, bonds_pred
+        return coords_pred, atoms_pred, bonds_pred, property_pred
+
 
 class HiddenEdgeDistanceMLP(nn.Module):
-    def __init__(
-        self,
-        hn_dim: Tuple[int, int]
-    ) -> None:
+    def __init__(self, hn_dim: Tuple[int, int]) -> None:
         super(HiddenEdgeDistanceMLP, self).__init__()
         self.sdim, self.vdim = hn_dim
         self.distance_mlp = nn.Sequential(
-            DenseLayer(self.sdim, 
-                       self.sdim // 2,
-                       bias=True, 
-                       activation=nn.SiLU()),
-            DenseLayer(self.sdim // 2, 
-                       self.sdim // 4,
-                       bias=True, 
-                       activation=nn.SiLU()),
-            DenseLayer(self.sdim // 4, 
-                       1,
-                       bias=True,
-                       activation=nn.ReLU()),
-            )
+            DenseLayer(self.sdim, self.sdim // 2, bias=True, activation=nn.SiLU()),
+            DenseLayer(self.sdim // 2, self.sdim // 4, bias=True, activation=nn.SiLU()),
+            DenseLayer(self.sdim // 4, 1, bias=True, activation=nn.ReLU()),
+        )
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -152,7 +156,10 @@ class HiddenEdgeDistanceMLP(nn.Module):
         pocket_mask: Tensor,
         ca_mask: Tensor,
     ) -> Dict:
-        s_ligand, s_pocket = x["s"][pocket_mask.squeeze()], x["s"][~pocket_mask.squeeze()]
+        s_ligand, s_pocket = (
+            x["s"][pocket_mask.squeeze()],
+            x["s"][~pocket_mask.squeeze()],
+        )
         # select c-alpha representatives
         batch_pocket = batch_pocket[ca_mask]
         s_pocket = s_pocket[ca_mask]
@@ -162,7 +169,8 @@ class HiddenEdgeDistanceMLP(nn.Module):
         s = s_ligand[l] + s_pocket[p]
         s = self.distance_mlp(s).squeeze(dim=-1)
         return s
-    
+
+
 class PropertyPredictionHead(nn.Module):
     def __init__(
         self,
@@ -209,6 +217,55 @@ class PropertyPredictionHead(nn.Module):
             s, v = layer(s, v)
         # include v in output to make sure all parameters have a gradient
         out = s + v.sum() * 0
+
+        return out
+
+
+class PropertyPredictionMLP(nn.Module):
+    def __init__(
+        self,
+        hn_dim: Tuple[int, int],
+        num_context_features: int,
+    ) -> None:
+        super(PropertyPredictionMLP, self).__init__()
+        self.sdim, self.vdim = hn_dim
+        self.num_context_features = num_context_features
+
+        self.scalar_mapping = DenseLayer(
+            self.sdim, self.sdim, bias=True, activation=nn.SiLU()
+        )
+        self.edge_mapping = DenseLayer(
+            self.sdim, self.sdim, bias=True, activation=nn.SiLU()
+        )
+        self.vector_mapping = DenseLayer(
+            in_features=self.vdim, out_features=1, bias=False
+        )
+        self.property_mapping = DenseLayer(
+            self.sdim, 1, bias=True, activation=nn.ReLU()
+        )
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.scalar_mapping.reset_parameters()
+        self.edge_mapping.reset_parameters()
+        self.vector_mapping.reset_parameters()
+        self.property_mapping.reset_parameters()
+
+    def forward(self, x: Dict, batch: Tensor, edge_index_global: Tensor) -> Dict:
+        s, v, p, e = x["s"], x["v"], x["p"], x["e"]
+        e = 0.5 * scatter_mean(
+            e,
+            index=edge_index_global[1],
+            dim=0,
+            dim_size=s.size(0),
+        )
+        s = self.scalar_mapping(s)
+        e = self.edge_mapping(e)
+        v = self.vector_mapping(v) + p.sum() * 0
+        v = torch.norm(v, dim=-1)
+
+        out = self.property_mapping(s + e + v)
 
         return out
 

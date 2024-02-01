@@ -1095,7 +1095,9 @@ def get_fingerprints_from_smileslist(smiles_list):
     return get_fingerprints(get_mols(smiles_list))
 
 
-def get_fingerprints(mols: Iterable[Chem.Mol], radius=2, length=4096):
+def get_fingerprints(
+    mols: Iterable[Chem.Mol], radius=2, length=4096, chiral=True, sanitize=False
+):
     """
     Converts molecules to ECFP bitvectors.
 
@@ -1106,7 +1108,18 @@ def get_fingerprints(mols: Iterable[Chem.Mol], radius=2, length=4096):
 
     Returns: a list of fingerprints
     """
-    return [AllChem.GetMorganFingerprintAsBitVect(m, radius, length) for m in mols]
+    if sanitize:
+        fps = []
+        for mol in mols:
+            Chem.SanitizeMol(mol)
+            fps.append(
+                AllChem.GetMorganFingerprintAsBitVect(
+                    mol, radius, length, useChirality=chiral
+                )
+            )
+    else:
+        fps = [AllChem.GetMorganFingerprintAsBitVect(m, radius, length) for m in mols]
+    return fps
 
 
 def get_rdkit_fingerprints(mols: Iterable[Chem.Mol]):
@@ -1290,3 +1303,8 @@ def processMols(mols):
 
         smiles = Chem.MolToSmiles(m)
         print(smiles + "\t" + m.GetProp("_Name") + "\t%3f" % s)
+
+
+def calculate_sascore(rdmol):
+    sa = calculateScore(rdmol)
+    return round((10 - sa) / 9, 2)

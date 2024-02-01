@@ -16,6 +16,7 @@ from rdkit.DataStructs import BulkTanimotoSimilarity, TanimotoSimilarity
 from torchmetrics import MaxMetric, MeanMetric
 from tqdm import tqdm
 
+from experiments.sampling.lipinski import lipinski_pass
 from experiments.sampling.utils import *
 from experiments.sampling.utils import calculateScore
 from experiments.utils import write_sdf_file
@@ -255,6 +256,7 @@ class BasicMolecularMetrics(object):
         calculate_statistics=True,
         calculate_distribution_statistics=True,
         filter_by_posebusters=False,
+        filter_by_lipinski=False,
         pdb_file=None,
     ):
         stable_molecules = []
@@ -299,7 +301,10 @@ class BasicMolecularMetrics(object):
             valid_smiles, valid_molecules = self.evaluate_posebusters(
                 valid_smiles, valid_molecules, pdb_file
             )
-
+        if filter_by_lipinski:
+            valid_smiles, valid_molecules = self.evaluate_lipinski(
+                valid_smiles, valid_molecules
+            )
         sanitize_validity = self.compute_sanitize_validity(molecules)
 
         novelty = novelty if isinstance(novelty, int) else novelty.item()
@@ -348,7 +353,16 @@ class BasicMolecularMetrics(object):
             mols = get_mols_list(valid_smiles)
             # rings = np.mean([num_rings(mol) for mol in mols])
             # aromatic_rings = np.mean([num_aromatic_rings(mol) for mol in mols])
-            qed, sa, logp, lipinski, diversity = self.evaluate_mean(mols)
+            (
+                qed,
+                sa,
+                logp,
+                molwt,
+                hacceptors,
+                hdonors,
+                lipinski,
+                diversity,
+            ) = self.evaluate_mean(mols)
         else:
             print("No valid smiles have been generated. Setting scores to -1")
             qed = -1.0
@@ -356,20 +370,31 @@ class BasicMolecularMetrics(object):
             logp = -1.0
             lipinski = -1.0
             diversity = -1.0
+            molwt = -1.0
+            hacceptors = -1.0
+            hdonors = -1.0
         if not calculate_statistics:
             statistics_dict = {"QED": qed}
         else:
             statistics_dict["QED"] = qed
         statistics_dict["SA"] = sa
         statistics_dict["LogP"] = logp
+        statistics_dict["MolWeight"] = molwt
+        statistics_dict["HAcceptors"] = hacceptors
+        statistics_dict["HDonors"] = hdonors
         statistics_dict["Lipinski"] = lipinski
         statistics_dict["Diversity"] = diversity
 
         if return_stats_per_molecule:
-            qed, sa, logp, lipinski = self.evaluate_per_mol(mols)
+            qed, sa, logp, molwt, hacceptors, hdonors, lipinski = self.evaluate_per_mol(
+                mols
+            )
             statistics_dict["QEDs"] = qed
             statistics_dict["SAs"] = sa
             statistics_dict["LogPs"] = logp
+            statistics_dict["MolWeight"] = molwt
+            statistics_dict["HAcceptors"] = hacceptors
+            statistics_dict["HDonors"] = hdonors
             statistics_dict["Lipinskis"] = lipinski
 
         self.reset()
@@ -586,6 +611,18 @@ class BasicMolecularMetrics(object):
     def calculate_logp(self, rdmol):
         return Crippen.MolLogP(rdmol)
 
+    def calculate_hdonors(self, rdmol):
+        num_hdonors = Lipinski.NumHDonors(rdmol)
+        return num_hdonors
+
+    def calculate_hacceptors(self, rdmol):
+        num_hacceptors = Lipinski.NumHAcceptors(rdmol)
+        return num_hacceptors
+
+    def calculate_molwt(self, rdmol):
+        mol_weight = Descriptors.MolWt(rdmol)
+        return mol_weight
+
     def calculate_lipinski(self, rdmol):
         rule_1 = Descriptors.ExactMolWt(rdmol) < 500
         rule_2 = Lipinski.NumHDonors(rdmol) <= 5
@@ -627,6 +664,9 @@ class BasicMolecularMetrics(object):
         qed = np.mean([self.calculate_qed(mol) for mol in rdmols])
         sa = np.mean([self.calculate_sa(mol) for mol in rdmols])
         logp = np.mean([self.calculate_logp(mol) for mol in rdmols])
+        molwt = np.mean([self.calculate_molwt(mol) for mol in rdmols])
+        hacceptors = np.mean([self.calculate_hacceptors(mol) for mol in rdmols])
+        hdonors = np.mean([self.calculate_hdonors(mol) for mol in rdmols])
         lipinski = np.mean([self.calculate_lipinski(mol) for mol in rdmols])
 
         if len(rdmols) > 1000:
@@ -634,7 +674,7 @@ class BasicMolecularMetrics(object):
         else:
             diversity = self.calculate_diversity(rdmols)
 
-        return qed, sa, logp, lipinski, diversity
+        return qed, sa, logp, molwt, hacceptors, hdonors, lipinski, diversity
 
     def evaluate_per_mol(self, rdmols):
         """
@@ -651,9 +691,12 @@ class BasicMolecularMetrics(object):
         qed = [self.calculate_qed(mol) for mol in rdmols]
         sa = [self.calculate_sa(mol) for mol in rdmols]
         logp = [self.calculate_logp(mol) for mol in rdmols]
+        molwt = [self.calculate_molwt(mol) for mol in rdmols]
+        hacceptors = [self.calculate_hacceptors(mol) for mol in rdmols]
+        hdonors = [self.calculate_hdonors(mol) for mol in rdmols]
         lipinski = [self.calculate_lipinski(mol) for mol in rdmols]
 
-        return qed, sa, logp, lipinski
+        return qed, sa, logp, molwt, hacceptors, hdonors, lipinski
 
     def evaluate_posebusters(self, smiles, rdmols, pdb_file):
         # PoseBusters
@@ -689,6 +732,22 @@ class BasicMolecularMetrics(object):
 
         return valid_smiles, valid_mols
 
+    def evaluate_lipinski(self, smiles, molecules):
+        valid_mols = []
+        valid_smiles = []
+
+        mols = get_mols_list(smiles)
+        for i, mol in enumerate(mols):
+            if lipinski_pass(mol):
+                valid_mols.append(molecules[i])
+                valid_smiles.append(smiles[i])
+
+        print(
+            f"{len(smiles) - len(valid_smiles)} of {len(smiles)} molecules failed PoseBusters check."
+        )
+
+        return valid_smiles, valid_mols
+
 
 def analyze_stability_for_molecules(
     molecule_list,
@@ -703,6 +762,7 @@ def analyze_stability_for_molecules(
     calculate_distribution_statistics=True,
     test=False,
     filter_by_posebusters=False,
+    filter_by_lipinski=False,
     pdb_file=None,
 ):
     metrics = BasicMolecularMetrics(
@@ -727,6 +787,7 @@ def analyze_stability_for_molecules(
         calculate_statistics=calculate_statistics,
         calculate_distribution_statistics=calculate_distribution_statistics,
         filter_by_posebusters=filter_by_posebusters,
+        filter_by_lipinski=filter_by_lipinski,
         pdb_file=pdb_file,
     )
 

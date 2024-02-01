@@ -30,9 +30,11 @@ from experiments.diffusion.utils import (
     energy_guidance,
     get_joint_edge_attrs,
     initialize_edge_attrs_reverse,
+    self_guidance,
 )
 from experiments.losses import DiffusionLoss
 from experiments.sampling.analyze import analyze_stability_for_molecules
+from experiments.sampling.utils import calculateScore
 from experiments.utils import (
     coalesce_edges,
     concat_ligand_pocket,
@@ -135,14 +137,16 @@ class Trainer(pl.LightningModule):
                 edge_mp=hparams["edge_mp"],
                 context_mapping=hparams["context_mapping"],
                 num_context_features=hparams["num_context_features"],
-                bond_prediction=hparams["bond_prediction"],
-                property_prediction=hparams["property_prediction"],
                 coords_param=hparams["continuous_param"],
                 use_pos_norm=hparams["use_pos_norm"],
+                ligand_pocket_interaction=hparams["ligand_pocket_interaction"],
                 store_intermediate_coords=hparams["store_intermediate_coords"],
                 distance_ligand_pocket=hparams["ligand_pocket_hidden_distance"]
                 if "ligand_pocket_hidden_distance" in hparams.keys()
                 else False,
+                bond_prediction=hparams["bond_prediction"],
+                property_prediction=hparams["property_prediction"],
+                joint_property_prediction=hparams["joint_property_prediction"],
             )
 
         self.sde_pos = DiscreteDDPM(
@@ -175,27 +179,30 @@ class Trainer(pl.LightningModule):
             enforce_zero_terminal_snr=False,
         )
 
-        self.cat_atoms = CategoricalDiffusionKernel(
-            terminal_distribution=atom_types_distribution,
-            alphas=self.sde_atom_charge.alphas.clone(),
-            num_atom_types=self.num_atom_types,
-            num_bond_types=self.num_bond_classes,
-            num_charge_types=self.num_charge_classes,
-        )
-        self.cat_bonds = CategoricalDiffusionKernel(
-            terminal_distribution=bond_types_distribution,
-            alphas=self.sde_bonds.alphas.clone(),
-            num_atom_types=self.num_atom_types,
-            num_bond_types=self.num_bond_classes,
-            num_charge_types=self.num_charge_classes,
-        )
-        self.cat_charges = CategoricalDiffusionKernel(
-            terminal_distribution=charge_types_distribution,
-            alphas=self.sde_atom_charge.alphas.clone(),
-            num_atom_types=self.num_atom_types,
-            num_bond_types=self.num_bond_classes,
-            num_charge_types=self.num_charge_classes,
-        )
+        if not self.hparams.atoms_continuous:
+            self.cat_atoms = CategoricalDiffusionKernel(
+                terminal_distribution=atom_types_distribution,
+                alphas=self.sde_atom_charge.alphas.clone(),
+                num_atom_types=self.num_atom_types,
+                num_bond_types=self.num_bond_classes,
+                num_charge_types=self.num_charge_classes,
+            )
+            self.cat_charges = CategoricalDiffusionKernel(
+                terminal_distribution=charge_types_distribution,
+                alphas=self.sde_atom_charge.alphas.clone(),
+                num_atom_types=self.num_atom_types,
+                num_bond_types=self.num_bond_classes,
+                num_charge_types=self.num_charge_classes,
+            )
+
+        if not self.hparams.bonds_continuous:
+            self.cat_bonds = CategoricalDiffusionKernel(
+                terminal_distribution=bond_types_distribution,
+                alphas=self.sde_bonds.alphas.clone(),
+                num_atom_types=self.num_atom_types,
+                num_bond_types=self.num_bond_classes,
+                num_charge_types=self.num_charge_classes,
+            )
 
         self.diffusion_loss = DiffusionLoss(
             modalities=["coords", "atoms", "charges", "bonds"],
@@ -372,6 +379,7 @@ class Trainer(pl.LightningModule):
         atoms_loss,
         charges_loss,
         bonds_loss,
+        properties_loss,
         dloss,
         batch_size,
         stage,
@@ -415,6 +423,15 @@ class Trainer(pl.LightningModule):
         self.log(
             f"{stage}/bonds_loss",
             bonds_loss,
+            on_step=True,
+            batch_size=batch_size,
+            prog_bar=(stage == "train"),
+            sync_dist=self.hparams.gpus > 1 and stage == "val",
+        )
+
+        self.log(
+            f"{stage}/properties_loss",
+            properties_loss,
             on_step=True,
             batch_size=batch_size,
             prog_bar=(stage == "train"),
@@ -478,6 +495,9 @@ class Trainer(pl.LightningModule):
             "atoms": out_dict["atoms_true"],
             "charges": out_dict["charges_true"],
             "bonds": out_dict["bonds_true"],
+            "properties": out_dict["properties_true"]
+            if self.hparams.joint_property_prediction
+            else None,
         }
 
         coords_pred = out_dict["coords_pred"]
@@ -486,12 +506,18 @@ class Trainer(pl.LightningModule):
             [self.num_atom_types, self.num_charge_classes], dim=-1
         )
         edges_pred = out_dict["bonds_pred"]
+        prop_pred = (
+            out_dict["property_pred"].squeeze()
+            if self.hparams.joint_property_prediction
+            else None
+        )
 
         pred_data = {
             "coords": coords_pred,
             "atoms": atoms_pred,
             "charges": charges_pred,
             "bonds": edges_pred,
+            "properties": prop_pred,
         }
 
         loss = self.diffusion_loss(
@@ -509,6 +535,7 @@ class Trainer(pl.LightningModule):
             + self.hparams.lc_atoms * loss["atoms"]
             + self.hparams.lc_bonds * loss["bonds"]
             + self.hparams.lc_charges * loss["charges"]
+            + self.hparams.lc_properties * loss["properties"]
         )
 
         # if self.training:
@@ -560,6 +587,7 @@ class Trainer(pl.LightningModule):
             loss["atoms"],
             loss["charges"],
             loss["bonds"],
+            loss["properties"],
             dloss,
             batch_size,
             stage,
@@ -602,25 +630,46 @@ class Trainer(pl.LightningModule):
             remove_mean=False,
         )
 
-        atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
-            t,
-            atom_types,
-            data_batch,
-            self.dataset_info,
-            num_classes=self.num_atom_types,
-            type="atoms",
-        )
-        charges, charges_perturbed = self.cat_charges.sample_categorical(
-            t,
-            charges,
-            data_batch,
-            self.dataset_info,
-            num_classes=self.num_charge_classes,
-            type="charges",
-        )
-        import pdb
+        if not self.hparams.atoms_continuous:
+            atom_types, atom_types_perturbed = self.cat_atoms.sample_categorical(
+                t,
+                atom_types,
+                data_batch,
+                self.dataset_info,
+                num_classes=self.num_atom_types,
+                type="atoms",
+            )
+            charges, charges_perturbed = self.cat_charges.sample_categorical(
+                t,
+                charges,
+                data_batch,
+                self.dataset_info,
+                num_classes=self.num_charge_classes,
+                type="charges",
+            )
+        else:
+            atom_types = F.one_hot(atom_types, num_classes=self.num_atom_types).float()
+            if self.hparams.continuous_param == "noise":
+                atom_types = 0.25 * atom_types
 
-        pdb.set_trace()
+            # sample noise for OHEs in {0, 1}^NUM_CLASSES
+            noise_atom_types = torch.randn_like(atom_types)
+            mean_ohes, std_ohes = self.sde_atom_charge.marginal_prob(
+                x=atom_types, t=t[data_batch]
+            )
+            # perturb OHEs
+            atom_types_perturbed = mean_ohes + std_ohes * noise_atom_types
+
+            # Charges
+            charges = self.dataset_info.one_hot_charges(charges).float()
+            # sample noise for OHEs in {0, 1}^NUM_CLASSES
+            noise_charges = torch.randn_like(charges)
+            mean_ohes, std_ohes = self.sde_atom_charge.marginal_prob(
+                x=charges, t=t[data_batch]
+            )
+            # perturb OHEs
+            charges_perturbed = mean_ohes + std_ohes * noise_charges
+
         atom_types_pocket = F.one_hot(
             atom_types_pocket.squeeze().long(), num_classes=self.num_atom_types
         ).float()
@@ -650,17 +699,57 @@ class Trainer(pl.LightningModule):
             edge_attr=edge_attr_global_lig,
             sort_by_row=False,
         )
-        edge_attr_global_perturbed_lig = (
-            self.cat_bonds.sample_edges_categorical(
-                t,
-                edge_index_global_lig,
-                edge_attr_global_lig,
-                data_batch,
-                return_one_hot=True,
+
+        if self.hparams.bonds_continuous:
+            n = len(pos)
+            # create block diagonal matrix
+            dense_edge = torch.zeros(n, n, device=self.device, dtype=torch.long)
+            # populate entries with integer features
+            dense_edge[
+                edge_index_global_lig[0, :], edge_index_global_lig[1, :]
+            ] = edge_attr_global_lig
+            dense_edge_ohe = (
+                F.one_hot(dense_edge.view(-1, 1), num_classes=BOND_FEATURE_DIMS + 1)
+                .view(n, n, -1)
+                .float()
             )
-            if not self.hparams.bond_prediction
-            else None
-        )
+
+            assert (
+                torch.norm(dense_edge_ohe - dense_edge_ohe.permute(1, 0, 2)).item()
+                == 0.0
+            )
+
+            # create symmetric noise for edge-attributes
+            noise_edges = torch.randn_like(dense_edge_ohe)
+            noise_edges = 0.5 * (noise_edges + noise_edges.permute(1, 0, 2))
+            assert torch.norm(noise_edges - noise_edges.permute(1, 0, 2)).item() == 0.0
+
+            signal = self.sde_bonds.sqrt_alphas_cumprod[t]
+            std = self.sde_bonds.sqrt_1m_alphas_cumprod[t]
+
+            signal_b = signal[data_batch].unsqueeze(-1).unsqueeze(-1)
+            std_b = std[data_batch].unsqueeze(-1).unsqueeze(-1)
+            dense_edge_ohe_perturbed = dense_edge_ohe * signal_b + noise_edges * std_b
+
+            # retrieve as edge-attributes in PyG Format
+            edge_attr_global_perturbed_lig = dense_edge_ohe_perturbed[
+                edge_index_global_lig[0, :], edge_index_global_lig[1, :], :
+            ]
+            edge_attr_global_noise = noise_edges[
+                edge_index_global_lig[0, :], edge_index_global_lig[1, :], :
+            ]
+        else:
+            edge_attr_global_perturbed_lig = (
+                self.cat_bonds.sample_edges_categorical(
+                    t,
+                    edge_index_global_lig,
+                    edge_attr_global_lig,
+                    data_batch,
+                    return_one_hot=True,
+                )
+                if not self.hparams.bond_prediction
+                else None
+            )
         (
             edge_index_global,
             edge_attr_global_perturbed,
@@ -721,49 +810,23 @@ class Trainer(pl.LightningModule):
             batch_pocket=batch.pos_pocket_batch,
         )
 
-        # if self.training and self.trainer.current_epoch > 40:
-        #     inp = {
-        #         "coords": pos_centered,
-        #         "atoms": atom_types,
-        #         "charges": charges,
-        #         "edges": edge_attr_global_lig,
-        #     }
-        #     molecules = get_inp_molecules(
-        #         inp,
-        #         data_batch,
-        #         edge_index_global_lig,
-        #         self.dataset_info,
-        #         device=self.device,
-        #         mol_device="cpu",
-        #         context=context,
-        #     )
-        #     molecules_sampled = get_molecules(
-        #         out,
-        #         data_batch,
-        #         edge_index_global_lig,
-        #         self.num_atom_types,
-        #         self.num_charge_classes,
-        #         self.dataset_info,
-        #         device=self.device,
-        #         mol_device="cpu",
-        #         context=context,
-        #         while_train=True,
-        #     )
-        #     torch.save(molecules, "/scratch1/tmp/molecules.pt")
-        #     torch.save(molecules_sampled, "/scratch1/tmp/molecules_sampled.pt")
-        #     if self.local_rank == 0:
-        #         import pdb
-
-        #         pdb.set_trace()
-
         # Ground truth masking
         out["coords_true"] = pos_centered
         out["coords_noise_true"] = noise_coords_true
+        if self.hparams.atoms_continuous:
+            out["atoms_noise_true"] = noise_atom_types
+            out["charges_noise_true"] = noise_charges
         out["atoms_true"] = atom_types.argmax(dim=-1)
         out["bonds_true"] = edge_attr_global_lig
         out["charges_true"] = charges.argmax(dim=-1)
-
         out["bond_aggregation_index"] = edge_index_global_lig[1]
+        if self.hparams.joint_property_prediction:
+            label = torch.tensor([calculateScore(mol) for mol in batch.mol]).to(
+                self.device
+            )
+            out["properties_true"] = label
+        if self.hparams.bonds_continuous:
+            out["bonds_noise_true"] = edge_attr_global_noise
 
         if self.hparams.ligand_pocket_distance_loss:
             # Protein Pocket Coords for Distance Loss computation
@@ -926,24 +989,41 @@ class Trainer(pl.LightningModule):
         fix_n_nodes=False,
         vary_n_nodes=False,
         n_nodes_bias=0,
+        property_self_guidance=False,
+        guidance_scale=None,
         build_obabel_mol=False,
         save_dir=None,
     ):
-        pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(0)
-        num_nodes_lig = (
-            self.conditional_size_distribution.sample_conditional(
-                n1=None, n2=pocket_size
-            )
-            .repeat(num_graphs)
-            .to(self.device)
-        )
-        if not fix_n_nodes:
+        if fix_n_nodes:
+            num_nodes_lig = pocket_data.batch.bincount().to(self.device)
             if vary_n_nodes:
                 num_nodes_lig += torch.randint(
                     low=0, high=n_nodes_bias, size=num_nodes_lig.size()
                 ).to(self.device)
             else:
                 num_nodes_lig += n_nodes_bias
+        else:
+            try:
+                pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(0)
+                num_nodes_lig = (
+                    self.conditional_size_distribution.sample_conditional(
+                        n1=None, n2=pocket_size
+                    )
+                    .repeat(num_graphs)
+                    .to(self.device)
+                )
+            except Exception:
+                print(
+                    "Could not retrieve ligand size from the conditional size distribution given the pocket size. Taking the ground truth size."
+                )
+                num_nodes_lig = pocket_data.batch.bincount().to(self.device)
+            if vary_n_nodes:
+                num_nodes_lig += torch.randint(
+                    low=0, high=n_nodes_bias, size=num_nodes_lig.size()
+                ).to(self.device)
+            else:
+                num_nodes_lig += n_nodes_bias
+
         molecules = self.reverse_sampling(
             num_graphs=num_graphs,
             num_nodes_lig=num_nodes_lig,
@@ -953,7 +1033,8 @@ class Trainer(pl.LightningModule):
             ddpm=ddpm,
             eta_ddim=eta_ddim,
             every_k_step=every_k_step,
-            guidance_scale=None,
+            property_self_guidance=property_self_guidance,
+            guidance_scale=guidance_scale,
             energy_model=None,
             relax_mol=relax_mol,
             max_relax_iter=max_relax_iter,
@@ -973,6 +1054,7 @@ class Trainer(pl.LightningModule):
         ddpm: bool = True,
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
+        property_self_guidance: bool = False,
         guidance_scale: float = 1.0e-4,
         energy_model=None,
         save_dir: str = None,
@@ -991,6 +1073,10 @@ class Trainer(pl.LightningModule):
         )
         bs = int(batch.max()) + 1
 
+        if property_self_guidance:
+            t = torch.arange(0, self.hparams.timesteps)
+            alphas = self.sde_pos.alphas_cumprod[t]
+
         # sample context condition
         context = None
         if self.prop_dist is not None:
@@ -1008,48 +1094,86 @@ class Trainer(pl.LightningModule):
 
         n = len(pos)
 
-        # initialize the atom-types
-        atom_types = torch.multinomial(
-            self.atoms_prior, num_samples=n, replacement=True
-        )
-        atom_types = F.one_hot(atom_types, self.num_atom_types).float()
+        if not self.hparams.atoms_continuous:
+            # initialize the atom- and charge types
+            atom_types = torch.multinomial(
+                self.atoms_prior, num_samples=n, replacement=True
+            )
+            atom_types = F.one_hot(atom_types, self.num_atom_types).float()
+
+            charge_types = torch.multinomial(
+                self.charges_prior, num_samples=n, replacement=True
+            )
+            charge_types = F.one_hot(charge_types, self.num_charge_classes).float()
+        else:
+            # initialize the atom- and charge types
+            atom_types = torch.randn(
+                pos.size(0), self.num_atom_types, device=self.device
+            )
+            charge_types = torch.randn(
+                pos.size(0), self.num_charge_classes, device=self.device
+            )
+
         atom_types_pocket = F.one_hot(
             x_pocket.squeeze().long(), num_classes=self.num_atom_types
         ).float()
-
-        charge_types = torch.multinomial(
-            self.charges_prior, num_samples=n, replacement=True
-        )
-        charge_types = F.one_hot(charge_types, self.num_charge_classes).float()
         charges_pocket = torch.zeros(
             pos_pocket.shape[0], charge_types.shape[1], dtype=torch.float32
         ).to(self.device)
 
-        # edge_index_local = radius_graph(x=pos,
-        #                                r=self.hparams.cutoff_local,
-        #                                batch=batch,
-        #                                max_num_neighbors=self.hparams.max_num_neighbors)
-        edge_index_local = None
-        edge_index_global = (
-            torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1)).int().fill_diagonal_(0)
-        )
-        edge_index_global, _ = dense_to_sparse(edge_index_global)
-        edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
-        if not self.hparams.bond_prediction:
-            (
-                edge_attr_global_lig,
-                edge_index_global_lig,
-                mask,
-                mask_i,
-            ) = initialize_edge_attrs_reverse(
-                edge_index_global,
-                n,
-                self.bonds_prior,
-                self.num_bond_classes,
-                self.device,
+        if self.hparams.bonds_continuous:
+            edge_index_local = None
+            edge_index_global_lig = (
+                torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1))
+                .int()
+                .fill_diagonal_(0)
             )
+            # sample symmetric edge-attributes
+            edge_attrs = torch.randn(
+                (
+                    edge_index_global_lig.size(0),
+                    edge_index_global_lig.size(1),
+                    self.num_bond_classes,
+                ),
+                device=self.device,
+                dtype=torch.get_default_dtype(),
+            )
+            # symmetrize
+            edge_attrs = 0.5 * (edge_attrs + edge_attrs.permute(1, 0, 2))
+            assert torch.norm(edge_attrs - edge_attrs.permute(1, 0, 2)).item() == 0.0
+            # get COO format (2, E)
+            edge_index_global_lig, _ = dense_to_sparse(edge_index_global_lig)
+            edge_index_global_lig = sort_edge_index(
+                edge_index_global_lig, sort_by_row=False
+            )
+            # select in PyG formt (E, self.hparams.num_bond_types)
+            edge_attr_global_lig = edge_attrs[
+                edge_index_global_lig[0, :], edge_index_global_lig[1, :], :
+            ]
         else:
-            edge_attr_global = None
+            edge_index_local = None
+            edge_index_global = (
+                torch.eq(batch.unsqueeze(0), batch.unsqueeze(-1))
+                .int()
+                .fill_diagonal_(0)
+            )
+            edge_index_global, _ = dense_to_sparse(edge_index_global)
+            edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
+            if not self.hparams.bond_prediction:
+                (
+                    edge_attr_global_lig,
+                    edge_index_global_lig,
+                    mask,
+                    mask_i,
+                ) = initialize_edge_attrs_reverse(
+                    edge_index_global,
+                    n,
+                    self.bonds_prior,
+                    self.num_bond_classes,
+                    self.device,
+                )
+            else:
+                edge_attr_global = None
 
         (
             edge_index_global,
@@ -1140,6 +1264,31 @@ class Trainer(pl.LightningModule):
                     pos = self.sde_pos.sample_reverse_adaptive(
                         s, t, pos, coords_pred, batch, cog_proj=False, eta_ddim=eta_ddim
                     )  # here is cog_proj false as it will be downprojected later
+                    if self.hparams.atoms_continuous:
+                        atom_types = self.sde_atom_charge.sample_reverse_adaptive(
+                            s,
+                            t,
+                            atom_types,
+                            atoms_pred,
+                            batch,
+                        )
+                        charge_types = self.sde_atom_charge.sample_reverse_adaptive(
+                            s,
+                            t,
+                            charge_types,
+                            charges_pred,
+                            batch,
+                        )
+                    if self.hparams.bonds_continuous:
+                        edge_attr_global_lig = self.sde_bonds.sample_reverse_adaptive(
+                            s,
+                            t,
+                            edge_attr_global_lig,
+                            edges_pred,
+                            batch_edge_global,
+                            edge_attrs=edge_attrs,
+                            edge_index_global=edge_index_global_lig,
+                        )
                 else:
                     # positions
                     pos = self.sde_pos.sample_reverse(
@@ -1150,22 +1299,23 @@ class Trainer(pl.LightningModule):
                     t, pos, coords_pred, batch, cog_proj=False, eta_ddim=eta_ddim
                 )  # here is cog_proj false as it will be downprojected later
 
-            # atoms
-            atom_types = self.cat_atoms.sample_reverse_categorical(
-                xt=atom_types,
-                x0=atoms_pred,
-                t=t[batch],
-                num_classes=self.num_atom_types,
-            )
-            # charges
-            charge_types = self.cat_charges.sample_reverse_categorical(
-                xt=charge_types,
-                x0=charges_pred,
-                t=t[batch],
-                num_classes=self.num_charge_classes,
-            )
+            if not self.hparams.atoms_continuous:
+                # atoms
+                atom_types = self.cat_atoms.sample_reverse_categorical(
+                    xt=atom_types,
+                    x0=atoms_pred,
+                    t=t[batch],
+                    num_classes=self.num_atom_types,
+                )
+                # charges
+                charge_types = self.cat_charges.sample_reverse_categorical(
+                    xt=charge_types,
+                    x0=charges_pred,
+                    t=t[batch],
+                    num_classes=self.num_charge_classes,
+                )
             # edges
-            if not self.hparams.bond_prediction:
+            if not self.hparams.bonds_continuous:
                 (
                     edge_attr_global_lig,
                     edge_index_global_lig,
@@ -1181,9 +1331,6 @@ class Trainer(pl.LightningModule):
                     edge_index_global=edge_index_global_lig,
                     num_classes=self.num_bond_classes,
                 )
-            else:
-                edge_attr_global_lig = edges_pred
-
             (
                 edge_index_global,
                 edge_attr_global,
@@ -1199,24 +1346,60 @@ class Trainer(pl.LightningModule):
                 self.num_bond_classes,
                 self.device,
             )
-            # pos, pos_pocket = remove_mean_pocket(pos, pos_pocket, batch, batch_pocket)
-            (
-                pos_joint,
-                atom_types_joint,
-                charge_types_joint,
-                batch_full,
-                pocket_mask,
-            ) = concat_ligand_pocket(
-                pos,
-                pos_pocket,
-                atom_types,
-                atom_types_pocket,
-                charge_types,
-                charges_pocket,
-                batch,
-                batch_pocket,
-                sorting=False,
-            )
+            if property_self_guidance:
+                signal = 1.0  # alphas[timestep] / (guidance_scale * 10)
+                (
+                    pos_joint,
+                    atom_types_joint,
+                    charge_types_joint,
+                    batch_full,
+                    pocket_mask,
+                ) = self_guidance(
+                    model=self.model,
+                    pos=pos,
+                    pos_pocket=pos_pocket,
+                    atom_types=atom_types,
+                    atom_types_pocket=atom_types_pocket,
+                    charge_types=charge_types,
+                    charges_pocket=charges_pocket,
+                    edge_index_global=edge_index_global,
+                    edge_index_global_lig=edge_index_global_lig,
+                    edge_attr_global=edge_attr_global,
+                    batch=batch,
+                    batch_pocket=batch_pocket,
+                    batch_full=batch_full,
+                    batch_edge_global=batch_edge_global,
+                    batch_size=bs,
+                    pocket_mask=pocket_mask,
+                    edge_mask=edge_mask,
+                    edge_mask_pocket=edge_mask_pocket,
+                    ca_mask=pocket_data.pocket_ca_mask.to(batch.device),
+                    num_atom_types=self.num_atom_types,
+                    temb=temb,
+                    context=context,
+                    signal=signal,
+                    guidance_scale=guidance_scale,
+                    optimization="maximize",
+                )
+            else:
+                # pos, pos_pocket = remove_mean_pocket(pos, pos_pocket, batch, batch_pocket)
+                (
+                    pos_joint,
+                    atom_types_joint,
+                    charge_types_joint,
+                    batch_full,
+                    pocket_mask,
+                ) = concat_ligand_pocket(
+                    pos,
+                    pos_pocket,
+                    atom_types,
+                    atom_types_pocket,
+                    charge_types,
+                    charges_pocket,
+                    batch,
+                    batch_pocket,
+                    sorting=False,
+                )
 
             if save_traj:
                 atom_decoder = self.dataset_info.atom_decoder

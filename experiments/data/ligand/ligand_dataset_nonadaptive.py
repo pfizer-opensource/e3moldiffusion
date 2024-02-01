@@ -186,8 +186,11 @@ class LigandPocketDataset(InMemoryDataset):
                 if k == "pocket_one_hot":
                     pocket_one_hot_mask = data["pocket_mask"][data["pocket_ca_mask"]]
                     sections = np.where(np.diff(pocket_one_hot_mask))[0] + 1
-                    mol_data["pocket_one_hot_mask"] = [torch.from_numpy(x) for x in np.split(pocket_one_hot_mask, sections)]
-                    
+                    mol_data["pocket_one_hot_mask"] = [
+                        torch.from_numpy(x)
+                        for x in np.split(pocket_one_hot_mask, sections)
+                    ]
+
                 mol_data[k] = [torch.from_numpy(x) for x in np.split(v, sections)]
             # add number of nodes for convenience
             if k == "lig_mask":
@@ -215,19 +218,21 @@ class LigandPocketDataset(InMemoryDataset):
             pocket_one_hot,
             pocket_one_hot_mask,
         ) in enumerate(
-            tqdm(zip(
-                mol_data["lig_mol"],
-                mol_data["lig_coords"],
-                mol_data["lig_atom"],
-                mol_data["lig_mask"],
-                mol_data["pocket_coords"],
-                mol_data["pocket_atom"],
-                mol_data["pocket_mask"],
-                mol_data["pocket_ca_mask"],
-                mol_data["pocket_one_hot"],
-                mol_data["pocket_one_hot_mask"],
-            ),
-                 total=len(mol_data["lig_mol"]))
+            tqdm(
+                zip(
+                    mol_data["lig_mol"],
+                    mol_data["lig_coords"],
+                    mol_data["lig_atom"],
+                    mol_data["lig_mask"],
+                    mol_data["pocket_coords"],
+                    mol_data["pocket_atom"],
+                    mol_data["pocket_mask"],
+                    mol_data["pocket_ca_mask"],
+                    mol_data["pocket_one_hot"],
+                    mol_data["pocket_one_hot_mask"],
+                ),
+                total=len(mol_data["lig_mol"]),
+            )
         ):
             try:
                 # atom_types = [atom_decoder[int(a)] for a in atoms_lig]

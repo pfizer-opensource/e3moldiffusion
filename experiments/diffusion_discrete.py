@@ -1416,8 +1416,6 @@ class Trainer(pl.LightningModule):
                     path=os.path.join(save_dir, f"iter_{iteration}"),
                     i=i,
                 )
-
-                atom_decoder = self.dataset_info.atom_decoder
                 write_xyz_file_from_batch(
                     pos_perturbed_trans,
                     atom_types_perturbed,

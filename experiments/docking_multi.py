@@ -14,6 +14,7 @@ from rdkit import Chem
 from tqdm import tqdm
 
 from experiments.data.ligand.process_pdb import get_pdb_components, write_pdb
+from experiments.data.reconstruct_ob import reconstruct_from_generated
 from experiments.data.utils import save_pickle
 from experiments.utils import retrieve_interactions_per_mol, split_list, write_sdf_file
 
@@ -140,7 +141,6 @@ def calculate_qvina2_score(
         ligand_pdbqt_file.unlink()
 
         if "-----+------------+----------+----------" not in out:
-            scores.append(np.nan)
             continue
 
         out_split = out.splitlines()
@@ -158,6 +158,7 @@ def calculate_qvina2_score(
             out_pdbqt_file.unlink()
 
         rdmol = Chem.SDMolSupplier(str(out_sdf_file))[0]
+
         if rdmol is None:
             continue
         rdmols.append(rdmol)

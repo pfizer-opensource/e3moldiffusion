@@ -111,10 +111,11 @@ def aggregate(args):
     print(f"Mean PoseCheck metrics across all sampled ligands: {posecheck_dict}")
 
     num_sdf_files = len(glob(os.path.join(args.files_dir, f"{name}/*.sdf")))
+    num_samples = len(violin_dict[list(violin_dict.keys())[0]])
     print(
-        f"Found {num_sdf_files} sdf files in {os.path.join(args.files_dir, f'{name}')}. \
-            Check if that matches with 'num_ligands_per_pocket' specified in sampling."
+        f"Found {num_sdf_files} sdf files in {os.path.join(args.files_dir, f'{name}')}. Check if that matches with 'num_ligands_per_pocket' specified in sampling."
     )
+    print(f"Found {num_samples} ligands overall.")
     print(f"All files saved at {args.files_dir}.")
 
 
