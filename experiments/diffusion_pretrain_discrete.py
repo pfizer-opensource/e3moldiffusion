@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
+import numpy as np
 
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
@@ -15,6 +16,12 @@ from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.losses import DiffusionLoss
 from experiments.utils import coalesce_edges, dropout_node, zero_mean
+from rdkit import Chem
+from rdkit.Chem import RDConfig
+import os
+import sys
+sys.path.append(os.path.join(RDConfig.RDContribDir, 'SA_Score'))
+import sascorer
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(
@@ -102,7 +109,15 @@ class Trainer(pl.LightningModule):
             bond_prediction=hparams["bond_prediction"],
             property_prediction=hparams["property_prediction"],
             coords_param=hparams["continuous_param"],
-        )
+            use_pos_norm=hparams["use_pos_norm"],
+            model_synth=hparams["model_synth"],
+            ligand_pocket_interaction=hparams["ligand_pocket_interaction"]
+            )
+            
+        if hparams["model_synth"]:
+            self.bce_loss = torch.nn.BCELoss(reduction="none")
+        else:
+            self.bce_loss = None
 
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -234,6 +249,13 @@ class Trainer(pl.LightningModule):
             + 2.0 * loss["bonds"]
             + 1.0 * loss["charges"]
         )
+        
+        if self.hparams.model_synth:
+            sa_loss = self.bce_loss(out_dict["synth_pred"].squeeze(dim=-1), out_dict["synth_true"].squeeze(dim=-1))
+            sa_loss = torch.mean(weights * sa_loss)
+            final_loss = final_loss + sa_loss
+        else:
+            sa_loss = None
 
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
@@ -246,6 +268,7 @@ class Trainer(pl.LightningModule):
             loss["atoms"],
             loss["charges"],
             loss["bonds"],
+            sa_loss,
             bs,
             stage,
         )
@@ -266,6 +289,14 @@ class Trainer(pl.LightningModule):
             edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
         )
 
+        if self.hparams.model_synth:
+            sascore = np.array([sascorer.calculateScore(Chem.RemoveHs(mol)) for mol in batch.mol])
+            sascore = (sascore - 1.0) / (10.0 - 1.0)
+            sascore = 1.0 - sascore
+            sascore = torch.from_numpy(sascore).float().to(pos.device)
+        else:
+            sascore = None
+            
         t = torch.randint(
             low=1,
             high=self.hparams.timesteps + 1,
@@ -363,11 +394,12 @@ class Trainer(pl.LightningModule):
         out["charges_true"] = charges.argmax(dim=-1)
 
         out["bond_aggregation_index"] = edge_index_global[1]
+        out['synth_true'] = sascore
 
         return out, t, bs
 
     def _log(
-        self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, batch_size, stage
+        self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, sa_loss, batch_size, stage
     ):
         self.log(
             f"{stage}/loss",
@@ -414,6 +446,16 @@ class Trainer(pl.LightningModule):
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
 
+        if sa_loss is not None:
+            self.log(
+                f"{stage}/synth_loss",
+                sa_loss,
+                on_step=True,
+                batch_size=batch_size,
+                prog_bar=(stage == "train"),
+                sync_dist=self.hparams.gpus > 1 and stage == "val",
+            )
+                
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             self.model.parameters(),

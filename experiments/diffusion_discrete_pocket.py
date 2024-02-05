@@ -14,6 +14,14 @@ from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from torch_scatter import scatter_mean
 from tqdm import tqdm
 
+import numpy as np
+from rdkit import Chem
+from rdkit.Chem import RDConfig
+import os
+import sys
+sys.path.append(os.path.join(RDConfig.RDContribDir, 'SA_Score'))
+import sascorer
+
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.data.abstract_dataset import AbstractDatasetInfos
@@ -22,6 +30,7 @@ from experiments.data.utils import (
     write_trajectory_as_xyz,
     write_xyz_file,
     write_xyz_file_from_batch,
+    get_fc_edge_index_with_offset,
 )
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
@@ -143,8 +152,15 @@ class Trainer(pl.LightningModule):
                 distance_ligand_pocket=hparams["ligand_pocket_hidden_distance"]
                 if "ligand_pocket_hidden_distance" in hparams.keys()
                 else False,
+                model_synth=hparams["model_synth"],
+                ligand_pocket_interaction=hparams["ligand_pocket_interaction"]
             )
-
+            
+        if hparams["model_synth"]:
+            self.bce_loss = torch.nn.BCELoss(reduction="none")
+        else:
+            self.bce_loss = None
+            
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
             beta_max=hparams["beta_max"],
@@ -373,6 +389,7 @@ class Trainer(pl.LightningModule):
         charges_loss,
         bonds_loss,
         dloss,
+        synth_loss,
         batch_size,
         stage,
     ):
@@ -425,6 +442,15 @@ class Trainer(pl.LightningModule):
             self.log(
                 f"{stage}/d_loss",
                 dloss,
+                on_step=True,
+                batch_size=batch_size,
+                prog_bar=(stage == "train"),
+                sync_dist=self.hparams.gpus > 1 and stage == "val",
+            )
+        if synth_loss is not None:
+            self.log(
+                f"{stage}/synth_loss",
+                synth_loss,
                 on_step=True,
                 batch_size=batch_size,
                 prog_bar=(stage == "train"),
@@ -510,6 +536,13 @@ class Trainer(pl.LightningModule):
             + self.hparams.lc_bonds * loss["bonds"]
             + self.hparams.lc_charges * loss["charges"]
         )
+        
+        if self.hparams.model_synth:
+            sa_loss = self.bce_loss(out_dict["synth_pred"].squeeze(dim=-1), out_dict["synth_true"].squeeze(dim=-1))
+            sa_loss = torch.mean(weights * sa_loss)
+            final_loss = final_loss + sa_loss
+        else:
+            sa_loss = None
 
         # if self.training:
         #     final_loss.backward()
@@ -561,6 +594,7 @@ class Trainer(pl.LightningModule):
             loss["charges"],
             loss["bonds"],
             dloss,
+            sa_loss,
             batch_size,
             stage,
         )
@@ -581,6 +615,14 @@ class Trainer(pl.LightningModule):
         bond_edge_index, bond_edge_attr = sort_edge_index(
             edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
         )
+        
+        if self.hparams.model_synth:
+            sascore = np.array([sascorer.calculateScore(Chem.RemoveHs(mol)) for mol in batch.mol])
+            sascore = (sascore - 1.0) / (10.0 - 1.0)
+            sascore = 1.0 - sascore
+            sascore = torch.from_numpy(sascore).float().to(pos.device)
+        else:
+            sascore = None
 
         # TIME EMBEDDING
         temb = t.float() / self.hparams.timesteps
@@ -618,9 +660,6 @@ class Trainer(pl.LightningModule):
             num_classes=self.num_charge_classes,
             type="charges",
         )
-        import pdb
-
-        pdb.set_trace()
         atom_types_pocket = F.one_hot(
             atom_types_pocket.squeeze().long(), num_classes=self.num_atom_types
         ).float()
@@ -775,6 +814,7 @@ class Trainer(pl.LightningModule):
                 "pos_centered_pocket": pos_centered_pocket[batch.pocket_ca_mask],
                 "edge_index_cross": adj_cross,
             }
+        out['synth_true'] = sascore
         return out
 
     @torch.no_grad()
@@ -928,22 +968,40 @@ class Trainer(pl.LightningModule):
         n_nodes_bias=0,
         build_obabel_mol=False,
         save_dir=None,
-    ):
-        pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(0)
-        num_nodes_lig = (
-            self.conditional_size_distribution.sample_conditional(
-                n1=None, n2=pocket_size
+        importance_sampling: bool = False,
+        tau: float = 0.1,
+        every_importance_t: int = 5,
+        importance_sampling_start: int = 0,
+        importance_sampling_end: int = 200,
+        maximize_score: bool = True,
+        ground_truth_size: int = False
+    ):  
+        
+        if ground_truth_size:
+            num_nodes_lig = pocket_data.num_nodes_ligand
+        else:
+            pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(0)
+            num_nodes_lig = (
+                self.conditional_size_distribution.sample_conditional(
+                    n1=None, n2=pocket_size
+                )
+                .repeat(num_graphs)
+                .to(self.device)
             )
-            .repeat(num_graphs)
-            .to(self.device)
-        )
-        if not fix_n_nodes:
-            if vary_n_nodes:
-                num_nodes_lig += torch.randint(
-                    low=0, high=n_nodes_bias, size=num_nodes_lig.size()
+                       
+        if vary_n_nodes:
+            num_nodes_lig += torch.randint(
+                low=-5, high=10, size=num_nodes_lig.size()
                 ).to(self.device)
-            else:
-                num_nodes_lig += n_nodes_bias
+            
+        #if not fix_n_nodes:
+        #    if vary_n_nodes:
+        #        num_nodes_lig += torch.randint(
+        #            low=0, high=n_nodes_bias, size=num_nodes_lig.size()
+        #        ).to(self.device)
+        #    else:
+        #        num_nodes_lig += n_nodes_bias
+                
         molecules = self.reverse_sampling(
             num_graphs=num_graphs,
             num_nodes_lig=num_nodes_lig,
@@ -960,9 +1018,126 @@ class Trainer(pl.LightningModule):
             sanitize=sanitize,
             build_obabel_mol=build_obabel_mol,
             save_dir=save_dir,
+            importance_sampling=importance_sampling,
+            tau=tau,
+            importance_sampling_start=importance_sampling_start,
+            importance_sampling_end=importance_sampling_end,
+            every_importance_t=every_importance_t,
+            maximize_score=maximize_score,
         )
         return molecules
 
+    def importance_sampling(self, 
+                             node_feats_in,
+                             temb,
+                             pos,
+                             edge_index_local,
+                             edge_index_global,
+                             edge_attr_global,
+                             batch,
+                             batch_lig,
+                             batch_edge_global,
+                             context,
+                             batch_num_nodes,
+                             edge_index_global_lig: Tensor,
+                             edge_attr_global_lig: Tensor,
+                             pocket_mask: Tensor,
+                             edge_mask: Tensor,
+                             ca_mask: Tensor,
+                             edge_mask_pocket: Tensor,
+                             batch_pocket: Tensor,
+                             tau: float = 1.0,
+                             maximize_score: bool = True,
+                             ):
+        """
+        Idea: 
+        The point clouds / graphs have an intermediate predicted synthesizability. 
+        Given a set/population of B graphs/point clouds we want to __bias__ the sampling process towards "regions" where the fitness (here the synth.) is maximized.
+        Hence we can compute importance weights for each sample i=1,2,...,B and draw a new population with replacement. 
+        As the sampling process is stochastic, repeated samples will evolve differently. 
+        However we need to think about ways to also include/enforce uniformity such that some samples are not drawn too often. 
+        To make it more "uniform", we can use temperature annealing in the softmax
+        """
+        
+        out = self.model(
+                x=node_feats_in,
+                t=temb,
+                pos=pos,
+                edge_index_local=edge_index_local,
+                edge_index_global=edge_index_global,
+                edge_index_global_lig=edge_index_global_lig,
+                edge_attr_global=edge_attr_global,
+                batch=batch,
+                batch_edge_global=batch_edge_global,
+                context=context,
+                pocket_mask=pocket_mask.unsqueeze(1),
+                edge_mask=edge_mask,
+                edge_mask_pocket=edge_mask_pocket,
+                batch_lig=batch_lig,
+                ca_mask=ca_mask,
+                batch_pocket=batch_pocket,
+            )
+        
+        pocket_mask = pocket_mask.bool()
+        node_feats_in = node_feats_in[pocket_mask]
+        pos = pos[pocket_mask]
+    
+        sa =out["synth_pred"].squeeze(dim=1) # [B,]
+        if not maximize_score:
+            sa = 1.0 - sa
+        n = pos.size(0)
+        b = len(batch_num_nodes)
+        weights = (sa / tau).softmax(dim=0)
+        select = torch.multinomial(weights, num_samples=len(weights),  replacement=True)        
+        select = select.sort()[0]
+        ptr = torch.concat([torch.zeros((1,), device=batch_num_nodes.device, dtype=torch.long),
+                            batch_num_nodes.cumsum(0)], 
+                           dim=0
+                           )
+        batch_num_nodes_new = batch_num_nodes[select]
+        # select 
+        batch_new = torch.arange(b, device=pos.device).repeat_interleave(batch_num_nodes_new)
+        ## node level
+        a, b = node_feats_in.size(1), pos.size(1)
+        x = torch.concat([node_feats_in, pos], dim=1)
+        x_split = x.split(batch_num_nodes.cpu().numpy().tolist(), dim=0)
+        x_select = torch.concat([x_split[i] for i in select.cpu().numpy()], dim=0)
+        node_feats_in, pos = x_select.split([a, b], dim=-1)
+        
+        ## edge level
+        edge_slices = [slice(ptr[i-1].item(), ptr[i].item()) for i in range(1, len(ptr))]
+        edge_slices_new = [edge_slices[i] for i in select.cpu().numpy()]
+        
+        # populate the dense edge-tensor
+        E_dense = torch.zeros((n, n, edge_attr_global_lig.size(1)),
+                              dtype=edge_attr_global_lig.dtype,
+                              device=edge_attr_global_lig.device
+                              )
+        E_dense[edge_index_global_lig[0], edge_index_global_lig[1], :] = edge_attr_global_lig
+        
+        # select the slices
+        E_s = torch.stack([torch.block_diag(*[E_dense[s, s, i] for s in edge_slices_new]) for i in range(E_dense.size(-1))], dim=-1)
+        new_ptr = torch.concat([torch.zeros((1,), device=batch_num_nodes_new.device, dtype=torch.long),
+                                batch_num_nodes_new.cumsum(0)],
+                               dim=0
+                               )
+        
+        new_fc_edge_index = torch.concat([get_fc_edge_index_with_offset(n=batch_num_nodes_new[i].item(),
+                                                                        offset=new_ptr[i].item()
+                                                                        )
+                                          for i in range(len(new_ptr)-1)
+                                          ], dim=1
+                                         )
+        
+        new_edge_attr = E_s[new_fc_edge_index[0], new_fc_edge_index[1], :]
+        # batch_edge_global = batch_new[new_fc_edge_index[0]]
+        # batch_edge_global = None
+        
+        out =  pos.to(self.device), node_feats_in.to(self.device),\
+            new_fc_edge_index.to(self.device), new_edge_attr.to(self.device),\
+                batch_new.to(self.device), None, batch_num_nodes_new.to(self.device)
+        return out
+            
     def reverse_sampling(
         self,
         num_graphs: int,
@@ -981,11 +1156,22 @@ class Trainer(pl.LightningModule):
         sanitize=False,
         build_obabel_mol=False,
         iteration: int = 0,
+        importance_sampling: bool = False,
+        tau: float = 0.1,
+        every_importance_t: int = 5,
+        importance_sampling_start: int = 0,
+        importance_sampling_end: int = 200,
+        maximize_score: bool = True
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         pos_pocket = pocket_data.pos_pocket.to(self.device)
         batch_pocket = pocket_data.pos_pocket_batch.to(self.device)
         x_pocket = pocket_data.x_pocket.to(self.device)
 
+        try:
+            ca_mask = pocket_data.ca_mask.to(self.device)
+        except:
+            ca_mask = None
+            
         batch = torch.arange(num_graphs, device=self.device).repeat_interleave(
             num_nodes_lig, dim=0
         )
@@ -1120,8 +1306,8 @@ class Trainer(pl.LightningModule):
                 edge_mask=edge_mask,
                 edge_mask_pocket=edge_mask_pocket,
                 batch_lig=batch,
-                ca_mask=pocket_data.pocket_ca_mask.to(self.device),
-                batch_pocket=pocket_data.pos_pocket_batch.to(self.device),
+                ca_mask=ca_mask,
+                batch_pocket=batch_pocket,
             )
 
             coords_pred = out["coords_pred"].squeeze()
@@ -1183,7 +1369,7 @@ class Trainer(pl.LightningModule):
                 )
             else:
                 edge_attr_global_lig = edges_pred
-
+    
             (
                 edge_index_global,
                 edge_attr_global,
@@ -1218,6 +1404,74 @@ class Trainer(pl.LightningModule):
                 sorting=False,
             )
 
+            # importance sampling
+            if importance_sampling and i % every_importance_t == 0 and importance_sampling_start <= i <= importance_sampling_end:
+                node_feats_in = torch.cat([atom_types_joint, charge_types_joint], dim=-1)
+                pos, node_feats_in, edge_index_global_lig, edge_attr_global_lig, \
+                batch, _, num_nodes_lig = self.importance_sampling(node_feats_in=node_feats_in,
+                                                                   pos=pos_joint,
+                                                                   temb=temb,
+                                                                   edge_index_local=None,
+                                                                   edge_index_global=edge_index_global,
+                                                                   edge_attr_global=edge_attr_global,
+                                                                   batch=batch_full,
+                                                                   batch_lig=batch,
+                                                                   batch_edge_global=batch_edge_global,
+                                                                   batch_num_nodes=num_nodes_lig,
+                                                                   context=None,
+                                                                   tau=tau,
+                                                                   maximize_score=maximize_score,
+                                                                   edge_index_global_lig=edge_index_global_lig,
+                                                                   edge_attr_global_lig=edge_attr_global_lig,
+                                                                   pocket_mask=pocket_mask,
+                                                                   ca_mask=ca_mask,
+                                                                   edge_mask=edge_mask,
+                                                                   batch_pocket=batch_pocket,
+                                                                   edge_mask_pocket=edge_mask_pocket,
+                                                               )
+                atom_types, charge_types = node_feats_in.split(
+                [self.num_atom_types, self.num_charge_classes], dim=-1
+            )
+                j, i = edge_index_global_lig
+                mask = j < i
+                mask_i = i[mask]
+                
+                (
+                edge_index_global,
+                edge_attr_global,
+                batch_edge_global,
+                edge_mask,
+                edge_mask_pocket,
+                ) = get_joint_edge_attrs(
+                pos,
+                pos_pocket,
+                batch,
+                batch_pocket,
+                edge_attr_global_lig,
+                self.num_bond_classes,
+                self.device,
+                )
+                # pos, pos_pocket = remove_mean_pocket(pos, pos_pocket, batch, batch_pocket)
+                (
+                    pos_joint,
+                    atom_types_joint,
+                    charge_types_joint,
+                    batch_full,
+                    pocket_mask,
+                ) = concat_ligand_pocket(
+                    pos,
+                    pos_pocket,
+                    atom_types,
+                    atom_types_pocket,
+                    charge_types,
+                    charges_pocket,
+                    batch,
+                    batch_pocket,
+                    sorting=False,
+                )
+                
+            
+           
             if save_traj:
                 atom_decoder = self.dataset_info.atom_decoder
                 write_xyz_file_from_batch(

@@ -66,6 +66,8 @@ def evaluate(
     max_sample_iter,
     dataset_root=None,
     encode_ligand=False,
+    importance_sampling=False,
+    ground_truth_size=False,
 ):
     # load hyperparameter
     hparams = torch.load(model_path)["hyper_parameters"]
@@ -208,14 +210,18 @@ def evaluate(
             repeats=batch_size,
             device=device,
         )
-
+        
+        suppl = Chem.SDMolSupplier(str(sdf_file))
+        mol = []
+        for m in suppl:
+            mol.append(m)
+        assert len(mol) == 1
+        mol = mol[0]
+        num_nodes_ligand = mol.GetNumAtoms()
+        num_nodes_ligand = torch.tensor([num_nodes_ligand] * batch_size).long().to(device)
+        
+        pocket_data.num_nodes_ligand = num_nodes_ligand
         if encode_ligand:
-            suppl = Chem.SDMolSupplier(str(sdf_file))
-            mol = []
-            for m in suppl:
-                mol.append(m)
-            assert len(mol) == 1
-            mol = mol[0]
             ligand_data = mol_to_torch_geometric(
                 mol,
                 dataset_info.atom_encoder,
@@ -238,21 +244,48 @@ def evaluate(
         ):
             k += 1
             with torch.no_grad():
-                molecules = model.generate_ligands(
-                    pocket_data,
-                    num_graphs=batch_size,
-                    fix_n_nodes=fix_n_nodes,
-                    vary_n_nodes=vary_n_nodes,
-                    n_nodes_bias=n_nodes_bias,
-                    build_obabel_mol=build_obabel_mol,
-                    inner_verbose=False,
-                    save_traj=False,
-                    ddpm=ddpm,
-                    eta_ddim=eta_ddim,
-                    relax_mol=relax_mol,
-                    max_relax_iter=max_relax_iter,
-                    sanitize=sanitize,
-                )
+                
+                if not importance_sampling:
+                    molecules = model.generate_ligands(
+                        pocket_data,
+                        num_graphs=batch_size,
+                        fix_n_nodes=fix_n_nodes,
+                        vary_n_nodes=vary_n_nodes,
+                        n_nodes_bias=n_nodes_bias,
+                        build_obabel_mol=build_obabel_mol,
+                        inner_verbose=False,
+                        save_traj=False,
+                        ddpm=ddpm,
+                        eta_ddim=eta_ddim,
+                        relax_mol=relax_mol,
+                        max_relax_iter=max_relax_iter,
+                        sanitize=sanitize,
+                        ground_truth_size=ground_truth_size,
+                    )
+                else:
+                    molecules = model.generate_ligands(
+                        pocket_data,
+                        num_graphs=batch_size,
+                        fix_n_nodes=fix_n_nodes,
+                        vary_n_nodes=vary_n_nodes,
+                        n_nodes_bias=n_nodes_bias,
+                        build_obabel_mol=build_obabel_mol,
+                        inner_verbose=False,
+                        save_traj=False,
+                        ddpm=ddpm,
+                        eta_ddim=eta_ddim,
+                        relax_mol=relax_mol,
+                        max_relax_iter=max_relax_iter,
+                        sanitize=sanitize,
+                        importance_sampling=True,
+                        tau=0.1,
+                        every_importance_t=5,
+                        importance_sampling_start=0,
+                        importance_sampling_end=200,
+                        maximize_score=True,
+                        ground_truth_size=ground_truth_size,
+                    )
+                    
             all_molecules += len(molecules)
             tmp_molecules.extend(molecules)
             valid_molecules = analyze_stability_for_molecules(
@@ -282,21 +315,46 @@ def evaluate(
             ):
                 k += 1
                 with torch.no_grad():
-                    molecules = model.generate_ligands(
-                        pocket_data,
-                        num_graphs=batch_size,
-                        fix_n_nodes=fix_n_nodes,
-                        vary_n_nodes=vary_n_nodes,
-                        n_nodes_bias=n_nodes_bias,
-                        build_obabel_mol=build_obabel_mol,
-                        inner_verbose=False,
-                        save_traj=False,
-                        ddpm=ddpm,
-                        eta_ddim=eta_ddim,
-                        relax_mol=relax_mol,
-                        max_relax_iter=max_relax_iter,
-                        sanitize=sanitize,
-                    )
+                    if not importance_sampling:
+                        molecules = model.generate_ligands(
+                            pocket_data,
+                            num_graphs=batch_size,
+                            fix_n_nodes=fix_n_nodes,
+                            vary_n_nodes=vary_n_nodes,
+                            n_nodes_bias=n_nodes_bias,
+                            build_obabel_mol=build_obabel_mol,
+                            inner_verbose=False,
+                            save_traj=False,
+                            ddpm=ddpm,
+                            eta_ddim=eta_ddim,
+                            relax_mol=relax_mol,
+                            max_relax_iter=max_relax_iter,
+                            sanitize=sanitize,
+                            ground_truth_size=ground_truth_size,
+                        )
+                    else:
+                        molecules = model.generate_ligands(
+                            pocket_data,
+                            num_graphs=batch_size,
+                            fix_n_nodes=fix_n_nodes,
+                            vary_n_nodes=vary_n_nodes,
+                            n_nodes_bias=n_nodes_bias,
+                            build_obabel_mol=build_obabel_mol,
+                            inner_verbose=False,
+                            save_traj=False,
+                            ddpm=ddpm,
+                            eta_ddim=eta_ddim,
+                            relax_mol=relax_mol,
+                            max_relax_iter=max_relax_iter,
+                            sanitize=sanitize,
+                            importance_sampling=True,
+                            tau=0.1,
+                            every_importance_t=5,
+                            importance_sampling_start=0,
+                            importance_sampling_end=200,
+                            maximize_score=True,
+                            ground_truth_size=ground_truth_size,
+                        )
                 all_molecules += len(molecules)
                 tmp_molecules.extend(molecules)
                 valid_molecules = analyze_stability_for_molecules(
@@ -317,7 +375,7 @@ def evaluate(
 
         if len(valid_and_unique_molecules) < num_ligands_per_pocket:
             print(
-                "Reached {max_sample_iter} sampling iterations, but could not find {num_ligands_per_pocket} for pdb file {pdb_file}. Abort."
+                f"Reached {max_sample_iter} sampling iterations, but could not find {num_ligands_per_pocket} for pdb file {pdb_file}. Abort."
             )
             break
 
@@ -497,10 +555,12 @@ def get_args():
     )
     parser.add_argument("--test-list", type=Path, default=None)
     parser.add_argument("--save-dir", type=Path)
-    parser.add_argument("--fix-n-nodes", action="store_true")
-    parser.add_argument("--vary-n-nodes", action="store_true")
+    parser.add_argument("--fix-n-nodes", default=False, action="store_true")
+    parser.add_argument("--vary-n-nodes", default=False,  action="store_true")
     parser.add_argument("--n-nodes-bias", default=0, type=int)
-    parser.add_argument("--filter-by-posebusters", action="store_true")
+    parser.add_argument("--ground-truth-size", default=False, action="store_true")
+    parser.add_argument("--filter-by-posebusters", default=False, action="store_true")
+    parser.add_argument("--importance-sampling", action="store_true", default=False)
 
     args = parser.parse_args()
     return args
@@ -533,4 +593,6 @@ if __name__ == "__main__":
         encode_ligand=args.encode_ligand,
         filter_by_posebusters=args.filter_by_posebusters,
         max_sample_iter=args.max_sample_iter,
+        importance_sampling=args.importance_sampling,
+        ground_truth_size=args.ground_truth_size,
     )

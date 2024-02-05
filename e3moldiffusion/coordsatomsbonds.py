@@ -57,6 +57,7 @@ class DenoisingEdgeNetwork(nn.Module):
         ligand_pocket_interaction: bool = False,
         store_intermediate_coords: bool = False,
         distance_ligand_pocket: bool = False,
+        model_synth: bool = False
     ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
@@ -159,7 +160,9 @@ class DenoisingEdgeNetwork(nn.Module):
                 num_atom_features=num_atom_features,
                 num_bond_types=num_bond_types,
                 coords_param=coords_param,
+                model_synth=model_synth,
             )
+        self.model_synth = model_synth
 
         self.distance_ligand_pocket = distance_ligand_pocket
         if distance_ligand_pocket:
@@ -312,7 +315,7 @@ class DenoisingEdgeNetwork(nn.Module):
                 pocket_mask=pocket_mask,
             )
 
-        coords_pred, atoms_pred, bonds_pred = self.prediction_head(
+        coords_pred, atoms_pred, bonds_pred, synth_pred = self.prediction_head(
             x=out,
             batch=batch,
             edge_index_global=edge_index_global,
@@ -321,7 +324,7 @@ class DenoisingEdgeNetwork(nn.Module):
             pocket_mask=pocket_mask,
             edge_mask=edge_mask,
         )
-
+      
         if self.store_intermediate_coords and self.training:
             pos_list = out["p_list"]
             assert len(pos_list) > 0
@@ -344,6 +347,7 @@ class DenoisingEdgeNetwork(nn.Module):
             "atoms_pred": atoms_pred,
             "bonds_pred": bonds_pred,
             "dist_pred": dist_pred,
+            "synth_pred": synth_pred
         }
 
         return out

@@ -13,6 +13,14 @@ from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from torch_scatter import scatter_mean
 from tqdm import tqdm
 
+import numpy as np
+from rdkit import Chem
+from rdkit.Chem import RDConfig
+import os
+import sys
+sys.path.append(os.path.join(RDConfig.RDContribDir, 'SA_Score'))
+import sascorer
+
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.data.abstract_dataset import AbstractDatasetInfos
@@ -20,6 +28,7 @@ from experiments.data.distributions import prepare_context
 from experiments.data.utils import (
     write_trajectory_as_xyz,
     write_xyz_file_from_batch,
+    get_fc_edge_index_with_offset
 )
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
@@ -148,7 +157,16 @@ class Trainer(pl.LightningModule):
                 property_prediction=hparams["property_prediction"],
                 coords_param=hparams["continuous_param"],
                 store_intermediate_coords=hparams["store_intermediate_coords"],
+                # new: possibly comment out for back tracktability
+                use_pos_norm=hparams["use_pos_norm"],
+                ligand_pocket_interaction=hparams["ligand_pocket_interaction"],
+                model_synth=hparams["model_synth"],
             )
+            
+        if hparams["model_synth"]:
+            self.bce_loss = torch.nn.BCELoss(reduction="none")
+        else:
+            self.bce_loss = None
 
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -268,7 +286,7 @@ class Trainer(pl.LightningModule):
             )
 
     def _log(
-        self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, batch_size, stage
+        self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, synth_loss, batch_size, stage
     ):
         self.log(
             f"{stage}/loss",
@@ -314,6 +332,16 @@ class Trainer(pl.LightningModule):
             prog_bar=(stage == "train"),
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
+        
+        if synth_loss is not None:
+            self.log(
+                f"{stage}/synth_loss",
+                synth_loss,
+                on_step=True,
+                batch_size=batch_size,
+                prog_bar=(stage == "train"),
+                sync_dist=self.hparams.gpus > 1 and stage == "val",
+            )
 
     def step_fnc(self, batch, batch_idx, stage: str):
         batch_size = int(batch.batch.max()) + 1
@@ -393,6 +421,13 @@ class Trainer(pl.LightningModule):
             + self.hparams.lc_bonds * loss["bonds"]
             + self.hparams.lc_charges * loss["charges"]
         )
+        
+        if self.hparams.model_synth:
+            sa_loss = self.bce_loss(out_dict["synth_pred"].squeeze(dim=-1), out_dict["synth_true"].squeeze(dim=-1))
+            sa_loss = torch.mean(weights * sa_loss)
+            final_loss = final_loss + sa_loss
+        else:
+            sa_loss = None
 
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
@@ -405,6 +440,7 @@ class Trainer(pl.LightningModule):
             loss["atoms"],
             loss["charges"],
             loss["bonds"],
+            sa_loss,
             batch_size,
             stage,
         )
@@ -425,6 +461,14 @@ class Trainer(pl.LightningModule):
             edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
         )
 
+        if self.hparams.model_synth:
+            sascore = np.array([sascorer.calculateScore(Chem.RemoveHs(mol)) for mol in batch.mol])
+            sascore = (sascore - 1.0) / (10.0 - 1.0)
+            sascore = 1.0 - sascore
+            sascore = torch.from_numpy(sascore).float().to(pos.device)
+        else:
+            sascore = None
+            
         # TIME EMBEDDING
         temb = t.float() / self.hparams.timesteps
         temb = temb.clamp(min=self.hparams.eps_min)
@@ -512,7 +556,7 @@ class Trainer(pl.LightningModule):
         out["charges_true"] = charges.argmax(dim=-1)
 
         out["bond_aggregation_index"] = edge_index_global[1]
-
+        out['synth_true'] = sascore
         return out
 
     @torch.no_grad()
@@ -969,7 +1013,99 @@ class Trainer(pl.LightningModule):
             return total_res, all_generated_smiles, stable_molecules
         else:
             return total_res
-
+        
+    def importance_sampling(self, 
+                             node_feats_in,
+                             temb,
+                             pos,
+                             edge_index_local,
+                             edge_index_global,
+                             edge_attr_global,
+                             batch,
+                             batch_edge_global,
+                             context,
+                             batch_num_nodes,
+                             tau: float = 1.0,
+                             maximize_score: bool = True
+                             ):
+        
+        out = self.model(
+                    x=node_feats_in,
+                    t=temb,
+                    pos=pos,
+                    edge_index_local=edge_index_local,
+                    edge_index_global=edge_index_global,
+                    edge_attr_global=edge_attr_global,
+                    batch=batch,
+                    batch_edge_global=batch_edge_global,
+                    context=context,
+                )
+        
+        """
+        Idea: 
+        The point clouds / graphs have an intermediate predicted synthesizability. 
+        Given a set/population of B graphs/point clouds we want to __bias__ the sampling process towards "regions" where the fitness (here the synth.) is maximized.
+        Hence we can compute importance weights for each sample i=1,2,...,B and draw a new population with replacement. 
+        As the sampling process is stochastic, repeated samples will evolve differently. 
+        However we need to think about ways to also include/enforce uniformity such that some samples are not drawn too often. 
+        To make it more "uniform", we can use temperature annealing in the softmax
+        """
+        
+        sa =out["synth_pred"].squeeze(dim=1) # [B,]
+        if not maximize_score:
+            sa = 1.0 - sa
+        n = pos.size(0)
+        b = len(batch_num_nodes)
+        weights = (sa / tau).softmax(dim=0)
+        select = torch.multinomial(weights, num_samples=len(weights),  replacement=True)        
+        select = select.sort()[0]
+        ptr = torch.concat([torch.zeros((1,), device=batch_num_nodes.device, dtype=torch.long),
+                            batch_num_nodes.cumsum(0)], 
+                           dim=0
+                           )
+        batch_num_nodes_new = batch_num_nodes[select]
+        # select 
+        batch_new = torch.arange(b, device=pos.device).repeat_interleave(batch_num_nodes_new)
+        ## node level
+        a, b = node_feats_in.size(1), pos.size(1)
+        x = torch.concat([node_feats_in, pos], dim=1)
+        x_split = x.split(batch_num_nodes.cpu().numpy().tolist(), dim=0)
+        x_select = torch.concat([x_split[i] for i in select.cpu().numpy()], dim=0)
+        node_feats_in, pos = x_select.split([a, b], dim=-1)
+        
+        ## edge level
+        edge_slices = [slice(ptr[i-1].item(), ptr[i].item()) for i in range(1, len(ptr))]
+        edge_slices_new = [edge_slices[i] for i in select.cpu().numpy()]
+        
+        # populate the dense edge-tensor
+        E_dense = torch.zeros((n, n, edge_attr_global.size(1)),
+                              dtype=edge_attr_global.dtype,
+                              device=edge_attr_global.device
+                              )
+        E_dense[edge_index_global[0], edge_index_global[1], :] = edge_attr_global
+        
+        # select the slices
+        E_s = torch.stack([torch.block_diag(*[E_dense[s, s, i] for s in edge_slices_new]) for i in range(E_dense.size(-1))], dim=-1)
+        new_ptr = torch.concat([torch.zeros((1,), device=batch_num_nodes_new.device, dtype=torch.long),
+                                batch_num_nodes_new.cumsum(0)],
+                               dim=0
+                               )
+        
+        new_fc_edge_index = torch.concat([get_fc_edge_index_with_offset(n=batch_num_nodes_new[i].item(),
+                                                                        offset=new_ptr[i].item()
+                                                                        )
+                                          for i in range(len(new_ptr)-1)
+                                          ], dim=1
+                                         )
+        
+        new_edge_attr = E_s[new_fc_edge_index[0], new_fc_edge_index[1], :]
+        batch_edge_global = batch_new[new_fc_edge_index[0]]
+        
+        out =  pos.to(self.device), node_feats_in.to(self.device),\
+            new_fc_edge_index.to(self.device), new_edge_attr.to(self.device),\
+                batch_new.to(self.device), batch_edge_global.to(self.device), batch_num_nodes_new.to(self.device)
+        return out
+    
     def reverse_sampling(
         self,
         num_graphs: int,
@@ -994,6 +1130,12 @@ class Trainer(pl.LightningModule):
         num_nodes: Tensor = None,
         fixed_context: float = None,
         resample_steps: int = 1,
+        importance_sampling: bool = False,
+        tau: float = 0.1,
+        every_importance_t: int = 5,
+        importance_sampling_start: int = 0,
+        importance_sampling_end: int = 200,
+        maximize_score: bool = True
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         if num_nodes is not None:
             batch_num_nodes = num_nodes
@@ -1190,7 +1332,6 @@ class Trainer(pl.LightningModule):
                     batch_edge_global=batch_edge_global,
                     context=context,
                 )
-
                 coords_pred = out["coords_pred"].squeeze()
                 atoms_pred, charges_pred = out["atoms_pred"].split(
                     [self.num_atom_types, self.num_charge_classes], dim=-1
@@ -1199,8 +1340,7 @@ class Trainer(pl.LightningModule):
                 # N x a_0
                 edges_pred = out["bonds_pred"].softmax(dim=-1)
                 # E x b_0
-                charges_pred = charges_pred.softmax(dim=-1)
-
+                charges_pred = charges_pred.softmax(dim=-1)                    
                 if ddpm:
                     if self.hparams.noise_scheduler == "adaptive":
                         # positions
@@ -1405,7 +1545,31 @@ class Trainer(pl.LightningModule):
                             batch,
                             cumulative=False,
                         )
-
+                        
+                # importance sampling
+                if importance_sampling and i % every_importance_t == 0 and importance_sampling_start <= i <= importance_sampling_end:
+                    node_feats_in = torch.cat([atom_types, charge_types], dim=-1)
+                    pos, node_feats_in, edge_index_global, edge_attr_global, \
+                    batch, batch_edge_global, batch_num_nodes = self.importance_sampling(node_feats_in=node_feats_in,
+                                                                                        pos=pos,
+                                                                                        temb=temb,
+                                                                                        edge_index_local=None,
+                                                                                        edge_index_global=edge_index_global,
+                                                                                        edge_attr_global=edge_attr_global,
+                                                                                        batch=batch,
+                                                                                        batch_edge_global=batch_edge_global,
+                                                                                        batch_num_nodes=batch_num_nodes,
+                                                                                        context=None,
+                                                                                        tau=tau,
+                                                                                        maximize_score=maximize_score
+                                                                                        )
+                    atom_types, charge_types = node_feats_in.split(
+                    [self.num_atom_types, self.num_charge_classes], dim=-1
+                )
+                    j, i = edge_index_global
+                    mask = j < i
+                    mask_i = i[mask]
+                    
             if save_traj:
                 atom_decoder = self.dataset_info.atom_decoder
                 write_xyz_file_from_batch(

@@ -202,7 +202,8 @@ def add_arguments(parser):
 
     # PROPERTY PREDICTION
     parser.add_argument("--property-prediction", default=False, action="store_true")
-
+    # Model SAScore 
+    parser.add_argument("--model-synth", default=False, action="store_true")
     # LATENT
     parser.add_argument("--prior-beta", default=1.0, type=float)
     parser.add_argument("--sdim-latent", default=256, type=int)

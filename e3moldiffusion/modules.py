@@ -18,6 +18,7 @@ class PredictionHeadEdge(nn.Module):
         num_atom_features: int,
         num_bond_types: int = 5,
         coords_param: str = "data",
+        model_synth: bool = False
     ) -> None:
         super(PredictionHeadEdge, self).__init__()
         self.sdim, self.vdim = hn_dim
@@ -41,6 +42,15 @@ class PredictionHeadEdge(nn.Module):
         )
 
         self.coords_param = coords_param
+        
+        self.model_synth = model_synth
+        if model_synth:
+            self.synth_mlp = nn.Sequential(
+                DenseLayer(self.sdim, self.sdim, activation=nn.SiLU()),
+                DenseLayer(self.sdim, 1, activation=nn.Sigmoid())
+            )
+        else:
+            self.synth_mlp = None
 
         self.reset_parameters()
 
@@ -115,8 +125,13 @@ class PredictionHeadEdge(nn.Module):
 
         bonds_pred = F.silu(self.bonds_lin_0(edge))
         bonds_pred = self.bonds_lin_1(bonds_pred)
+        
+        if not self.model_synth:
+            return coords_pred, atoms_pred, bonds_pred, None
+        else:
+            spred = self.synth_mlp(scatter_mean(s, index=batch if batch_lig is None else batch_lig, dim=0))
+            return coords_pred, atoms_pred, bonds_pred, spred
 
-        return coords_pred, atoms_pred, bonds_pred
 
 class HiddenEdgeDistanceMLP(nn.Module):
     def __init__(

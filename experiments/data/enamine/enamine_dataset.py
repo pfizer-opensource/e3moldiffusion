@@ -17,13 +17,13 @@ from experiments.data.abstract_dataset import (
 )
 
 # aws
-# ENAMINE_DB_ROOT = "/scratch1/e3moldiffusion/data/enamine/database_noH"  
+ENAMINE_DB_ROOT = "/scratch1/e3moldiffusion/data/enamine/database_noH"  
 
 # delta
 # ENAMINE_DB_ROOT = "/home/let55/workspace/datasets/enamine/database_noH"
 
 # gamma
-ENAMINE_DB_ROOT = "/hpfs/projects/mlcs/mlhub/e3moldiffusion/data/enamine/database_noH"
+# ENAMINE_DB_ROOT = "/hpfs/projects/mlcs/mlhub/e3moldiffusion/data/enamine/database_noH"
 
 full_atom_encoder = {
     "H": 0,

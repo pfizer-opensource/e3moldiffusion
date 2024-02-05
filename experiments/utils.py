@@ -630,6 +630,8 @@ def create_model(hparams, num_atom_features, num_bond_classes):
         coords_param=hparams["continuous_param"],
         use_pos_norm=hparams["use_pos_norm"],
         store_intermediate_coords=hparams["store_intermediate_coords"],
+        ligand_pocket_interaction=hparams['ligand_pocket_interaction'],
+        model_synth=hparams['model_synth'],
     )
     return model
 
