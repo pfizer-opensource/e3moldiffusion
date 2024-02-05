@@ -46,7 +46,6 @@ class dotdict(dict):
 def create_list_defaultdict():
     return defaultdict(list)
 
-
 def evaluate(args):
     # load hyperparameter
     hparams = torch.load(args.model_path)["hyper_parameters"]
@@ -585,7 +584,6 @@ def get_args():
     parser.add_argument('--max-sample-iter', default=20, type=int,
                             help='How many iteration steps for UFF optimization')
     parser.add_argument("--test-dir", type=Path)
-    parser.add_argument("--encode-ligand", default=False, action="store_true")
     parser.add_argument(
         "--pdbqt-dir",
         type=Path,
@@ -600,7 +598,13 @@ def get_args():
     parser.add_argument("--filter-by-posebusters", action="store_true")
     
     parser.add_argument("--encode-ligand", default=False, action="store_true")
-
+    
+    # importance sampling
+    parser.add_argument("--importance-sampling", default=False, action="store_true")
+    parser.add_argument("--tau", default=0.1, type=float)
+    parser.add_argument("--every-importance-t", default=5, type=int)
+    parser.add_argument("--importance-sampling-start", default=0, type=int)
+    parser.add_argument("--importance-sampling-end", default=200, type=int)
     args = parser.parse_args()
     return args
 
