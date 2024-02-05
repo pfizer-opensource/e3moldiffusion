@@ -1,7 +1,6 @@
 import argparse
 import os
 import random
-import shutil
 import tempfile
 import warnings
 from collections import defaultdict
@@ -19,7 +18,6 @@ from rdkit import Chem
 from torch_geometric.data import Batch
 
 from experiments.data.distributions import DistributionProperty
-from experiments.data.ligand.process_pdb import get_pdb_components, write_pdb
 from experiments.data.utils import load_pickle, mol_to_torch_geometric, save_pickle
 from experiments.docking import calculate_qvina2_score
 from experiments.sampling.analyze import analyze_stability_for_molecules
@@ -35,10 +33,8 @@ warnings.filterwarnings(
 )
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-
 class dotdict(dict):
     """dot.notation access to dictionary attributes"""
-
     __getattr__ = dict.get
     __setattr__ = dict.__setitem__
     __delattr__ = dict.__delitem__
@@ -447,20 +443,6 @@ def evaluate(args):
 
         write_sdf_file(sdf_out_file_raw, valid_molecules, extract_mol=True)
         sdf_files.append(sdf_out_file_raw)
-
-        # pdb_name = str(sdf_out_file_raw).split("/")[-1].split("-")[0]
-        # if pdb_dir is not None:
-        #     pdbs = [
-        #         str(i).split("/")[-1].split(".")[0] for i in pdb_dir.glob("[!.]*.pdb")
-        #     ]
-        # else:
-        #     pdbs = None
-        # if pdbs is not None and pdb_name in pdbs:
-        #     pdb_file = os.path.join(str(pdb_dir), pdb_name + ".pdb")
-        # else:
-        #     temp_dir = tempfile.mkdtemp()
-        #     protein, _ = get_pdb_components(pdb_name)
-        #     pdb_file = write_pdb(temp_dir, protein, pdb_name)
 
         # PoseBusters
         if not args.filter_by_posebusters and not args.omit_posebusters:
