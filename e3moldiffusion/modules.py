@@ -18,11 +18,13 @@ class PredictionHeadEdge(nn.Module):
         num_atom_features: int,
         num_bond_types: int = 5,
         coords_param: str = "data",
-        model_synth: bool = False
+        joint_property_prediction: bool = False,
     ) -> None:
         super(PredictionHeadEdge, self).__init__()
         self.sdim, self.vdim = hn_dim
         self.num_atom_features = num_atom_features
+        self.coords_param = coords_param
+        self.joint_property_prediction = joint_property_prediction
 
         self.shared_mapping = DenseLayer(
             self.sdim, self.sdim, bias=True, activation=nn.SiLU()
@@ -40,18 +42,21 @@ class PredictionHeadEdge(nn.Module):
         self.atoms_lin = DenseLayer(
             in_features=self.sdim, out_features=num_atom_features, bias=True
         )
-
-        self.coords_param = coords_param
-        
-        self.model_synth = model_synth
-        if model_synth:
-            self.synth_mlp = nn.Sequential(
-                DenseLayer(self.sdim, self.sdim, activation=nn.SiLU()),
-                DenseLayer(self.sdim, 1, activation=nn.Sigmoid())
+        if self.joint_property_prediction:
+            #self.property_mlp = DenseLayer(
+            #    in_features=self.sdim, out_features=1, bias=True, activation=nn.ReLU()
+            #)
+            self.property_mlp = nn.Sequential(DenseLayer(in_features=self.sdim,
+                                                         out_features=self.sdim,
+                                                         bias=True,
+                                                         activation=nn.SiLU()
+                                                         ),
+                                              DenseLayer(in_features=self.sdim,
+                                                         out_features=1,
+                                                         bias=True,
+                                                         activation=nn.Identity()
+                                                         )
             )
-        else:
-            self.synth_mlp = None
-
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -60,6 +65,8 @@ class PredictionHeadEdge(nn.Module):
         self.atoms_lin.reset_parameters()
         self.bonds_lin_0.reset_parameters()
         self.bonds_lin_1.reset_parameters()
+        if self.joint_property_prediction:
+            reset(self.property_mlp)
 
     def forward(
         self,
@@ -71,24 +78,29 @@ class PredictionHeadEdge(nn.Module):
         pocket_mask: Tensor = None,
         edge_mask: Tensor = None,
     ) -> Dict:
+        
         s, v, p, e = x["s"], x["v"], x["p"], x["e"]
         s = self.shared_mapping(s)
-
         coords_pred = self.coords_lin(v).squeeze()
         atoms_pred = self.atoms_lin(s)
+        
+        if self.joint_property_prediction:
+            batch_size = int(batch.max()) + 1
+            property_pred = scatter_mean(
+                s, index=batch if batch_lig is None else batch_lig, dim=0, dim_size=batch_size
+            )
+            property_pred = self.property_mlp(property_pred)
+        else:
+            property_pred = None
 
         if batch_lig is not None and pocket_mask is not None:
             s = (s * pocket_mask)[pocket_mask.squeeze(), :]
             j, i = edge_index_global_lig
             atoms_pred = (atoms_pred * pocket_mask)[pocket_mask.squeeze(), :]
             coords_pred = (coords_pred * pocket_mask)[pocket_mask.squeeze(), :]
-            p = p[pocket_mask.squeeze(), :]
-            # coords_pred = (
-            #    coords_pred
-            #    - scatter_mean(coords_pred, index=batch_lig, dim=0)[batch_lig]
-            # )
+            p = (p * pocket_mask)[pocket_mask.squeeze(), :]
+            coords_pred = p + coords_pred
             d = (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)
-
         elif self.coords_param == "data":
             j, i = edge_index_global
             n = s.size(0)
@@ -126,34 +138,18 @@ class PredictionHeadEdge(nn.Module):
         bonds_pred = F.silu(self.bonds_lin_0(edge))
         bonds_pred = self.bonds_lin_1(bonds_pred)
         
-        if not self.model_synth:
-            return coords_pred, atoms_pred, bonds_pred, None
-        else:
-            spred = self.synth_mlp(scatter_mean(s, index=batch if batch_lig is None else batch_lig, dim=0))
-            return coords_pred, atoms_pred, bonds_pred, spred
+        return coords_pred, atoms_pred, bonds_pred, property_pred
 
 
 class HiddenEdgeDistanceMLP(nn.Module):
-    def __init__(
-        self,
-        hn_dim: Tuple[int, int]
-    ) -> None:
+    def __init__(self, hn_dim: Tuple[int, int]) -> None:
         super(HiddenEdgeDistanceMLP, self).__init__()
         self.sdim, self.vdim = hn_dim
         self.distance_mlp = nn.Sequential(
-            DenseLayer(self.sdim, 
-                       self.sdim // 2,
-                       bias=True, 
-                       activation=nn.SiLU()),
-            DenseLayer(self.sdim // 2, 
-                       self.sdim // 4,
-                       bias=True, 
-                       activation=nn.SiLU()),
-            DenseLayer(self.sdim // 4, 
-                       1,
-                       bias=True,
-                       activation=nn.ReLU()),
-            )
+            DenseLayer(self.sdim, self.sdim // 2, bias=True, activation=nn.SiLU()),
+            DenseLayer(self.sdim // 2, self.sdim // 4, bias=True, activation=nn.SiLU()),
+            DenseLayer(self.sdim // 4, 1, bias=True, activation=nn.ReLU()),
+        )
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -167,7 +163,10 @@ class HiddenEdgeDistanceMLP(nn.Module):
         pocket_mask: Tensor,
         ca_mask: Tensor,
     ) -> Dict:
-        s_ligand, s_pocket = x["s"][pocket_mask.squeeze()], x["s"][~pocket_mask.squeeze()]
+        s_ligand, s_pocket = (
+            x["s"][pocket_mask.squeeze()],
+            x["s"][~pocket_mask.squeeze()],
+        )
         # select c-alpha representatives
         batch_pocket = batch_pocket[ca_mask]
         s_pocket = s_pocket[ca_mask]
@@ -177,7 +176,8 @@ class HiddenEdgeDistanceMLP(nn.Module):
         s = s_ligand[l] + s_pocket[p]
         s = self.distance_mlp(s).squeeze(dim=-1)
         return s
-    
+
+
 class PropertyPredictionHead(nn.Module):
     def __init__(
         self,
@@ -224,6 +224,55 @@ class PropertyPredictionHead(nn.Module):
             s, v = layer(s, v)
         # include v in output to make sure all parameters have a gradient
         out = s + v.sum() * 0
+
+        return out
+
+
+class PropertyPredictionMLP(nn.Module):
+    def __init__(
+        self,
+        hn_dim: Tuple[int, int],
+        num_context_features: int,
+    ) -> None:
+        super(PropertyPredictionMLP, self).__init__()
+        self.sdim, self.vdim = hn_dim
+        self.num_context_features = num_context_features
+
+        self.scalar_mapping = DenseLayer(
+            self.sdim, self.sdim, bias=True, activation=nn.SiLU()
+        )
+        self.edge_mapping = DenseLayer(
+            self.sdim, self.sdim, bias=True, activation=nn.SiLU()
+        )
+        self.vector_mapping = DenseLayer(
+            in_features=self.vdim, out_features=1, bias=False
+        )
+        self.property_mapping = DenseLayer(
+            self.sdim, 1, bias=True, activation=nn.ReLU()
+        )
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.scalar_mapping.reset_parameters()
+        self.edge_mapping.reset_parameters()
+        self.vector_mapping.reset_parameters()
+        self.property_mapping.reset_parameters()
+
+    def forward(self, x: Dict, batch: Tensor, edge_index_global: Tensor) -> Dict:
+        s, v, p, e = x["s"], x["v"], x["p"], x["e"]
+        e = 0.5 * scatter_mean(
+            e,
+            index=edge_index_global[1],
+            dim=0,
+            dim_size=s.size(0),
+        )
+        s = self.scalar_mapping(s)
+        e = self.edge_mapping(e)
+        v = self.vector_mapping(v) + p.sum() * 0
+        v = torch.norm(v, dim=-1)
+
+        out = self.property_mapping(s + e + v)
 
         return out
 

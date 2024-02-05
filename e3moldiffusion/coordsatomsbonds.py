@@ -9,15 +9,19 @@ from torch_geometric.typing import OptTensor
 from torch_geometric.utils import softmax
 from torch_scatter import scatter_add, scatter_mean
 
-from e3moldiffusion.gnn import EQGATEdgeGNN, EQGATEnergyGNN, EQGATLocalGNN, EQGATDynamicLocalEdge, MixGNN
+from e3moldiffusion.gnn import (
+    EQGATEdgeGNN,
+    EQGATEnergyGNN,
+    EQGATLocalGNN,
+)
 from e3moldiffusion.modules import (
     DenseLayer,
     GatedEquivBlock,
     HiddenEdgeDistanceMLP,
     PredictionHeadEdge,
     PropertyPredictionHead,
+    PropertyPredictionMLP,
 )
-
 
 class DenoisingEdgeNetwork(nn.Module):
     """_summary_
@@ -51,17 +55,18 @@ class DenoisingEdgeNetwork(nn.Module):
         use_pos_norm: bool = True,
         context_mapping: bool = False,
         num_context_features: int = 0,
-        property_prediction: bool = False,
-        bond_prediction: bool = False,
         coords_param: str = "data",
         ligand_pocket_interaction: bool = False,
         store_intermediate_coords: bool = False,
         distance_ligand_pocket: bool = False,
-        model_synth: bool = False
+        property_prediction: bool = False,
+        joint_property_prediction: bool = False,
+        bond_prediction: bool = False,
     ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
         self.property_prediction = property_prediction
+        self.joint_property_prediction = joint_property_prediction
         self.bond_prediction = bond_prediction
         self.num_bond_types = num_bond_types
 
@@ -109,45 +114,31 @@ class DenoisingEdgeNetwork(nn.Module):
         else:
             latent_dim_ = None
 
-        self.dynamic = False
+    
+        self.gnn = EQGATEdgeGNN(
+            hn_dim=hn_dim,
+            cutoff_local=cutoff_local,
+            num_atom_features=num_atom_features,
+            num_bond_types=num_bond_types,
+            coords_param=coords_param,
+            num_context_features=num_context_features,
+            property_prediction=property_prediction,
+            edge_dim=edge_dim,
+            latent_dim=latent_dim_,
+            num_layers=num_layers,
+            use_cross_product=use_cross_product,
+            vector_aggr=vector_aggr,
+            fully_connected=fully_connected,
+            local_global_model=local_global_model,
+            recompute_radius_graph=recompute_radius_graph,
+            recompute_edge_attributes=recompute_edge_attributes,
+            edge_mp=edge_mp,
+            p1=p1,
+            use_pos_norm=use_pos_norm,
+            ligand_pocket_interaction=ligand_pocket_interaction,
+            store_intermediate_coords=store_intermediate_coords,
+        )
         
-        if not self.dynamic:
-            self.gnn = EQGATEdgeGNN(
-                hn_dim=hn_dim,
-                cutoff_local=cutoff_local,
-                num_atom_features=num_atom_features,
-                num_bond_types=num_bond_types,
-                coords_param=coords_param,
-                num_context_features=num_context_features,
-                property_prediction=property_prediction,
-                edge_dim=edge_dim,
-                latent_dim=latent_dim_,
-                num_layers=num_layers,
-                use_cross_product=use_cross_product,
-                vector_aggr=vector_aggr,
-                fully_connected=fully_connected,
-                local_global_model=local_global_model,
-                recompute_radius_graph=recompute_radius_graph,
-                recompute_edge_attributes=recompute_edge_attributes,
-                edge_mp=edge_mp,
-                p1=p1,
-                use_pos_norm=use_pos_norm,
-                ligand_pocket_interaction=ligand_pocket_interaction,
-                store_intermediate_coords=store_intermediate_coords,
-            )
-        else:
-            self.gnn = MixGNN(
-                hn_dim=hn_dim,
-                edge_dim=edge_dim,
-                cutoff_local=cutoff_local,
-                num_layers=num_layers,
-                latent_dim=latent_dim_,
-                rbf_dim=20,
-                vector_aggr=vector_aggr,
-                property_prediction=property_prediction,
-                store_intermediate_coords=store_intermediate_coords,
-            )
-            
         if property_prediction:
             self.prediction_head = PropertyPredictionHead(
                 hn_dim=hn_dim,
@@ -160,9 +151,8 @@ class DenoisingEdgeNetwork(nn.Module):
                 num_atom_features=num_atom_features,
                 num_bond_types=num_bond_types,
                 coords_param=coords_param,
-                model_synth=model_synth,
+                joint_property_prediction=self.joint_property_prediction,
             )
-        self.model_synth = model_synth
 
         self.distance_ligand_pocket = distance_ligand_pocket
         if distance_ligand_pocket:
@@ -225,13 +215,24 @@ class DenoisingEdgeNetwork(nn.Module):
         batch_edge_global: OptTensor = None,
         z: OptTensor = None,
         context: OptTensor = None,
-        batch_lig: OptTensor = None,
         pocket_mask: OptTensor = None,
         edge_mask: OptTensor = None,
         edge_mask_pocket: OptTensor = None,
         ca_mask: OptTensor = None,
         batch_pocket: OptTensor = None,
+        pos_lig: OptTensor = None,
+        atoms_lig: OptTensor = None,
+        edge_attr_global_lig: OptTensor = None,
+        batch_edge_global_lig: OptTensor = None,
+        batch_lig: OptTensor = None,
+        joint_tensor: OptTensor = None,
     ) -> Dict:
+        
+        if pos is None and x is None:
+            assert joint_tensor is not None
+            pos = joint_tensor[:, :3].clone()
+            x = joint_tensor[:, 3:].clone()
+
         if pocket_mask is None:
             pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
         # t: (batch_size,)
@@ -277,45 +278,35 @@ class DenoisingEdgeNetwork(nn.Module):
         #    edge_attr_local_transformed = self.calculate_edge_attrs(edge_index=edge_index_local, edge_attr=edge_attr_local_transformed, pos=pos)
         # else:
         #    edge_attr_local_transformed = (None, None, None)
-        
-        v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
-        if not self.dynamic:
-            # global
-            edge_attr_global_transformed = self.calculate_edge_attrs(
-                edge_index=edge_index_global,
-                edge_attr=edge_attr_global_transformed,
-                pos=pos,
-                sqrt=True,
-                batch=batch if self.ligand_pocket_interaction else None,
-            )
-            
-            out = self.gnn(
-                s=s,
-                v=v,
-                p=pos,
-                z=z,
-                edge_index_local=None,
-                edge_attr_local=(None, None, None),
-                edge_index_global=edge_index_global,
-                edge_attr_global=edge_attr_global_transformed,
-                batch=batch,
-                context=cemb,
-                batch_lig=batch_lig,
-                pocket_mask=pocket_mask,
-                edge_mask_pocket=edge_mask_pocket,
-        )
-        else:
-            out = self.gnn(
-                s=s, 
-                v=v,
-                p=pos,
-                edge_index_global=edge_index_global,
-                edge_attr_global=edge_attr_global_transformed,
-                batch=batch,
-                pocket_mask=pocket_mask,
-            )
 
-        coords_pred, atoms_pred, bonds_pred, synth_pred = self.prediction_head(
+        v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
+
+        # global
+        edge_attr_global_transformed = self.calculate_edge_attrs(
+            edge_index=edge_index_global,
+            edge_attr=edge_attr_global_transformed,
+            pos=pos,
+            sqrt=True,
+            batch=batch if self.ligand_pocket_interaction else None,
+        )
+
+        out = self.gnn(
+            s=s,
+            v=v,
+            p=pos,
+            z=z,
+            edge_index_local=None,
+            edge_attr_local=(None, None, None),
+            edge_index_global=edge_index_global,
+            edge_attr_global=edge_attr_global_transformed,
+            batch=batch,
+            context=cemb,
+            batch_lig=batch_lig,
+            pocket_mask=pocket_mask,
+            edge_mask_pocket=edge_mask_pocket,
+        )
+
+        coords_pred, atoms_pred, bonds_pred, property_pred = self.prediction_head(
             x=out,
             batch=batch,
             edge_index_global=edge_index_global,
@@ -347,7 +338,7 @@ class DenoisingEdgeNetwork(nn.Module):
             "atoms_pred": atoms_pred,
             "bonds_pred": bonds_pred,
             "dist_pred": dist_pred,
-            "synth_pred": synth_pred
+            "property_pred": property_pred,
         }
 
         return out
@@ -367,7 +358,7 @@ class LatentEncoderNetwork(nn.Module):
         atom_mapping: bool = True,
         bond_mapping: bool = True,
         intermediate_outs: bool = False,
-        use_pos_norm: bool = False
+        use_pos_norm: bool = False,
     ) -> None:
         super(LatentEncoderNetwork, self).__init__()
 
@@ -392,7 +383,7 @@ class LatentEncoderNetwork(nn.Module):
             vector_aggr=vector_aggr,
             intermediate_outs=intermediate_outs,
             use_pos_norm=use_pos_norm,
-            coords_update=False
+            coords_update=False,
         )
 
         self.intermediate_outs = intermediate_outs
@@ -792,8 +783,18 @@ class EQGATEnergyNetwork(nn.Module):
         return edge_attr
 
     def forward(
-        self, x: Tensor, pos: Tensor, t: Tensor, batch: OptTensor = None
+        self,
+        x: Tensor,
+        pos: Tensor,
+        t: Tensor,
+        batch: OptTensor = None,
+        joint_tensor: OptTensor = None,
     ) -> Dict:
+        if pos is None and x is None:
+            assert joint_tensor is not None
+            pos = joint_tensor[:, :3].clone()
+            x = joint_tensor[:, 3:].clone()
+
         edge_index = radius_graph(
             x=pos, r=self.cutoff, batch=batch, max_num_neighbors=128
         )
@@ -815,6 +816,242 @@ class EQGATEnergyNetwork(nn.Module):
         energy_molecule = scatter_add(energy_atoms, index=batch, dim=0, dim_size=bs)
         assert energy_molecule.size(1) == 1
         out = {"property_pred": energy_molecule}
+        return out
+
+
+class PropertyEdgeNetwork(nn.Module):
+    """_summary_
+    Denoising network that inputs:
+        atom features, edge features, position features
+    The network is tasked for data prediction, i.e. x0 parameterization as commonly known in the literature:
+        atom features, edge features, position features
+    Args:
+        nn (_type_): _description_
+    """
+
+    def __init__(
+        self,
+        num_atom_features: int,
+        num_bond_types: int = 5,
+        hn_dim: Tuple[int, int] = (256, 64),
+        edge_dim: int = 32,
+        cutoff_local: float = 7.5,
+        num_layers: int = 5,
+        latent_dim: Optional[int] = None,
+        use_cross_product: bool = False,
+        fully_connected: bool = True,
+        local_global_model: bool = False,
+        recompute_radius_graph: bool = True,
+        recompute_edge_attributes: bool = True,
+        vector_aggr: str = "mean",
+        atom_mapping: bool = True,
+        bond_mapping: bool = True,
+        edge_mp: bool = False,
+        p1: bool = True,
+        use_pos_norm: bool = True,
+        context_mapping: bool = False,
+        num_context_features: int = 0,
+        coords_param: str = "data",
+        ligand_pocket_interaction: bool = False,
+        store_intermediate_coords: bool = False,
+        property_prediction: bool = False,
+        joint_property_prediction: bool = False,
+        bond_prediction: bool = False,
+    ) -> None:
+        super(PropertyEdgeNetwork, self).__init__()
+
+        self.property_prediction = property_prediction
+        self.joint_property_prediction = joint_property_prediction
+        self.bond_prediction = bond_prediction
+        self.num_bond_types = num_bond_types
+
+        self.ligand_pocket_interaction = ligand_pocket_interaction
+        self.store_intermediate_coords = store_intermediate_coords
+
+        self.time_mapping_atom = DenseLayer(1, hn_dim[0])
+        self.time_mapping_bond = DenseLayer(1, edge_dim)
+
+        if atom_mapping:
+            self.atom_mapping = DenseLayer(num_atom_features, hn_dim[0])
+        else:
+            self.atom_mapping = nn.Identity()
+
+        if bond_mapping or bond_prediction:
+            if bond_prediction:
+                num_bond_types = 1 * num_atom_features + 1
+            self.bond_mapping = DenseLayer(num_bond_types, edge_dim)
+        else:
+            self.bond_mapping = nn.Identity()
+
+        self.atom_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
+        self.bond_time_mapping = DenseLayer(edge_dim, edge_dim)
+
+        self.context_mapping = context_mapping
+        if self.context_mapping:
+            self.context_mapping = DenseLayer(num_context_features, hn_dim[0])
+            self.atom_context_mapping = DenseLayer(hn_dim[0], hn_dim[0])
+
+        assert fully_connected or local_global_model
+
+        self.sdim, self.vdim = hn_dim
+
+        self.local_global_model = local_global_model
+        self.fully_connected = fully_connected
+
+        assert fully_connected
+        assert not local_global_model
+
+        if latent_dim:
+            if context_mapping:
+                latent_dim_ = None
+            else:
+                latent_dim_ = latent_dim
+        else:
+            latent_dim_ = None
+
+        self.gnn = EQGATEdgeGNN(
+            hn_dim=hn_dim,
+            cutoff_local=cutoff_local,
+            num_atom_features=num_atom_features,
+            num_bond_types=num_bond_types,
+            coords_param=coords_param,
+            num_context_features=num_context_features,
+            property_prediction=property_prediction,
+            edge_dim=edge_dim,
+            latent_dim=latent_dim_,
+            num_layers=num_layers,
+            use_cross_product=use_cross_product,
+            vector_aggr=vector_aggr,
+            fully_connected=fully_connected,
+            local_global_model=local_global_model,
+            recompute_radius_graph=recompute_radius_graph,
+            recompute_edge_attributes=recompute_edge_attributes,
+            edge_mp=edge_mp,
+            p1=p1,
+            use_pos_norm=use_pos_norm,
+            ligand_pocket_interaction=ligand_pocket_interaction,
+            store_intermediate_coords=store_intermediate_coords,
+        )
+
+        self.prediction_head = PropertyPredictionMLP(
+            hn_dim=hn_dim,
+            num_context_features=num_context_features,
+        )
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        if hasattr(self.atom_mapping, "reset_parameters"):
+            self.atom_mapping.reset_parameters()
+        if hasattr(self.bond_mapping, "reset_parameters"):
+            self.bond_mapping.reset_parameters()
+        self.time_mapping_atom.reset_parameters()
+        self.atom_time_mapping.reset_parameters()
+        if self.context_mapping and hasattr(
+            self.atom_context_mapping, "reset_parameters"
+        ):
+            self.atom_context_mapping.reset_parameters()
+        if self.context_mapping and hasattr(self.context_mapping, "reset_parameters"):
+            self.context_mapping.reset_parameters()
+        self.time_mapping_bond.reset_parameters()
+        self.bond_time_mapping.reset_parameters()
+        self.gnn.reset_parameters()
+
+    def calculate_edge_attrs(
+        self,
+        edge_index: Tensor,
+        edge_attr: OptTensor,
+        pos: Tensor,
+        sqrt: bool = True,
+        batch: Tensor = None,
+    ):
+        source, target = edge_index
+        r = pos[target] - pos[source]
+        if self.ligand_pocket_interaction:
+            pos = pos / torch.norm(pos, dim=1).unsqueeze(1)
+            a = pos[target] * pos[source]
+        else:
+            a = pos[target] * pos[source]
+        a = a.sum(-1)
+        d = torch.clamp(torch.pow(r, 2).sum(-1), min=1e-6)
+        if sqrt:
+            d = d.sqrt()
+        r_norm = torch.div(r, (1.0 + d.unsqueeze(-1)))
+        edge_attr = (d, a, r_norm, edge_attr)
+        return edge_attr
+
+    def forward(
+        self,
+        x: Tensor,
+        t: Tensor,
+        pos: Tensor,
+        edge_index_global: Tensor,
+        edge_index_local: OptTensor = None,
+        edge_attr_global: OptTensor = None,
+        batch: OptTensor = None,
+        batch_edge_global: OptTensor = None,
+        z: OptTensor = None,
+        context: OptTensor = None,
+        joint_tensor: OptTensor = None,
+    ) -> Dict:
+        if pos is None and x is None:
+            assert joint_tensor is not None
+            pos = joint_tensor[:, :3].clone()
+            x = joint_tensor[:, 3:].clone()
+
+        # t: (batch_size,)
+        ta = self.time_mapping_atom(t)
+        tb = self.time_mapping_bond(t)
+        tnode = ta[batch]
+
+        # edge_index_global (2, E*)
+        tedge_global = tb[batch_edge_global]
+
+        if batch is None:
+            batch = torch.zeros(x.size(0), device=x.device, dtype=torch.long)
+
+        s = self.atom_mapping(x)
+        cemb = None
+        if context is not None and self.context_mapping:
+            cemb = self.context_mapping(context)
+            s = self.atom_context_mapping(s + cemb)
+        s = self.atom_time_mapping(s + tnode)
+
+        edge_attr_global_transformed = self.bond_mapping(edge_attr_global)
+        edge_attr_global_transformed = self.bond_time_mapping(
+            edge_attr_global_transformed + tedge_global
+        )
+
+        v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
+        edge_attr_global_transformed = self.calculate_edge_attrs(
+            edge_index=edge_index_global,
+            edge_attr=edge_attr_global_transformed,
+            pos=pos,
+            sqrt=True,
+            batch=batch if self.ligand_pocket_interaction else None,
+        )
+
+        out = self.gnn(
+            s=s,
+            v=v,
+            p=pos,
+            z=z,
+            edge_index_local=None,
+            edge_attr_local=(None, None, None),
+            edge_index_global=edge_index_global,
+            edge_attr_global=edge_attr_global_transformed,
+            batch=batch,
+            context=cemb,
+        )
+
+        property_atoms = self.prediction_head(out, batch, edge_index_global)
+
+        bs = len(batch.unique())
+        property_molecule = scatter_add(property_atoms, index=batch, dim=0, dim_size=bs)
+
+        assert property_molecule.size(1) == 1
+
+        out = {"property_pred": property_molecule}
         return out
 
 

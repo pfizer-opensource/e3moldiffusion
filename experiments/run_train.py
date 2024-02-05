@@ -135,6 +135,7 @@ if __name__ == "__main__":
             GeomQMDataModule as DataModule,
         )
     elif hparams.dataset == "enamine":
+        dataset = "enamine"
         from experiments.data.enamine.enamine_dataset import (
             EnamineDataModule as DataModule,
         )
@@ -166,9 +167,9 @@ if __name__ == "__main__":
         else datamodule.train_smiles
     )
     prop_norm, prop_dist = None, None
-    if (
-        len(hparams.properties_list) > 0 and hparams.context_mapping
-    ) or hparams.property_training:
+    if (len(hparams.properties_list) > 0 and hparams.context_mapping) or (
+        hparams.property_training and not hparams.regression_property == "sascore"
+    ):
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
@@ -183,10 +184,8 @@ if __name__ == "__main__":
         ):
             print("Using continuous diffusion")
             if hparams.diffusion_pretraining:
-                print("Starting pre-training")
-                from experiments.diffusion_pretrain_continuous import Trainer
-            else:
-                from experiments.diffusion_continuous import Trainer
+                print(f"Starting continuous pre-training on {dataset} dataset")
+            from experiments.diffusion_continuous import Trainer
         elif hparams.bond_prediction:
             print("Starting bond prediction model via discrete diffusion")
             from experiments.diffusion_discrete import Trainer
@@ -194,7 +193,10 @@ if __name__ == "__main__":
             print("Starting property prediction model via discrete diffusion")
             from experiments.diffusion_discrete import Trainer
         elif (
-            hparams.latent_dim and hparams.dataset != "crossdocked" and hparams.dataset != "bindingmoad" and hparams.dataset != "enamine"
+            hparams.latent_dim
+            and hparams.dataset != "crossdocked"
+            and hparams.dataset != "bindingmoad"
+            and hparams.dataset != "enamine"
         ):
             print("Using latent diffusion")
             from experiments.diffusion_latent_discrete import Trainer
@@ -213,7 +215,9 @@ if __name__ == "__main__":
                         print(f"Starting pre-training on {hparams.dataset}")
                         from experiments.diffusion_pretrain_discrete import Trainer
                 else:
-                    print(f"Starting pre-training on {hparams.dataset} with latent shape conditioned encoding")
+                    print(
+                        f"Starting pre-training on {hparams.dataset} with latent shape conditioned encoding"
+                    )
                     from experiments.diffusion_pretrain_latent_discrete import Trainer
             elif (
                 (dataset == "crossdocked" or dataset == "bindingmoad")
@@ -222,16 +226,18 @@ if __name__ == "__main__":
             ):
                 histogram = os.path.join(hparams.dataset_root, "size_distribution.npy")
                 histogram = np.load(histogram).tolist()
-                print("Ligand-pocket training using additional features (reduced, only h-bond acceptor and donor)")
-                #from experiments.diffusion_discrete_pocket_addfeats import (
+                print(
+                    "Ligand-pocket training using additional features (reduced, only h-bond acceptor and donor)"
+                )
+                # from experiments.diffusion_discrete_pocket_addfeats import (
                 #    Trainer,
-                #)
+                # )
                 ##from experiments.diffusion_discrete_pocket_addfeats_reduced import (
                 ##    Trainer,
                 ##)
                 from experiments.diffusion_discrete_pocket import (
-                            Trainer,
-                        )
+                    Trainer,
+                )
             else:
                 if dataset == "crossdocked" or dataset == "bindingmoad":
                     histogram = os.path.join(
@@ -278,8 +284,11 @@ if __name__ == "__main__":
             from experiments.energy_training import Trainer
         else:
             print(f"Running {hparams.regression_property} training")
-            assert hparams.dataset == "geomqm"
-            from experiments.property_training import Trainer
+            if hparams.regression_property == "sascore":
+                from experiments.sascore_training import Trainer
+            else:
+                assert hparams.dataset == "geomqm"
+                from experiments.property_training import Trainer
 
     model = Trainer(
         hparams=hparams.__dict__,

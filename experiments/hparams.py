@@ -41,7 +41,7 @@ def add_arguments(parser):
             "pcqm4mv2",
             "pepconf",
             "crossdocked",
-            "enamine"
+            "enamine",
         ],
     )
     parser.add_argument(
@@ -119,12 +119,6 @@ def add_arguments(parser):
 
     # DIFFUSION
     parser.add_argument(
-        "--continuous",
-        default=False,
-        action="store_true",
-        help="If the diffusion process is applied on continuous time variable. Defaults to False",
-    )
-    parser.add_argument(
         "--noise-scheduler",
         default="cosine",
         choices=["linear", "cosine", "quad", "sigmoid", "adaptive", "linear-time"],
@@ -140,6 +134,7 @@ def add_arguments(parser):
     parser.add_argument("--lc-charges", default=1.0, type=float)
     parser.add_argument("--lc-mulliken", default=1.5, type=float)
     parser.add_argument("--lc-wbo", default=2.0, type=float)
+    parser.add_argument("--lc-properties", default=1.0, type=float)
 
     parser.add_argument("--pocket-noise-std", default=0.1, type=float)
     parser.add_argument(
@@ -167,14 +162,23 @@ def add_arguments(parser):
         "--store-intermediate-coords", default=False, action="store_true"
     )
     parser.add_argument(
-        "--intermediate-outs", default=False, action="store_true", help="If latent node embeddings should be stored. Defaults to False"
+        "--intermediate-outs",
+        default=False,
+        action="store_true",
+        help="If latent node embeddings should be stored. Defaults to False",
     )
     parser.add_argument("--diffusion-pretraining", default=False, action="store_true")
     parser.add_argument(
         "--continuous-param", default="data", type=str, choices=["data", "noise"]
     )
-    parser.add_argument("--atoms-categorical", default=False, action="store_true")
-    parser.add_argument("--bonds-categorical", default=False, action="store_true")
+    parser.add_argument(
+        "--continuous",
+        default=False,
+        action="store_true",
+        help="If the diffusion process is applied on continuous time variable. Defaults to False",
+    )
+    parser.add_argument("--atoms-continuous", default=False, action="store_true")
+    parser.add_argument("--bonds-continuous", default=False, action="store_true")
 
     parser.add_argument("--atom-type-masking", default=False, action="store_true")
     parser.add_argument("--use-absorbing-state", default=False, action="store_true")
@@ -202,8 +206,10 @@ def add_arguments(parser):
 
     # PROPERTY PREDICTION
     parser.add_argument("--property-prediction", default=False, action="store_true")
-    # Model SAScore 
-    parser.add_argument("--model-synth", default=False, action="store_true")
+    parser.add_argument(
+        "--joint-property-prediction", default=False, action="store_true"
+    )
+
     # LATENT
     parser.add_argument("--prior-beta", default=1.0, type=float)
     parser.add_argument("--sdim-latent", default=256, type=int)

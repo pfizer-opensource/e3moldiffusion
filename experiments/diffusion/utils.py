@@ -10,7 +10,7 @@ from rdkit.Chem.Scaffolds.MurckoScaffold import GetScaffoldForMol
 from torch_geometric.utils import remove_self_loops, sort_edge_index
 from torch_scatter import scatter_mean
 
-from experiments.utils import get_edges, zero_mean
+from experiments.utils import concat_ligand_pocket, get_edges, zero_mean
 
 sys.path.append(os.path.join(RDConfig.RDContribDir, "IFG"))
 from ifg import identify_functional_groups
@@ -213,6 +213,128 @@ def energy_guidance(
         pos = zero_mean(pos, batch=batch, dim_size=batch_size, dim=0)
 
     return pos.detach()
+
+
+def self_guidance(
+    model,
+    pos=None,
+    pos_pocket=None,
+    atom_types=None,
+    atom_types_pocket=None,
+    charge_types=None,
+    charges_pocket=None,
+    temb=None,
+    edge_index_global=None,
+    edge_index_global_lig=None,
+    edge_attr_global=None,
+    batch=None,
+    batch_pocket=None,
+    batch_full=None,
+    batch_edge_global=None,
+    batch_size=None,
+    pocket_mask=None,
+    edge_mask=None,
+    edge_mask_pocket=None,
+    ca_mask=None,
+    context=None,
+    num_atom_types=None,
+    signal=1.0e-3,
+    guidance_scale=100,
+    optimization="minimize",
+):
+    (
+        pos_joint,
+        atom_types_joint,
+        charge_types_joint,
+        batch_full,
+        pocket_mask,
+    ) = concat_ligand_pocket(
+        pos,
+        pos_pocket,
+        atom_types,
+        atom_types_pocket,
+        charge_types,
+        charges_pocket,
+        batch,
+        batch_pocket,
+        sorting=False,
+    )
+    with torch.enable_grad():
+        joint_tensor = (
+            torch.cat([pos_joint, atom_types_joint, charge_types_joint], dim=-1)
+            .detach()
+            .requires_grad_(True)
+        )
+        out = model(
+            x=None,
+            t=temb,
+            pos=None,
+            joint_tensor=joint_tensor,
+            edge_index_local=None,
+            edge_index_global=edge_index_global,
+            edge_index_global_lig=edge_index_global_lig,
+            edge_attr_global=edge_attr_global,
+            batch=batch_full,
+            batch_edge_global=batch_edge_global,
+            context=context,
+            pocket_mask=pocket_mask.unsqueeze(1),
+            edge_mask=edge_mask,
+            edge_mask_pocket=edge_mask_pocket,
+            batch_lig=batch,
+            ca_mask=ca_mask,
+            batch_pocket=batch_pocket,
+        )
+        if optimization == "minimize":
+            sign = -1.0
+        elif optimization == "maximize":
+            sign = 1.0
+        else:
+            raise Exception("Optimization arg needs to be 'minimize' or 'maximize'!")
+        property_pred = sign * guidance_scale * out["property_pred"]
+
+        grad_outputs: List[Optional[torch.Tensor]] = [torch.ones_like(property_pred)]
+        grad_shift = torch.autograd.grad(
+            [property_pred],
+            [joint_tensor],
+            grad_outputs=grad_outputs,
+            create_graph=False,
+            retain_graph=False,
+        )[0]
+
+    pos = pos + signal * grad_shift[:, :3][pocket_mask.squeeze(), :]
+    pos.detach_()
+
+    atom_types = (
+        atom_types
+        + signal * grad_shift[:, 3 : num_atom_types + 3][pocket_mask.squeeze(), :]
+    )
+    atom_types.detach_()
+    charge_types = (
+        charge_types
+        + signal * grad_shift[:, 3 + num_atom_types :][pocket_mask.squeeze(), :]
+    )
+    charge_types.detach_()
+    # pos = zero_mean(pos, batch=batch, dim_size=batch_size, dim=0)
+
+    (
+        pos_joint,
+        atom_types_joint,
+        charge_types_joint,
+        batch_full,
+        pocket_mask,
+    ) = concat_ligand_pocket(
+        pos,
+        pos_pocket,
+        atom_types,
+        atom_types_pocket,
+        charge_types,
+        charges_pocket,
+        batch,
+        batch_pocket,
+        sorting=False,
+    )
+
+    return pos_joint, atom_types_joint, charge_types_joint, batch_full, pocket_mask
 
 
 def extract_scaffolds_(batch_data):

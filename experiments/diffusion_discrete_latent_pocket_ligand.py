@@ -50,11 +50,11 @@ from experiments.utils import (
     get_molecules,
     load_bond_model,
     load_energy_model,
+    load_latent_encoder,
     load_model,
     load_model_ligand,
     remove_mean_pocket,
     zero_mean,
-    load_latent_encoder
 )
 from experiments.xtb_energy import calculate_xtb_energy
 
@@ -148,14 +148,21 @@ class Trainer(pl.LightningModule):
                 coords_param=hparams["continuous_param"],
                 use_pos_norm=hparams["use_pos_norm"],
             )
-            
+
         self.max_nodes = dataset_info.max_n_nodes
-        
+
         if self.hparams.load_ckpt_from_pretrained is not None:
-            self.encoder, self.latent_lin, \
-            self.graph_pooling, self.mu_logvar_z, \
-            self.node_z, self.latentmodel = load_latent_encoder(filepath=self.hparams.load_ckpt_from_pretrained,
-                                                                max_n_nodes=self.max_nodes)
+            (
+                self.encoder,
+                self.latent_lin,
+                self.graph_pooling,
+                self.mu_logvar_z,
+                self.node_z,
+                self.latentmodel,
+            ) = load_latent_encoder(
+                filepath=self.hparams.load_ckpt_from_pretrained,
+                max_n_nodes=self.max_nodes,
+            )
         else:
             self.encoder = LatentEncoderNetwork(
                 num_atom_features=self.num_atom_types,
@@ -166,7 +173,9 @@ class Trainer(pl.LightningModule):
                 num_layers=hparams["num_layers_latent"],
                 vector_aggr=hparams["vector_aggr"],
                 intermediate_outs=hparams["intermediate_outs"],
-                use_pos_norm=hparams["use_pos_norm"],   # for old checkpoint to start sampling.
+                use_pos_norm=hparams[
+                    "use_pos_norm"
+                ],  # for old checkpoint to start sampling.
             )
             self.latent_lin = GatedEquivBlock(
                 in_dims=(hparams["sdim_latent"], hparams["vdim_latent"]),
@@ -174,7 +183,9 @@ class Trainer(pl.LightningModule):
             )
             self.graph_pooling = SoftMaxAttentionAggregation(dim=hparams["latent_dim"])
             m = 2 if hparams["latentmodel"] == "vae" else 1
-            self.mu_logvar_z = DenseLayer(hparams["latent_dim"], m * hparams["latent_dim"])
+            self.mu_logvar_z = DenseLayer(
+                hparams["latent_dim"], m * hparams["latent_dim"]
+            )
             self.node_z = DenseLayer(hparams["latent_dim"], self.max_nodes)
             self.latentmodel = get_latent_model(hparams)
 
@@ -968,21 +979,27 @@ class Trainer(pl.LightningModule):
             else:
                 num_nodes_lig += n_nodes_bias
         else:
-            pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(0)
-            num_nodes_lig = (
-                self.conditional_size_distribution.sample_conditional(
-                    n1=None, n2=pocket_size
+            try:
+                pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(0)
+                num_nodes_lig = (
+                    self.conditional_size_distribution.sample_conditional(
+                        n1=None, n2=pocket_size
+                    )
+                    .repeat(num_graphs)
+                    .to(self.device)
                 )
-                .repeat(num_graphs)
-                .to(self.device)
-            )
+            except Exception:
+                print(
+                    "Could not retrieve ligand size from the conditional size distribution given the pocket size. Taking the ground truth size."
+                )
+                num_nodes_lig = pocket_data.batch.bincount().to(self.device)
             if vary_n_nodes:
                 num_nodes_lig += torch.randint(
                     low=0, high=n_nodes_bias, size=num_nodes_lig.size()
                 ).to(self.device)
             else:
                 num_nodes_lig += n_nodes_bias
-            
+
         molecules = self.reverse_sampling(
             num_graphs=num_graphs,
             num_nodes_lig=num_nodes_lig,
@@ -999,7 +1016,7 @@ class Trainer(pl.LightningModule):
             sanitize=sanitize,
             build_obabel_mol=build_obabel_mol,
             save_dir=save_dir,
-            encode_ligand=True,   # note this is hardcoded as true for our use-case on conditioning. (evaluation but also inference)
+            encode_ligand=True,  # note this is hardcoded as true for our use-case on conditioning. (evaluation but also inference)
         )
         return molecules
 

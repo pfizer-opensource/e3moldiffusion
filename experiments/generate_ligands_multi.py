@@ -1,5 +1,6 @@
 import argparse
 import os
+import random
 import shutil
 import tempfile
 import warnings
@@ -19,7 +20,8 @@ from torch_geometric.data import Batch
 
 from experiments.data.distributions import DistributionProperty
 from experiments.data.ligand.process_pdb import get_pdb_components, write_pdb
-from experiments.data.utils import mol_to_torch_geometric, save_pickle
+from experiments.data.utils import load_pickle, mol_to_torch_geometric, save_pickle
+from experiments.docking import calculate_qvina2_score
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import (
     prepare_pocket,
@@ -41,41 +43,18 @@ class dotdict(dict):
     __setattr__ = dict.__setitem__
     __delattr__ = dict.__delitem__
 
+def create_list_defaultdict():
+    return defaultdict(list)
 
-def evaluate(
-    mp_index,
-    num_gpus,
-    model_path,
-    save_dir,
-    test_dir,
-    pdb_dir,
-    test_list,
-    skip_existing,
-    fix_n_nodes,
-    vary_n_nodes,
-    n_nodes_bias,
-    num_ligands_per_pocket,
-    build_obabel_mol,
-    batch_size,
-    ddpm,
-    eta_ddim,
-    relax_mol,
-    max_relax_iter,
-    sanitize,
-    filter_by_posebusters,
-    max_sample_iter,
-    dataset_root=None,
-    encode_ligand=False,
-    importance_sampling=False,
-    ground_truth_size=False,
-):
+
+def evaluate(args):
     # load hyperparameter
-    hparams = torch.load(model_path)["hyper_parameters"]
+    hparams = torch.load(args.model_path)["hyper_parameters"]
     hparams["select_train_subset"] = False
     hparams["diffusion_pretraining"] = False
     hparams["num_charge_classes"] = 6
-    if dataset_root is not None:
-        hparams["dataset_root"] = dataset_root
+    if args.dataset_root is not None:
+        hparams["dataset_root"] = args.dataset_root
     hparams = dotdict(hparams)
 
     hparams.load_ckpt_from_pretrained = None
@@ -124,7 +103,7 @@ def evaluate(
     # if you want bond_model_guidance, flag this here in the Trainer
     device = "cuda"
     model = Trainer.load_from_checkpoint(
-        model_path,
+        args.model_path,
         dataset_info=dataset_info,
         smiles_list=train_smiles,
         histogram=histogram,
@@ -135,6 +114,8 @@ def evaluate(
         ligand_pocket_hidden_distance=None,
         ligand_pocket_distance_loss=None,
         load_ckpt=None,
+        # atoms_continuous=False,
+        # joint_property_prediction=False,
         # energy_model_guidance=True if use_energy_guidance else False,
         # ckpt_energy_model=ckpt_energy_model,
         run_evaluation=True,
@@ -144,15 +125,18 @@ def evaluate(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    save_dir.mkdir(exist_ok=skip_existing)
-    raw_sdf_dir = Path(save_dir, "sampled")
-    raw_sdf_dir.mkdir(exist_ok=skip_existing)
-    times_dir = Path(save_dir, "pocket_times")
-    times_dir.mkdir(exist_ok=skip_existing)
+    args.save_dir.mkdir(exist_ok=args.skip_existing)
+    raw_sdf_dir = Path(args.save_dir, "sampled")
+    raw_sdf_dir.mkdir(exist_ok=args.skip_existing)
+    if args.filter_by_docking_scores:
+        docked_sdf_dir = Path(args.save_dir, "docked")
+        docked_sdf_dir.mkdir(exist_ok=args.skip_existing)
+    times_dir = Path(args.save_dir, "pocket_times")
+    times_dir.mkdir(exist_ok=args.skip_existing)
 
-    test_files = list(test_dir.glob("[!.]*.sdf"))
-    if test_list is not None:
-        with open(test_list, "r") as f:
+    test_files = list(args.test_dir.glob("[!.]*.sdf"))
+    if args.test_list is not None:
+        with open(args.test_list, "r") as f:
             test_list = set(f.read().split(","))
         test_files = [x for x in test_files if x.stem in test_list]
 
@@ -164,18 +148,23 @@ def evaluate(
     posecheck_dict = defaultdict(list)
 
     sdf_files = []
+    if args.encode_ligand:
+        embedding_dict = defaultdict(create_list_defaultdict)
+        embed_out_file = Path(args.save_dir, f"{args.mp_index}_latent_embeddings.pt")
 
-    if build_obabel_mol:
+    if args.build_obabel_mol:
         print(
             "Sampled molecules will be built with OpenBabel (without bond information)!"
         )
     print("\nStarting sampling...\n")
 
-    assert np.sum([len(i) for i in split_list(test_files, num_gpus)]) == len(test_files)
+    assert np.sum([len(i) for i in split_list(test_files, args.num_gpus)]) == len(
+        test_files
+    )
 
-    test_files = split_list(test_files, num_gpus)[mp_index - 1]
+    test_files = split_list(test_files, args.num_gpus)[args.mp_index - 1]
 
-    print(f"Processing {len(test_files)} SDF files on job index {mp_index}.")
+    print(f"Processing {len(test_files)} SDF files on job index {args.mp_index}.")
 
     for sdf_file in test_files:
         ligand_name = sdf_file.stem
@@ -184,6 +173,8 @@ def evaluate(
         pdb_file = Path(sdf_file.parent, f"{pdb_name}.pdb")
         txt_file = Path(sdf_file.parent, f"{ligand_name}.txt")
         sdf_out_file_raw = Path(raw_sdf_dir, f"{ligand_name}_gen.sdf")
+        if args.filter_by_docking_scores:
+            sdf_out_file_docked = Path(docked_sdf_dir, f"{ligand_name}_out.sdf")
         time_file = Path(times_dir, f"{ligand_name}.txt")
 
         t_pocket_start = time()
@@ -207,8 +198,9 @@ def evaluate(
             residues,
             dataset_info.atom_encoder,
             no_H=True,
-            repeats=batch_size,
+            repeats=args.batch_size,
             device=device,
+            ligand_sdf=sdf_file if not args.encode_ligand else None,
         )
         
         suppl = Chem.SDMolSupplier(str(sdf_file))
@@ -219,9 +211,9 @@ def evaluate(
         mol = mol[0]
         num_nodes_ligand = mol.GetNumAtoms()
         num_nodes_ligand = torch.tensor([num_nodes_ligand] * batch_size).long().to(device)
-        
         pocket_data.num_nodes_ligand = num_nodes_ligand
-        if encode_ligand:
+        
+        if args.encode_ligand:
             ligand_data = mol_to_torch_geometric(
                 mol,
                 dataset_info.atom_encoder,
@@ -229,8 +221,19 @@ def evaluate(
                 remove_hydrogens=hparams.remove_hs,
                 cog_proj=True,  # only for processing the ligand-shape encode
             )
+            ligand_data = Batch.from_data_list([ligand_data]).to(device)
+            with torch.no_grad():
+                ligand_embeds = model.encode_ligand(
+                    pos=ligand_data.pos,
+                    atom_types=ligand_data.x,
+                    data_batch=torch.zeros_like(ligand_data.x).to(device),
+                    bond_edge_index=ligand_data.edge_index,
+                    bond_edge_attr=ligand_data.edge_attr,
+                )
+            embedding_dict[ligand_name]["seed"].append(ligand_embeds)
+
             ligand_data = Batch.from_data_list(
-                [deepcopy(ligand_data) for _ in range(batch_size)]
+                [deepcopy(ligand_data) for _ in range(args.batch_size)]
             )
             for name, tensor in ligand_data.to_dict().items():
                 pocket_data.__setattr__(name, tensor)
@@ -239,53 +242,35 @@ def evaluate(
 
         k = 0
         while (
-            len(valid_and_unique_molecules) < num_ligands_per_pocket
-            and k <= max_sample_iter
+            len(valid_and_unique_molecules) < args.num_ligands_per_pocket
+            and k <= args.max_sample_iter
         ):
             k += 1
             with torch.no_grad():
-                
-                if not importance_sampling:
-                    molecules = model.generate_ligands(
-                        pocket_data,
-                        num_graphs=batch_size,
-                        fix_n_nodes=fix_n_nodes,
-                        vary_n_nodes=vary_n_nodes,
-                        n_nodes_bias=n_nodes_bias,
-                        build_obabel_mol=build_obabel_mol,
-                        inner_verbose=False,
-                        save_traj=False,
-                        ddpm=ddpm,
-                        eta_ddim=eta_ddim,
-                        relax_mol=relax_mol,
-                        max_relax_iter=max_relax_iter,
-                        sanitize=sanitize,
-                        ground_truth_size=ground_truth_size,
-                    )
-                else:
-                    molecules = model.generate_ligands(
-                        pocket_data,
-                        num_graphs=batch_size,
-                        fix_n_nodes=fix_n_nodes,
-                        vary_n_nodes=vary_n_nodes,
-                        n_nodes_bias=n_nodes_bias,
-                        build_obabel_mol=build_obabel_mol,
-                        inner_verbose=False,
-                        save_traj=False,
-                        ddpm=ddpm,
-                        eta_ddim=eta_ddim,
-                        relax_mol=relax_mol,
-                        max_relax_iter=max_relax_iter,
-                        sanitize=sanitize,
-                        importance_sampling=True,
-                        tau=0.1,
-                        every_importance_t=5,
-                        importance_sampling_start=0,
-                        importance_sampling_end=200,
-                        maximize_score=True,
-                        ground_truth_size=ground_truth_size,
-                    )
-                    
+                molecules = model.generate_ligands(
+                    pocket_data,
+                    num_graphs=args.batch_size,
+                    fix_n_nodes=args.fix_n_nodes,
+                    vary_n_nodes=args.vary_n_nodes,
+                    n_nodes_bias=args.n_nodes_bias,
+                    property_self_guidance=args.property_self_guidance,
+                    guidance_scale=args.guidance_scale,
+                    build_obabel_mol=args.build_obabel_mol,
+                    inner_verbose=False,
+                    save_traj=False,
+                    ddpm=args.ddpm,
+                    eta_ddim=args.eta_ddim,
+                    relax_mol=args.relax_mol,
+                    max_relax_iter=args.max_relax_iter,
+                    sanitize=args.sanitize,
+                    importance_sampling=args.importance_sampling, # True
+                    tau=args.tau, # 0.1,
+                    every_importance_t=args.every_importance_t, # 5,
+                    importance_sampling_start=args.importance_sampling_start, # 0,
+                    importance_sampling_end=args.importance_sampling_end, # 200,
+                    maximize_score=True
+                )
+                     
             all_molecules += len(molecules)
             tmp_molecules.extend(molecules)
             valid_molecules = analyze_stability_for_molecules(
@@ -296,65 +281,50 @@ def evaluate(
                 return_molecules=True,
                 calculate_statistics=False,
                 calculate_distribution_statistics=False,
-                filter_by_posebusters=filter_by_posebusters,
+                filter_by_posebusters=args.filter_by_posebusters,
+                filter_by_lipinski=args.filter_by_lipinski,
                 pdb_file=pdb_file,
                 remove_hs=hparams.remove_hs,
                 device="cpu",
             )
+
             valid_and_unique_molecules = valid_molecules.copy()
             tmp_molecules = valid_molecules.copy()
 
-        if (
-            len(valid_and_unique_molecules) < num_ligands_per_pocket
-            and filter_by_posebusters
+        if len(valid_and_unique_molecules) < args.num_ligands_per_pocket and (
+            args.filter_by_posebusters or args.filter_by_lipinski
         ):
             k = 0
             while (
-                len(valid_and_unique_molecules) < num_ligands_per_pocket
-                and k <= max_sample_iter
+                len(valid_and_unique_molecules) < args.num_ligands_per_pocket
+                and k <= args.max_sample_iter
             ):
                 k += 1
                 with torch.no_grad():
-                    if not importance_sampling:
-                        molecules = model.generate_ligands(
-                            pocket_data,
-                            num_graphs=batch_size,
-                            fix_n_nodes=fix_n_nodes,
-                            vary_n_nodes=vary_n_nodes,
-                            n_nodes_bias=n_nodes_bias,
-                            build_obabel_mol=build_obabel_mol,
-                            inner_verbose=False,
-                            save_traj=False,
-                            ddpm=ddpm,
-                            eta_ddim=eta_ddim,
-                            relax_mol=relax_mol,
-                            max_relax_iter=max_relax_iter,
-                            sanitize=sanitize,
-                            ground_truth_size=ground_truth_size,
-                        )
-                    else:
-                        molecules = model.generate_ligands(
-                            pocket_data,
-                            num_graphs=batch_size,
-                            fix_n_nodes=fix_n_nodes,
-                            vary_n_nodes=vary_n_nodes,
-                            n_nodes_bias=n_nodes_bias,
-                            build_obabel_mol=build_obabel_mol,
-                            inner_verbose=False,
-                            save_traj=False,
-                            ddpm=ddpm,
-                            eta_ddim=eta_ddim,
-                            relax_mol=relax_mol,
-                            max_relax_iter=max_relax_iter,
-                            sanitize=sanitize,
-                            importance_sampling=True,
-                            tau=0.1,
-                            every_importance_t=5,
-                            importance_sampling_start=0,
-                            importance_sampling_end=200,
-                            maximize_score=True,
-                            ground_truth_size=ground_truth_size,
-                        )
+                    molecules = model.generate_ligands(
+                    pocket_data,
+                    num_graphs=args.batch_size,
+                    fix_n_nodes=args.fix_n_nodes,
+                    vary_n_nodes=args.vary_n_nodes,
+                    n_nodes_bias=args.n_nodes_bias,
+                    property_self_guidance=args.property_self_guidance,
+                    guidance_scale=args.guidance_scale,
+                    build_obabel_mol=args.build_obabel_mol,
+                    inner_verbose=False,
+                    save_traj=False,
+                    ddpm=args.ddpm,
+                    eta_ddim=args.eta_ddim,
+                    relax_mol=args.relax_mol,
+                    max_relax_iter=args.max_relax_iter,
+                    sanitize=args.sanitize,
+                    importance_sampling=args.importance_sampling, # True
+                    tau=args.tau, # 0.1,
+                    every_importance_t=args.every_importance_t, # 5,
+                    importance_sampling_start=args.importance_sampling_start, # 0,
+                    importance_sampling_end=args.importance_sampling_end, # 200,
+                    maximize_score=True
+                )
+                    
                 all_molecules += len(molecules)
                 tmp_molecules.extend(molecules)
                 valid_molecules = analyze_stability_for_molecules(
@@ -365,7 +335,6 @@ def evaluate(
                     return_molecules=True,
                     calculate_statistics=False,
                     calculate_distribution_statistics=False,
-                    filter_by_posebusters=False,
                     pdb_file=pdb_file,
                     remove_hs=hparams.remove_hs,
                     device="cpu",
@@ -373,11 +342,15 @@ def evaluate(
                 valid_and_unique_molecules = valid_molecules.copy()
                 tmp_molecules = valid_molecules.copy()
 
-        if len(valid_and_unique_molecules) < num_ligands_per_pocket:
+        if len(valid_and_unique_molecules) == 0:
             print(
-                f"Reached {max_sample_iter} sampling iterations, but could not find {num_ligands_per_pocket} for pdb file {pdb_file}. Abort."
+                f"Reached {args.max_sample_iter} sampling iterations, but could not find any ligands for pdb file {pdb_file}. Skipping."
             )
-            break
+            continue
+        elif len(valid_and_unique_molecules) < args.num_ligands_per_pocket:
+            print(
+                f"FYI: Reached {args.max_sample_iter} sampling iterations, but could only find {len(valid_and_unique_molecules)} ligands for pdb file {pdb_file}."
+            )
 
         del pocket_data
         torch.cuda.empty_cache()
@@ -401,6 +374,43 @@ def evaluate(
             remove_hs=hparams.remove_hs,
             device="cpu",
         )
+
+        if args.filter_by_docking_scores:
+            temp_file = tempfile.NamedTemporaryFile(
+                suffix=f"{random.randint(0, 100000)}.sdf", delete=False
+            )
+            temp_path = temp_file.name
+            write_sdf_file(temp_path, valid_molecules, extract_mol=True)
+            target = ("-").join(
+                ligand_name.split("-")[:5]
+            )  # get the target, chain and ligand name
+            ground_truth_score = load_pickle(args.docking_scores)[
+                target
+            ]  # get the ground truth docking score of that target
+            receptor_file = Path(args.pdbqt_dir, ligand_name.split("_")[0] + ".pdbqt")
+            scores, rdmols, valid_ids = calculate_qvina2_score(
+                pdb_file,
+                receptor_file,
+                temp_path,
+                args.save_dir,
+                return_rdmol=True,
+                filtering=True,
+            )
+            valid_molecules = [
+                m for i, m in enumerate(valid_molecules) if i in valid_ids
+            ]
+            valid_molecules = [
+                m for m, s in zip(valid_molecules, scores) if ground_truth_score < s
+            ]
+            write_sdf_file(sdf_out_file_docked, rdmols)
+
+            temp_file.close()
+            os.remove(temp_path)
+
+            if len(valid_molecules) == 0:
+                print("No sample found with better docking score. Skipping!")
+                continue
+
         run_time = datetime.now() - start
         print(f"\n Run time={run_time} for {len(valid_molecules)} valid molecules \n")
 
@@ -409,9 +419,32 @@ def evaluate(
         statistics_dict["Lipinski"].append(statistics["Lipinski"])
         statistics_dict["Diversity"].append(statistics["Diversity"])
 
-        valid_molecules = valid_molecules[
-            :num_ligands_per_pocket
-        ]  # we could sort them by QED, SA or whatever
+        if len(valid_molecules) > args.num_ligands_per_pocket:
+            valid_molecules = valid_molecules[
+                : args.num_ligands_per_pocket
+            ]  # we could sort them by QED, SA or whatever
+
+        if args.encode_ligand:
+            ligand_data = [
+                mol_to_torch_geometric(
+                    mol.rdkit_mol,
+                    dataset_info.atom_encoder,
+                    Chem.MolToSmiles(mol.rdkit_mol),
+                    remove_hydrogens=True,
+                    cog_proj=True,
+                )
+                for mol in valid_molecules
+            ]
+            ligand_data = Batch.from_data_list(ligand_data).to(device)
+            with torch.no_grad():
+                ligand_embeds = model.encode_ligand(
+                    pos=ligand_data.pos,
+                    atom_types=ligand_data.x,
+                    data_batch=ligand_data.batch,
+                    bond_edge_index=ligand_data.edge_index,
+                    bond_edge_attr=ligand_data.edge_attr,
+                )
+            embedding_dict[ligand_name]["sampled"].append(ligand_embeds)
 
         write_sdf_file(sdf_out_file_raw, valid_molecules, extract_mol=True)
         sdf_files.append(sdf_out_file_raw)
@@ -431,7 +464,7 @@ def evaluate(
         #     pdb_file = write_pdb(temp_dir, protein, pdb_name)
 
         # PoseBusters
-        if not filter_by_posebusters:
+        if not args.filter_by_posebusters and not args.omit_posebusters:
             print("Starting evaluation with PoseBusters...")
             buster = {}
             buster_mol = PoseBusters(config="mol")
@@ -453,38 +486,39 @@ def evaluate(
                 buster_dict[k].append(v)
             print("Done!")
 
-        # PoseCheck
-        print("Starting evaluation with PoseCheck...")
-        pc = PoseCheck()
-        pc.load_protein_from_pdb(str(pdb_file))
-        pc.load_ligands_from_sdf(str(sdf_out_file_raw), add_hs=True)
-        interactions = pc.calculate_interactions()
-        interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
-            interactions
-        )
-        for k, v in interactions_per_mol.items():
-            violin_dict[k].extend(v)
-        for k, v in interactions_mean.items():
-            posecheck_dict[k].append(v["mean"])
-        clashes = pc.calculate_clashes()
-        strain_energies = pc.calculate_strain_energy()
-        violin_dict["Clashes"].extend(clashes)
-        violin_dict["Strain Energies"].extend(strain_energies)
-        posecheck_dict["Clashes"].append(np.mean(clashes))
-        posecheck_dict["Strain Energies"].append(np.nanmedian(strain_energies))
-        print("Done!")
+        if not args.omit_posecheck:
+            # PoseCheck
+            print("Starting evaluation with PoseCheck...")
+            pc = PoseCheck()
+            pc.load_protein_from_pdb(str(pdb_file))
+            pc.load_ligands_from_sdf(str(sdf_out_file_raw), add_hs=True)
+            interactions = pc.calculate_interactions()
+            interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
+                interactions
+            )
+            for k, v in interactions_per_mol.items():
+                violin_dict[k].extend(v)
+            for k, v in interactions_mean.items():
+                posecheck_dict[k].append(v["mean"])
+            clashes = pc.calculate_clashes()
+            strain_energies = pc.calculate_strain_energy()
+            violin_dict["Clashes"].extend(clashes)
+            violin_dict["Strain Energies"].extend(strain_energies)
+            posecheck_dict["Clashes"].append(np.mean(clashes))
+            posecheck_dict["Strain Energies"].append(np.nanmedian(strain_energies))
+            print("Done!")
 
-        # try:
-        #     shutil.rmtree(temp_dir)
-        # except UnboundLocalError:
-        #     pass
+            # try:
+            #     shutil.rmtree(temp_dir)
+            # except UnboundLocalError:
+            #     pass
 
         # Time the sampling process
         time_per_pocket[str(sdf_file)] = time() - t_pocket_start
         with open(time_file, "w") as f:
             f.write(f"{str(sdf_file)} {time_per_pocket[str(sdf_file)]}")
 
-    with open(Path(save_dir, "pocket_times.txt"), "w") as f:
+    with open(Path(args.save_dir, "pocket_times.txt"), "w") as f:
         for k, v in time_per_pocket.items():
             f.write(f"{k} {v}\n")
 
@@ -496,19 +530,28 @@ def evaluate(
     print("Sampling finished.")
 
     save_pickle(
-        statistics_dict, os.path.join(save_dir, f"{mp_index}_statistics_dict.pickle")
+        statistics_dict,
+        os.path.join(args.save_dir, f"{args.mp_index}_statistics_dict.pickle"),
     )
-    if not filter_by_posebusters:
+    if not args.filter_by_posebusters and not args.omit_posebusters:
         save_pickle(
             buster_dict,
-            os.path.join(save_dir, f"{mp_index}_posebusters_sampled.pickle"),
+            os.path.join(args.save_dir, f"{args.mp_index}_posebusters_sampled.pickle"),
         )
-    save_pickle(
-        violin_dict, os.path.join(save_dir, f"{mp_index}_violin_dict_sampled.pickle")
-    )
-    save_pickle(
-        posecheck_dict, os.path.join(save_dir, f"{mp_index}_posecheck_sampled.pickle")
-    )
+    if not args.omit_posebusters and not args.omit_posecheck:
+        save_pickle(
+            violin_dict,
+            os.path.join(args.save_dir, f"{args.mp_index}_violin_dict_sampled.pickle"),
+        )
+    if not args.omit_posecheck:
+        save_pickle(
+            posecheck_dict,
+            os.path.join(args.save_dir, f"{args.mp_index}_posecheck_sampled.pickle"),
+        )
+
+    if args.encode_ligand:
+        embedding_dict = {k: v for k, v in embedding_dict.items()}
+        torch.save(embedding_dict, embed_out_file)
 
 
 def get_args():
@@ -521,10 +564,6 @@ def get_args():
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument('--dataset-root', default=None, type=str,
                         help='If not set it will be taken from the model ckpt, otherwise it will overwrite it in the ckpt.')
-    parser.add_argument("--use-energy-guidance", default=False, action="store_true")
-    parser.add_argument("--ckpt-energy-model", default=None, type=str)
-    parser.add_argument('--guidance-scale', default=1.0e-4, type=float,
-                        help='How to scale the guidance shift')
     parser.add_argument('--save-xyz', default=False, action="store_true",
                         help='Whether or not to store generated molecules in xyz files')
     parser.add_argument('--calculate-energy', default=False, action="store_true",
@@ -548,19 +587,19 @@ def get_args():
     parser.add_argument("--test-dir", type=Path)
     parser.add_argument("--encode-ligand", default=False, action="store_true")
     parser.add_argument(
-        "--pdb-dir",
+        "--pdbqt-dir",
         type=Path,
         default=None,
-        help="Directory where all full protein pdb files are stored. If not available, there will be calculated on the fly.",
+        help="Directory where all full protein pdbqt files are stored. If not available, there will be calculated on the fly.",
     )
     parser.add_argument("--test-list", type=Path, default=None)
     parser.add_argument("--save-dir", type=Path)
     parser.add_argument("--fix-n-nodes", default=False, action="store_true")
     parser.add_argument("--vary-n-nodes", default=False,  action="store_true")
     parser.add_argument("--n-nodes-bias", default=0, type=int)
-    parser.add_argument("--ground-truth-size", default=False, action="store_true")
-    parser.add_argument("--filter-by-posebusters", default=False, action="store_true")
-    parser.add_argument("--importance-sampling", action="store_true", default=False)
+    parser.add_argument("--filter-by-posebusters", action="store_true")
+    
+    parser.add_argument("--encode-ligand", default=False, action="store_true")
 
     args = parser.parse_args()
     return args
@@ -568,31 +607,4 @@ def get_args():
 
 if __name__ == "__main__":
     args = get_args()
-    # Evaluate negative log-likelihood for the test partitions
-    evaluate(
-        mp_index=args.mp_index,
-        num_gpus=args.num_gpus,
-        model_path=args.model_path,
-        test_dir=args.test_dir,
-        pdb_dir=args.pdb_dir,
-        test_list=args.test_list,
-        skip_existing=args.skip_existing,
-        save_dir=args.save_dir,
-        fix_n_nodes=args.fix_n_nodes,
-        vary_n_nodes=args.vary_n_nodes,
-        n_nodes_bias=args.n_nodes_bias,
-        batch_size=args.batch_size,
-        num_ligands_per_pocket=args.num_ligands_per_pocket,
-        build_obabel_mol=args.build_obabel_mol,
-        ddpm=not args.ddim,
-        eta_ddim=args.eta_ddim,
-        relax_mol=args.relax_mol,
-        max_relax_iter=args.max_relax_iter,
-        sanitize=args.sanitize,
-        dataset_root=args.dataset_root,
-        encode_ligand=args.encode_ligand,
-        filter_by_posebusters=args.filter_by_posebusters,
-        max_sample_iter=args.max_sample_iter,
-        importance_sampling=args.importance_sampling,
-        ground_truth_size=args.ground_truth_size,
-    )
+    evaluate(args)

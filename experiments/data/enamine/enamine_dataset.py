@@ -1,29 +1,30 @@
-from rdkit import RDLogger
-import torch
-import numpy as np
-from os.path import join
-from torch_geometric.data import Dataset, DataLoader
-from experiments.data.utils import load_pickle, make_splits
-from torch.utils.data import Subset
-import lmdb
-import pickle
 import gzip
 import io
-from pytorch_lightning import LightningDataModule
 import os
+import pickle
+from os.path import join
+
 import experiments.data.utils as dataset_utils
+import lmdb
+import numpy as np
+import torch
 from experiments.data.abstract_dataset import (
     AbstractAdaptiveDataModule,
 )
+from experiments.data.utils import load_pickle, make_splits
+from pytorch_lightning import LightningDataModule
+from rdkit import RDLogger
+from torch.utils.data import Subset
+from torch_geometric.data import DataLoader, Dataset
 
 # aws
-ENAMINE_DB_ROOT = "/scratch1/e3moldiffusion/data/enamine/database_noH"  
+# ENAMINE_DB_ROOT = "/scratch1/e3moldiffusion/data/enamine/database_noH"
 
 # delta
 # ENAMINE_DB_ROOT = "/home/let55/workspace/datasets/enamine/database_noH"
 
 # gamma
-# ENAMINE_DB_ROOT = "/hpfs/projects/mlcs/mlhub/e3moldiffusion/data/enamine/database_noH"
+ENAMINE_DB_ROOT = "/scratch1/e3moldiffusion/data/enamine/database_noH"
 
 full_atom_encoder = {
     "H": 0,
@@ -44,6 +45,7 @@ full_atom_encoder = {
     "Bi": 15,
 }
 
+
 def get_data(env, index):
     with env.begin(write=False) as txn:
         compressed = txn.get(str(index).encode())
@@ -55,6 +57,7 @@ def get_data(env, index):
         except Exception as e:
             return None
     return item
+
 
 class EnamineLMDBDataset(Dataset):
     def __init__(
@@ -71,10 +74,8 @@ class EnamineLMDBDataset(Dataset):
         self._num_graphs = 108_754_224
 
         if remove_hs:
-            self.stats_dir = (
-                f"{ENAMINE_DB_ROOT}/processed"
-            )
-      
+            self.stats_dir = f"{ENAMINE_DB_ROOT}/processed"
+
         super().__init__(root)
 
         self.remove_hs = remove_hs
@@ -162,7 +163,7 @@ class EnamineDataModule(AbstractAdaptiveDataModule):
 
         self.remove_hs = hparams.remove_hs
         if self.remove_hs:
-            print("Pre-Training on dataset with implicit hydrogens")
+            print("Training on Enamine dataset with implicit hydrogens")
         self.dataset = EnamineLMDBDataset(
             root=self.datadir, remove_hs=self.remove_hs, evaluation=evaluation
         )
@@ -275,8 +276,9 @@ class EnamineDataModule(AbstractAdaptiveDataModule):
         )
 
         return dl
-    
-if __name__ == '__main__':
+
+
+if __name__ == "__main__":
     dataset = EnamineLMDBDataset(root=ENAMINE_DB_ROOT, remove_hs=True)
     print(dataset.get(0))
     print(dataset.get(108754223))

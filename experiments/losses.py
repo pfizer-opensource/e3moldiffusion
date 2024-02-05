@@ -46,13 +46,16 @@ class DiffusionLoss(nn.Module):
         bonds_loss = None
         mulliken_loss = None
         wbo_loss = None
+        property_loss = 0.0
 
         if weights is not None:
             assert len(weights) == batch_size
 
             if intermediate_coords:
                 pos_true = true_data[self.regression_key]
-                pos_list = pred_data[self.regression_key] # tensor of shape [num_layers, N, 3] where the last element on first axis is the final coords prediction
+                pos_list = pred_data[
+                    self.regression_key
+                ]  # tensor of shape [num_layers, N, 3] where the last element on first axis is the final coords prediction
                 pos_losses = (
                     torch.nn.functional.l1_loss(
                         pos_true[None, :, :].expand(len(pos_list), -1, -1),
@@ -62,7 +65,7 @@ class DiffusionLoss(nn.Module):
                     if l1_loss
                     else torch.square(pos_true.unsqueeze(0) - pos_list)
                 )
-                pos_losses = pos_losses.mean(-1) # [num_layers, N]
+                pos_losses = pos_losses.mean(-1)  # [num_layers, N]
                 pos_losses = scatter_mean(pos_losses, batch, -1)
                 # [num_layers, bs]
                 aux_loss = pos_losses[:-1].mean(0)
@@ -121,6 +124,15 @@ class DiffusionLoss(nn.Module):
             else:
                 fnc = F.mse_loss
                 take_mean = True
+
+            if pred_data["properties"] is not None:
+                property_loss = F.mse_loss(
+                    pred_data["properties"],
+                    true_data["properties"],
+                    reduction="none",
+                )
+                property_loss *= weights
+                property_loss = torch.mean(property_loss, dim=0)
 
             atoms_loss = fnc(pred_data["atoms"], true_data["atoms"], reduction="none")
             if take_mean:
@@ -230,14 +242,12 @@ class DiffusionLoss(nn.Module):
                 donor_loss = scatter_mean(
                     donor_loss, index=batch, dim=0, dim_size=batch_size
                 )
-                donor_loss, m = self.loss_non_nans(
-                    donor_loss, "donor"
-                )
+                donor_loss, m = self.loss_non_nans(donor_loss, "donor")
                 donor_loss *= weights[~m]
                 donor_loss = torch.sum(donor_loss, dim=0)
             else:
                 donor_loss = None
-            
+
             if "acceptor" in self.modalities:
                 acceptor_loss = F.cross_entropy(
                     pred_data["acceptor"],
@@ -247,9 +257,7 @@ class DiffusionLoss(nn.Module):
                 acceptor_loss = scatter_mean(
                     acceptor_loss, index=batch, dim=0, dim_size=batch_size
                 )
-                acceptor_loss, m = self.loss_non_nans(
-                    acceptor_loss, "acceptor"
-                )
+                acceptor_loss, m = self.loss_non_nans(acceptor_loss, "acceptor")
                 acceptor_loss *= weights[~m]
                 acceptor_loss = torch.sum(acceptor_loss, dim=0)
             else:
@@ -284,6 +292,13 @@ class DiffusionLoss(nn.Module):
                     pred_data["bonds"], true_data["bonds"], reduction="mean"
                 )
 
+            if pred_data["properties"] is not None:
+                property_loss = F.mse_loss(
+                    pred_data["properties"],
+                    true_data["properties"],
+                    reduction="mean",
+                )
+
             if "ring" in self.modalities:
                 ring_loss = F.cross_entropy(
                     pred_data["ring"], true_data["ring"], reduction="mean"
@@ -306,7 +321,7 @@ class DiffusionLoss(nn.Module):
                 )
             else:
                 hybridization_loss = None
-                
+
             if "donor" in self.modalities:
                 donor_loss = F.cross_entropy(
                     pred_data["donor"],
@@ -315,7 +330,7 @@ class DiffusionLoss(nn.Module):
                 )
             else:
                 donor_loss = None
-                
+
             if "acceptor" in self.modalities:
                 acceptor_loss = F.cross_entropy(
                     pred_data["acceptor"],
@@ -335,7 +350,8 @@ class DiffusionLoss(nn.Module):
             "mulliken": mulliken_loss,
             "wbo": wbo_loss,
             "donor": donor_loss,
-            "acceptor": acceptor_loss
+            "acceptor": acceptor_loss,
+            "properties": property_loss,
         }
 
         return loss
