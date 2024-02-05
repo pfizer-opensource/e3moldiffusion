@@ -157,17 +157,11 @@ class Trainer(pl.LightningModule):
                 property_prediction=hparams["property_prediction"],
                 coords_param=hparams["continuous_param"],
                 store_intermediate_coords=hparams["store_intermediate_coords"],
-                # new: possibly comment out for back tracktability
                 use_pos_norm=hparams["use_pos_norm"],
                 ligand_pocket_interaction=hparams["ligand_pocket_interaction"],
-                model_synth=hparams["model_synth"],
+                joint_property_prediction=hparams["joint_property_prediction"],
             )
             
-        if hparams["model_synth"]:
-            self.bce_loss = torch.nn.BCELoss(reduction="none")
-        else:
-            self.bce_loss = None
-
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
             beta_max=hparams["beta_max"],
@@ -286,7 +280,15 @@ class Trainer(pl.LightningModule):
             )
 
     def _log(
-        self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, synth_loss, batch_size, stage
+        self, 
+        loss,
+        coords_loss,
+        atoms_loss,
+        charges_loss, 
+        bonds_loss,
+        properties_loss,
+        batch_size, 
+        stage
     ):
         self.log(
             f"{stage}/loss",
@@ -333,10 +335,10 @@ class Trainer(pl.LightningModule):
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
         
-        if synth_loss is not None:
+        if properties_loss is not None:
             self.log(
-                f"{stage}/synth_loss",
-                synth_loss,
+                f"{stage}/properties_loss",
+                properties_loss,
                 on_step=True,
                 batch_size=batch_size,
                 prog_bar=(stage == "train"),
@@ -389,6 +391,9 @@ class Trainer(pl.LightningModule):
             "atoms": out_dict["atoms_true"],
             "charges": out_dict["charges_true"],
             "bonds": out_dict["bonds_true"],
+            "properties": out_dict["properties_true"]
+            if self.hparams.joint_property_prediction
+            else None,
         }
 
         coords_pred = out_dict["coords_pred"]
@@ -397,12 +402,18 @@ class Trainer(pl.LightningModule):
             [self.num_atom_types, self.num_charge_classes], dim=-1
         )
         edges_pred = out_dict["bonds_pred"]
-
+        prop_pred = (
+            out_dict["property_pred"].squeeze()
+            if self.hparams.joint_property_prediction
+            else None
+        )
+        
         pred_data = {
             "coords": coords_pred,
             "atoms": atoms_pred,
             "charges": charges_pred,
             "bonds": edges_pred,
+            "properties": prop_pred.sigmoid() if prop_pred else None,
         }
 
         loss = self.diffusion_loss(
@@ -420,15 +431,9 @@ class Trainer(pl.LightningModule):
             + self.hparams.lc_atoms * loss["atoms"]
             + self.hparams.lc_bonds * loss["bonds"]
             + self.hparams.lc_charges * loss["charges"]
+            + self.hparams.lc_properties * loss["properties"]
         )
-        
-        if self.hparams.model_synth:
-            sa_loss = self.bce_loss(out_dict["synth_pred"].squeeze(dim=-1), out_dict["synth_true"].squeeze(dim=-1))
-            sa_loss = torch.mean(weights * sa_loss)
-            final_loss = final_loss + sa_loss
-        else:
-            sa_loss = None
-
+       
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
             print(f"Detected NaNs. Terminating training at epoch {self.current_epoch}")
@@ -440,7 +445,7 @@ class Trainer(pl.LightningModule):
             loss["atoms"],
             loss["charges"],
             loss["bonds"],
-            sa_loss,
+            loss["properties"],
             batch_size,
             stage,
         )
@@ -460,15 +465,7 @@ class Trainer(pl.LightningModule):
         bond_edge_index, bond_edge_attr = sort_edge_index(
             edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
         )
-
-        if self.hparams.model_synth:
-            sascore = np.array([sascorer.calculateScore(Chem.RemoveHs(mol)) for mol in batch.mol])
-            sascore = (sascore - 1.0) / (10.0 - 1.0)
-            sascore = 1.0 - sascore
-            sascore = torch.from_numpy(sascore).float().to(pos.device)
-        else:
-            sascore = None
-            
+      
         # TIME EMBEDDING
         temb = t.float() / self.hparams.timesteps
         temb = temb.clamp(min=self.hparams.eps_min)
@@ -556,7 +553,17 @@ class Trainer(pl.LightningModule):
         out["charges_true"] = charges.argmax(dim=-1)
 
         out["bond_aggregation_index"] = edge_index_global[1]
-        out['synth_true'] = sascore
+
+        if self.hparams.joint_property_prediction:
+            label = np.array([sascorer.calculateScore(Chem.RemoveHs(mol)) for mol in batch.mol])
+            label = (label - 1.0) / (10.0 - 1.0)
+            label = 1.0 - label
+            label = torch.from_numpy(label).float().to(pos.device)
+        else:
+            label = None
+            
+        out["properties_true"] = label
+        
         return out
 
     @torch.no_grad()
@@ -1051,7 +1058,7 @@ class Trainer(pl.LightningModule):
         To make it more "uniform", we can use temperature annealing in the softmax
         """
         
-        sa =out["synth_pred"].squeeze(dim=1) # [B,]
+        sa =out["property_pred"].squeeze(dim=1).sigmoid() # [B,]
         if not maximize_score:
             sa = 1.0 - sa
         n = pos.size(0)

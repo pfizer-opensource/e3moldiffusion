@@ -527,7 +527,7 @@ class Trainer(pl.LightningModule):
             "atoms": atoms_pred,
             "charges": charges_pred,
             "bonds": edges_pred,
-            "properties": prop_pred,
+            "properties": prop_pred.sigmoid() if prop_pred else None,
         }
 
         loss = self.diffusion_loss(
@@ -545,17 +545,8 @@ class Trainer(pl.LightningModule):
             + self.hparams.lc_atoms * loss["atoms"]
             + self.hparams.lc_bonds * loss["bonds"]
             + self.hparams.lc_charges * loss["charges"]
+            + self.hparams.lc_properties * loss["properties"]
         )
-
-        # if self.training:
-        #     final_loss.backward()
-        #     names = []
-        #     for name, param in self.model.named_parameters():
-        #         if param.grad is None:
-        #             names.append(name)
-        #     import pdb
-
-        #     pdb.set_trace()
 
         if self.hparams.ligand_pocket_distance_loss:
             coords_pocket = out_dict["distance_loss_data"]["pos_centered_pocket"]
@@ -1127,7 +1118,7 @@ class Trainer(pl.LightningModule):
         node_feats_in = node_feats_in[pocket_mask]
         pos = pos[pocket_mask]
     
-        sa =out["properties_pred"].squeeze(dim=1) # [B,]
+        sa = out["property_pred"].squeeze(dim=1).sigmoid() # [B,]
         if not maximize_score:
             sa = 1.0 - sa
         n = pos.size(0)
