@@ -260,6 +260,12 @@ def evaluate(args):
                     relax_mol=args.relax_mol,
                     max_relax_iter=args.max_relax_iter,
                     sanitize=args.sanitize,
+                    importance_sampling=args.importance_sampling, # True
+                    tau=args.tau, # 0.1,
+                    every_importance_t=args.every_importance_t, # 5,
+                    importance_sampling_start=args.importance_sampling_start, # 0,
+                    importance_sampling_end=args.importance_sampling_end, # 200,
+                    maximize_score=True
                 )
             all_molecules += len(molecules)
             tmp_molecules.extend(molecules)
@@ -305,6 +311,12 @@ def evaluate(args):
                         relax_mol=args.relax_mol,
                         max_relax_iter=args.max_relax_iter,
                         sanitize=args.sanitize,
+                        importance_sampling=args.importance_sampling, # True
+                        tau=args.tau, # 0.1,
+                        every_importance_t=args.every_importance_t, # 5,
+                        importance_sampling_start=args.importance_sampling_start, # 0,
+                        importance_sampling_end=args.importance_sampling_end, # 200,
+                        maximize_score=True
                     )
                 all_molecules += len(molecules)
                 tmp_molecules.extend(molecules)
@@ -429,21 +441,7 @@ def evaluate(args):
 
         write_sdf_file(sdf_out_file_raw, valid_molecules, extract_mol=True)
         sdf_files.append(sdf_out_file_raw)
-
-        # pdb_name = str(sdf_out_file_raw).split("/")[-1].split("-")[0]
-        # if pdb_dir is not None:
-        #     pdbs = [
-        #         str(i).split("/")[-1].split(".")[0] for i in pdb_dir.glob("[!.]*.pdb")
-        #     ]
-        # else:
-        #     pdbs = None
-        # if pdbs is not None and pdb_name in pdbs:
-        #     pdb_file = os.path.join(str(pdb_dir), pdb_name + ".pdb")
-        # else:
-        #     temp_dir = tempfile.mkdtemp()
-        #     protein, _ = get_pdb_components(pdb_name)
-        #     pdb_file = write_pdb(temp_dir, protein, pdb_name)
-
+        
         # PoseBusters
         if not args.filter_by_posebusters and not args.omit_posebusters:
             print("Starting evaluation with PoseBusters...")
@@ -591,11 +589,16 @@ def get_args():
     parser.add_argument("--omit-posebusters", default=False, action="store_true")
     parser.add_argument("--omit-posecheck", default=False, action="store_true")
 
+    # importance sampling
+    parser.add_argument("--importance-sampling", default=False, action="store_true")
+    parser.add_argument("--tau", default=0.1, type=float)
+    parser.add_argument("--every-importance-t", default=5, type=int)
+    parser.add_argument("--importance-sampling-start", default=0, type=int)
+    parser.add_argument("--importance-sampling-end", default=200, type=int)
     args = parser.parse_args()
     return args
 
 
 if __name__ == "__main__":
     args = get_args()
-    # Evaluate negative log-likelihood for the test partitions
     evaluate(args)
