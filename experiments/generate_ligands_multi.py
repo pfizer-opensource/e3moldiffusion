@@ -1,6 +1,7 @@
 import argparse
 import os
 import random
+import shutil
 import tempfile
 import warnings
 from collections import defaultdict
@@ -18,6 +19,7 @@ from rdkit import Chem
 from torch_geometric.data import Batch
 
 from experiments.data.distributions import DistributionProperty
+from experiments.data.ligand.process_pdb import get_pdb_components, write_pdb
 from experiments.data.utils import load_pickle, mol_to_torch_geometric, save_pickle
 from experiments.docking import calculate_qvina2_score
 from experiments.sampling.analyze import analyze_stability_for_molecules
@@ -33,14 +35,18 @@ warnings.filterwarnings(
 )
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
+
 class dotdict(dict):
     """dot.notation access to dictionary attributes"""
+
     __getattr__ = dict.get
     __setattr__ = dict.__setitem__
     __delattr__ = dict.__delitem__
 
+
 def create_list_defaultdict():
     return defaultdict(list)
+
 
 def evaluate(args):
     # load hyperparameter
@@ -197,18 +203,14 @@ def evaluate(args):
             device=device,
             ligand_sdf=sdf_file if not args.encode_ligand else None,
         )
-        
-        suppl = Chem.SDMolSupplier(str(sdf_file))
-        mol = []
-        for m in suppl:
-            mol.append(m)
-        assert len(mol) == 1
-        mol = mol[0]
-        num_nodes_ligand = mol.GetNumAtoms()
-        num_nodes_ligand = torch.tensor([num_nodes_ligand] * batch_size).long().to(device)
-        pocket_data.num_nodes_ligand = num_nodes_ligand
-        
+
         if args.encode_ligand:
+            suppl = Chem.SDMolSupplier(str(sdf_file))
+            mol = []
+            for m in suppl:
+                mol.append(m)
+            assert len(mol) == 1
+            mol = mol[0]
             ligand_data = mol_to_torch_geometric(
                 mol,
                 dataset_info.atom_encoder,
@@ -258,14 +260,7 @@ def evaluate(args):
                     relax_mol=args.relax_mol,
                     max_relax_iter=args.max_relax_iter,
                     sanitize=args.sanitize,
-                    importance_sampling=args.importance_sampling, # True
-                    tau=args.tau, # 0.1,
-                    every_importance_t=args.every_importance_t, # 5,
-                    importance_sampling_start=args.importance_sampling_start, # 0,
-                    importance_sampling_end=args.importance_sampling_end, # 200,
-                    maximize_score=True
                 )
-                     
             all_molecules += len(molecules)
             tmp_molecules.extend(molecules)
             valid_molecules = analyze_stability_for_molecules(
@@ -297,29 +292,20 @@ def evaluate(args):
                 k += 1
                 with torch.no_grad():
                     molecules = model.generate_ligands(
-                    pocket_data,
-                    num_graphs=args.batch_size,
-                    fix_n_nodes=args.fix_n_nodes,
-                    vary_n_nodes=args.vary_n_nodes,
-                    n_nodes_bias=args.n_nodes_bias,
-                    property_self_guidance=args.property_self_guidance,
-                    guidance_scale=args.guidance_scale,
-                    build_obabel_mol=args.build_obabel_mol,
-                    inner_verbose=False,
-                    save_traj=False,
-                    ddpm=args.ddpm,
-                    eta_ddim=args.eta_ddim,
-                    relax_mol=args.relax_mol,
-                    max_relax_iter=args.max_relax_iter,
-                    sanitize=args.sanitize,
-                    importance_sampling=args.importance_sampling, # True
-                    tau=args.tau, # 0.1,
-                    every_importance_t=args.every_importance_t, # 5,
-                    importance_sampling_start=args.importance_sampling_start, # 0,
-                    importance_sampling_end=args.importance_sampling_end, # 200,
-                    maximize_score=True
-                )
-                    
+                        pocket_data,
+                        num_graphs=args.batch_size,
+                        fix_n_nodes=args.fix_n_nodes,
+                        vary_n_nodes=args.vary_n_nodes,
+                        n_nodes_bias=args.n_nodes_bias,
+                        build_obabel_mol=args.build_obabel_mol,
+                        inner_verbose=False,
+                        save_traj=False,
+                        ddpm=args.ddpm,
+                        eta_ddim=args.eta_ddim,
+                        relax_mol=args.relax_mol,
+                        max_relax_iter=args.max_relax_iter,
+                        sanitize=args.sanitize,
+                    )
                 all_molecules += len(molecules)
                 tmp_molecules.extend(molecules)
                 valid_molecules = analyze_stability_for_molecules(
@@ -444,6 +430,20 @@ def evaluate(args):
         write_sdf_file(sdf_out_file_raw, valid_molecules, extract_mol=True)
         sdf_files.append(sdf_out_file_raw)
 
+        # pdb_name = str(sdf_out_file_raw).split("/")[-1].split("-")[0]
+        # if pdb_dir is not None:
+        #     pdbs = [
+        #         str(i).split("/")[-1].split(".")[0] for i in pdb_dir.glob("[!.]*.pdb")
+        #     ]
+        # else:
+        #     pdbs = None
+        # if pdbs is not None and pdb_name in pdbs:
+        #     pdb_file = os.path.join(str(pdb_dir), pdb_name + ".pdb")
+        # else:
+        #     temp_dir = tempfile.mkdtemp()
+        #     protein, _ = get_pdb_components(pdb_name)
+        #     pdb_file = write_pdb(temp_dir, protein, pdb_name)
+
         # PoseBusters
         if not args.filter_by_posebusters and not args.omit_posebusters:
             print("Starting evaluation with PoseBusters...")
@@ -566,6 +566,7 @@ def get_args():
     parser.add_argument('--max-sample-iter', default=20, type=int,
                             help='How many iteration steps for UFF optimization')
     parser.add_argument("--test-dir", type=Path)
+    parser.add_argument("--encode-ligand", default=False, action="store_true")
     parser.add_argument(
         "--pdbqt-dir",
         type=Path,
@@ -574,23 +575,27 @@ def get_args():
     )
     parser.add_argument("--test-list", type=Path, default=None)
     parser.add_argument("--save-dir", type=Path)
-    parser.add_argument("--fix-n-nodes", default=False, action="store_true")
-    parser.add_argument("--vary-n-nodes", default=False,  action="store_true")
+    parser.add_argument("--fix-n-nodes", action="store_true")
+    parser.add_argument("--vary-n-nodes", action="store_true")
     parser.add_argument("--n-nodes-bias", default=0, type=int)
+    parser.add_argument("--property-guidance", default=False, action="store_true")
+    parser.add_argument("--ckpt-property-model", default=None, type=str)
+    parser.add_argument("--property-self-guidance", action="store_true")
+    parser.add_argument("--guidance-scale", default=1.e-4, type=float)
     parser.add_argument("--filter-by-posebusters", action="store_true")
-    
-    parser.add_argument("--encode-ligand", default=False, action="store_true")
-    
-    # importance sampling
-    parser.add_argument("--importance-sampling", default=False, action="store_true")
-    parser.add_argument("--tau", default=0.1, type=float)
-    parser.add_argument("--every-importance-t", default=5, type=int)
-    parser.add_argument("--importance-sampling-start", default=0, type=int)
-    parser.add_argument("--importance-sampling-end", default=200, type=int)
+    parser.add_argument("--filter-by-lipinski", action="store_true")
+    parser.add_argument("--filter-by-docking-scores", action="store_true", 
+                        help="Samples will be docked directly after generation and filtered versus a ground truth docking score. Only higher score will be kept.")
+    parser.add_argument("--docking-scores", type=Path, default=None, 
+                        help="If filter-by-docking-score is set to True, you have to provide ground-truth docking scores as a dictionary containing the respective ground truth ligand names and their scores")
+    parser.add_argument("--omit-posebusters", default=False, action="store_true")
+    parser.add_argument("--omit-posecheck", default=False, action="store_true")
+
     args = parser.parse_args()
     return args
 
 
 if __name__ == "__main__":
     args = get_args()
+    # Evaluate negative log-likelihood for the test partitions
     evaluate(args)
