@@ -84,15 +84,6 @@ class PredictionHeadEdge(nn.Module):
         coords_pred = self.coords_lin(v).squeeze()
         atoms_pred = self.atoms_lin(s)
         
-        if self.joint_property_prediction:
-            batch_size = int(batch.max()) + 1
-            property_pred = scatter_mean(
-                s, index=batch if batch_lig is None else batch_lig, dim=0, dim_size=batch_size
-            )
-            property_pred = self.property_mlp(property_pred)
-        else:
-            property_pred = None
-
         if batch_lig is not None and pocket_mask is not None:
             s = (s * pocket_mask)[pocket_mask.squeeze(), :]
             j, i = edge_index_global_lig
@@ -138,6 +129,15 @@ class PredictionHeadEdge(nn.Module):
         bonds_pred = F.silu(self.bonds_lin_0(edge))
         bonds_pred = self.bonds_lin_1(bonds_pred)
         
+        if self.joint_property_prediction:
+            batch_size = int(batch.max()) + 1
+            property_pred = scatter_mean(
+                s, index=batch if batch_lig is None else batch_lig, dim=0, dim_size=batch_size
+            )
+            property_pred = self.property_mlp(property_pred)
+        else:
+            property_pred = None
+            
         return coords_pred, atoms_pred, bonds_pred, property_pred
 
 

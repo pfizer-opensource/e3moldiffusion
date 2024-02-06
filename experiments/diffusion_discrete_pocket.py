@@ -517,7 +517,7 @@ class Trainer(pl.LightningModule):
         )
         edges_pred = out_dict["bonds_pred"]
         prop_pred = (
-            out_dict["property_pred"].squeeze()
+            out_dict["property_pred"].squeeze().sigmoid()
             if self.hparams.joint_property_prediction
             else None
         )
@@ -527,7 +527,7 @@ class Trainer(pl.LightningModule):
             "atoms": atoms_pred,
             "charges": charges_pred,
             "bonds": edges_pred,
-            "properties": prop_pred.sigmoid() if prop_pred else None,
+            "properties": prop_pred,
         }
 
         loss = self.diffusion_loss(
