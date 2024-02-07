@@ -255,7 +255,7 @@ def evaluate(args):
                     build_obabel_mol=args.build_obabel_mol,
                     inner_verbose=False,
                     save_traj=False,
-                    ddpm=args.ddpm,
+                    ddpm=not args.ddim,
                     eta_ddim=args.eta_ddim,
                     relax_mol=args.relax_mol,
                     max_relax_iter=args.max_relax_iter,
@@ -306,7 +306,7 @@ def evaluate(args):
                         build_obabel_mol=args.build_obabel_mol,
                         inner_verbose=False,
                         save_traj=False,
-                        ddpm=args.ddpm,
+                        ddpm=not args.ddim,
                         eta_ddim=args.eta_ddim,
                         relax_mol=args.relax_mol,
                         max_relax_iter=args.max_relax_iter,
@@ -594,7 +594,7 @@ def get_args():
     parser.add_argument("--tau", default=0.1, type=float)
     parser.add_argument("--every-importance-t", default=5, type=int)
     parser.add_argument("--importance-sampling-start", default=0, type=int)
-    parser.add_argument("--importance-sampling-end", default=200, type=int)
+    parser.add_argument("--importance-sampling-end", default=250, type=int)
     args = parser.parse_args()
     return args
 
