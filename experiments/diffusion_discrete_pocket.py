@@ -1626,7 +1626,7 @@ class Trainer(pl.LightningModule):
                 )
 
         # Move generated molecule back to the original pocket position for docking
-        pos += pocket_cog_batch
+        pos += pocket_cog[batch]
         pos_pocket += pocket_cog[batch_pocket]
 
         out_dict = {
