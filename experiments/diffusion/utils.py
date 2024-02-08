@@ -215,6 +215,63 @@ def energy_guidance(
     return pos.detach()
 
 
+def property_classifier_guidance(
+    pos,
+    atom_types,
+    charge_types,
+    temb,
+    property_model,
+    batch,
+    num_atom_types,
+    signal=1.0e-3,
+    guidance_scale=100,
+    optimization="minimize",
+):
+    with torch.enable_grad():
+        joint_tensor = (
+            torch.cat([pos, atom_types, charge_types], dim=-1)
+            .detach()
+            .requires_grad_(True)
+        )
+        out = property_model(
+            x=None,
+            pos=None,
+            joint_tensor=joint_tensor,
+            t=temb,
+            batch=batch,
+        )
+        if optimization == "minimize":
+            sign = -1.0
+        elif optimization == "maximize":
+            sign = 1.0
+        else:
+            raise Exception("Optimization arg needs to be 'minimize' or 'maximize'!")
+
+        property_prediction = sign * guidance_scale * out["property_pred"]
+
+        grad_outputs: List[Optional[torch.Tensor]] = [
+            torch.ones_like(property_prediction)
+        ]
+        grad_shift = torch.autograd.grad(
+            [property_prediction],
+            [joint_tensor],
+            grad_outputs=grad_outputs,
+            create_graph=False,
+            retain_graph=False,
+        )[0]
+
+    pos = pos + signal * grad_shift[:, :3]
+    pos.detach_()
+
+    signal = 1.0
+    atom_types = atom_types + signal * grad_shift[:, 3 : num_atom_types + 3]
+    atom_types.detach_()
+    charge_types = charge_types + signal * grad_shift[:, 3 + num_atom_types :]
+    charge_types.detach_()
+
+    return pos, atom_types, charge_types
+
+
 def self_guidance(
     model,
     pos=None,
@@ -316,25 +373,7 @@ def self_guidance(
     charge_types.detach_()
     # pos = zero_mean(pos, batch=batch, dim_size=batch_size, dim=0)
 
-    (
-        pos_joint,
-        atom_types_joint,
-        charge_types_joint,
-        batch_full,
-        pocket_mask,
-    ) = concat_ligand_pocket(
-        pos,
-        pos_pocket,
-        atom_types,
-        atom_types_pocket,
-        charge_types,
-        charges_pocket,
-        batch,
-        batch_pocket,
-        sorting=False,
-    )
-
-    return pos_joint, atom_types_joint, charge_types_joint, batch_full, pocket_mask
+    return pos, atom_types, charge_types
 
 
 def extract_scaffolds_(batch_data):

@@ -936,6 +936,7 @@ class PropertyEdgeNetwork(nn.Module):
         self.prediction_head = PropertyPredictionMLP(
             hn_dim=hn_dim,
             num_context_features=num_context_features,
+            activation=nn.Sigmoid(),
         )
 
         self.reset_parameters()

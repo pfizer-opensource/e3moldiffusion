@@ -33,6 +33,11 @@ class BasicMolecularMetrics(object):
             if isinstance(dataset_info, dict)
             else dataset_info.atom_decoder
         )
+        self.atom_encoder = (
+            dataset_info["atom_encoder"]
+            if isinstance(dataset_info, dict)
+            else dataset_info.atom_encoder
+        )
         self.dataset_info = dataset_info
 
         self.number_samples = 0  # update based on unique generated smiles
@@ -267,11 +272,11 @@ class BasicMolecularMetrics(object):
             for i, mol in enumerate(molecules):
                 if mol.bond_types is None:
                     mol_stable, at_stable, num_bonds = check_stability_without_bonds(
-                        mol, self.dataset_info
+                        mol, self.atom_decoder
                     )
                 else:
                     mol_stable, at_stable, num_bonds = check_stability(
-                        mol, self.dataset_info
+                        mol, self.atom_decoder
                     )
                 self.mol_stable.update(value=mol_stable)
                 self.atom_stable.update(value=at_stable / num_bonds, weight=num_bonds)
@@ -439,7 +444,7 @@ class BasicMolecularMetrics(object):
         )
         self.charge_w1(charge_w1)
         valency_w1, valency_w1_per_class = valency_distance(
-            molecules, stat.valencies, stat.atom_types, self.dataset_info.atom_encoder
+            molecules, stat.valencies, stat.atom_types, self.atom_encoder
         )
         self.valency_w1(valency_w1)
         bond_lengths_w1, bond_lengths_w1_per_type = bond_length_distance(
@@ -450,14 +455,14 @@ class BasicMolecularMetrics(object):
             if local_rank == 0:
                 print(f"Too many edges, skipping angle distance computation.")
             angles_w1 = 0
-            angles_w1_per_type = [-1] * len(self.dataset_info.atom_decoder)
+            angles_w1_per_type = [-1] * len(self.atom_decoder)
         else:
             angles_w1, angles_w1_per_type = angle_distance(
                 molecules,
                 stat.bond_angles,
                 stat.atom_types,
                 stat.valencies,
-                atom_decoder=self.dataset_info.atom_decoder,
+                atom_decoder=self.atom_decoder,
                 save_histogram=self.test,
             )
         self.angles_w1(angles_w1)
@@ -478,7 +483,7 @@ class BasicMolecularMetrics(object):
 
         sampling_per_class = False
         if sampling_per_class:
-            for i, atom_type in enumerate(self.dataset_info.atom_decoder):
+            for i, atom_type in enumerate(self.atom_decoder):
                 statistics_log[
                     f"sampling_per_class/{atom_type}_TV"
                 ] = atom_tv_per_class[i].item()
@@ -753,7 +758,7 @@ def analyze_stability_for_molecules(
     molecule_list,
     dataset_info,
     smiles_train,
-    local_rank,
+    local_rank=0,
     return_molecules=False,
     return_stats_per_molecule=False,
     remove_hs=False,

@@ -1,4 +1,5 @@
 import argparse
+import os
 import random
 import shutil
 import subprocess
@@ -24,6 +25,7 @@ from experiments.data.ligand.constants import (
     dataset_params,
 )
 from experiments.data.ligand.molecule_builder import build_molecule
+from experiments.data.utils import load_pickle
 
 dataset_info = dataset_params["crossdock_full"]
 amino_acid_dict = dataset_info["aa_encoder"]
@@ -294,6 +296,7 @@ def saveall(
     pocket_mask,
     pocket_one_hot,
     pocket_ca_mask,
+    docking_scores,
 ):
     np.savez(
         filename,
@@ -307,6 +310,7 @@ def saveall(
         pocket_mask=pocket_mask,
         pocket_one_hot=pocket_one_hot,
         pocket_ca_mask=pocket_ca_mask,
+        docking_scores=docking_scores,
     )
     return True
 
@@ -319,6 +323,8 @@ if __name__ == "__main__":
     parser.add_argument("--ca-only", action="store_true")
     parser.add_argument("--dist-cutoff", type=float, default=8.0)
     parser.add_argument("--random-seed", type=int, default=42)
+    parser.add_argument("--with-docking-scores", action="store_true")
+    parser.add_argument("--path-docking-scores", type=str, default=None)
     args = parser.parse_args()
 
     datadir = args.basedir / "crossdocked_pocket10/"
@@ -353,12 +359,16 @@ if __name__ == "__main__":
 
     failed_save = []
 
+    if args.with_docking_scores:
+        recs = load_pickle(args.path_docking_scores)
+
     n_samples_after = {}
     for split in data_split.keys():
         lig_coords = []
         lig_atom = []
         lig_mask = []
         lig_mol = []
+        docking_scores = []
         pocket_coords = []
         pocket_atom = []
         pocket_mask = []
@@ -392,6 +402,15 @@ if __name__ == "__main__":
                 continue
 
             try:
+                if args.with_docking_scores:
+                    if Path(pdbfile).stem not in recs:
+                        print(
+                            f"PDB {Path(pdbfile).stem} not found in list of QVina-docked files"
+                        )
+                        continue
+                    else:
+                        docking_scores.append(recs[Path(pdbfile).stem])
+
                 ligand_data, pocket_data = process_ligand_and_pocket(
                     pdbfile,
                     sdffile,
@@ -454,6 +473,7 @@ if __name__ == "__main__":
         pocket_coords = np.concatenate(pocket_coords, axis=0)
         pocket_atom = np.concatenate(pocket_atom, axis=0)
         pocket_mask = np.concatenate(pocket_mask, axis=0)
+        docking_scores = np.array(docking_scores)
 
         if not args.ca_only:
             pocket_one_hot_resids = np.concatenate(pocket_one_hot_resids, axis=0)
@@ -462,8 +482,9 @@ if __name__ == "__main__":
             pocket_one_hot_resids = np.array([])
             pocket_ca_mask = np.array([])
 
+        d = "_dock" if args.with_docking_scores else ""
         saveall(
-            processed_dir / f"{split}.npz",
+            processed_dir / f"{split}{d}.npz",
             pdb_and_mol_ids,
             lig_coords,
             lig_atom,
@@ -474,6 +495,7 @@ if __name__ == "__main__":
             pocket_mask,
             pocket_one_hot=pocket_one_hot_resids,
             pocket_ca_mask=pocket_ca_mask,
+            docking_scores=docking_scores,
         )
 
         n_samples_after[split] = len(pdb_and_mol_ids)
@@ -482,7 +504,7 @@ if __name__ == "__main__":
     # --------------------------------------------------------------------------
     # Compute statistics & additional information
     # --------------------------------------------------------------------------
-    with np.load(processed_dir / "train.npz", allow_pickle=True) as data:
+    with np.load(processed_dir / f"train{d}.npz", allow_pickle=True) as data:
         lig_mask = data["lig_mask"]
         pocket_mask = data["pocket_mask"]
         lig_coords = data["lig_coords"]

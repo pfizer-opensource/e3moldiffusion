@@ -83,7 +83,16 @@ class PredictionHeadEdge(nn.Module):
         s = self.shared_mapping(s)
         coords_pred = self.coords_lin(v).squeeze()
         atoms_pred = self.atoms_lin(s)
-        
+
+        if self.joint_property_prediction:
+            batch_size = len(batch.bincount())
+            property_pred = self.property_mlp(s)
+            property_pred = scatter_add(
+                property_pred, index=batch, dim=0, dim_size=batch_size
+            )
+        else:
+            property_pred = None
+
         if batch_lig is not None and pocket_mask is not None:
             s = (s * pocket_mask)[pocket_mask.squeeze(), :]
             j, i = edge_index_global_lig
@@ -128,15 +137,7 @@ class PredictionHeadEdge(nn.Module):
 
         bonds_pred = F.silu(self.bonds_lin_0(edge))
         bonds_pred = self.bonds_lin_1(bonds_pred)
-        
-        if self.joint_property_prediction:
-            batch_size = int(batch.max()) + 1
-            property_pred = scatter_mean(
-                s, index=batch if batch_lig is None else batch_lig, dim=0, dim_size=batch_size
-            )
-            property_pred = self.property_mlp(property_pred)
-        else:
-            property_pred = None
+
             
         return coords_pred, atoms_pred, bonds_pred, property_pred
 
@@ -233,22 +234,32 @@ class PropertyPredictionMLP(nn.Module):
         self,
         hn_dim: Tuple[int, int],
         num_context_features: int,
+        activation: Union[Callable, nn.Module] = None,
     ) -> None:
         super(PropertyPredictionMLP, self).__init__()
         self.sdim, self.vdim = hn_dim
         self.num_context_features = num_context_features
 
         self.scalar_mapping = DenseLayer(
-            self.sdim, self.sdim, bias=True, activation=nn.SiLU()
+            self.sdim,
+            self.sdim,
+            bias=True,
+            activation=nn.SiLU(),
         )
         self.edge_mapping = DenseLayer(
-            self.sdim, self.sdim, bias=True, activation=nn.SiLU()
+            self.sdim,
+            self.sdim,
+            bias=True,
+            activation=nn.SiLU(),
         )
         self.vector_mapping = DenseLayer(
             in_features=self.vdim, out_features=1, bias=False
         )
         self.property_mapping = DenseLayer(
-            self.sdim, 1, bias=True, activation=nn.ReLU()
+            self.sdim,
+            1,
+            bias=True,
+            activation=activation,
         )
 
         self.reset_parameters()

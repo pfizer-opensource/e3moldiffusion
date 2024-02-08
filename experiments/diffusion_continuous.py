@@ -30,7 +30,7 @@ from experiments.diffusion.utils import (
 )
 from experiments.losses import DiffusionLoss
 from experiments.sampling.analyze import analyze_stability_for_molecules
-from experiments.sampling.utils import calculateScore
+from experiments.sampling.utils import calculate_sascore
 from experiments.utils import (
     coalesce_edges,
     get_molecules,
@@ -516,7 +516,7 @@ class Trainer(pl.LightningModule):
         out["bonds_true"] = edge_attr_global
         out["charges_true"] = charges.argmax(dim=-1)
         if self.hparams.joint_property_prediction:
-            label = torch.tensor([calculateScore(mol) for mol in batch.mol]).to(
+            label = torch.tensor([calculate_sascore(mol) for mol in batch.mol]).to(
                 self.device
             )
             out["properties_true"] = label
