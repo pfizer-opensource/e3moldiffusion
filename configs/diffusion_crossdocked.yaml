@@ -27,6 +27,7 @@ regression_property: docking_score
 ligand_pocket_interaction: true
 use_pos_norm: false
 
+molsize_loss_weighting: false
 
 seed: 42
 batch_size: 4
