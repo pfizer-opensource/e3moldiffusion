@@ -232,15 +232,11 @@ ATOM_VALENCY = {6: 4, 7: 3, 8: 2, 9: 1, 15: 3, 16: 2, 17: 1, 35: 1, 53: 1}
 
 
 def check_stability(
-    molecule, dataset_info, debug=False, atom_decoder=None, smiles=None
+    molecule,
+    atom_decoder,
+    debug=False,
+    smiles=None,
 ):
-    """molecule: Molecule object."""
-    if atom_decoder is None:
-        atom_decoder = (
-            dataset_info["atom_decoder"]
-            if isinstance(dataset_info, dict)
-            else dataset_info.atom_decoder
-        )
     atom_types = molecule.atom_types
     edge_types = molecule.bond_types
 
@@ -314,16 +310,7 @@ def get_bond_order(atom1, atom2, distance, check_exists=False):
     return 0  # No bond
 
 
-def check_stability_without_bonds(
-    molecule, dataset_info, atom_decoder=None, debug=False
-):
-    if atom_decoder is None:
-        atom_decoder = (
-            dataset_info["atom_decoder"]
-            if isinstance(dataset_info, dict)
-            else dataset_info.atom_decoder
-        )
-
+def check_stability_without_bonds(molecule, atom_decoder, debug=False):
     positions = molecule.positions
     atom_type = molecule.atom_types
     charges = molecule.charges

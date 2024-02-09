@@ -38,7 +38,9 @@ class DiffusionLoss(nn.Module):
         bond_aggregation_index: Tensor,
         intermediate_coords: bool = False,
         weights: Optional[Tensor] = None,
+        molsize_weights: Optional[Tensor] = None,
         aux_weight: float = 1.0,
+        regression_property: str = None,
         l1_loss: bool = False,
     ) -> Dict:
         batch_size = len(batch.unique())
@@ -72,6 +74,8 @@ class DiffusionLoss(nn.Module):
                 pos_loss = pos_losses[-1]
                 regr_loss = pos_loss + aux_weight * aux_loss
                 regr_loss, m = self.loss_non_nans(regr_loss, self.regression_key)
+                if molsize_weights is not None:
+                    regr_loss /= molsize_weights[~m]
                 regr_loss *= weights[~m]
                 regr_loss = torch.sum(regr_loss, dim=0)
             else:
@@ -85,6 +89,8 @@ class DiffusionLoss(nn.Module):
                 )
                 regr_loss, m = self.loss_non_nans(regr_loss, self.regression_key)
 
+                if molsize_weights is not None:
+                    regr_loss /= molsize_weights[~m]
                 regr_loss *= weights[~m]
                 regr_loss = torch.sum(regr_loss, dim=0)
 
@@ -97,6 +103,8 @@ class DiffusionLoss(nn.Module):
                 mulliken_loss = scatter_mean(
                     mulliken_loss, index=batch, dim=0, dim_size=batch_size
                 )
+                if molsize_weights is not None:
+                    mulliken_loss /= molsize_weights
                 mulliken_loss *= weights
                 mulliken_loss = torch.sum(mulliken_loss, dim=0)
 
@@ -115,6 +123,8 @@ class DiffusionLoss(nn.Module):
                 wbo_loss = scatter_mean(
                     wbo_loss, index=batch, dim=0, dim_size=batch_size
                 )
+                if molsize_weights is not None:
+                    wbo_loss /= molsize_weights
                 wbo_loss *= weights
                 wbo_loss = torch.sum(wbo_loss, dim=0)
 
@@ -126,11 +136,20 @@ class DiffusionLoss(nn.Module):
                 take_mean = True
 
             if pred_data["properties"] is not None:
-                property_loss = F.mse_loss(
-                    pred_data["properties"],
-                    true_data["properties"],
-                    reduction="none",
-                )
+                if regression_property == "sascore":
+                    property_loss = F.binary_cross_entropy_with_logits(
+                        pred_data["properties"],
+                        true_data["properties"],
+                        reduction="none",
+                    )
+                elif regression_property == "docking_score":
+                    property_loss = F.mse_loss(
+                        pred_data["properties"],
+                        true_data["properties"],
+                        reduction="none",
+                    )
+                else:
+                    raise Exception("Regression property not defined.")
                 property_loss *= weights
                 property_loss = torch.mean(property_loss, dim=0)
 
@@ -141,6 +160,9 @@ class DiffusionLoss(nn.Module):
                 atoms_loss, index=batch, dim=0, dim_size=batch_size
             )
             atoms_loss, m = self.loss_non_nans(atoms_loss, "atoms")
+
+            if molsize_weights is not None:
+                atoms_loss /= molsize_weights[~m]
             atoms_loss *= weights[~m]
             atoms_loss = torch.sum(atoms_loss, dim=0)
 
@@ -161,6 +183,9 @@ class DiffusionLoss(nn.Module):
                     charges_loss, index=batch, dim=0, dim_size=batch_size
                 )
                 charges_loss, m = self.loss_non_nans(charges_loss, "charges")
+
+                if molsize_weights is not None:
+                    charges_loss /= molsize_weights[~m]
                 charges_loss *= weights[~m]
                 charges_loss = torch.sum(charges_loss, dim=0)
 
@@ -187,6 +212,9 @@ class DiffusionLoss(nn.Module):
                     bonds_loss, index=batch, dim=0, dim_size=batch_size
                 )
                 bonds_loss, m = self.loss_non_nans(bonds_loss, "bonds")
+
+                if molsize_weights is not None:
+                    bonds_loss /= molsize_weights[~m]
                 bonds_loss *= weights[~m]
                 bonds_loss = bonds_loss.sum(dim=0)
 
@@ -198,6 +226,9 @@ class DiffusionLoss(nn.Module):
                     ring_loss, index=batch, dim=0, dim_size=batch_size
                 )
                 ring_loss, m = self.loss_non_nans(ring_loss, "ring")
+
+                if molsize_weights is not None:
+                    ring_loss /= molsize_weights[~m]
                 ring_loss *= weights[~m]
                 ring_loss = torch.sum(ring_loss, dim=0)
             else:
@@ -211,6 +242,9 @@ class DiffusionLoss(nn.Module):
                     aromatic_loss, index=batch, dim=0, dim_size=batch_size
                 )
                 aromatic_loss, m = self.loss_non_nans(aromatic_loss, "aromatic")
+
+                if molsize_weights is not None:
+                    aromatic_loss /= molsize_weights[~m]
                 aromatic_loss *= weights[~m]
                 aromatic_loss = torch.sum(aromatic_loss, dim=0)
             else:
@@ -228,6 +262,9 @@ class DiffusionLoss(nn.Module):
                 hybridization_loss, m = self.loss_non_nans(
                     hybridization_loss, "hybridization"
                 )
+
+                if molsize_weights is not None:
+                    hybridization_loss /= molsize_weights[~m]
                 hybridization_loss *= weights[~m]
                 hybridization_loss = torch.sum(hybridization_loss, dim=0)
             else:
@@ -243,6 +280,9 @@ class DiffusionLoss(nn.Module):
                     donor_loss, index=batch, dim=0, dim_size=batch_size
                 )
                 donor_loss, m = self.loss_non_nans(donor_loss, "donor")
+
+                if molsize_weights is not None:
+                    donor_loss /= molsize_weights[~m]
                 donor_loss *= weights[~m]
                 donor_loss = torch.sum(donor_loss, dim=0)
             else:
@@ -258,6 +298,9 @@ class DiffusionLoss(nn.Module):
                     acceptor_loss, index=batch, dim=0, dim_size=batch_size
                 )
                 acceptor_loss, m = self.loss_non_nans(acceptor_loss, "acceptor")
+
+                if molsize_weights is not None:
+                    acceptor_loss /= molsize_weights[~m]
                 acceptor_loss *= weights[~m]
                 acceptor_loss = torch.sum(acceptor_loss, dim=0)
             else:

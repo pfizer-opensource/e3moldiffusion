@@ -14,7 +14,7 @@ import torch.nn.functional as F
 import yaml
 from pytorch_lightning.utilities import rank_zero_warn
 from rdkit import Chem
-from torch_geometric.data import Data
+from torch_geometric.data import Batch, Data
 from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from torch_geometric.utils.num_nodes import maybe_num_nodes
@@ -25,7 +25,9 @@ from torch_sparse import coalesce
 from tqdm import tqdm
 
 from e3moldiffusion.molfeat import atom_type_config
+from experiments.data.data_info import full_atom_encoder
 from experiments.data.ligand.process_crossdocked import amino_acid_dict, three_to_one
+from experiments.data.utils import mol_to_torch_geometric
 from experiments.molecule_utils import Molecule
 
 # fmt: off
@@ -616,10 +618,24 @@ def load_latent_encoder(filepath, max_n_nodes, device="cpu"):
 def create_model(hparams, num_atom_features, num_bond_classes):
     from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 
+    # backward compatability:
+    if "joint_property_prediction" not in hparams.keys():
+        hparams["joint_property_prediction"] = False
+    if "atoms_continuous" not in hparams.keys():
+        hparams["atoms_continuous"] = False
+    if "bonds_continuous" not in hparams.keys():
+        hparams["bonds_continuous"] = False
+    if "store_intermediate_coords" not in hparams.keys():
+        hparams["store_intermediate_coords"] = False
+    if "ligand_pocket_distance_loss" not in hparams.keys():
+        hparams["ligand_pocket_distance_loss"] = False
+    if "ligand_pocket_hidden_distance" not in hparams.keys():
+        hparams["ligand_pocket_hidden_distance"] = False
+
     model = DenoisingEdgeNetwork(
         hn_dim=(hparams["sdim"], hparams["vdim"]),
         num_layers=hparams["num_layers"],
-        latent_dim=hparams["latent_dim"],
+        latent_dim=None,
         use_cross_product=hparams["use_cross_product"],
         num_atom_features=num_atom_features,
         num_bond_types=num_bond_classes,
@@ -633,13 +649,14 @@ def create_model(hparams, num_atom_features, num_bond_classes):
         edge_mp=hparams["edge_mp"],
         context_mapping=hparams["context_mapping"],
         num_context_features=hparams["num_context_features"],
-        bond_prediction=hparams["bond_prediction"],
-        property_prediction=hparams["property_prediction"],
         coords_param=hparams["continuous_param"],
         use_pos_norm=hparams["use_pos_norm"],
+        ligand_pocket_interaction=hparams["ligand_pocket_interaction"],
         store_intermediate_coords=hparams["store_intermediate_coords"],
-        ligand_pocket_interaction=hparams['ligand_pocket_interaction'],
-        model_synth=hparams['model_synth'],
+        distance_ligand_pocket=hparams["ligand_pocket_hidden_distance"],
+        bond_prediction=hparams["bond_prediction"],
+        property_prediction=hparams["property_prediction"],
+        joint_property_prediction=hparams["joint_property_prediction"],
     )
     return model
 
@@ -700,6 +717,43 @@ def load_energy_model(filepath, num_atom_features, device="cpu"):
 
 
 def create_energy_model(hparams, num_atom_features):
+    from e3moldiffusion.coordsatomsbonds import EQGATEnergyNetwork
+
+    model = EQGATEnergyNetwork(
+        hn_dim=(hparams["sdim"], hparams["vdim"]),
+        num_layers=hparams["num_layers"],
+        num_rbfs=hparams["rbf_dim"],
+        use_cross_product=hparams["use_cross_product"],
+        num_atom_features=num_atom_features,
+        cutoff_local=hparams["cutoff_local"],
+        vector_aggr=hparams["vector_aggr"],
+    )
+    return model
+
+
+def load_property_model(filepath, num_atom_features, device="cpu"):
+    import re
+
+    ckpt = torch.load(filepath, map_location="cpu")
+    args = ckpt["hyper_parameters"]
+    model = create_property_model(args, num_atom_features)
+
+    state_dict = ckpt["state_dict"]
+    state_dict = {
+        re.sub(r"^model\.", "", k): v
+        for k, v in ckpt["state_dict"].items()
+        if k.startswith("model")
+    }
+    state_dict = {
+        k: v
+        for k, v in state_dict.items()
+        if not any(x in k for x in ["prior", "sde", "cat"])
+    }
+    model.load_state_dict(state_dict)
+    return model.to(device)
+
+
+def create_property_model(hparams, num_atom_features):
     from e3moldiffusion.coordsatomsbonds import EQGATEnergyNetwork
 
     model = EQGATEnergyNetwork(
@@ -1078,6 +1132,23 @@ def get_molecules(
         molecule_list.append(molecule)
 
     return molecule_list
+
+
+def molecules_to_torch_geometric(molecule_list, add_feats, remove_hs, cog_proj):
+    data_list = []
+    for molecule in molecule_list:
+        data_list.append(
+            mol_to_torch_geometric(
+                molecule.rdkit_mol,
+                full_atom_encoder,
+                remove_hydrogens=remove_hs,
+                cog_proj=cog_proj,
+                add_ad=add_feats,
+            )
+        )
+
+    data = Batch.from_data_list(data_list)
+    return data
 
 
 def get_inp_molecules(

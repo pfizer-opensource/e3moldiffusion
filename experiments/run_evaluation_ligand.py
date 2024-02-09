@@ -33,8 +33,8 @@ def evaluate(
     use_ligand_dataset_sizes=False,
     build_obabel_mol=False,
     save_traj=False,
-    use_energy_guidance=False,
-    ckpt_energy_model=None,
+    property_guidance=False,
+    ckpt_property_model=None,
     guidance_scale=1.0e-4,
     ddpm=True,
     eta_ddim=1.0,
@@ -56,10 +56,14 @@ def evaluate(
     ckpt["hyper_parameters"]["build_obabel_mol"] = build_obabel_mol
     ckpt["hyper_parameters"]["save_traj"] = save_traj
     ckpt["hyper_parameters"]["num_charge_classes"] = 6
+    ckpt["hyper_parameters"]["property_guidance"] = property_guidance
+    ckpt["hyper_parameters"]["ckpt_property_model"] = ckpt_property_model
+    ckpt["hyper_parameters"]["guidance_scale"] = guidance_scale
+    ckpt["hyper_parameters"]["ddpm"] = ddpm
+    ckpt["hyper_parameters"]["eta_ddim"] = eta_ddim
 
     ckpt_path = os.path.join(save_dir, f"test_model.ckpt")
-    if not os.path.exists(ckpt_path):
-        torch.save(ckpt, ckpt_path)
+    torch.save(ckpt, ckpt_path)
 
     hparams = ckpt["hyper_parameters"]
     hparams = dotdict(hparams)
@@ -157,11 +161,11 @@ def get_args():
     parser = argparse.ArgumentParser(description='Data generation')
     parser.add_argument('--model-path', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol/best_mol_stab.ckpt", type=str,
                         help='Path to trained model')
-    parser.add_argument("--use-energy-guidance", default=False, action="store_true")
+    parser.add_argument("--property-guidance", default=False, action="store_true")
     parser.add_argument("--use-ligand-dataset-sizes", default=False, action="store_true")
     parser.add_argument("--build-obabel-mol", default=False, action="store_true")
     parser.add_argument("--save-traj", default=False, action="store_true")
-    parser.add_argument("--ckpt-energy-model", default=None, type=str)
+    parser.add_argument("--ckpt-property-model", default=None, type=str)
     parser.add_argument('--guidance-scale', default=1.0e-4, type=float,
                         help='How to scale the guidance shift')
     parser.add_argument('--save-dir', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol", type=str,
@@ -194,9 +198,9 @@ if __name__ == "__main__":
         save_xyz=args.save_xyz,
         save_traj=args.save_traj,
         calculate_energy=args.calculate_energy,
-        use_energy_guidance=args.use_energy_guidance,
+        property_guidance=args.property_guidance,
         use_ligand_dataset_sizes=args.use_ligand_dataset_sizes,
         build_obabel_mol=args.build_obabel_mol,
-        ckpt_energy_model=args.ckpt_energy_model,
+        ckpt_property_model=args.ckpt_property_model,
         guidance_scale=args.guidance_scale,
     )

@@ -107,6 +107,8 @@ def add_arguments(parser):
             "dispersion",
             "atomisation_energy",
             "polarizability",
+            "docking_score",
+            "sascore",
         ],
     )
     parser.add_argument("--energy-loss", default="l2", type=str, choices=["l2", "l1"])
@@ -146,9 +148,10 @@ def add_arguments(parser):
         default="snr_t",
         choices=["snr_s_t", "snr_t", "exp_t", "expt_t_half", "uniform"],
     )
+    parser.add_argument("--molsize-loss-weighting", default=False, action="store_true")
     parser.add_argument("--snr-clamp-min", default=0.05, type=float)
     parser.add_argument("--snr-clamp-max", default=1.50, type=float)
-
+    parser.add_argument("--train-docking-scores", default=False, action="store_true")
     parser.add_argument(
         "--ligand-pocket-interaction", default=False, action="store_true"
     )

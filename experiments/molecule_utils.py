@@ -356,15 +356,23 @@ class Molecule:
                     largest_mol = max(
                         mol_frags, default=mol, key=lambda m: m.GetNumAtoms()
                     )
-                    initial_adj = Chem.GetAdjacencyMatrix(
-                        largest_mol, useBO=True, force=True
-                    )
-                    Chem.SanitizeMol(largest_mol)
-                    smiles = Chem.MolToSmiles(largest_mol)
+                    if not strict:
+                        Chem.SanitizeMol(largest_mol)
+                        smiles = Chem.MolToSmiles(largest_mol)
 
-                    if sum([a.GetNumImplicitHs() for a in largest_mol.GetAtoms()]) > 0:
-                        return None
-                    if strict:
+                    else:
+                        initial_adj = Chem.GetAdjacencyMatrix(
+                            largest_mol, useBO=True, force=True
+                        )
+
+                        Chem.SanitizeMol(largest_mol)
+                        smiles = Chem.MolToSmiles(largest_mol)
+
+                        if (
+                            sum([a.GetNumImplicitHs() for a in largest_mol.GetAtoms()])
+                            > 0
+                        ):
+                            return None
                         # sanitization changes bond order without throwing exceptions for certain cases
                         # https://github.com/rdkit/rdkit/blob/master/Docs/Book/RDKit_Book.rst#molecular-sanitization
                         # only consider change in BO to be wrong when difference is > 0.5 (not just kekulization difference)

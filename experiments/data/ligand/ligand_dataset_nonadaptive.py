@@ -1,9 +1,14 @@
+import os
 import tempfile
+from itertools import zip_longest
+from typing import Sequence, Union
 
 import numpy as np
 import torch
 from rdkit import Chem, RDLogger
+from torch import Tensor
 from torch_geometric.data import DataLoader, InMemoryDataset
+from torch_geometric.data.data import BaseData
 from tqdm import tqdm
 
 import experiments.data.utils as dataset_utils
@@ -17,6 +22,8 @@ from experiments.data.utils import (
     save_pickle,
     write_xyz_file,
 )
+
+IndexType = Union[slice, Tensor, np.ndarray, Sequence]
 
 
 def get_mol_babel(coords, atom_types):
@@ -55,6 +62,7 @@ class LigandPocketDataset(InMemoryDataset):
         self,
         split,
         root,
+        with_docking_scores=False,
         remove_hs=True,
         transform=None,
         pre_transform=None,
@@ -63,6 +71,7 @@ class LigandPocketDataset(InMemoryDataset):
         assert split in ["train", "val", "test"]
         self.split = split
         self.remove_hs = remove_hs
+        self.with_docking_scores = with_docking_scores
 
         self.compute_bond_distance_angles = True
         self.atom_encoder = full_atom_encoder
@@ -88,65 +97,67 @@ class LigandPocketDataset(InMemoryDataset):
 
     @property
     def raw_file_names(self):
+        d = "_dock" if self.with_docking_scores else ""
         if self.split == "train":
-            return ["train.npz"]
+            return [f"train{d}.npz"]
         elif self.split == "val":
-            return ["val.npz"]
+            return [f"val{d}.npz"]
         else:
-            return ["test.npz"]
+            return [f"test{d}.npz"]
 
     def processed_file_names(self):
         h = "noh" if self.remove_hs else "h"
+        d = "_dock" if self.with_docking_scores else ""
         if self.split == "train":
             return [
-                f"train_{h}.pt",
-                f"train_n_{h}.pickle",
-                f"train_atom_types_{h}.npy",
-                f"train_bond_types_{h}.npy",
-                f"train_charges_{h}.npy",
-                f"train_valency_{h}.pickle",
-                f"train_bond_lengths_{h}.pickle",
-                f"train_angles_{h}.npy",
-                f"train_is_aromatic_{h}.npy",
-                f"train_is_in_ring_{h}.npy",
-                f"train_hybridization_{h}.npy",
-                f"train_is_h_donor_{h}.npy",
-                f"train_is_h_acceptor_{h}.npy",
-                "train_smiles.pickle",
+                f"train_{h}{d}.pt",
+                f"train_n_{h}{d}.pickle",
+                f"train_atom_types_{h}{d}.npy",
+                f"train_bond_types_{h}{d}.npy",
+                f"train_charges_{h}{d}.npy",
+                f"train_valency_{h}{d}.pickle",
+                f"train_bond_lengths_{h}{d}.pickle",
+                f"train_angles_{h}{d}.npy",
+                f"train_is_aromatic_{h}{d}.npy",
+                f"train_is_in_ring_{h}{d}.npy",
+                f"train_hybridization_{h}{d}.npy",
+                f"train_is_h_donor_{h}{d}.npy",
+                f"train_is_h_acceptor_{h}{d}.npy",
+                f"train_smiles{d}.pickle",
             ]
         elif self.split == "val":
             return [
-                f"val_{h}.pt",
-                f"val_n_{h}.pickle",
-                f"val_atom_types_{h}.npy",
-                f"val_bond_types_{h}.npy",
-                f"val_charges_{h}.npy",
-                f"val_valency_{h}.pickle",
-                f"val_bond_lengths_{h}.pickle",
-                f"val_angles_{h}.npy",
-                f"val_is_aromatic_{h}.npy",
-                f"val_is_in_ring_{h}.npy",
-                f"val_hybridization_{h}.npy",
-                f"val_is_h_donor_{h}.npy",
-                f"val_is_h_acceptor_{h}.npy",
-                "val_smiles.pickle",
+                f"val_{h}{d}.pt",
+                f"val_n_{h}{d}.pickle",
+                f"val_atom_types_{h}{d}.npy",
+                f"val_bond_types_{h}{d}.npy",
+                f"val_charges_{h}{d}.npy",
+                f"val_valency_{h}{d}.pickle",
+                f"val_bond_lengths_{h}{d}.pickle",
+                f"val_angles_{h}{d}.npy",
+                f"val_is_aromatic_{h}{d}.npy",
+                f"val_is_in_ring_{h}{d}.npy",
+                f"val_hybridization_{h}{d}.npy",
+                f"val_is_h_donor_{h}{d}.npy",
+                f"val_is_h_acceptor_{h}{d}.npy",
+                f"val_smiles{d}.pickle",
             ]
         else:
             return [
-                f"test_{h}.pt",
-                f"test_n_{h}.pickle",
-                f"test_atom_types_{h}.npy",
-                f"test_bond_types_{h}.npy",
-                f"test_charges_{h}.npy",
-                f"test_valency_{h}.pickle",
-                f"test_bond_lengths_{h}.pickle",
-                f"test_angles_{h}.npy",
-                f"test_is_aromatic_{h}.npy",
-                f"test_is_in_ring_{h}.npy",
-                f"test_hybridization_{h}.npy",
-                f"test_is_h_donor_{h}.npy",
-                f"test_is_h_acceptor_{h}.npy",
-                "test_smiles.pickle",
+                f"test_{h}{d}.pt",
+                f"test_n_{h}{d}.pickle",
+                f"test_atom_types_{h}{d}.npy",
+                f"test_bond_types_{h}{d}.npy",
+                f"test_charges_{h}{d}.npy",
+                f"test_valency_{h}{d}.pickle",
+                f"test_bond_lengths_{h}{d}.pickle",
+                f"test_angles_{h}{d}.npy",
+                f"test_is_aromatic_{h}{d}.npy",
+                f"test_is_in_ring_{h}{d}.npy",
+                f"test_hybridization_{h}{d}.npy",
+                f"test_is_h_donor_{h}{d}.npy",
+                f"test_is_h_acceptor_{h}{d}.npy",
+                f"test_smiles{d}.pickle",
             ]
 
     def download(self):
@@ -159,7 +170,6 @@ class LigandPocketDataset(InMemoryDataset):
         RDLogger.DisableLog("rdApp.*")
 
         data_list_lig = []
-        data_list_pocket = []
         all_smiles = []
 
         with np.load(self.raw_paths[0], allow_pickle=True) as f:
@@ -167,6 +177,7 @@ class LigandPocketDataset(InMemoryDataset):
 
         # split data based on mask
         mol_data = {}
+        docking_scores = []
         for k, v in data.items():
             if k == "names" or k == "receptors" or k == "lig_mol":
                 mol_data[k] = v
@@ -190,8 +201,10 @@ class LigandPocketDataset(InMemoryDataset):
                         torch.from_numpy(x)
                         for x in np.split(pocket_one_hot_mask, sections)
                     ]
-
-                mol_data[k] = [torch.from_numpy(x) for x in np.split(v, sections)]
+                elif k == "docking_scores" and self.with_docking_scores:
+                    docking_scores = torch.from_numpy(v)
+                else:
+                    mol_data[k] = [torch.from_numpy(x) for x in np.split(v, sections)]
             # add number of nodes for convenience
             if k == "lig_mask":
                 mol_data["num_lig_atoms"] = torch.tensor(
@@ -215,11 +228,12 @@ class LigandPocketDataset(InMemoryDataset):
             atoms_pocket,
             mask_pocket,
             pocket_ca_mask,
-            pocket_one_hot,
-            pocket_one_hot_mask,
+            # pocket_one_hot,
+            # pocket_one_hot_mask,
+            scores,
         ) in enumerate(
             tqdm(
-                zip(
+                zip_longest(
                     mol_data["lig_mol"],
                     mol_data["lig_coords"],
                     mol_data["lig_atom"],
@@ -228,8 +242,10 @@ class LigandPocketDataset(InMemoryDataset):
                     mol_data["pocket_atom"],
                     mol_data["pocket_mask"],
                     mol_data["pocket_ca_mask"],
-                    mol_data["pocket_one_hot"],
-                    mol_data["pocket_one_hot_mask"],
+                    # mol_data["pocket_one_hot"],
+                    # mol_data["pocket_one_hot_mask"],
+                    docking_scores,
+                    fillvalue=None,
                 ),
                 total=len(mol_data["lig_mol"]),
             )
@@ -256,8 +272,9 @@ class LigandPocketDataset(InMemoryDataset):
             data.pocket_mask = mask_pocket
             # AA information
             data.pocket_ca_mask = pocket_ca_mask
-            data.pocket_one_hot = pocket_one_hot
-            data.pocket_one_hot_mask = pocket_one_hot_mask
+            # data.pocket_one_hot = pocket_one_hot
+            # data.pocket_one_hot_mask = pocket_one_hot_mask
+            data.docking_scores = scores
             all_smiles.append(smiles_lig)
             data_list_lig.append(data)
 
@@ -289,11 +306,27 @@ class LigandPocketDataset(InMemoryDataset):
         np.save(self.processed_paths[7], statistics.bond_angles)
         np.save(self.processed_paths[8], statistics.is_aromatic)
         np.save(self.processed_paths[9], statistics.is_in_ring)
-        # is_h_donor and is_h_acceptor
+        np.save(self.processed_paths[10], statistics.hybridization)
         np.save(self.processed_paths[11], statistics.is_h_donor)
         np.save(self.processed_paths[12], statistics.is_h_acceptor)
 
         save_pickle(set(all_smiles), self.processed_paths[13])
+
+    def __getitem__(
+        self,
+        idx: Union[int, np.integer, IndexType],
+    ):
+        if (
+            isinstance(idx, (int, np.integer))
+            or (isinstance(idx, Tensor) and idx.dim() == 0)
+            or (isinstance(idx, np.ndarray) and np.isscalar(idx))
+        ):
+            data = self.get(self.indices()[idx])
+            data = data if self.transform is None else self.transform(data)
+            return data
+
+        else:
+            return self.index_select(idx)
 
 
 class LigandPocketDataModule(AbstractDataModuleLigand):
@@ -303,13 +336,25 @@ class LigandPocketDataModule(AbstractDataModuleLigand):
         self.pin_memory = True
 
         train_dataset = LigandPocketDataset(
-            split="train", root=root_path, remove_hs=cfg.remove_hs
+            split="train",
+            root=root_path,
+            with_docking_scores=cfg.joint_property_prediction
+            and cfg.regression_property == "docking_score",
+            remove_hs=cfg.remove_hs,
         )
         val_dataset = LigandPocketDataset(
-            split="val", root=root_path, remove_hs=cfg.remove_hs
+            split="val",
+            root=root_path,
+            with_docking_scores=cfg.joint_property_prediction
+            and cfg.regression_property == "docking_score",
+            remove_hs=cfg.remove_hs,
         )
         test_dataset = LigandPocketDataset(
-            split="test", root=root_path, remove_hs=cfg.remove_hs
+            split="test",
+            root=root_path,
+            with_docking_scores=cfg.joint_property_prediction
+            and cfg.regression_property == "docking_score",
+            remove_hs=cfg.remove_hs,
         )
         self.remove_hs = cfg.remove_hs
         self.statistics = {

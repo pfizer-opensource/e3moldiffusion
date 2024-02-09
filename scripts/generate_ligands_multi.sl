@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=12
 #SBATCH --partition=ondemand-8xv100m32-1a
 #SBATCH --gres=gpu:1
-#SBATCH --array=1-15
+#SBATCH --array=1-8
 #SBATCH --output=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.out
 #SBATCH --error=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.err
 
@@ -17,14 +17,14 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_continous_sascore"
-output_dir="$main_dir/evaluation/docking/nodes_bias_large_sa"
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_enamineft_cutoff5_bonds5_ep10_new"
+output_dir="$main_dir/evaluation/docking/nodes_bias_large"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
 mkdir "$output_dir"
 
-num_gpus=15
+num_gpus=8
 
 python experiments/generate_ligands_multi.py \
     --mp-index "${SLURM_ARRAY_TASK_ID}" \
@@ -37,19 +37,23 @@ python experiments/generate_ligands_multi.py \
     --skip-existing \
     --num-ligands-per-pocket 100 \
     --max-sample-iter 40 \
-    --batch-size 8 \
+    --batch-size 40 \
     --n-nodes-bias 10 \
-    --property-self-guidance \
-    --guidance-scale 1.
+    #--fix-n-nodes
+    #--n-nodes-bias 10 \
+    #--property-guidance \
+    #--ckpt-property-model /scratch1/e3moldiffusion/logs/crossdocked/sascore_training/run0/last-v11.ckpt \
+    #--guidance-scale 1.
+    # --guidance-scale 1.
     #--fix-n-nodes \
     #--vary-n-nodes \
-    # --encode-ligand \
+    #--encode-ligand \
     #--omit-posebusters \
     #--omit-posecheck \
     #--docking-scores /scratch1/e3moldiffusion/logs/crossdocked/ground_truth/evaluation/docking/crossdocked_scores.pickle
     #--filter-by-posebusters \
-    # --filter-by-lipinski \
-    # --filter-by-docking-scores \
+    #--filter-by-lipinski \
+    #--filter-by-docking-scores \
     #--build-obabel-mol \
     #--sanitize 
     #--relax-mol \

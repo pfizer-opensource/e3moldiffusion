@@ -50,7 +50,7 @@ def get_fc_edge_index_with_offset(n, offset: int = 0, device="cpu"):
 def mol_to_torch_geometric(
     mol,
     atom_encoder,
-    smiles,
+    smiles=None,
     remove_hydrogens: bool = False,
     cog_proj: bool = True,
     add_ad=True,
@@ -63,6 +63,8 @@ def mol_to_torch_geometric(
         )  # only remove (explicit) hydrogens attached to molecular graph
         Chem.Kekulize(mol, clearAromaticFlags=True)
 
+    if smiles is None:
+        smiles = Chem.MolToSmiles(mol)
     adj = torch.from_numpy(Chem.rdmolops.GetAdjacencyMatrix(mol, useBO=True))
     edge_index = adj.nonzero().contiguous().T
     bond_types = adj[edge_index[0], edge_index[1]]
