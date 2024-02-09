@@ -165,7 +165,7 @@ class Trainer(pl.LightningModule):
                 num_context_features=hparams["num_context_features"],
                 coords_param=hparams["continuous_param"],
                 use_pos_norm=hparams["use_pos_norm"],
-                ligand_pocket_interaction=False, #hparams["ligand_pocket_interaction"],
+                ligand_pocket_interaction=False, #hparams["ligand_pocket_interaction"],  # to test old model
                 store_intermediate_coords=hparams["store_intermediate_coords"],
                 distance_ligand_pocket=hparams["ligand_pocket_hidden_distance"],
                 bond_prediction=hparams["bond_prediction"],
