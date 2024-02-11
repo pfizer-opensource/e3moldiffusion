@@ -46,7 +46,21 @@ class PredictionHeadEdge(nn.Module):
             #self.property_mlp = DenseLayer(
             #    in_features=self.sdim, out_features=1, bias=True, activation=nn.ReLU()
             #)
-            self.property_mlp = nn.Sequential(DenseLayer(in_features=self.sdim,
+            self.node_lin = DenseLayer(self.sdim, self.sdim, activation=nn.SiLU())
+            
+            self.sa_mlp = nn.Sequential(DenseLayer(in_features=self.sdim,
+                                                         out_features=self.sdim,
+                                                         bias=True,
+                                                         activation=nn.SiLU()
+                                                         ),
+                                              DenseLayer(in_features=self.sdim,
+                                                         out_features=1,
+                                                         bias=True,
+                                                         activation=nn.Identity()
+                                                         )
+            )
+            
+            self.docking_mlp = nn.Sequential(DenseLayer(in_features=self.sdim,
                                                          out_features=self.sdim,
                                                          bias=True,
                                                          activation=nn.SiLU()
@@ -65,8 +79,8 @@ class PredictionHeadEdge(nn.Module):
         self.atoms_lin.reset_parameters()
         self.bonds_lin_0.reset_parameters()
         self.bonds_lin_1.reset_parameters()
-        if self.joint_property_prediction:
-            reset(self.property_mlp)
+        #if self.joint_property_prediction:
+        #    reset(self.property_mlp)
 
     def forward(
         self,
@@ -83,15 +97,6 @@ class PredictionHeadEdge(nn.Module):
         s = self.shared_mapping(s)
         coords_pred = self.coords_lin(v).squeeze()
         atoms_pred = self.atoms_lin(s)
-
-        if self.joint_property_prediction:
-            batch_size = len(batch.bincount())
-            property_pred = self.property_mlp(s)
-            property_pred = scatter_add(
-                property_pred, index=batch, dim=0, dim_size=batch_size
-            )
-        else:
-            property_pred = None
 
         if batch_lig is not None and pocket_mask is not None:
             s = (s * pocket_mask)[pocket_mask.squeeze(), :]
@@ -131,6 +136,23 @@ class PredictionHeadEdge(nn.Module):
             e_dense[edge_index_global[0], edge_index_global[1], :] = e
             e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
             e = e_dense[edge_index_global[0], edge_index_global[1], :]
+            
+        if self.joint_property_prediction:
+            batch_size = len(batch.bincount())
+            snode = self.node_lin(torch.relu(s))
+            # do not take pocket nodes for aggregation
+            avg_embedding = scatter_mean(
+                snode, index=batch_lig if batch_lig is not None else batch, dim=0, dim_size=batch_size
+                )
+            sa_pred = self.sa_mlp(avg_embedding)
+            docking_pred = self.docking_mlp(avg_embedding)
+            property_pred = (sa_pred, docking_pred)
+            # property_pred = self.property_mlp(s)
+            # property_pred = scatter_add(
+            #     property_pred, index=batch, dim=0, dim_size=batch_size
+            #)
+        else:
+            property_pred = None
 
         f = s[i] + s[j] + self.bond_mapping(e)
         edge = torch.cat([f, d], dim=-1)
