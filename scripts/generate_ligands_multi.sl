@@ -49,7 +49,7 @@ python experiments/generate_ligands_multi.py \
     #--guidance-scale 1.
     #--fix-n-nodes \
     #--vary-n-nodes \
-    #--encode-ligand \
+    #--encode-ligands \
     #--omit-posebusters \
     #--omit-posecheck \
     #--docking-scores /scratch1/e3moldiffusion/logs/crossdocked/ground_truth/evaluation/docking/crossdocked_scores.pickle

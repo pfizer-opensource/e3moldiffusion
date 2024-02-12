@@ -5,7 +5,6 @@ import shutil
 import tempfile
 import warnings
 from collections import defaultdict
-from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from time import time
@@ -24,7 +23,7 @@ from experiments.data.utils import load_pickle, mol_to_torch_geometric, save_pic
 from experiments.docking import calculate_qvina2_score
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import (
-    prepare_pocket,
+    prepare_data_and_generate_ligands,
     retrieve_interactions_per_mol,
     split_list,
     write_sdf_file,
@@ -143,7 +142,8 @@ def evaluate(args):
     posecheck_dict = defaultdict(list)
 
     sdf_files = []
-    if args.encode_ligand:
+    embedding_dict = None
+    if args.encode_ligands:
         embedding_dict = defaultdict(create_list_defaultdict)
         embed_out_file = Path(args.save_dir, f"{args.mp_index}_latent_embeddings.pt")
 
@@ -189,46 +189,6 @@ def evaluate(args):
         tmp_molecules = []
         valid_and_unique_molecules = []
 
-        pocket_data = prepare_pocket(
-            residues,
-            dataset_info.atom_encoder,
-            no_H=True,
-            repeats=args.batch_size,
-            device=device,
-            ligand_sdf=sdf_file if not args.encode_ligand else None,
-        )
-
-        if args.encode_ligand:
-            suppl = Chem.SDMolSupplier(str(sdf_file))
-            mol = []
-            for m in suppl:
-                mol.append(m)
-            assert len(mol) == 1
-            mol = mol[0]
-            ligand_data = mol_to_torch_geometric(
-                mol,
-                dataset_info.atom_encoder,
-                smiles=Chem.MolToSmiles(mol),
-                remove_hydrogens=hparams.remove_hs,
-                cog_proj=True,  # only for processing the ligand-shape encode
-            )
-            ligand_data = Batch.from_data_list([ligand_data]).to(device)
-            with torch.no_grad():
-                ligand_embeds = model.encode_ligand(
-                    pos=ligand_data.pos,
-                    atom_types=ligand_data.x,
-                    data_batch=torch.zeros_like(ligand_data.x).to(device),
-                    bond_edge_index=ligand_data.edge_index,
-                    bond_edge_attr=ligand_data.edge_attr,
-                )
-            embedding_dict[ligand_name]["seed"].append(ligand_embeds)
-
-            ligand_data = Batch.from_data_list(
-                [deepcopy(ligand_data) for _ in range(args.batch_size)]
-            )
-            for name, tensor in ligand_data.to_dict().items():
-                pocket_data.__setattr__(name, tensor)
-
         start = datetime.now()
 
         k = 0
@@ -237,33 +197,68 @@ def evaluate(args):
             and k <= args.max_sample_iter
         ):
             k += 1
-            with torch.no_grad():
-                molecules = model.generate_ligands(
-                    pocket_data,
-                    num_graphs=args.batch_size,
-                    fix_n_nodes=args.fix_n_nodes,
-                    vary_n_nodes=args.vary_n_nodes,
-                    n_nodes_bias=args.n_nodes_bias,
-                    property_guidance=args.property_guidance,
-                    ckpt_property_model=args.ckpt_property_model,
-                    property_self_guidance=args.property_self_guidance,
-                    property_guidance_complex=args.property_guidance_complex,
-                    guidance_scale=args.guidance_scale,
-                    build_obabel_mol=args.build_obabel_mol,
-                    inner_verbose=False,
-                    save_traj=False,
-                    ddpm=not args.ddim,
-                    eta_ddim=args.eta_ddim,
-                    relax_mol=args.relax_mol,
-                    max_relax_iter=args.max_relax_iter,
-                    sanitize=args.sanitize,
-                    importance_sampling=args.importance_sampling,  # True
-                    tau=args.tau,  # 0.1,
-                    every_importance_t=args.every_importance_t,  # 5,
-                    importance_sampling_start=args.importance_sampling_start,  # 0,
-                    importance_sampling_end=args.importance_sampling_end,  # 200,
-                    maximize_score=True,
+            try:
+                molecules = prepare_data_and_generate_ligands(
+                    model,
+                    residues,
+                    sdf_file,
+                    dataset_info,
+                    hparams=hparams,
+                    args=args,
+                    device=device,
+                    embedding_dict=embedding_dict,
                 )
+            except torch.cuda.OutOfMemoryError:
+                print(
+                    "WARNING: ran out of memory, retrying with 75perc. of the batch size"
+                )
+                torch.cuda.empty_cache()
+                try:
+                    bs = int(args.batch_size * 0.25)
+                    molecules = prepare_data_and_generate_ligands(
+                        model,
+                        residues,
+                        sdf_file,
+                        dataset_info,
+                        hparams=hparams,
+                        args=args,
+                        device=device,
+                        embedding_dict=embedding_dict,
+                        batch_size=args.batch_size - bs,
+                    )
+                except torch.cuda.OutOfMemoryError:
+                    print(
+                        "WARNING: ran out of memory, retrying with half the batch size"
+                    )
+                    torch.cuda.empty_cache()
+                    try:
+                        molecules = prepare_data_and_generate_ligands(
+                            model,
+                            residues,
+                            sdf_file,
+                            dataset_info,
+                            hparams=hparams,
+                            args=args,
+                            device=device,
+                            embedding_dict=embedding_dict,
+                            batch_size=args.batch_size // 2,
+                        )
+                    except torch.cuda.OutOfMemoryError:
+                        print(
+                            "WARNING: ran out of memory, last try with 25perc. of the batch size"
+                        )
+                        torch.cuda.empty_cache()
+                        molecules = prepare_data_and_generate_ligands(
+                            model,
+                            residues,
+                            sdf_file,
+                            dataset_info,
+                            hparams=hparams,
+                            args=args,
+                            device=device,
+                            embedding_dict=embedding_dict,
+                            batch_size=args.batch_size // 4,
+                        )
             all_molecules += len(molecules)
             tmp_molecules.extend(molecules)
             valid_molecules = analyze_stability_for_molecules(
@@ -294,27 +289,17 @@ def evaluate(args):
             ):
                 k += 1
                 with torch.no_grad():
-                    molecules = model.generate_ligands(
-                        pocket_data,
-                        num_graphs=args.batch_size,
-                        fix_n_nodes=args.fix_n_nodes,
-                        vary_n_nodes=args.vary_n_nodes,
-                        n_nodes_bias=args.n_nodes_bias,
-                        build_obabel_mol=args.build_obabel_mol,
-                        inner_verbose=False,
-                        save_traj=False,
-                        ddpm=not args.ddim,
-                        eta_ddim=args.eta_ddim,
-                        relax_mol=args.relax_mol,
-                        max_relax_iter=args.max_relax_iter,
-                        sanitize=args.sanitize,
-                        importance_sampling=args.importance_sampling,  # True
-                        tau=args.tau,  # 0.1,
-                        every_importance_t=args.every_importance_t,  # 5,
-                        importance_sampling_start=args.importance_sampling_start,  # 0,
-                        importance_sampling_end=args.importance_sampling_end,  # 200,
-                        maximize_score=True,
+                    molecules = prepare_data_and_generate_ligands(
+                        model,
+                        residues,
+                        sdf_file,
+                        dataset_info,
+                        hparams=hparams,
+                        args=args,
+                        device=device,
+                        embedding_dict=embedding_dict,
                     )
+
                 all_molecules += len(molecules)
                 tmp_molecules.extend(molecules)
                 valid_molecules = analyze_stability_for_molecules(
@@ -342,7 +327,6 @@ def evaluate(args):
                 f"FYI: Reached {args.max_sample_iter} sampling iterations, but could only find {len(valid_and_unique_molecules)} ligands for pdb file {pdb_file}."
             )
 
-        del pocket_data
         torch.cuda.empty_cache()
 
         (
@@ -414,7 +398,7 @@ def evaluate(args):
                 : args.num_ligands_per_pocket
             ]  # we could sort them by QED, SA or whatever
 
-        if args.encode_ligand:
+        if args.encode_ligands:
             ligand_data = [
                 mol_to_torch_geometric(
                     mol.rdkit_mol,
@@ -525,7 +509,7 @@ def evaluate(args):
             os.path.join(args.save_dir, f"{args.mp_index}_posecheck_sampled.pickle"),
         )
 
-    if args.encode_ligand:
+    if args.encode_ligands:
         embedding_dict = {k: v for k, v in embedding_dict.items()}
         torch.save(embedding_dict, embed_out_file)
 
@@ -561,7 +545,7 @@ def get_args():
     parser.add_argument('--max-sample-iter', default=20, type=int,
                             help='How many iteration steps for UFF optimization')
     parser.add_argument("--test-dir", type=Path)
-    parser.add_argument("--encode-ligand", default=False, action="store_true")
+    parser.add_argument("--encode-ligands", default=False, action="store_true")
     parser.add_argument(
         "--pdbqt-dir",
         type=Path,
@@ -593,6 +577,7 @@ def get_args():
     parser.add_argument("--every-importance-t", default=5, type=int)
     parser.add_argument("--importance-sampling-start", default=0, type=int)
     parser.add_argument("--importance-sampling-end", default=250, type=int)
+    parser.add_argument("--minimize-score", default=False, action="store_true")
     args = parser.parse_args()
     return args
 

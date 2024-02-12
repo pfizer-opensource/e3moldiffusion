@@ -3,6 +3,7 @@ import math
 import os
 import re
 from collections import defaultdict
+from copy import deepcopy
 from glob import glob
 from itertools import zip_longest
 from os.path import dirname, exists, join
@@ -1481,3 +1482,105 @@ def split_list(data, num_chunks):
         chunks.append(data[start:chunk_end])
         start = chunk_end
     return chunks
+
+
+def prepare_data_and_generate_ligands(
+    model,
+    residues,
+    sdf_file,
+    dataset_info,
+    hparams,
+    args,
+    device,
+    embedding_dict=None,
+    batch_size=None,
+):
+    batch_size = args.batch_size if batch_size is None else batch_size
+
+    pocket_data = prepare_pocket(
+        residues,
+        dataset_info.atom_encoder,
+        no_H=True,
+        repeats=batch_size,
+        device=device,
+        ligand_sdf=sdf_file if not args.encode_ligands else None,
+    )
+
+    if args.encode_ligands:
+        pocket_data, ligand_embeds = encode_ligands(
+            model,
+            pocket_data,
+            sdf_file,
+            dataset_info,
+            hparams=hparams,
+            args=args,
+            batch_size=batch_size,
+            device=device,
+        )
+        embedding_dict[sdf_file.stem]["seed"].append(ligand_embeds)
+
+    with torch.no_grad():
+        molecules = model.generate_ligands(
+            pocket_data,
+            num_graphs=batch_size,
+            fix_n_nodes=args.fix_n_nodes,
+            vary_n_nodes=args.vary_n_nodes,
+            n_nodes_bias=args.n_nodes_bias,
+            property_guidance=args.property_guidance,
+            ckpt_property_model=args.ckpt_property_model,
+            property_self_guidance=args.property_self_guidance,
+            property_guidance_complex=args.property_guidance_complex,
+            guidance_scale=args.guidance_scale,
+            build_obabel_mol=args.build_obabel_mol,
+            inner_verbose=False,
+            save_traj=False,
+            ddpm=not args.ddim,
+            eta_ddim=args.eta_ddim,
+            relax_mol=args.relax_mol,
+            max_relax_iter=args.max_relax_iter,
+            sanitize=args.sanitize,
+            importance_sampling=args.importance_sampling,  # True
+            tau=args.tau,  # 0.1,
+            every_importance_t=args.every_importance_t,  # 5,
+            importance_sampling_start=args.importance_sampling_start,  # 0,
+            importance_sampling_end=args.importance_sampling_end,  # 200,
+            maximize_score=not args.minimize_score,
+        )
+    del pocket_data
+    torch.cuda.empty_cache()
+
+    return molecules
+
+
+def encode_ligands(
+    model, pocket_data, sdf_file, dataset_info, hparams, args, batch_size, device
+):
+    suppl = Chem.SDMolSupplier(str(sdf_file))
+    mol = []
+    for m in suppl:
+        mol.append(m)
+    assert len(mol) == 1
+    mol = mol[0]
+    ligand_data = mol_to_torch_geometric(
+        mol,
+        dataset_info.atom_encoder,
+        smiles=Chem.MolToSmiles(mol),
+        remove_hydrogens=hparams.remove_hs,
+        cog_proj=True,  # only for processing the ligand-shape encode
+    )
+    ligand_data = Batch.from_data_list([ligand_data]).to(device)
+    with torch.no_grad():
+        ligand_embeds = model.encode_ligand(
+            pos=ligand_data.pos,
+            atom_types=ligand_data.x,
+            data_batch=torch.zeros_like(ligand_data.x).to(device),
+            bond_edge_index=ligand_data.edge_index,
+            bond_edge_attr=ligand_data.edge_attr,
+        )
+
+    ligand_data = Batch.from_data_list(
+        [deepcopy(ligand_data) for _ in range(batch_size)]
+    )
+    for name, tensor in ligand_data.to_dict().items():
+        pocket_data.__setattr__(name, tensor)
+    return pocket_data, ligand_embeds
