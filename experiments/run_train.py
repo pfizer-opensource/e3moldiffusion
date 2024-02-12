@@ -168,7 +168,7 @@ if __name__ == "__main__":
     )
     prop_norm, prop_dist = None, None
     if (len(hparams.properties_list) > 0 and hparams.context_mapping) or (
-        hparams.property_training and not hparams.regression_property == "sascore"
+        hparams.property_training and not (hparams.regression_property == "sascore" or hparams.regression_property == "docking_score")
     ):
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
@@ -284,11 +284,13 @@ if __name__ == "__main__":
             from experiments.energy_training import Trainer
         else:
             print(f"Running {hparams.regression_property} training")
-            if hparams.regression_property == "sascore":
-                from experiments.sascore_training import Trainer
+            if hparams.regression_property == "sascore": 
+                from experiments.property_training import Trainer
+            elif hparams.regression_property == "docking_score":
+                from experiments.property_training_pocket import Trainer
             else:
                 assert hparams.dataset == "geomqm"
-                from experiments.property_training import Trainer
+                from experiments.property_training_qm import Trainer
 
     model = Trainer(
         hparams=hparams.__dict__,

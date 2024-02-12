@@ -43,20 +43,13 @@ class PredictionHeadEdge(nn.Module):
             in_features=self.sdim, out_features=num_atom_features, bias=True
         )
         if self.joint_property_prediction:
-            #self.property_mlp = DenseLayer(
-            #    in_features=self.sdim, out_features=1, bias=True, activation=nn.ReLU()
-            #)
-            self.property_mlp = nn.Sequential(DenseLayer(in_features=self.sdim,
-                                                         out_features=self.sdim,
-                                                         bias=True,
-                                                         activation=nn.SiLU()
-                                                         ),
-                                              DenseLayer(in_features=self.sdim,
-                                                         out_features=1,
-                                                         bias=True,
-                                                         activation=nn.Identity()
-                                                         )
+            self.property_mlp = GatedEquivBlock(
+                in_dims=hn_dim,
+                out_dims=(1, None),
+                use_mlp=True,
+                return_vector=False,
             )
+
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -78,20 +71,20 @@ class PredictionHeadEdge(nn.Module):
         pocket_mask: Tensor = None,
         edge_mask: Tensor = None,
     ) -> Dict:
-        
+
         s, v, p, e = x["s"], x["v"], x["p"], x["e"]
         s = self.shared_mapping(s)
         coords_pred = self.coords_lin(v).squeeze()
         atoms_pred = self.atoms_lin(s)
 
-        if self.joint_property_prediction:
-            batch_size = len(batch.bincount())
-            property_pred = self.property_mlp(s)
-            property_pred = scatter_add(
-                property_pred, index=batch, dim=0, dim_size=batch_size
-            )
-        else:
-            property_pred = None
+        # if self.joint_property_prediction:
+        #     batch_size = len(batch.bincount())
+        #     property_pred = self.property_mlp((s, v))
+        #     property_pred = scatter_add(
+        #         property_pred, index=batch, dim=0, dim_size=batch_size
+        #     )
+        # else:
+        #     property_pred = None
 
         if batch_lig is not None and pocket_mask is not None:
             s = (s * pocket_mask)[pocket_mask.squeeze(), :]
@@ -138,7 +131,16 @@ class PredictionHeadEdge(nn.Module):
         bonds_pred = F.silu(self.bonds_lin_0(edge))
         bonds_pred = self.bonds_lin_1(bonds_pred)
 
-            
+        if self.joint_property_prediction:
+            batch_size = len(batch.bincount())
+            v = (v * pocket_mask.unsqueeze(-1))[pocket_mask.squeeze(), :]
+            property_pred = self.property_mlp((s, v))
+            property_pred = scatter_add(
+                property_pred, index=batch_lig, dim=0, dim_size=batch_size
+            )
+        else:
+            property_pred = None
+
         return coords_pred, atoms_pred, bonds_pred, property_pred
 
 
@@ -233,27 +235,26 @@ class PropertyPredictionMLP(nn.Module):
     def __init__(
         self,
         hn_dim: Tuple[int, int],
+        edge_dim: int,
         num_context_features: int,
         activation: Union[Callable, nn.Module] = None,
     ) -> None:
         super(PropertyPredictionMLP, self).__init__()
         self.sdim, self.vdim = hn_dim
+        self.edim = edge_dim
         self.num_context_features = num_context_features
 
-        self.scalar_mapping = DenseLayer(
-            self.sdim,
-            self.sdim,
-            bias=True,
-            activation=nn.SiLU(),
-        )
         self.edge_mapping = DenseLayer(
-            self.sdim,
+            self.edim,
             self.sdim,
             bias=True,
             activation=nn.SiLU(),
         )
-        self.vector_mapping = DenseLayer(
-            in_features=self.vdim, out_features=1, bias=False
+        self.s_v_mapping = GatedEquivBlock(
+            in_dims=hn_dim,
+            out_dims=(self.sdim, None),
+            use_mlp=True,
+            return_vector=False,
         )
         self.property_mapping = DenseLayer(
             self.sdim,
@@ -265,10 +266,9 @@ class PropertyPredictionMLP(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        self.scalar_mapping.reset_parameters()
         self.edge_mapping.reset_parameters()
-        self.vector_mapping.reset_parameters()
         self.property_mapping.reset_parameters()
+        self.s_v_mapping.reset_parameters()
 
     def forward(self, x: Dict, batch: Tensor, edge_index_global: Tensor) -> Dict:
         s, v, p, e = x["s"], x["v"], x["p"], x["e"]
@@ -278,12 +278,9 @@ class PropertyPredictionMLP(nn.Module):
             dim=0,
             dim_size=s.size(0),
         )
-        s = self.scalar_mapping(s)
         e = self.edge_mapping(e)
-        v = self.vector_mapping(v) + p.sum() * 0
-        v = torch.norm(v, dim=-1)
-
-        out = self.property_mapping(s + e + v)
+        s = self.s_v_mapping((s, v)) + p.sum() * 0
+        out = self.property_mapping(s + e)
 
         return out
 
@@ -327,8 +324,11 @@ class GatedEquivBlock(nn.Module):
         hv_dim: Optional[int] = None,
         norm_eps: float = 1e-6,
         use_mlp: bool = False,
+        return_vector: bool = True,
     ):
         super(GatedEquivBlock, self).__init__()
+        self.return_vector = return_vector
+
         self.si, self.vi = in_dims
         self.so, self.vo = out_dims
         self.vo = 0 if self.vo is None else self.vo
@@ -364,7 +364,9 @@ class GatedEquivBlock(nn.Module):
             if self.vo > 0:
                 reset(self.Wv1)
 
-    def forward(self, x: Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tensor]:
+    def forward(
+        self, x: Tuple[Tensor, Tensor], return_vector: bool = True
+    ) -> Tuple[Tensor, Tensor]:
         s, v = x
         vv = self.Wv0(v)
 
@@ -383,7 +385,10 @@ class GatedEquivBlock(nn.Module):
             if self.use_mlp:
                 v = self.Wv1(v)
 
-        return s, v
+        if self.return_vector:
+            return s, v
+        else:
+            return s + v.sum() * 0
 
 
 class LayerNorm(nn.Module):

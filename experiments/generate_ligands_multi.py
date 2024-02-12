@@ -111,6 +111,7 @@ def evaluate(args):
         prop_norm=prop_norm,
         prop_dist=prop_dist,
         load_ckpt_from_pretrained=None,
+        ligand_pocket_interaction=False,
         load_ckpt=None,
         run_evaluation=True,
         strict=False,
@@ -246,6 +247,7 @@ def evaluate(args):
                     property_guidance=args.property_guidance,
                     ckpt_property_model=args.ckpt_property_model,
                     property_self_guidance=args.property_self_guidance,
+                    property_guidance_complex=args.property_guidance_complex,
                     guidance_scale=args.guidance_scale,
                     build_obabel_mol=args.build_obabel_mol,
                     inner_verbose=False,
@@ -255,12 +257,12 @@ def evaluate(args):
                     relax_mol=args.relax_mol,
                     max_relax_iter=args.max_relax_iter,
                     sanitize=args.sanitize,
-                    importance_sampling=args.importance_sampling, # True
-                    tau=args.tau, # 0.1,
-                    every_importance_t=args.every_importance_t, # 5,
-                    importance_sampling_start=args.importance_sampling_start, # 0,
-                    importance_sampling_end=args.importance_sampling_end, # 200,
-                    maximize_score=True
+                    importance_sampling=args.importance_sampling,  # True
+                    tau=args.tau,  # 0.1,
+                    every_importance_t=args.every_importance_t,  # 5,
+                    importance_sampling_start=args.importance_sampling_start,  # 0,
+                    importance_sampling_end=args.importance_sampling_end,  # 200,
+                    maximize_score=True,
                 )
             all_molecules += len(molecules)
             tmp_molecules.extend(molecules)
@@ -306,12 +308,12 @@ def evaluate(args):
                         relax_mol=args.relax_mol,
                         max_relax_iter=args.max_relax_iter,
                         sanitize=args.sanitize,
-                        importance_sampling=args.importance_sampling, # True
-                        tau=args.tau, # 0.1,
-                        every_importance_t=args.every_importance_t, # 5,
-                        importance_sampling_start=args.importance_sampling_start, # 0,
-                        importance_sampling_end=args.importance_sampling_end, # 200,
-                        maximize_score=True
+                        importance_sampling=args.importance_sampling,  # True
+                        tau=args.tau,  # 0.1,
+                        every_importance_t=args.every_importance_t,  # 5,
+                        importance_sampling_start=args.importance_sampling_start,  # 0,
+                        importance_sampling_end=args.importance_sampling_end,  # 200,
+                        maximize_score=True,
                     )
                 all_molecules += len(molecules)
                 tmp_molecules.extend(molecules)
@@ -436,7 +438,7 @@ def evaluate(args):
 
         write_sdf_file(sdf_out_file_raw, valid_molecules, extract_mol=True)
         sdf_files.append(sdf_out_file_raw)
-        
+
         # PoseBusters
         if not args.filter_by_posebusters and not args.omit_posebusters:
             print("Starting evaluation with PoseBusters...")
@@ -573,7 +575,8 @@ def get_args():
     parser.add_argument("--n-nodes-bias", default=0, type=int)
     parser.add_argument("--property-guidance", default=False, action="store_true")
     parser.add_argument("--ckpt-property-model", default=None, type=str)
-    parser.add_argument("--property-self-guidance", action="store_true")
+    parser.add_argument("--property-self-guidance", default=False, action="store_true")
+    parser.add_argument("--property-guidance-complex", default=False, action="store_true")
     parser.add_argument("--guidance-scale", default=1.e-4, type=float)
     parser.add_argument("--filter-by-posebusters", action="store_true")
     parser.add_argument("--filter-by-lipinski", action="store_true")

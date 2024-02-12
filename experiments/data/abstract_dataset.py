@@ -1,7 +1,10 @@
-from typing import Optional
+from typing import List, Optional
 
 import torch
-from torch.utils.data import Subset
+from torch.utils.data import Dataset, Subset
+from torch_geometric.data import Data
+from torch_geometric.data.collate import collate
+from torch_geometric.data.separate import separate
 
 from experiments.data.adaptive_loader import AdaptiveLightningDataset
 
@@ -211,3 +214,47 @@ class AbstractDatasetInfos:
             self.is_h_donor = statistics["train"].is_h_donor
         if hasattr(statistics["train"], "is_h_acceptor"):
             self.is_h_acceptor = statistics["train"].is_h_acceptor
+
+
+class CustomDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        return self.data[index]
+
+
+class CustomPyGDataset(Dataset):
+    def __init__(self, data_list, root=None, transform=None, pre_transform=None):
+        super(CustomPyGDataset, self).__init__(root, transform, pre_transform)
+        self.data, self.slices = _collate(data_list)
+
+    def get(self, idx: int) -> Data:
+
+        data = separate(
+            cls=self.data.__class__,
+            batch=self.data,
+            idx=idx,
+            slice_dict=self.slices,
+            decrement=False,
+        )
+        return data
+
+
+def _collate(data_list: List[Data]):
+    r"""Collates a Python list of :obj:`torch_geometric.data.Data` objects
+    to the internal storage format of
+    :class:`~torch_geometric.data.InMemoryDataset`."""
+    if len(data_list) == 1:
+        return data_list[0], None
+
+    data, slices, _ = collate(
+        data_list[0].__class__,
+        data_list=data_list,
+        increment=False,
+        add_batch=False,
+    )
+    return data, slices

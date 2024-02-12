@@ -338,22 +338,25 @@ class LigandPocketDataModule(AbstractDataModuleLigand):
         train_dataset = LigandPocketDataset(
             split="train",
             root=root_path,
-            with_docking_scores=cfg.joint_property_prediction
-            and cfg.regression_property == "docking_score",
+            with_docking_scores=(cfg.joint_property_prediction
+            and cfg.regression_property == "docking_score") or (cfg.property_training
+            and cfg.regression_property == "docking_score"),
             remove_hs=cfg.remove_hs,
         )
         val_dataset = LigandPocketDataset(
             split="val",
             root=root_path,
-            with_docking_scores=cfg.joint_property_prediction
-            and cfg.regression_property == "docking_score",
+            with_docking_scores=(cfg.joint_property_prediction
+            and cfg.regression_property == "docking_score") or (cfg.property_training
+            and cfg.regression_property == "docking_score"),
             remove_hs=cfg.remove_hs,
         )
         test_dataset = LigandPocketDataset(
             split="test",
             root=root_path,
-            with_docking_scores=cfg.joint_property_prediction
-            and cfg.regression_property == "docking_score",
+            with_docking_scores=(cfg.joint_property_prediction
+            and cfg.regression_property == "docking_score") or (cfg.property_training
+            and cfg.regression_property == "docking_score"),
             remove_hs=cfg.remove_hs,
         )
         self.remove_hs = cfg.remove_hs

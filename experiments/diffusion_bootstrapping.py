@@ -12,14 +12,14 @@ import torch.nn.functional as F
 from joblib import Parallel, delayed
 from torch import Tensor
 from torch.utils.data import Subset
-from torch_geometric.data import Batch
+from torch_geometric.data import Batch, DataLoader
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from torch_scatter import scatter_mean
 from tqdm import tqdm
 
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
-from experiments.data.abstract_dataset import AbstractDatasetInfos
+from experiments.data.abstract_dataset import AbstractDatasetInfos, CustomPyGDataset
 from experiments.data.distributions import ConditionalDistributionNodes, prepare_context
 from experiments.data.utils import (
     write_trajectory_as_xyz,
@@ -243,13 +243,23 @@ class Trainer(pl.LightningModule):
         else:
             self.dist_loss = None
 
+        self.i = 0  # monitor number of iterations
+        self.filtered_complexes = []
+
+    def init_train_dataset(self):
+        self.orig_train_dataset = self.trainer.datamodule.train_dataset
+
     def on_training_epoch_start(self):
+        if self.i == 0:
+            self.init_train_dataset()
+        self.i += 1
+
         def generate_ligands(batch, model):
-            model = deepcopy(model).cpu()
+            model = deepcopy(model).cuda()
             model.eval()
             molecules = model.generate_ligands(
                 batch,
-                num_graphs=self.hparams.batch_size,
+                num_graphs=self.hparams.inference_batch_size,
                 fix_n_nodes=self.hparams.fix_n_nodes,
                 vary_n_nodes=self.hparams.vary_n_nodes,
                 n_nodes_bias=self.hparams.n_nodes_bias,
@@ -268,38 +278,53 @@ class Trainer(pl.LightningModule):
             return valid_molecules
 
         def get_scores(molecules, model):
-            model = deepcopy(model).cpu()
+            model = deepcopy(model).cuda()
             model.eval()
-            filtered_samples = model.get_scores(molecules)
-            return filtered_samples
+            scores = model.get_scores(molecules)
+            return scores
 
         # sample new ligands
         generated_complexes = []
-        train_dataset = self.trainer.datamodule.train_dataset
-        idx_train = [
-            i for i in torch.randperm(len(train_dataset))[: len(generated_complexes)]
-        ]
-        train_dataset = Subset(train_dataset, idx_train)
-
         for batch in self.trainer.test_dataloader:
             generated_complexes.extend(generate_ligands(batch, self.model))
-        filtered_complexes = get_scores(generated_complexes, self.model)
 
+        scores = get_scores(generated_complexes, self.model)
+        keep_ids = [i for i in scores if i > self.hparams.docking_scores_threshold]
+        filtered_complexes = [
+            mol for i, mol in enumerate(generated_complexes) if i in keep_ids
+        ]
+        self.filtered_complexes.extend(filtered_complexes)
+
+        train_dataset = self.orig_train_dataset
+        idx_train = [
+            i
+            for i in torch.randperm(len(train_dataset))[: len(self.filtered_complexes)]
+        ]
+        train_dataset = Subset(train_dataset, idx_train)
         train_dataset.extend(filtered_complexes)
         self.trainer.reset_train_dataloader(self)
 
     @torch.no_grad()
     def get_scores(self, molecule_list):
-        batch = molecules_to_torch_geometric(
+        data_list = molecules_to_torch_geometric(
             molecule_list,
             add_feats=self.hparams.additional_feats,
             remove_hs=self.hparams.remove_hs,
             cog_proj=False,
         )
-        t = torch.ones_like(batch.x)
-        scores = self(batch=batch, t=t)["property_pred"]
-        keep_ids = [i for i in scores if i > self.hparams.docking_scores_threshold]
-        return [mol for i, mol in enumerate(molecule_list) if i in keep_ids]
+        dataset = CustomPyGDataset(data_list=data_list)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=self.hparams.inference_batch_size,
+            num_workers=self.hparams.num_workers,
+            shuffle=False,
+        )
+
+        scores = []
+        for batch in dataloader:
+            t = torch.ones_like(batch.x)
+            scores.append(self(batch=batch, t=t)["property_pred"])
+        return scores
 
     def training_step(self, batch, batch_idx):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
@@ -573,15 +598,19 @@ class Trainer(pl.LightningModule):
         out_dict = self(batch=batch, t=t)
 
         true_data = {
-            "coords": out_dict["coords_true"]
-            if self.hparams.continuous_param == "data"
-            else out_dict["coords_noise_true"],
+            "coords": (
+                out_dict["coords_true"]
+                if self.hparams.continuous_param == "data"
+                else out_dict["coords_noise_true"]
+            ),
             "atoms": out_dict["atoms_true"],
             "charges": out_dict["charges_true"],
             "bonds": out_dict["bonds_true"],
-            "properties": out_dict["properties_true"]
-            if self.hparams.joint_property_prediction
-            else None,
+            "properties": (
+                out_dict["properties_true"]
+                if self.hparams.joint_property_prediction
+                else None
+            ),
         }
 
         coords_pred = out_dict["coords_pred"]
@@ -790,9 +819,9 @@ class Trainer(pl.LightningModule):
             # create block diagonal matrix
             dense_edge = torch.zeros(n, n, device=self.device, dtype=torch.long)
             # populate entries with integer features
-            dense_edge[
-                edge_index_global_lig[0, :], edge_index_global_lig[1, :]
-            ] = edge_attr_global_lig
+            dense_edge[edge_index_global_lig[0, :], edge_index_global_lig[1, :]] = (
+                edge_attr_global_lig
+            )
             dense_edge_ohe = (
                 F.one_hot(dense_edge.view(-1, 1), num_classes=BOND_FEATURE_DIMS + 1)
                 .view(n, n, -1)
@@ -881,9 +910,9 @@ class Trainer(pl.LightningModule):
             edge_index_local=None,
             edge_index_global=edge_index_global,
             edge_index_global_lig=edge_index_global_lig,
-            edge_attr_global=edge_attr_global_perturbed
-            if not self.hparams.bond_prediction
-            else None,
+            edge_attr_global=(
+                edge_attr_global_perturbed if not self.hparams.bond_prediction else None
+            ),
             batch=batch_full,
             batch_edge_global=batch_edge_global,
             context=context,

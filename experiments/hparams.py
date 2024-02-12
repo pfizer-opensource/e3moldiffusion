@@ -213,6 +213,12 @@ def add_arguments(parser):
         "--joint-property-prediction", default=False, action="store_true"
     )
 
+    # SAMPLING
+    parser.add_argument(
+        "--docking-scores-threshold", default=False, action="store_true"
+    )
+    parser.add_argument("--sascores-threshold", default=0, type=int)
+
     # LATENT
     parser.add_argument("--prior-beta", default=1.0, type=float)
     parser.add_argument("--sdim-latent", default=256, type=int)

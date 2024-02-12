@@ -23,6 +23,7 @@ from e3moldiffusion.modules import (
     PropertyPredictionMLP,
 )
 
+
 class DenoisingEdgeNetwork(nn.Module):
     """_summary_
     Denoising network that inputs:
@@ -114,7 +115,6 @@ class DenoisingEdgeNetwork(nn.Module):
         else:
             latent_dim_ = None
 
-    
         self.gnn = EQGATEdgeGNN(
             hn_dim=hn_dim,
             cutoff_local=cutoff_local,
@@ -138,7 +138,7 @@ class DenoisingEdgeNetwork(nn.Module):
             ligand_pocket_interaction=ligand_pocket_interaction,
             store_intermediate_coords=store_intermediate_coords,
         )
-        
+
         if property_prediction:
             self.prediction_head = PropertyPredictionHead(
                 hn_dim=hn_dim,
@@ -227,7 +227,7 @@ class DenoisingEdgeNetwork(nn.Module):
         batch_lig: OptTensor = None,
         joint_tensor: OptTensor = None,
     ) -> Dict:
-        
+
         if pos is None and x is None:
             assert joint_tensor is not None
             pos = joint_tensor[:, :3].clone()
@@ -315,7 +315,7 @@ class DenoisingEdgeNetwork(nn.Module):
             pocket_mask=pocket_mask,
             edge_mask=edge_mask,
         )
-      
+
         if self.store_intermediate_coords and self.training:
             pos_list = out["p_list"]
             assert len(pos_list) > 0
@@ -935,8 +935,9 @@ class PropertyEdgeNetwork(nn.Module):
 
         self.prediction_head = PropertyPredictionMLP(
             hn_dim=hn_dim,
+            edge_dim=edge_dim,
             num_context_features=num_context_features,
-            activation=nn.Sigmoid(),
+            activation=nn.Identity(),
         )
 
         self.reset_parameters()
@@ -986,20 +987,34 @@ class PropertyEdgeNetwork(nn.Module):
         x: Tensor,
         t: Tensor,
         pos: Tensor,
+        edge_index_local: Tensor,
         edge_index_global: Tensor,
-        edge_index_local: OptTensor = None,
+        edge_index_global_lig: OptTensor = None,
         edge_attr_global: OptTensor = None,
         batch: OptTensor = None,
         batch_edge_global: OptTensor = None,
         z: OptTensor = None,
         context: OptTensor = None,
+        pocket_mask: OptTensor = None,
+        edge_mask: OptTensor = None,
+        edge_mask_pocket: OptTensor = None,
+        ca_mask: OptTensor = None,
+        batch_pocket: OptTensor = None,
+        pos_lig: OptTensor = None,
+        atoms_lig: OptTensor = None,
+        edge_attr_global_lig: OptTensor = None,
+        batch_edge_global_lig: OptTensor = None,
+        batch_lig: OptTensor = None,
         joint_tensor: OptTensor = None,
     ) -> Dict:
+
         if pos is None and x is None:
             assert joint_tensor is not None
             pos = joint_tensor[:, :3].clone()
             x = joint_tensor[:, 3:].clone()
 
+        if pocket_mask is None:
+            pos = pos - scatter_mean(pos, index=batch, dim=0)[batch]
         # t: (batch_size,)
         ta = self.time_mapping_atom(t)
         tb = self.time_mapping_bond(t)
@@ -1018,12 +1033,25 @@ class PropertyEdgeNetwork(nn.Module):
             s = self.atom_context_mapping(s + cemb)
         s = self.atom_time_mapping(s + tnode)
 
+        if self.bond_prediction:
+            # symmetric initial edge-feature
+            d = (
+                (pos[edge_index_global[1]] - pos[edge_index_global[0]])
+                .pow(2)
+                .sum(-1, keepdim=True)
+                .sqrt()
+            )
+            edge_attr_global = torch.concat(
+                [x[edge_index_global[1]] + x[edge_index_global[0]], d], dim=-1
+            )
         edge_attr_global_transformed = self.bond_mapping(edge_attr_global)
         edge_attr_global_transformed = self.bond_time_mapping(
             edge_attr_global_transformed + tedge_global
         )
 
         v = torch.zeros(size=(x.size(0), 3, self.vdim), device=s.device)
+
+        # global
         edge_attr_global_transformed = self.calculate_edge_attrs(
             edge_index=edge_index_global,
             edge_attr=edge_attr_global_transformed,
@@ -1043,6 +1071,10 @@ class PropertyEdgeNetwork(nn.Module):
             edge_attr_global=edge_attr_global_transformed,
             batch=batch,
             context=cemb,
+            batch_lig=batch_lig,
+            pocket_mask=pocket_mask,
+            edge_mask_pocket=edge_mask_pocket,
+            norm_output=True,
         )
 
         property_atoms = self.prediction_head(out, batch, edge_index_global)

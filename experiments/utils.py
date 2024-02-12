@@ -731,12 +731,16 @@ def create_energy_model(hparams, num_atom_features):
     return model
 
 
-def load_property_model(filepath, num_atom_features, device="cpu"):
+def load_property_model(
+    filepath, num_atom_features, num_bond_classes, with_complex=False, device="cpu"
+):
     import re
 
     ckpt = torch.load(filepath, map_location="cpu")
     args = ckpt["hyper_parameters"]
-    model = create_property_model(args, num_atom_features)
+    model = create_property_model(
+        args, num_atom_features, num_bond_classes, with_complex=with_complex
+    )
 
     state_dict = ckpt["state_dict"]
     state_dict = {
@@ -753,18 +757,62 @@ def load_property_model(filepath, num_atom_features, device="cpu"):
     return model.to(device)
 
 
-def create_property_model(hparams, num_atom_features):
+def create_property_model(
+    hparams, num_atom_features, num_bond_classes, with_complex=False
+):
     from e3moldiffusion.coordsatomsbonds import EQGATEnergyNetwork
 
-    model = EQGATEnergyNetwork(
-        hn_dim=(hparams["sdim"], hparams["vdim"]),
-        num_layers=hparams["num_layers"],
-        num_rbfs=hparams["rbf_dim"],
-        use_cross_product=hparams["use_cross_product"],
-        num_atom_features=num_atom_features,
-        cutoff_local=hparams["cutoff_local"],
-        vector_aggr=hparams["vector_aggr"],
-    )
+    if with_complex:
+        from e3moldiffusion.coordsatomsbonds import PropertyEdgeNetwork
+
+        # backward compatability:
+        if "joint_property_prediction" not in hparams.keys():
+            hparams["joint_property_prediction"] = False
+        if "atoms_continuous" not in hparams.keys():
+            hparams["atoms_continuous"] = False
+        if "bonds_continuous" not in hparams.keys():
+            hparams["bonds_continuous"] = False
+        if "store_intermediate_coords" not in hparams.keys():
+            hparams["store_intermediate_coords"] = False
+        if "ligand_pocket_distance_loss" not in hparams.keys():
+            hparams["ligand_pocket_distance_loss"] = False
+        if "ligand_pocket_hidden_distance" not in hparams.keys():
+            hparams["ligand_pocket_hidden_distance"] = False
+
+        model = PropertyEdgeNetwork(
+            hn_dim=(hparams["sdim"], hparams["vdim"]),
+            num_layers=hparams["num_layers"],
+            latent_dim=None,
+            use_cross_product=hparams["use_cross_product"],
+            num_atom_features=num_atom_features,
+            num_bond_types=num_bond_classes,
+            edge_dim=hparams["edim"],
+            cutoff_local=hparams["cutoff_local"],
+            vector_aggr=hparams["vector_aggr"],
+            fully_connected=hparams["fully_connected"],
+            local_global_model=hparams["local_global_model"],
+            recompute_edge_attributes=True,
+            recompute_radius_graph=False,
+            edge_mp=hparams["edge_mp"],
+            context_mapping=hparams["context_mapping"],
+            num_context_features=hparams["num_context_features"],
+            coords_param=hparams["continuous_param"],
+            use_pos_norm=hparams["use_pos_norm"],
+            ligand_pocket_interaction=hparams["ligand_pocket_interaction"],
+            bond_prediction=hparams["bond_prediction"],
+            property_prediction=hparams["property_prediction"],
+            joint_property_prediction=hparams["joint_property_prediction"],
+        )
+    else:
+        model = EQGATEnergyNetwork(
+            hn_dim=(hparams["sdim"], hparams["vdim"]),
+            num_layers=hparams["num_layers"],
+            num_rbfs=hparams["rbf_dim"],
+            use_cross_product=hparams["use_cross_product"],
+            num_atom_features=num_atom_features,
+            cutoff_local=hparams["cutoff_local"],
+            vector_aggr=hparams["vector_aggr"],
+        )
     return model
 
 
@@ -1112,12 +1160,14 @@ def get_molecules(
             positions=positions,
             charges=charges,
             bond_types=edges,
-            positions_pocket=pos_pocket_splits[i]
-            if data_batch_pocket is not None
-            else None,
-            atom_types_pocket=atom_types_integer_split_pocket[i]
-            if data_batch_pocket is not None
-            else None,
+            positions_pocket=(
+                pos_pocket_splits[i] if data_batch_pocket is not None else None
+            ),
+            atom_types_pocket=(
+                atom_types_integer_split_pocket[i]
+                if data_batch_pocket is not None
+                else None
+            ),
             context=context_split[i][0] if context_split is not None else None,
             is_aromatic=aromatic_feat_integer_split[i] if add_feats else None,
             hybridization=hybridization_feat_integer_split[i] if add_feats else None,
@@ -1147,8 +1197,8 @@ def molecules_to_torch_geometric(molecule_list, add_feats, remove_hs, cog_proj):
             )
         )
 
-    data = Batch.from_data_list(data_list)
-    return data
+    # data = Batch.from_data_list(data_list)
+    return data_list
 
 
 def get_inp_molecules(
@@ -1203,9 +1253,11 @@ def get_inp_molecules(
             positions=positions.detach().to(mol_device),
             charges=charges.detach().to(mol_device),
             bond_types=edges.detach().to(mol_device),
-            context=context_split[i][0].detach().to(mol_device)
-            if context_split is not None
-            else None,
+            context=(
+                context_split[i][0].detach().to(mol_device)
+                if context_split is not None
+                else None
+            ),
             dataset_info=dataset_info,
         )
         molecule_list.append(molecule)
@@ -1384,9 +1436,9 @@ def sdfs_to_molecules(sdf_path, remove_hs=True):
                     sort_by_row=False,
                 )
                 edge_attrs_dense = torch.zeros(size=(n, n), device="cpu").long()
-                edge_attrs_dense[
-                    edge_index_global[0, :], edge_index_global[1, :]
-                ] = edge_attr_global
+                edge_attrs_dense[edge_index_global[0, :], edge_index_global[1, :]] = (
+                    edge_attr_global
+                )
 
                 molecule = Molecule(
                     atom_types=atoms,

@@ -42,9 +42,9 @@ def initialize_edge_attrs_reverse(
     # some assert
 
     edge_attr_global_dense = torch.zeros(size=(n, n), device=device, dtype=torch.long)
-    edge_attr_global_dense[
-        edge_index_global[0], edge_index_global[1]
-    ] = edge_attr_global
+    edge_attr_global_dense[edge_index_global[0], edge_index_global[1]] = (
+        edge_attr_global
+    )
     assert (edge_attr_global_dense - edge_attr_global_dense.T).sum().float() == 0.0
 
     edge_attr_global = F.one_hot(edge_attr_global, num_bond_classes).float()
@@ -272,7 +272,7 @@ def property_classifier_guidance(
     return pos, atom_types, charge_types
 
 
-def self_guidance(
+def property_guidance_lig_pocket(
     model,
     pos=None,
     pos_pocket=None,
@@ -288,44 +288,64 @@ def self_guidance(
     batch_pocket=None,
     batch_full=None,
     batch_edge_global=None,
-    batch_size=None,
     pocket_mask=None,
     edge_mask=None,
     edge_mask_pocket=None,
     ca_mask=None,
     context=None,
     num_atom_types=None,
+    atoms_continuous=False,
     signal=1.0e-3,
     guidance_scale=100,
     optimization="minimize",
 ):
-    (
-        pos_joint,
-        atom_types_joint,
-        charge_types_joint,
-        batch_full,
-        pocket_mask,
-    ) = concat_ligand_pocket(
-        pos,
-        pos_pocket,
-        atom_types,
-        atom_types_pocket,
-        charge_types,
-        charges_pocket,
-        batch,
-        batch_pocket,
-        sorting=False,
-    )
+
+    pos = pos.detach()
+    pos.requires_grad = True
+    pos_pocket = pos_pocket.detach()
+    pos_pocket.requires_grad = False
+    if atoms_continuous:
+        atom_types = atom_types.detach()
+        atom_types.requires_grad = True
+        atom_types_pocket = atom_types_pocket.detach()
+        atom_types_pocket.requires_grad = False
+        charge_types = charge_types.detach()
+        charge_types.requires_grad = True
+        charges_pocket = charges_pocket.detach()
+        charges_pocket.requires_grad = False
+
     with torch.enable_grad():
-        joint_tensor = (
-            torch.cat([pos_joint, atom_types_joint, charge_types_joint], dim=-1)
-            .detach()
-            .requires_grad_(True)
+        (
+            pos_joint,
+            atom_types_joint,
+            charge_types_joint,
+            batch_full,
+            pocket_mask,
+        ) = concat_ligand_pocket(
+            pos,
+            pos_pocket,
+            atom_types,
+            atom_types_pocket,
+            charge_types,
+            charges_pocket,
+            batch,
+            batch_pocket,
+            sorting=False,
         )
+        if atoms_continuous:
+            joint_tensor = torch.cat(
+                [pos_joint, atom_types_joint, charge_types_joint], dim=-1
+            )
+            x = None
+            pos_joint = None
+        else:
+            joint_tensor = None
+            x = torch.cat([atom_types_joint, charge_types_joint], dim=-1)
+
         out = model(
-            x=None,
+            x=x,
             t=temb,
-            pos=None,
+            pos=pos_joint,
             joint_tensor=joint_tensor,
             edge_index_local=None,
             edge_index_global=edge_index_global,
@@ -347,31 +367,38 @@ def self_guidance(
             sign = 1.0
         else:
             raise Exception("Optimization arg needs to be 'minimize' or 'maximize'!")
-        property_pred = sign * guidance_scale * out["property_pred"]
+
+        property_pred = guidance_scale * out["property_pred"]
 
         grad_outputs: List[Optional[torch.Tensor]] = [torch.ones_like(property_pred)]
-        grad_shift = torch.autograd.grad(
-            [property_pred],
-            [joint_tensor],
-            grad_outputs=grad_outputs,
-            create_graph=False,
-            retain_graph=False,
-        )[0]
+        if atoms_continuous:
+            grad_shift = torch.autograd.grad(
+                [property_pred],
+                [joint_tensor[pocket_mask]],
+                grad_outputs=grad_outputs,
+                create_graph=False,
+                retain_graph=False,
+            )[0]
+        else:
+            grad_shift = torch.autograd.grad(
+                [property_pred],
+                [pos],
+                grad_outputs=grad_outputs,
+                create_graph=False,
+                retain_graph=False,
+            )[0]
 
-    pos = pos + signal * grad_shift[:, :3][pocket_mask.squeeze(), :]
+    pos = pos + sign * signal * grad_shift[:, :3]
     pos.detach_()
 
-    atom_types = (
-        atom_types
-        + signal * grad_shift[:, 3 : num_atom_types + 3][pocket_mask.squeeze(), :]
-    )
-    atom_types.detach_()
-    charge_types = (
-        charge_types
-        + signal * grad_shift[:, 3 + num_atom_types :][pocket_mask.squeeze(), :]
-    )
-    charge_types.detach_()
-    # pos = zero_mean(pos, batch=batch, dim_size=batch_size, dim=0)
+    if atoms_continuous:
+        atom_types = atom_types + sign * signal * grad_shift[:, 3 : num_atom_types + 3]
+        atom_types.detach_()
+        charge_types = (
+            charge_types + sign * signal * grad_shift[:, 3 + num_atom_types :]
+        )
+        charge_types.detach_()
+        # pos = zero_mean(pos, batch=batch, dim_size=batch_size, dim=0)
 
     return pos, atom_types, charge_types
 
