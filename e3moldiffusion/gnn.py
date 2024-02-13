@@ -156,6 +156,7 @@ class EQGATEdgeGNN(nn.Module):
         self.norms = nn.ModuleList(
             [norm_module(dims=hn_dim, latent_dim=latent_dim) for _ in range(num_layers)]
         )
+        self.out_norm = LayerNorm(dims=hn_dim)
 
         self.reset_parameters()
 
@@ -163,6 +164,7 @@ class EQGATEdgeGNN(nn.Module):
         for conv, norm in zip(self.convs, self.norms):
             conv.reset_parameters()
             norm.reset_parameters()
+        self.out_norm.reset_parameters()
 
     def calculate_edge_attrs(
         self,
@@ -261,8 +263,7 @@ class EQGATEdgeGNN(nn.Module):
 
             e = edge_attr_global[-1]
 
-        if norm_output:
-            s, v = self.norms[i](x={"s": s, "v": v, "z": z}, batch=batch)
+        s, v = self.out_norm(x={"s": s, "v": v, "z": z}, batch=batch)
         out = {"s": s, "v": v, "e": e, "p": p, "p_list": pos_list}
 
         return out

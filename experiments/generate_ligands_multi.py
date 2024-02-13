@@ -3,6 +3,7 @@ import os
 import random
 import shutil
 import tempfile
+import time as time_sleep
 import warnings
 from collections import defaultdict
 from datetime import datetime
@@ -197,68 +198,17 @@ def evaluate(args):
             and k <= args.max_sample_iter
         ):
             k += 1
-            try:
-                molecules = prepare_data_and_generate_ligands(
-                    model,
-                    residues,
-                    sdf_file,
-                    dataset_info,
-                    hparams=hparams,
-                    args=args,
-                    device=device,
-                    embedding_dict=embedding_dict,
-                )
-            except torch.cuda.OutOfMemoryError:
-                print(
-                    "WARNING: ran out of memory, retrying with 75perc. of the batch size"
-                )
-                torch.cuda.empty_cache()
-                try:
-                    bs = int(args.batch_size * 0.25)
-                    molecules = prepare_data_and_generate_ligands(
-                        model,
-                        residues,
-                        sdf_file,
-                        dataset_info,
-                        hparams=hparams,
-                        args=args,
-                        device=device,
-                        embedding_dict=embedding_dict,
-                        batch_size=args.batch_size - bs,
-                    )
-                except torch.cuda.OutOfMemoryError:
-                    print(
-                        "WARNING: ran out of memory, retrying with half the batch size"
-                    )
-                    torch.cuda.empty_cache()
-                    try:
-                        molecules = prepare_data_and_generate_ligands(
-                            model,
-                            residues,
-                            sdf_file,
-                            dataset_info,
-                            hparams=hparams,
-                            args=args,
-                            device=device,
-                            embedding_dict=embedding_dict,
-                            batch_size=args.batch_size // 2,
-                        )
-                    except torch.cuda.OutOfMemoryError:
-                        print(
-                            "WARNING: ran out of memory, last try with 25perc. of the batch size"
-                        )
-                        torch.cuda.empty_cache()
-                        molecules = prepare_data_and_generate_ligands(
-                            model,
-                            residues,
-                            sdf_file,
-                            dataset_info,
-                            hparams=hparams,
-                            args=args,
-                            device=device,
-                            embedding_dict=embedding_dict,
-                            batch_size=args.batch_size // 4,
-                        )
+            molecules = prepare_data_and_generate_ligands(
+                model,
+                residues,
+                sdf_file,
+                dataset_info,
+                hparams=hparams,
+                args=args,
+                device=device,
+                embedding_dict=embedding_dict,
+            )
+
             all_molecules += len(molecules)
             tmp_molecules.extend(molecules)
             valid_molecules = analyze_stability_for_molecules(

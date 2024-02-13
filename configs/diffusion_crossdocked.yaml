@@ -18,7 +18,6 @@ bonds_continuous: false
 bond_model_guidance: false
 bond_prediction: false
 
-
 #REGRESSION
 joint_property_prediction: false
 regression_property: docking_score

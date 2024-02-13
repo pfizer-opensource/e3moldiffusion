@@ -92,7 +92,7 @@ class PredictionHeadEdge(nn.Module):
             atoms_pred = (atoms_pred * pocket_mask)[pocket_mask.squeeze(), :]
             coords_pred = (coords_pred * pocket_mask)[pocket_mask.squeeze(), :]
             p = (p * pocket_mask)[pocket_mask.squeeze(), :]
-            # coords_pred = p + coords_pred ## to test old model
+            coords_pred = p + coords_pred  ## to test old model
             d = (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)
         elif self.coords_param == "data":
             j, i = edge_index_global
