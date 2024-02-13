@@ -260,7 +260,11 @@ def evaluate(args):
                     every_importance_t=args.every_importance_t, # 5,
                     importance_sampling_start=args.importance_sampling_start, # 0,
                     importance_sampling_end=args.importance_sampling_end, # 200,
-                    maximize_score=True
+                    maximize_score=True,
+                    docking_guidance=args.docking_guidance,
+                    docking_t_start=args.docking_t_start,
+                    docking_t_end=args.docking_t_end,
+                    tau1=args.tau1,
                 )
             all_molecules += len(molecules)
             tmp_molecules.extend(molecules)
@@ -311,7 +315,12 @@ def evaluate(args):
                         every_importance_t=args.every_importance_t, # 5,
                         importance_sampling_start=args.importance_sampling_start, # 0,
                         importance_sampling_end=args.importance_sampling_end, # 200,
-                        maximize_score=True
+                        maximize_score=True,
+                        docking_guidance=args.docking_guidance,
+                        docking_t_start=args.docking_t_start,
+                        docking_t_end=args.docking_t_end,
+                        guidance_scale=args.guidance_scale,
+                        tau1=args.tau1,
                     )
                 all_molecules += len(molecules)
                 tmp_molecules.extend(molecules)
@@ -590,6 +599,11 @@ def get_args():
     parser.add_argument("--every-importance-t", default=5, type=int)
     parser.add_argument("--importance-sampling-start", default=0, type=int)
     parser.add_argument("--importance-sampling-end", default=250, type=int)
+    
+    parser.add_argument("--docking-guidance", default=False, action="store_true")
+    parser.add_argument("--tau1", default=0.5, type=float)
+    parser.add_argument("--docking-t-start", default=300, type=int)
+    parser.add_argument("--docking-t-end", default=450, type=int)
     args = parser.parse_args()
     return args
 
