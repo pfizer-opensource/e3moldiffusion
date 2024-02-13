@@ -1294,4 +1294,6 @@ def processMols(mols):
 
 def calculate_sascore(rdmol):
     sa = calculateScore(rdmol)
-    return round((10 - sa) / 9, 2)
+    sa = (sa - 1.0) / (10.0 - 1.0)
+    sa = 1.0 - sa 
+    return sa

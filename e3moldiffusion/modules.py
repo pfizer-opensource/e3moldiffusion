@@ -18,7 +18,7 @@ class PredictionHeadEdge(nn.Module):
         num_atom_features: int,
         num_bond_types: int = 5,
         coords_param: str = "data",
-        joint_property_prediction: bool = False,
+        joint_property_prediction: int = 0,   # gives the number of output nodes for property prediction.
     ) -> None:
         super(PredictionHeadEdge, self).__init__()
         self.sdim, self.vdim = hn_dim
@@ -43,9 +43,11 @@ class PredictionHeadEdge(nn.Module):
             in_features=self.sdim, out_features=num_atom_features, bias=True
         )
         if self.joint_property_prediction:
+            if isinstance(joint_property_prediction, bool):
+                joint_property_prediction = 1
             self.property_mlp = GatedEquivBlock(
                 in_dims=hn_dim,
-                out_dims=(1, None),
+                out_dims=(joint_property_prediction, None),
                 use_mlp=True,
                 return_vector=False,
             )
@@ -76,15 +78,6 @@ class PredictionHeadEdge(nn.Module):
         s = self.shared_mapping(s)
         coords_pred = self.coords_lin(v).squeeze()
         atoms_pred = self.atoms_lin(s)
-
-        # if self.joint_property_prediction:
-        #     batch_size = len(batch.bincount())
-        #     property_pred = self.property_mlp((s, v))
-        #     property_pred = scatter_add(
-        #         property_pred, index=batch, dim=0, dim_size=batch_size
-        #     )
-        # else:
-        #     property_pred = None
 
         if batch_lig is not None and pocket_mask is not None:
             s = (s * pocket_mask)[pocket_mask.squeeze(), :]
@@ -124,7 +117,7 @@ class PredictionHeadEdge(nn.Module):
             e_dense[edge_index_global[0], edge_index_global[1], :] = e
             e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
             e = e_dense[edge_index_global[0], edge_index_global[1], :]
-
+            
         f = s[i] + s[j] + self.bond_mapping(e)
         edge = torch.cat([f, d], dim=-1)
 
@@ -136,7 +129,8 @@ class PredictionHeadEdge(nn.Module):
             v = (v * pocket_mask.unsqueeze(-1))[pocket_mask.squeeze(), :]
             property_pred = self.property_mlp((s, v))
             property_pred = scatter_add(
-                property_pred, index=batch_lig, dim=0, dim_size=batch_size
+                property_pred, index=batch_lig if batch_lig is not None else batch,
+                dim=0, dim_size=batch_size # in case we want to train on ligand only
             )
         else:
             property_pred = None

@@ -1545,6 +1545,10 @@ def prepare_data_and_generate_ligands(
             importance_sampling_start=args.importance_sampling_start,  # 0,
             importance_sampling_end=args.importance_sampling_end,  # 200,
             maximize_score=not args.minimize_score,
+            docking_guidance=args.docking_guidance,
+            tau1=args.tau1,
+            docking_t_start=args.docking_t_start,
+            docking_t_end=args.docking_t_end,
         )
     del pocket_data
     torch.cuda.empty_cache()

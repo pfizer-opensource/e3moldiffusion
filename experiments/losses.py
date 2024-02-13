@@ -40,7 +40,6 @@ class DiffusionLoss(nn.Module):
         weights: Optional[Tensor] = None,
         molsize_weights: Optional[Tensor] = None,
         aux_weight: float = 1.0,
-        regression_property: str = None,
         l1_loss: bool = False,
     ) -> Dict:
         batch_size = len(batch.unique())
@@ -48,7 +47,6 @@ class DiffusionLoss(nn.Module):
         bonds_loss = None
         mulliken_loss = None
         wbo_loss = None
-        property_loss = 0.0
 
         if weights is not None:
             assert len(weights) == batch_size
@@ -134,24 +132,6 @@ class DiffusionLoss(nn.Module):
             else:
                 fnc = F.mse_loss
                 take_mean = True
-
-            if pred_data["properties"] is not None:
-                if regression_property == "sascore":
-                    property_loss = F.binary_cross_entropy_with_logits(
-                        pred_data["properties"],
-                        true_data["properties"],
-                        reduction="none",
-                    )
-                elif regression_property == "docking_score":
-                    property_loss = F.mse_loss(
-                        pred_data["properties"],
-                        true_data["properties"],
-                        reduction="none",
-                    )
-                else:
-                    raise Exception("Regression property not defined.")
-                property_loss *= weights
-                property_loss = torch.mean(property_loss, dim=0)
 
             atoms_loss = fnc(pred_data["atoms"], true_data["atoms"], reduction="none")
             if take_mean:
@@ -335,12 +315,6 @@ class DiffusionLoss(nn.Module):
                     pred_data["bonds"], true_data["bonds"], reduction="mean"
                 )
 
-            if pred_data["properties"] is not None:
-                property_loss = F.mse_loss(
-                    pred_data["properties"],
-                    true_data["properties"],
-                    reduction="mean",
-                )
 
             if "ring" in self.modalities:
                 ring_loss = F.cross_entropy(
@@ -394,7 +368,6 @@ class DiffusionLoss(nn.Module):
             "wbo": wbo_loss,
             "donor": donor_loss,
             "acceptor": acceptor_loss,
-            "properties": property_loss,
         }
 
         return loss

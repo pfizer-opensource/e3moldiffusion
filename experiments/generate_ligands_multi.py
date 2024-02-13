@@ -528,6 +528,11 @@ def get_args():
     parser.add_argument("--importance-sampling-start", default=0, type=int)
     parser.add_argument("--importance-sampling-end", default=250, type=int)
     parser.add_argument("--minimize-score", default=False, action="store_true")
+    
+    parser.add_argument("--docking-guidance", default=False, action="store_true")
+    parser.add_argument("--tau1", default=0.5, type=float)
+    parser.add_argument("--docking-t-start", default=250, type=int)
+    parser.add_argument("--docking-t-end", default=350, type=int)
     args = parser.parse_args()
     return args
 

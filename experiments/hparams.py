@@ -205,12 +205,12 @@ def add_arguments(parser):
     # CONTEXT
     parser.add_argument("--context-mapping", default=False, action="store_true")
     parser.add_argument("--num-context-features", default=0, type=int)
-    parser.add_argument("--properties-list", default=[], nargs="+", type=str)
+    parser.add_argument("--properties-list", default=[], nargs="+", type=str, choices=["docking_score", "sascore"])
 
     # PROPERTY PREDICTION
     parser.add_argument("--property-prediction", default=False, action="store_true")
     parser.add_argument(
-        "--joint-property-prediction", default=False, action="store_true"
+        "--joint-property-prediction", default=0, type=int,
     )
 
     # SAMPLING
