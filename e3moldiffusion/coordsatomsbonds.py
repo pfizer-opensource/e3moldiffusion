@@ -63,7 +63,6 @@ class DenoisingEdgeNetwork(nn.Module):
         property_prediction: bool = False,
         joint_property_prediction: bool = False,
         bond_prediction: bool = False,
-        scatter_first: bool = True,
     ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
@@ -153,7 +152,6 @@ class DenoisingEdgeNetwork(nn.Module):
                 num_bond_types=num_bond_types,
                 coords_param=coords_param,
                 joint_property_prediction=self.joint_property_prediction,
-                scatter_first=scatter_first,
             )
 
         self.distance_ligand_pocket = distance_ligand_pocket

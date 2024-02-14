@@ -19,14 +19,12 @@ class PredictionHeadEdge(nn.Module):
         num_bond_types: int = 5,
         coords_param: str = "data",
         joint_property_prediction: int = 0,   # gives the number of output nodes for property prediction.
-        scatter_first: bool = True,
     ) -> None:
         super(PredictionHeadEdge, self).__init__()
         self.sdim, self.vdim = hn_dim
         self.num_atom_features = num_atom_features
         self.coords_param = coords_param
         self.joint_property_prediction = joint_property_prediction
-        self.scatter_first = scatter_first
 
         self.shared_mapping = DenseLayer(
             self.sdim, self.sdim, bias=True, activation=nn.SiLU()
@@ -45,13 +43,16 @@ class PredictionHeadEdge(nn.Module):
             in_features=self.sdim, out_features=num_atom_features, bias=True
         )
         if self.joint_property_prediction:
+            self.node_lin = DenseLayer(self.sdim, self.sdim)
             if isinstance(joint_property_prediction, bool):
                 joint_property_prediction = 1
-            self.property_mlp = GatedEquivBlock(
-                in_dims=hn_dim,
-                out_dims=(joint_property_prediction, None),
-                use_mlp=True,
-                return_vector=False,
+            self.property_mlp = nn.Sequential(
+                DenseLayer(self.sdim, joint_property_prediction * self.sdim, 
+                           activation=nn.SiLU(),
+                           bias=True),
+                DenseLayer(joint_property_prediction * self.sdim, joint_property_prediction,
+                           bias=True,
+                           activation=nn.Identity())
             )
 
         self.reset_parameters()
@@ -63,6 +64,7 @@ class PredictionHeadEdge(nn.Module):
         self.bonds_lin_0.reset_parameters()
         self.bonds_lin_1.reset_parameters()
         if self.joint_property_prediction:
+            self.node_lin.reset_parameters()
             reset(self.property_mlp)
 
     def forward(
@@ -128,23 +130,12 @@ class PredictionHeadEdge(nn.Module):
 
         if self.joint_property_prediction:
             batch_size = len(batch.bincount())
-            v = (v * pocket_mask.unsqueeze(-1))[pocket_mask.squeeze(), :]
-            if self.scatter_first:
-                s = scatter_mean(
-                    s, index=batch_lig if batch_lig is not None else batch,
-                    dim=0, dim_size=batch_size # in case we want to train on ligand only
-                )
-                v = scatter_mean(
-                    v, index=batch_lig if batch_lig is not None else batch,
-                    dim=0, dim_size=batch_size # in case we want to train on ligand only
-                )
-                property_pred = self.property_mlp((s, v))
-            else:
-                property_pred = self.property_mlp((s, v))
-                property_pred = scatter_add(
-                    property_pred, index=batch_lig if batch_lig is not None else batch,
-                    dim=0, dim_size=batch_size # in case we want to train on ligand only
-                )
+            s = self.node_lin(s)
+            avg_embedding = scatter_mean(
+                s, index=batch_lig if batch_lig is not None else batch,
+                dim=0, dim_size=batch_size # in case we want to train on ligand only
+            )
+            property_pred = self.property_mlp(avg_embedding)
         else:
             property_pred = None
 
