@@ -212,7 +212,9 @@ def add_arguments(parser):
     parser.add_argument(
         "--joint-property-prediction", default=0, type=int,
     )
-
+    parser.add_argument(
+        "--scatter-first", default=False, action="store_true",
+    )
     # SAMPLING
     parser.add_argument(
         "--docking-scores-threshold", default=False, action="store_true"

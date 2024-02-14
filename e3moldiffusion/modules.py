@@ -19,12 +19,14 @@ class PredictionHeadEdge(nn.Module):
         num_bond_types: int = 5,
         coords_param: str = "data",
         joint_property_prediction: int = 0,   # gives the number of output nodes for property prediction.
+        scatter_first: bool = True,
     ) -> None:
         super(PredictionHeadEdge, self).__init__()
         self.sdim, self.vdim = hn_dim
         self.num_atom_features = num_atom_features
         self.coords_param = coords_param
         self.joint_property_prediction = joint_property_prediction
+        self.scatter_first = scatter_first
 
         self.shared_mapping = DenseLayer(
             self.sdim, self.sdim, bias=True, activation=nn.SiLU()
@@ -127,11 +129,22 @@ class PredictionHeadEdge(nn.Module):
         if self.joint_property_prediction:
             batch_size = len(batch.bincount())
             v = (v * pocket_mask.unsqueeze(-1))[pocket_mask.squeeze(), :]
-            property_pred = self.property_mlp((s, v))
-            property_pred = scatter_add(
-                property_pred, index=batch_lig if batch_lig is not None else batch,
-                dim=0, dim_size=batch_size # in case we want to train on ligand only
-            )
+            if self.scatter_first:
+                s = scatter_mean(
+                    s, index=batch_lig if batch_lig is not None else batch,
+                    dim=0, dim_size=batch_size # in case we want to train on ligand only
+                )
+                v = scatter_mean(
+                    v, index=batch_lig if batch_lig is not None else batch,
+                    dim=0, dim_size=batch_size # in case we want to train on ligand only
+                )
+                property_pred = self.property_mlp((s, v))
+            else:
+                property_pred = self.property_mlp((s, v))
+                property_pred = scatter_add(
+                    property_pred, index=batch_lig if batch_lig is not None else batch,
+                    dim=0, dim_size=batch_size # in case we want to train on ligand only
+                )
         else:
             property_pred = None
 

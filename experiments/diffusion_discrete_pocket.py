@@ -88,7 +88,9 @@ class Trainer(pl.LightningModule):
             hparams["ligand_pocket_distance_loss"] = False
         if "ligand_pocket_hidden_distance" not in hparams.keys():
             hparams["ligand_pocket_hidden_distance"] = False
-        
+        if "scatter_first" not in hparams.keys():
+            hparams["scatter_first"] = False
+            
         # re-using the hparam
         self.joint_properties_list = hparams["properties_list"]
         
@@ -170,6 +172,7 @@ class Trainer(pl.LightningModule):
                 bond_prediction=hparams["bond_prediction"],
                 property_prediction=hparams["property_prediction"],
                 joint_property_prediction=hparams["joint_property_prediction"],
+                scatter_first=hparams["scatter_first"],
             )
 
         self.sde_pos = DiscreteDDPM(
