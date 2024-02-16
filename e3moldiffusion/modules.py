@@ -44,17 +44,17 @@ class PredictionHeadEdge(nn.Module):
         )
         if self.joint_property_prediction:
             self.node_lin = DenseLayer(self.sdim, self.sdim)
-            if isinstance(joint_property_prediction, bool):
-                joint_property_prediction = 1
-            self.property_mlp = nn.Sequential(
-                DenseLayer(self.sdim, joint_property_prediction * self.sdim, 
-                           activation=nn.SiLU(),
-                           bias=True),
-                DenseLayer(joint_property_prediction * self.sdim, joint_property_prediction,
-                           bias=True,
-                           activation=nn.Identity())
-            )
-
+            
+            self.sa_mlp = nn.Sequential(
+                DenseLayer(self.sdim, self.sdim, activation=nn.SiLU(),  bias=True),
+                DenseLayer(self.sdim, 1, bias=True, activation=nn.Identity())
+                )
+            
+            self.docking_mlp = nn.Sequential(
+                DenseLayer(self.sdim, self.sdim, activation=nn.ReLU(),  bias=True),
+                DenseLayer(self.sdim, 1, bias=True, activation=nn.Identity())
+                )
+            
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -65,7 +65,8 @@ class PredictionHeadEdge(nn.Module):
         self.bonds_lin_1.reset_parameters()
         if self.joint_property_prediction:
             self.node_lin.reset_parameters()
-            reset(self.property_mlp)
+            reset(self.sa_mlp)
+            reset(self.docking_mlp)
 
     def forward(
         self,
@@ -132,10 +133,10 @@ class PredictionHeadEdge(nn.Module):
             batch_size = len(batch.bincount())
             s = self.node_lin(s)
             avg_embedding = scatter_mean(
-                s, index=batch_lig if batch_lig is not None else batch,
-                dim=0, dim_size=batch_size # in case we want to train on ligand only
+                s, index=batch_lig, dim=0, dim_size=batch_size
             )
-            property_pred = self.property_mlp(avg_embedding)
+            sa_pred, docking_pred = self.sa_mlp(avg_embedding), self.docking_mlp(avg_embedding)
+            property_pred = (sa_pred, docking_pred)
         else:
             property_pred = None
 
