@@ -111,7 +111,7 @@ def evaluate(args):
         prop_norm=prop_norm,
         prop_dist=prop_dist,
         load_ckpt_from_pretrained=None,
-        ligand_pocket_interaction=False,
+        # ligand_pocket_interaction=False,
         load_ckpt=None,
         run_evaluation=True,
         strict=False,
