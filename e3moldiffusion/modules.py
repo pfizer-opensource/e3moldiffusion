@@ -18,7 +18,7 @@ class PredictionHeadEdge(nn.Module):
         num_atom_features: int,
         num_bond_types: int = 5,
         coords_param: str = "data",
-        joint_property_prediction: int = 0,   # gives the number of output nodes for property prediction.
+        joint_property_prediction: int = 0,  # gives the number of output nodes for property prediction.
     ) -> None:
         super(PredictionHeadEdge, self).__init__()
         self.sdim, self.vdim = hn_dim
@@ -43,18 +43,22 @@ class PredictionHeadEdge(nn.Module):
             in_features=self.sdim, out_features=num_atom_features, bias=True
         )
         if self.joint_property_prediction:
-            self.node_lin = DenseLayer(self.sdim, self.sdim)
-            
+            self.property_mlp = GatedEquivBlock(
+                in_dims=hn_dim,
+                out_dims=(self.sdim, None),
+                use_mlp=True,
+                return_vector=False,
+            )
             self.sa_mlp = nn.Sequential(
-                DenseLayer(self.sdim, self.sdim, activation=nn.SiLU(),  bias=True),
-                DenseLayer(self.sdim, 1, bias=True, activation=nn.Identity())
-                )
-            
+                DenseLayer(self.sdim, self.sdim, activation=nn.SiLU(), bias=True),
+                DenseLayer(self.sdim, 1, bias=True, activation=nn.Identity()),
+            )
+
             self.docking_mlp = nn.Sequential(
-                DenseLayer(self.sdim, self.sdim, activation=nn.ReLU(),  bias=True),
-                DenseLayer(self.sdim, 1, bias=True, activation=nn.Identity())
-                )
-            
+                DenseLayer(self.sdim, self.sdim, activation=nn.ReLU(), bias=True),
+                DenseLayer(self.sdim, 1, bias=True, activation=nn.Identity()),
+            )
+
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -122,7 +126,7 @@ class PredictionHeadEdge(nn.Module):
             e_dense[edge_index_global[0], edge_index_global[1], :] = e
             e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
             e = e_dense[edge_index_global[0], edge_index_global[1], :]
-            
+
         f = s[i] + s[j] + self.bond_mapping(e)
         edge = torch.cat([f, d], dim=-1)
 
@@ -131,11 +135,14 @@ class PredictionHeadEdge(nn.Module):
 
         if self.joint_property_prediction:
             batch_size = len(batch.bincount())
-            s = self.node_lin(s)
-            avg_embedding = scatter_mean(
-                s, index=batch_lig, dim=0, dim_size=batch_size
+            v = (v * pocket_mask.unsqueeze(-1))[pocket_mask.squeeze(), :]
+            property_pred = self.property_mlp((s, v))
+            property_pred = scatter_mean(
+                property_pred, index=batch_lig, dim=0, dim_size=batch_size
             )
-            sa_pred, docking_pred = self.sa_mlp(avg_embedding), self.docking_mlp(avg_embedding)
+            sa_pred, docking_pred = self.sa_mlp(property_pred), self.docking_mlp(
+                property_pred
+            )
             property_pred = (sa_pred, docking_pred)
         else:
             property_pred = None
@@ -618,3 +625,96 @@ class GatedEquivariantBlock(nn.Module):
         if self.act is not None:
             x = self.act(x)
         return x, v
+
+
+class ClusterContinuousEmbedder(nn.Module):
+    def __init__(self, input_size, hidden_size, dropout_prob):
+        super().__init__()
+        use_cfg_embedding = dropout_prob > 0
+
+        if use_cfg_embedding:
+            self.embedding_drop = nn.Embedding(1, hidden_size)
+
+        self.mlp = nn.Sequential(
+            nn.Linear(input_size, hidden_size, bias=True),
+            nn.Softmax(dim=1),
+            nn.Linear(hidden_size, hidden_size, bias=False),
+        )
+        self.hidden_size = hidden_size
+        self.dropout_prob = dropout_prob
+
+    def forward(self, labels, train, force_drop_ids=None):
+        use_dropout = self.dropout_prob > 0
+        if force_drop_ids is not None:
+            drop_ids = force_drop_ids == 1
+        else:
+            drop_ids = None
+
+        if train and use_dropout:
+            drop_ids_rand = (
+                torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
+            )
+            if force_drop_ids is not None:
+                drop_ids = torch.logical_or(drop_ids, drop_ids_rand)
+            else:
+                drop_ids = drop_ids_rand
+
+        if drop_ids is not None:
+            embeddings = torch.zeros(
+                (labels.shape[0], self.hidden_size), device=labels.device
+            )
+            embeddings[~drop_ids] = self.mlp(labels[~drop_ids])
+            embeddings[drop_ids] += self.embedding_drop.weight[0]
+        else:
+            embeddings = self.mlp(labels)
+
+        if train:
+            noise = torch.randn_like(embeddings)
+            embeddings = embeddings + noise
+        return embeddings
+
+
+class TimestepEmbedder(nn.Module):
+    """
+    Embeds scalar timesteps into vector representations.
+    """
+
+    def __init__(self, hidden_size, frequency_embedding_size=256):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(frequency_embedding_size, hidden_size, bias=True),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size, bias=True),
+        )
+        self.frequency_embedding_size = frequency_embedding_size
+
+    @staticmethod
+    def timestep_embedding(t, dim, max_period=10000):
+        """
+        Create sinusoidal timestep embeddings.
+        :param t: a 1-D Tensor of N indices, one per batch element.
+                          These may be fractional.
+        :param dim: the dimension of the output.
+        :param max_period: controls the minimum frequency of the embeddings.
+        :return: an (N, D) Tensor of positional embeddings.
+        """
+        # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
+        half = dim // 2
+        freqs = torch.exp(
+            -math.log(max_period)
+            * torch.arange(start=0, end=half, dtype=torch.float32)
+            / half
+        ).to(device=t.device)
+        args = t[:, None].float() * freqs[None]
+        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+        if dim % 2:
+            embedding = torch.cat(
+                [embedding, torch.zeros_like(embedding[:, :1])], dim=-1
+            )
+        return embedding
+
+    def forward(self, t):
+        t = t.view(-1)
+        t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
+        t_emb = self.mlp(t_freq)
+        return t_emb

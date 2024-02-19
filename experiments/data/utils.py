@@ -36,6 +36,7 @@ x_map = {
     "is_h_acceptor": [False, True],
 }
 
+
 def get_fc_edge_index_with_offset(n, offset: int = 0, device="cpu"):
     row = torch.arange(n, dtype=torch.long)
     col = torch.arange(n, dtype=torch.long)
@@ -46,6 +47,7 @@ def get_fc_edge_index_with_offset(n, offset: int = 0, device="cpu"):
     fc_edge_index = fc_edge_index[:, mask]
     fc_edge_index += offset
     return fc_edge_index.to(device)
+
 
 def mol_to_torch_geometric(
     mol,

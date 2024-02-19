@@ -6,9 +6,11 @@
 #SBATCH --mem-per-cpu=12G
 #SBATCH --cpus-per-task=12
 #SBATCH --partition=ondemand-cpu-c48
-#SBATCH --array=1-20
+#SBATCH --array=1-40
 #SBATCH --output=/scratch1/e3moldiffusion/slurm_logs/dock_array_run_%j.out
 #SBATCH --error=/scratch1/e3moldiffusion/slurm_logs/dock_array_run_%j.err
+
+num_cpus=40
 
 cd /sharedhome/cremej01/workspace/e3moldiffusion
 source activate e3mol
@@ -16,11 +18,10 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_enamineft_cutoff5_bonds5_ep10"
-output_dir="$main_dir/evaluation/docking/nodes_bias_large_test"
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_norm"
+output_dir="$main_dir/evaluation/docking/nodes_bias_large"
 mkdir "$output_dir/docked"
 
-num_cpus=20
 
 python experiments/docking_multi.py \
     --mp-index "${SLURM_ARRAY_TASK_ID}" \

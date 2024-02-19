@@ -1,23 +1,11 @@
 import argparse
 import os
-import random
-import shutil
-import tempfile
 import warnings
-from argparse import ArgumentParser
-from collections import defaultdict
-from copy import deepcopy
-from datetime import datetime
-from pathlib import Path
-from time import time
 
 import numpy as np
 import pytorch_lightning as pl
-import torch
-from Bio.PDB import PDBParser
+from callbacks.data_scheduler import DataScheduler
 from callbacks.ema import ExponentialMovingAverage
-from posebusters import PoseBusters
-from posecheck.posecheck import PoseCheck
 from pytorch_lightning.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
@@ -25,27 +13,8 @@ from pytorch_lightning.callbacks import (
     TQDMProgressBar,
 )
 from pytorch_lightning.loggers import TensorBoardLogger
-from rdkit import Chem
-from torch_geometric.data import Batch
 
 from experiments.data.distributions import DistributionProperty
-from experiments.data.ligand.process_pdb import get_pdb_components, write_pdb
-from experiments.data.utils import load_pickle, mol_to_torch_geometric, save_pickle
-from experiments.docking import calculate_qvina2_score
-from experiments.sampling.analyze import analyze_stability_for_molecules
-from experiments.utils import (
-    prepare_pocket,
-    retrieve_interactions_per_mol,
-    split_list,
-    write_sdf_file,
-)
-
-warnings.filterwarnings(
-    "ignore", category=UserWarning, message="TypedStorage is deprecated"
-)
-
-from experiments.data.distributions import DistributionProperty
-from experiments.hparams import add_arguments
 
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
@@ -61,24 +30,42 @@ class dotdict(dict):
     __delattr__ = dict.__delitem__
 
 
-def create_list_defaultdict():
-    return defaultdict(list)
-
-
-def evaluate(args):
+def bootstrap(args):
     # load hyperparameter
-    hparams = torch.load(args.model_path)["hyper_parameters"]
-    hparams["select_train_subset"] = False
-    hparams["diffusion_pretraining"] = False
-    hparams["num_charge_classes"] = 6
-    if args.dataset_root is not None:
-        hparams["dataset_root"] = args.dataset_root
-    hparams = dotdict(hparams)
+    import torch
 
-    hparams.load_ckpt_from_pretrained = None
-    hparams.store_intermediate_coords = False
-    hparams.load_ckpt = None
-    hparams.gpus = 1
+    ckpt = torch.load(args.model_path)
+    ckpt["hyper_parameters"]["docking_scores_threshold"] = args.docking_scores_threshold
+    ckpt["hyper_parameters"]["sascores_threshold"] = args.sascores_threshold
+    ckpt["hyper_parameters"]["lr"] = args.lr
+    ckpt["hyper_parameters"]["bootstrap_save_dir"] = args.save_dir
+    ckpt["hyper_parameters"]["batch_size"] = args.batch_size
+    ckpt["hyper_parameters"]["inference_batch_size"] = args.inference_batch_size
+    ckpt["hyper_parameters"]["gpus"] = args.gpus
+    ckpt["hyper_parameters"]["property_guidance"] = args.property_guidance
+    ckpt["hyper_parameters"]["ckpt_property_model"] = args.ckpt_property_model
+    ckpt["hyper_parameters"]["guidance_scale"] = args.guidance_scale
+    ckpt["hyper_parameters"]["fix_n_nodes"] = args.fix_n_nodes
+    ckpt["hyper_parameters"]["vary_n_nodes"] = args.vary_n_nodes
+    ckpt["hyper_parameters"]["n_nodes_bias"] = args.n_nodes_bias
+    ckpt["hyper_parameters"]["num_ligands_per_pocket"] = args.num_ligands_per_pocket
+    ckpt["hyper_parameters"]["select_train_subset"] = False
+    ckpt["hyper_parameters"]["diffusion_pretraining"] = False
+    ckpt["hyper_parameters"]["load_ckpt_from_pretrained"] = False
+
+    ckpt["epoch"] = 0
+    ckpt["global_step"] = 0
+
+    if ckpt["optimizer_states"][0]["param_groups"][0]["lr"] != args.lr:
+        print("Changing learning rate ...")
+        ckpt["optimizer_states"][0]["param_groups"][0]["lr"] = args.lr
+        ckpt["optimizer_states"][0]["param_groups"][0]["initial_lr"] = args.lr
+
+    ckpt_path = os.path.join(args.save_dir, f"bootstrap_model_lr{args.lr}.ckpt")
+    torch.save(ckpt, ckpt_path)
+
+    hparams = ckpt["hyper_parameters"]
+    hparams = dotdict(hparams)
 
     print(f"Loading {hparams.dataset} Datamodule.")
     if hparams.use_adaptive_loader:
@@ -92,7 +79,7 @@ def evaluate(args):
             LigandPocketDataModule as DataModule,
         )
 
-    datamodule = DataModule(hparams)
+    datamodule = DataModule(hparams, bootstrapping=True)
 
     from experiments.data.data_info import GeneralInfos as DataInfos
 
@@ -111,23 +98,18 @@ def evaluate(args):
 
     torch.cuda.empty_cache()
 
-    # if you want bond_model_guidance, flag this here in the Trainer
-    device = "cuda"
-    model = Trainer.load_from_checkpoint(
-        args.model_path,
+    model = Trainer(
+        hparams=hparams,
         dataset_info=dataset_info,
         smiles_list=train_smiles,
-        histogram=histogram,
-        prop_norm=prop_norm,
         prop_dist=prop_dist,
-        load_ckpt_from_pretrained=None,
-        load_ckpt=None,
-        run_evaluation=True,
-        strict=False,
-    ).to(device)
+        prop_norm=prop_norm,
+        histogram=histogram,
+    )
 
     from pytorch_lightning.plugins.environments import LightningEnvironment
 
+    data_callback = DataScheduler()
     ema_callback = ExponentialMovingAverage(decay=hparams.ema_decay)
     checkpoint_callback = ModelCheckpoint(
         dirpath=hparams.save_dir + f"/run{hparams.id}/",
@@ -142,6 +124,7 @@ def evaluate(args):
     strategy = "ddp" if hparams.gpus > 1 else "auto"
     # strategy = 'ddp_find_unused_parameters_true'
     callbacks = [
+        data_callback,
         ema_callback,
         lr_logger,
         checkpoint_callback,
@@ -153,8 +136,8 @@ def evaluate(args):
         callbacks = callbacks[1:]
 
     trainer = pl.Trainer(
-        accelerator="gpu" if hparams.gpus else "cpu",
-        devices=hparams.gpus if hparams.gpus else 1,
+        accelerator="gpu" if args.gpus else "cpu",
+        devices=args.gpus if args.gpus else 1,
         strategy=strategy,
         plugins=LightningEnvironment(),
         num_nodes=1,
@@ -167,33 +150,49 @@ def evaluate(args):
         precision=hparams.precision,
         num_sanity_val_steps=2,
         max_epochs=hparams.num_epochs,
+        reload_dataloaders_every_n_epochs=1,
         detect_anomaly=hparams.detect_anomaly,
     )
 
-    pl.seed_everything(seed=hparams.seed, workers=hparams.gpus > 1)
+    pl.seed_everything(seed=hparams.seed, workers=args.gpus > 1)
 
-    ckpt_path = None
-    if hparams.load_ckpt is not None:
-        print("Loading from checkpoint ...")
-        import torch
-
-        ckpt_path = hparams.load_ckpt
-        ckpt = torch.load(ckpt_path)
-        if ckpt["optimizer_states"][0]["param_groups"][0]["lr"] != hparams.lr:
-            print("Changing learning rate ...")
-            ckpt["optimizer_states"][0]["param_groups"][0]["lr"] = hparams.lr
-            ckpt["optimizer_states"][0]["param_groups"][0]["initial_lr"] = hparams.lr
-            ckpt_path = (
-                "lr" + "_" + str(hparams.lr) + "_" + os.path.basename(hparams.load_ckpt)
-            )
-            ckpt_path = os.path.join(
-                os.path.dirname(hparams.load_ckpt),
-                f"retraining_with_lr{hparams.lr}.ckpt",
-            )
-            if not os.path.exists(ckpt_path):
-                torch.save(ckpt, ckpt_path)
     trainer.fit(
         model=model,
         datamodule=datamodule,
         ckpt_path=ckpt_path if hparams.load_ckpt is not None else None,
     )
+
+
+def get_args():
+    # fmt: off
+    parser = argparse.ArgumentParser(description='Data generation')
+    parser.add_argument('--model-path', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol/best_mol_stab.ckpt", type=str,
+                        help='Path to trained model')
+    parser.add_argument('--dataset-root', default=None, type=str, help='Path to dataset')
+    parser.add_argument("--gpus", default=1, type=int)
+    parser.add_argument("--docking-scores-threshold", default=-7.0, type=float)
+    parser.add_argument("--sascores-threshold", default=0.5, type=float)
+    parser.add_argument("--lr", default=1.e-4, type=float)
+    parser.add_argument("--fix-n-nodes", action="store_true")
+    parser.add_argument("--vary-n-nodes", action="store_true")
+    parser.add_argument("--n-nodes-bias", default=0, type=int)
+    parser.add_argument("--property-guidance", default=False, action="store_true")
+    parser.add_argument("--ckpt-property-model", default=None, type=str)
+    parser.add_argument('--guidance-scale', default=1.0e-4, type=float,
+                        help='How to scale the guidance shift')
+    parser.add_argument('--save-dir', default="/scratch1/e3moldiffusion/logs/crossdocked/bootstrapping", type=str,
+                        help='Path to test output')
+    parser.add_argument('--batch-size', default=8, type=int,
+                            help='Batch-size to generate the selected ngraphs. Defaults to 8.')
+    parser.add_argument('--num-ligands-per-pocket', default=50, type=int,
+                            help='Batch-size to generate the selected ngraphs. Defaults to 50.')
+    parser.add_argument('--inference-batch-size', default=50, type=int,
+                            help='Inference batch-size to generate the selected ngraphs. Defaults to 50.')
+    args = parser.parse_args()
+    return args
+
+
+if __name__ == "__main__":
+    args = get_args()
+    # Evaluate negative log-likelihood for the test partitions
+    bootstrap(args)

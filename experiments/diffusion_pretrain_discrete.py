@@ -1,12 +1,16 @@
 import logging
+import os
+import sys
 
+import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
+from rdkit import Chem
+from rdkit.Chem import RDConfig
 from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
-import numpy as np
 
 from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
@@ -15,12 +19,10 @@ from experiments.data.distributions import prepare_context
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.losses import DiffusionLoss
+from experiments.sampling.utils import calculate_sa
 from experiments.utils import coalesce_edges, dropout_node, zero_mean
-from rdkit import Chem
-from rdkit.Chem import RDConfig
-import os
-import sys
-sys.path.append(os.path.join(RDConfig.RDContribDir, 'SA_Score'))
+
+sys.path.append(os.path.join(RDConfig.RDContribDir, "SA_Score"))
 import sascorer
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
@@ -92,7 +94,7 @@ class Trainer(pl.LightningModule):
         self.model = DenoisingEdgeNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
-            latent_dim=None,
+            latent_dim=hparams["latent_dim"],
             use_cross_product=hparams["use_cross_product"],
             num_atom_features=self.num_atom_features,
             num_bond_types=self.num_bond_classes,
@@ -106,18 +108,15 @@ class Trainer(pl.LightningModule):
             edge_mp=hparams["edge_mp"],
             context_mapping=hparams["context_mapping"],
             num_context_features=hparams["num_context_features"],
-            bond_prediction=hparams["bond_prediction"],
-            property_prediction=hparams["property_prediction"],
             coords_param=hparams["continuous_param"],
             use_pos_norm=hparams["use_pos_norm"],
-            model_synth=hparams["model_synth"],
-            ligand_pocket_interaction=hparams["ligand_pocket_interaction"]
-            )
-            
-        if hparams["model_synth"]:
-            self.bce_loss = torch.nn.BCELoss(reduction="none")
-        else:
-            self.bce_loss = None
+            ligand_pocket_interaction=hparams["ligand_pocket_interaction"],
+            store_intermediate_coords=hparams["store_intermediate_coords"],
+            distance_ligand_pocket=hparams["ligand_pocket_hidden_distance"],
+            bond_prediction=hparams["bond_prediction"],
+            property_prediction=hparams["property_prediction"],
+            joint_property_prediction=hparams["joint_property_prediction"],
+        )
 
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -249,13 +248,20 @@ class Trainer(pl.LightningModule):
             + 2.0 * loss["bonds"]
             + 1.0 * loss["charges"]
         )
-        
-        if self.hparams.model_synth:
-            sa_loss = self.bce_loss(out_dict["synth_pred"].squeeze(dim=-1), out_dict["synth_true"].squeeze(dim=-1))
+
+        if self.hparams.joint_property_prediction:
+            sa_true, sa_pred = (
+                out_dict["properties_true"]["sascore"],
+                out_dict["property_pred"]["sascore"],
+            )
+            sa_loss = F.binary_cross_entropy_with_logits(
+                input=sa_pred.squeeze(dim=1), target=sa_true, reduction="none"
+            )
             sa_loss = torch.mean(weights * sa_loss)
+
             final_loss = final_loss + sa_loss
         else:
-            sa_loss = None
+            sa_loss = 0.0
 
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
@@ -289,14 +295,6 @@ class Trainer(pl.LightningModule):
             edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
         )
 
-        if self.hparams.model_synth:
-            sascore = np.array([sascorer.calculateScore(Chem.RemoveHs(mol)) for mol in batch.mol])
-            sascore = (sascore - 1.0) / (10.0 - 1.0)
-            sascore = 1.0 - sascore
-            sascore = torch.from_numpy(sascore).float().to(pos.device)
-        else:
-            sascore = None
-            
         t = torch.randint(
             low=1,
             high=self.hparams.timesteps + 1,
@@ -375,9 +373,9 @@ class Trainer(pl.LightningModule):
             pos=pos_perturbed,
             edge_index_local=None,
             edge_index_global=edge_index_global,
-            edge_attr_global=edge_attr_global_perturbed
-            if not self.hparams.bond_prediction
-            else None,
+            edge_attr_global=(
+                edge_attr_global_perturbed if not self.hparams.bond_prediction else None
+            ),
             batch=data_batch,
             batch_edge_global=batch_edge_global,
             context=context,
@@ -394,12 +392,30 @@ class Trainer(pl.LightningModule):
         out["charges_true"] = charges.argmax(dim=-1)
 
         out["bond_aggregation_index"] = edge_index_global[1]
-        out['synth_true'] = sascore
+        if self.hparams.joint_property_prediction:
+            label_sa = (
+                torch.tensor([calculate_sa(mol) for mol in batch.mol])
+                .to(self.device)
+                .float()
+            )
+            out["properties_true"] = {"sascore": label_sa}
+            sa_pred, _ = out["property_pred"]
+            out["property_pred"] = {"sascore": sa_pred}
+        else:
+            out["properties_true"] = None
 
         return out, t, bs
 
     def _log(
-        self, loss, coords_loss, atoms_loss, charges_loss, bonds_loss, sa_loss, batch_size, stage
+        self,
+        loss,
+        coords_loss,
+        atoms_loss,
+        charges_loss,
+        bonds_loss,
+        sa_loss,
+        batch_size,
+        stage,
     ):
         self.log(
             f"{stage}/loss",
@@ -455,7 +471,7 @@ class Trainer(pl.LightningModule):
                 prog_bar=(stage == "train"),
                 sync_dist=self.hparams.gpus > 1 and stage == "val",
             )
-                
+
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             self.model.parameters(),

@@ -253,7 +253,9 @@ class DistributionProperty:
         return n_nodes
 
 
-def prepare_context(properties_list, properties_norm, batch, dataset="aqm"):
+def prepare_context(
+    properties_list, properties_norm, batch, dataset="aqm", inflate_batch=True
+):
     batch_size = len(batch.batch.unique())
     device = batch.x.device
     n_nodes = batch.pos.size(0)
@@ -274,12 +276,18 @@ def prepare_context(properties_list, properties_norm, batch, dataset="aqm"):
         properties = (properties - mean) / std
         if len(properties) == batch_size:
             # Global feature.
-            reshaped = properties[batch.batch]
-            if reshaped.size() == (n_nodes,):
-                reshaped = reshaped.unsqueeze(1)
+            if inflate_batch:
+                reshaped = properties[batch.batch]
+                if reshaped.size() == (n_nodes,):
+                    reshaped = reshaped.unsqueeze(1)
+            else:
+                reshaped = properties
+                if reshaped.size() == (batch_size,):
+                    reshaped = reshaped.unsqueeze(1)
             context_list.append(reshaped)
             context_node_nf += 1
         elif len(properties) == n_nodes:
+            assert not inflate_batch
             # Node feature.
             if properties.size() == (n_nodes,):
                 properties = properties.unsqueeze(1)

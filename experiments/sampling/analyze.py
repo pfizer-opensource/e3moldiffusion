@@ -257,6 +257,7 @@ class BasicMolecularMetrics(object):
         local_rank=0,
         remove_hs=False,
         return_molecules=False,
+        return_mean_stats=True,
         return_stats_per_molecule=False,
         calculate_statistics=True,
         calculate_distribution_statistics=True,
@@ -331,7 +332,7 @@ class BasicMolecularMetrics(object):
 
             self.number_samples = len(valid_smiles)
 
-            if len(valid_smiles) <= 1000:
+            if len(valid_smiles) <= 1000 and len(valid_smiles) > 0:
                 self.train_subset = (
                     get_random_subset(self.train_smiles, self.number_samples, seed=42)
                     if len(valid_smiles) <= len(self.train_smiles)
@@ -339,68 +340,68 @@ class BasicMolecularMetrics(object):
                 )
                 similarity = self.get_bulk_similarity_with_train(valid_smiles)
                 diversity = self.get_bulk_diversity(valid_smiles)
-                if len(valid_smiles) > 0:
-                    try:
-                        kl_score = self.get_kl_divergence(valid_smiles)
-                    except:
-                        print(
-                            "kl_score could not be calculated. Setting kl_score to -1"
-                        )
-                        kl_score = -1.0
-                else:
-                    print("No valid smiles have been generated. Setting kl_score to -1")
+                try:
+                    kl_score = self.get_kl_divergence(valid_smiles)
+                except:
+                    print("kl_score could not be calculated. Setting kl_score to -1")
                     kl_score = -1.0
                 statistics_dict["bulk_similarity"] = similarity
                 statistics_dict["bulk_diversity"] = diversity
                 statistics_dict["kl_score"] = kl_score
 
-        if len(valid_smiles) > 0:
-            mols = get_mols_list(valid_smiles)
-            # rings = np.mean([num_rings(mol) for mol in mols])
-            # aromatic_rings = np.mean([num_aromatic_rings(mol) for mol in mols])
-            (
-                qed,
-                sa,
-                logp,
-                molwt,
-                hacceptors,
-                hdonors,
-                lipinski,
-                diversity,
-            ) = self.evaluate_mean(mols)
-        else:
-            print("No valid smiles have been generated. Setting scores to -1")
-            qed = -1.0
-            sa = -1.0
-            logp = -1.0
-            lipinski = -1.0
-            diversity = -1.0
-            molwt = -1.0
-            hacceptors = -1.0
-            hdonors = -1.0
-        if not calculate_statistics:
-            statistics_dict = {"QED": qed}
-        else:
-            statistics_dict["QED"] = qed
-        statistics_dict["SA"] = sa
-        statistics_dict["LogP"] = logp
-        statistics_dict["MolWeight"] = molwt
-        statistics_dict["HAcceptors"] = hacceptors
-        statistics_dict["HDonors"] = hdonors
-        statistics_dict["Lipinski"] = lipinski
-        statistics_dict["Diversity"] = diversity
+            if len(valid_smiles) > 0:
+                mols = get_mols_list(valid_smiles)
+                if return_mean_stats:
+                    (
+                        qed,
+                        n_rings,
+                        n_aromatic_rings,
+                        sa,
+                        logp,
+                        molwt,
+                        hacceptors,
+                        hdonors,
+                        lipinski,
+                        diversity,
+                    ) = self.evaluate_mean(mols)
+                    statistics_dict["QED"] = qed
+                    statistics_dict["Num_Rings"] = n_rings
+                    statistics_dict["Num_Aromatic_Rings"] = n_aromatic_rings
+                    statistics_dict["SA"] = sa
+                    statistics_dict["LogP"] = logp
+                    statistics_dict["MolWeight"] = molwt
+                    statistics_dict["HAcceptor"] = hacceptors
+                    statistics_dict["HDonor"] = hdonors
+                    statistics_dict["Lipinski"] = lipinski
+                    statistics_dict["Diversity"] = diversity
 
-        if return_stats_per_molecule:
-            qed, sa, logp, molwt, hacceptors, hdonors, lipinski = self.evaluate_per_mol(
-                mols
-            )
-            statistics_dict["QEDs"] = qed
-            statistics_dict["SAs"] = sa
-            statistics_dict["LogPs"] = logp
-            statistics_dict["MolWeight"] = molwt
-            statistics_dict["HAcceptors"] = hacceptors
-            statistics_dict["HDonors"] = hdonors
-            statistics_dict["Lipinskis"] = lipinski
+                if return_stats_per_molecule:
+                    (
+                        qed,
+                        n_rings,
+                        n_aromatic_rings,
+                        sa,
+                        logp,
+                        molwt,
+                        hacceptors,
+                        hdonors,
+                        lipinski,
+                    ) = self.evaluate_per_mol(mols)
+                    statistics_dict["QEDs"] = qed
+                    statistics_dict["Num_Rings_all"] = n_rings
+                    statistics_dict["Num_Aromatic_Rings_all"] = n_aromatic_rings
+                    statistics_dict["SAs"] = sa
+                    statistics_dict["LogPs"] = logp
+                    statistics_dict["MolWeights"] = molwt
+                    statistics_dict["HAcceptors"] = hacceptors
+                    statistics_dict["HDonors"] = hdonors
+                    statistics_dict["Lipinskis"] = lipinski
+            else:
+                print(
+                    "No valid smiles have been generated. No molecule statistics calculated."
+                )
+        else:
+            statistics_dict = None
 
         self.reset()
 
@@ -484,29 +485,29 @@ class BasicMolecularMetrics(object):
         sampling_per_class = False
         if sampling_per_class:
             for i, atom_type in enumerate(self.atom_decoder):
-                statistics_log[
-                    f"sampling_per_class/{atom_type}_TV"
-                ] = atom_tv_per_class[i].item()
-                statistics_log[
-                    f"sampling_per_class/{atom_type}_ValencyW1"
-                ] = valency_w1_per_class[i].item()
+                statistics_log[f"sampling_per_class/{atom_type}_TV"] = (
+                    atom_tv_per_class[i].item()
+                )
+                statistics_log[f"sampling_per_class/{atom_type}_ValencyW1"] = (
+                    valency_w1_per_class[i].item()
+                )
                 statistics_log[f"sampling_per_class/{atom_type}_BondAnglesW1"] = (
                     angles_w1_per_type[i].item() if angles_w1_per_type[i] != -1 else -1
                 )
-                statistics_log[
-                    f"sampling_per_class/{atom_type}_ChargesW1"
-                ] = charge_w1_per_class[i].item()
+                statistics_log[f"sampling_per_class/{atom_type}_ChargesW1"] = (
+                    charge_w1_per_class[i].item()
+                )
 
             for j, bond_type in enumerate(
                 ["No bond", "Single", "Double", "Triple", "Aromatic"]
             ):
-                statistics_log[
-                    f"sampling_per_class/{bond_type}_TV"
-                ] = bond_tv_per_class[j].item()
+                statistics_log[f"sampling_per_class/{bond_type}_TV"] = (
+                    bond_tv_per_class[j].item()
+                )
                 if j > 0:
-                    statistics_log[
-                        f"sampling_per_class/{bond_type}_BondLengthsW1"
-                    ] = bond_lengths_w1_per_type[j - 1].item()
+                    statistics_log[f"sampling_per_class/{bond_type}_BondLengthsW1"] = (
+                        bond_lengths_w1_per_type[j - 1].item()
+                    )
 
         return statistics_log
 
@@ -667,6 +668,8 @@ class BasicMolecularMetrics(object):
         """
 
         qed = np.mean([self.calculate_qed(mol) for mol in rdmols])
+        rings = np.mean([self.num_rings(mol) for mol in rdmols])
+        aromatic_rings = np.mean([self.num_aromatic_rings(mol) for mol in rdmols])
         sa = np.mean([self.calculate_sa(mol) for mol in rdmols])
         logp = np.mean([self.calculate_logp(mol) for mol in rdmols])
         molwt = np.mean([self.calculate_molwt(mol) for mol in rdmols])
@@ -679,7 +682,18 @@ class BasicMolecularMetrics(object):
         else:
             diversity = self.calculate_diversity(rdmols)
 
-        return qed, sa, logp, molwt, hacceptors, hdonors, lipinski, diversity
+        return (
+            qed,
+            rings,
+            aromatic_rings,
+            sa,
+            logp,
+            molwt,
+            hacceptors,
+            hdonors,
+            lipinski,
+            diversity,
+        )
 
     def evaluate_per_mol(self, rdmols):
         """
@@ -694,6 +708,8 @@ class BasicMolecularMetrics(object):
             return -1.0, -1.0, -1.0, -1.0
 
         qed = [self.calculate_qed(mol) for mol in rdmols]
+        rings = [self.num_rings(mol) for mol in rdmols]
+        aromatic_rings = [self.num_aromatic_rings(mol) for mol in rdmols]
         sa = [self.calculate_sa(mol) for mol in rdmols]
         logp = [self.calculate_logp(mol) for mol in rdmols]
         molwt = [self.calculate_molwt(mol) for mol in rdmols]
@@ -701,7 +717,17 @@ class BasicMolecularMetrics(object):
         hdonors = [self.calculate_hdonors(mol) for mol in rdmols]
         lipinski = [self.calculate_lipinski(mol) for mol in rdmols]
 
-        return qed, sa, logp, molwt, hacceptors, hdonors, lipinski
+        return (
+            qed,
+            rings,
+            aromatic_rings,
+            sa,
+            logp,
+            molwt,
+            hacceptors,
+            hdonors,
+            lipinski,
+        )
 
     def evaluate_posebusters(self, smiles, rdmols, pdb_file):
         # PoseBusters
@@ -737,6 +763,12 @@ class BasicMolecularMetrics(object):
 
         return valid_smiles, valid_mols
 
+    def num_rings(self, mol):
+        return Chem.rdMolDescriptors.CalcNumRings(mol)
+
+    def num_aromatic_rings(self, mol):
+        return Chem.rdMolDescriptors.CalcNumAromaticRings(mol)
+
     def evaluate_lipinski(self, smiles, molecules):
         valid_mols = []
         valid_smiles = []
@@ -760,6 +792,7 @@ def analyze_stability_for_molecules(
     smiles_train,
     local_rank=0,
     return_molecules=False,
+    return_mean_stats=True,
     return_stats_per_molecule=False,
     remove_hs=False,
     device="cpu",
@@ -789,6 +822,7 @@ def analyze_stability_for_molecules(
         remove_hs=remove_hs,
         return_stats_per_molecule=return_stats_per_molecule,
         return_molecules=return_molecules,
+        return_mean_stats=return_mean_stats,
         calculate_statistics=calculate_statistics,
         calculate_distribution_statistics=calculate_distribution_statistics,
         filter_by_posebusters=filter_by_posebusters,

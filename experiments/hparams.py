@@ -204,13 +204,19 @@ def add_arguments(parser):
 
     # CONTEXT
     parser.add_argument("--context-mapping", default=False, action="store_true")
+    parser.add_argument("--use-lipinski-properties", default=False, action="store_true")
     parser.add_argument("--num-context-features", default=0, type=int)
-    parser.add_argument("--properties-list", default=[], nargs="+", type=str, choices=["docking_score", "sascore"])
+    parser.add_argument("--properties-list", default=[], nargs="+", type=str)
+    parser.add_argument(
+        "--use-centroid-context-embed", default=False, action="store_true"
+    )
 
     # PROPERTY PREDICTION
     parser.add_argument("--property-prediction", default=False, action="store_true")
     parser.add_argument(
-        "--joint-property-prediction", default=0, type=int,
+        "--joint-property-prediction",
+        default=0,
+        type=int,
     )
     # SAMPLING
     parser.add_argument(
@@ -219,6 +225,10 @@ def add_arguments(parser):
     parser.add_argument("--sascores-threshold", default=0, type=int)
 
     # LATENT
+    parser.add_argument("--use-latent-encoder", default=False, action="store_true")
+    parser.add_argument(
+        "--use-scaffold-latent-embed", default=False, action="store_true"
+    )
     parser.add_argument("--prior-beta", default=1.0, type=float)
     parser.add_argument("--sdim-latent", default=256, type=int)
     parser.add_argument("--vdim-latent", default=64, type=int)
