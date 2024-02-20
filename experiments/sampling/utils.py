@@ -8,7 +8,15 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from rdkit import Chem, DataStructs, RDLogger
-from rdkit.Chem import AllChem, Descriptors, Mol, rdMolDescriptors
+from rdkit.Chem import (
+    QED,
+    AllChem,
+    Crippen,
+    Descriptors,
+    Lipinski,
+    Mol,
+    rdMolDescriptors,
+)
 from rdkit.DataStructs import TanimotoSimilarity
 from rdkit.ML.Descriptors import MoleculeDescriptors
 from scipy import histogram
@@ -683,8 +691,7 @@ def dihedral_distance(
             v2 = v2 / (v2 * v2).sum(-1) ** 0.5
             porm = np.sign((v1 * a3).sum(-1))
             rad = np.arccos(
-                (v1 * v2).sum(-1)
-                / ((v1**2).sum(-1) * (v2**2).sum(-1) + 1e-9) ** 0.5
+                (v1 * v2).sum(-1) / ((v1**2).sum(-1) * (v2**2).sum(-1) + 1e-9) ** 0.5
             )
             if not porm == 0:
                 rad = rad * porm
@@ -1292,8 +1299,25 @@ def processMols(mols):
         print(smiles + "\t" + m.GetProp("_Name") + "\t%3f" % s)
 
 
-def calculate_sascore(rdmol):
+def calculate_sa(rdmol):
     sa = calculateScore(rdmol)
-    sa = (sa - 1.0) / (10.0 - 1.0)
-    sa = 1.0 - sa 
-    return sa
+    return round((10 - sa) / 9, 2)  # from pocket2mol
+
+
+def calculate_logp(rdmol):
+    return Crippen.MolLogP(rdmol)
+
+
+def calculate_hdonors(rdmol):
+    num_hdonors = Lipinski.NumHDonors(rdmol)
+    return num_hdonors
+
+
+def calculate_hacceptors(rdmol):
+    num_hacceptors = Lipinski.NumHAcceptors(rdmol)
+    return num_hacceptors
+
+
+def calculate_molwt(rdmol):
+    mol_weight = Descriptors.MolWt(rdmol)
+    return mol_weight

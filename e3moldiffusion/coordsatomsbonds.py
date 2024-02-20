@@ -92,10 +92,13 @@ class DenoisingEdgeNetwork(nn.Module):
         self.atom_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
         self.bond_time_mapping = DenseLayer(edge_dim, edge_dim)
 
-        self.context_mapping = context_mapping
-        if self.context_mapping:
+        if context_mapping and latent_dim is None:
+            self.context_mapping = True
             self.context_mapping = DenseLayer(num_context_features, hn_dim[0])
             self.atom_context_mapping = DenseLayer(hn_dim[0], hn_dim[0])
+
+        else:
+            self.context_mapping = False
 
         assert fully_connected or local_global_model
 
@@ -107,14 +110,6 @@ class DenoisingEdgeNetwork(nn.Module):
         assert fully_connected
         assert not local_global_model
 
-        if latent_dim:
-            if context_mapping:
-                latent_dim_ = None
-            else:
-                latent_dim_ = latent_dim
-        else:
-            latent_dim_ = None
-
         self.gnn = EQGATEdgeGNN(
             hn_dim=hn_dim,
             cutoff_local=cutoff_local,
@@ -124,7 +119,7 @@ class DenoisingEdgeNetwork(nn.Module):
             num_context_features=num_context_features,
             property_prediction=property_prediction,
             edge_dim=edge_dim,
-            latent_dim=latent_dim_,
+            latent_dim=latent_dim,
             num_layers=num_layers,
             use_cross_product=use_cross_product,
             vector_aggr=vector_aggr,

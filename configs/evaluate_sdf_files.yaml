@@ -1,0 +1,11 @@
+sdf_path: /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_fienetune_lr2_cutoff5_bonds7/evaluation/eval_6/docking/raw
+
+use_adaptive_loader: false
+remove_hs: true
+
+#DATA
+dataset: crossdocked
+dataset_root: /scratch1/cremej01/data/crossdocked_noH_cutoff5
+
+#LOGGING
+save_dir: /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_fienetune_lr2_cutoff5_bonds7/evaluation/eval_6/docking

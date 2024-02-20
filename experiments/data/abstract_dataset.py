@@ -228,8 +228,8 @@ class CustomDataset(Dataset):
 
 
 class CustomPyGDataset(Dataset):
-    def __init__(self, data_list, root=None, transform=None, pre_transform=None):
-        super(CustomPyGDataset, self).__init__(root, transform, pre_transform)
+    def __init__(self, data_list):
+        super().__init__()
         self.data, self.slices = _collate(data_list)
 
     def get(self, idx: int) -> Data:

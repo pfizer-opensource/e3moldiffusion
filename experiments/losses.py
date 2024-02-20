@@ -315,7 +315,6 @@ class DiffusionLoss(nn.Module):
                     pred_data["bonds"], true_data["bonds"], reduction="mean"
                 )
 
-
             if "ring" in self.modalities:
                 ring_loss = F.cross_entropy(
                     pred_data["ring"], true_data["ring"], reduction="mean"

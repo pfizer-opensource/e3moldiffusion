@@ -167,8 +167,16 @@ if __name__ == "__main__":
         else datamodule.train_smiles
     )
     prop_norm, prop_dist = None, None
-    if (len(hparams.properties_list) > 0 and hparams.context_mapping) or (
-        hparams.property_training and not (hparams.regression_property == "sascore" or hparams.regression_property == "docking_score")
+    if (
+        len(hparams.properties_list) > 0
+        and hparams.context_mapping
+        and not hparams.use_centroid_context_embed
+    ) or (
+        hparams.property_training
+        and not (
+            hparams.regression_property == "sascore"
+            or hparams.regression_property == "docking_score"
+        )
     ):
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
@@ -257,7 +265,10 @@ if __name__ == "__main__":
                         # print("Ligand-pocket training with latent protein encoding")
                         # from experiments.diffusion_discrete_latent_pocket import Trainer
                         print("Ligand-pocket training with latent ligand encoding")
-                        from experiments.diffusion_discrete_latent_pocket_ligand import (
+                        # from experiments.diffusion_discrete_latent_pocket_ligand import (
+                        #     Trainer,
+                        # )
+                        from experiments.diffusion_discrete_pocket import (
                             Trainer,
                         )
                 elif dataset == "geomqm":
@@ -284,7 +295,7 @@ if __name__ == "__main__":
             from experiments.energy_training import Trainer
         else:
             print(f"Running {hparams.regression_property} training")
-            if hparams.regression_property == "sascore": 
+            if hparams.regression_property == "sascore":
                 from experiments.property_training import Trainer
             elif hparams.regression_property == "docking_score":
                 from experiments.property_training_pocket import Trainer

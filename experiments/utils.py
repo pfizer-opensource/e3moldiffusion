@@ -30,6 +30,13 @@ from experiments.data.data_info import full_atom_encoder
 from experiments.data.ligand.process_crossdocked import amino_acid_dict, three_to_one
 from experiments.data.utils import mol_to_torch_geometric
 from experiments.molecule_utils import Molecule
+from experiments.sampling.utils import (
+    calculate_hacceptors,
+    calculate_hdonors,
+    calculate_logp,
+    calculate_molwt,
+    calculate_sa,
+)
 
 # fmt: off
 # Atomic masses are based on:
@@ -1572,19 +1579,22 @@ def encode_ligands(
         remove_hydrogens=hparams.remove_hs,
         cog_proj=True,  # only for processing the ligand-shape encode
     )
-    ligand_data = Batch.from_data_list([ligand_data]).to(device)
+    ligand_data_ = Batch.from_data_list([ligand_data]).to(device)
+    ligand_data_.mol, ligand_data_.smiles = ligand_data_.mol[0], ligand_data_.smiles[0]
     with torch.no_grad():
-        ligand_embeds = model.encode_ligand(
-            pos=ligand_data.pos,
-            atom_types=ligand_data.x,
-            data_batch=torch.zeros_like(ligand_data.x).to(device),
-            bond_edge_index=ligand_data.edge_index,
-            bond_edge_attr=ligand_data.edge_attr,
-        )
+        ligand_embeds = model.encode_ligand(ligand_data_)
 
     ligand_data = Batch.from_data_list(
         [deepcopy(ligand_data) for _ in range(batch_size)]
     )
-    for name, tensor in ligand_data.to_dict().items():
-        pocket_data.__setattr__(name, tensor)
+    pocket_data.update(ligand_data)
     return pocket_data, ligand_embeds
+
+
+def get_lipinski_properties(rdmols):
+    sa = torch.tensor([calculate_sa(mol) for mol in rdmols]).float()
+    logp = torch.tensor([calculate_logp(mol) for mol in rdmols]).float()
+    molwt = torch.tensor([calculate_molwt(mol) for mol in rdmols]).float()
+    hacceptors = torch.tensor([calculate_hacceptors(mol) for mol in rdmols]).float()
+    hdonors = torch.tensor([calculate_hdonors(mol) for mol in rdmols]).float()
+    return torch.stack([sa, logp, molwt, hacceptors, hdonors], dim=1)

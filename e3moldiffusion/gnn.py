@@ -164,7 +164,7 @@ class EQGATEdgeGNN(nn.Module):
         for conv, norm in zip(self.convs, self.norms):
             conv.reset_parameters()
             norm.reset_parameters()
-        self.out_norm.reset_parameters()
+        # self.out_norm.reset_parameters()
 
     def calculate_edge_attrs(
         self,
@@ -219,7 +219,6 @@ class EQGATEdgeGNN(nn.Module):
         batch_lig: OptTensor = None,
         pocket_mask: OptTensor = None,
         edge_mask_pocket: OptTensor = None,
-        norm_output: bool = False,
     ) -> Dict:
         # edge_attr_xyz (distances, cosines, relative_positions, edge_features)
         # (E, E, E x 3, E x F)
@@ -490,6 +489,7 @@ class EQGATLocalGNN(nn.Module):
 
         self.convs = nn.ModuleList(convs)
         self.norms = nn.ModuleList([LayerNorm(dims=hn_dim) for _ in range(num_layers)])
+        self.out_norm = LayerNorm(dims=hn_dim)
 
         self.reset_parameters()
 
@@ -534,6 +534,7 @@ class EQGATLocalGNN(nn.Module):
             if self.intermediate_outs:
                 results.append(s)
 
+        s, v = self.out_norm(x={"s": s, "v": v}, batch=batch)
         out = {"s": s, "v": v, "p": p if self.coords_update else None}
 
         if self.intermediate_outs:

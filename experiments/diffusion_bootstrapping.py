@@ -9,7 +9,6 @@ import pandas as pd
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
-from joblib import Parallel, delayed
 from torch import Tensor
 from torch.utils.data import Subset
 from torch_geometric.data import Batch, DataLoader
@@ -29,22 +28,19 @@ from experiments.data.utils import (
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.utils import (
-    bond_guidance,
-    energy_guidance,
     get_joint_edge_attrs,
     initialize_edge_attrs_reverse,
     property_classifier_guidance,
-    self_guidance,
+    property_guidance_lig_pocket,
 )
 from experiments.losses import DiffusionLoss
 from experiments.sampling.analyze import analyze_stability_for_molecules
-from experiments.sampling.utils import calculate_sascore
+from experiments.sampling.utils import calculate_sa
 from experiments.utils import (
     coalesce_edges,
     concat_ligand_pocket,
     get_molecules,
     load_bond_model,
-    load_energy_model,
     load_model_ligand,
     load_property_model,
     molecules_to_torch_geometric,
@@ -99,6 +95,8 @@ class Trainer(pl.LightningModule):
         self.dataset_info = dataset_info
         self.prop_norm = prop_norm
         self.prop_dist = prop_dist
+
+        self.train_smiles = smiles_list
 
         atom_types_distribution = dataset_info.atom_types.float()
         if self.hparams.num_bond_classes != 5:
@@ -243,67 +241,6 @@ class Trainer(pl.LightningModule):
         else:
             self.dist_loss = None
 
-        self.i = 0  # monitor number of iterations
-        self.filtered_complexes = []
-
-    def init_train_dataset(self):
-        self.orig_train_dataset = self.trainer.datamodule.train_dataset
-
-    def on_training_epoch_start(self):
-        if self.i == 0:
-            self.init_train_dataset()
-        self.i += 1
-
-        def generate_ligands(batch, model):
-            model = deepcopy(model).cuda()
-            model.eval()
-            molecules = model.generate_ligands(
-                batch,
-                num_graphs=self.hparams.inference_batch_size,
-                fix_n_nodes=self.hparams.fix_n_nodes,
-                vary_n_nodes=self.hparams.vary_n_nodes,
-                n_nodes_bias=self.hparams.n_nodes_bias,
-            )
-            valid_molecules = analyze_stability_for_molecules(
-                molecule_list=molecules,
-                dataset_info=self.dataset_info,
-                smiles_train=self.train_smiles,
-                local_rank=0,
-                return_molecules=True,
-                calculate_statistics=False,
-                calculate_distribution_statistics=False,
-                remove_hs=self.hparams.remove_hs,
-                device="cpu",
-            )
-            return valid_molecules
-
-        def get_scores(molecules, model):
-            model = deepcopy(model).cuda()
-            model.eval()
-            scores = model.get_scores(molecules)
-            return scores
-
-        # sample new ligands
-        generated_complexes = []
-        for batch in self.trainer.test_dataloader:
-            generated_complexes.extend(generate_ligands(batch, self.model))
-
-        scores = get_scores(generated_complexes, self.model)
-        keep_ids = [i for i in scores if i > self.hparams.docking_scores_threshold]
-        filtered_complexes = [
-            mol for i, mol in enumerate(generated_complexes) if i in keep_ids
-        ]
-        self.filtered_complexes.extend(filtered_complexes)
-
-        train_dataset = self.orig_train_dataset
-        idx_train = [
-            i
-            for i in torch.randperm(len(train_dataset))[: len(self.filtered_complexes)]
-        ]
-        train_dataset = Subset(train_dataset, idx_train)
-        train_dataset.extend(filtered_complexes)
-        self.trainer.reset_train_dataloader(self)
-
     @torch.no_grad()
     def get_scores(self, molecule_list):
         data_list = molecules_to_torch_geometric(
@@ -322,7 +259,7 @@ class Trainer(pl.LightningModule):
 
         scores = []
         for batch in dataloader:
-            t = torch.ones_like(batch.x)
+            t = torch.ones(self.hparams.inference_batch_size)
             scores.append(self(batch=batch, t=t)["property_pred"])
         return scores
 
@@ -552,6 +489,12 @@ class Trainer(pl.LightningModule):
             )
 
     def step_fnc(self, batch, batch_idx, stage: str):
+        # if self.trainer.global_rank == 0:
+        #     import pdb
+
+        #     pdb.set_trace()
+        # self.trainer.strategy.barrier()
+
         batch.batch = batch.pos_batch
         batch_size = int(batch.batch.max()) + 1
 
@@ -642,6 +585,7 @@ class Trainer(pl.LightningModule):
             and self.training,
             weights=weights,
             molsize_weights=molsize_weights,
+            regression_property=self.hparams.regression_property,
         )
 
         final_loss = (
@@ -936,11 +880,13 @@ class Trainer(pl.LightningModule):
         out["bond_aggregation_index"] = edge_index_global_lig[1]
         if self.hparams.joint_property_prediction:
             if self.hparams.regression_property == "sascore":
-                label = torch.tensor([calculate_sascore(mol) for mol in batch.mol]).to(
-                    self.device
+                label = (
+                    torch.tensor([calculate_sa(mol) for mol in batch.mol])
+                    .to(self.device)
+                    .float()
                 )
             elif self.hparams.regression_property == "docking_score":
-                label = batch.docking_scores
+                label = batch.docking_scores.float()
             out["properties_true"] = label
         if self.hparams.bonds_continuous:
             out["bonds_noise_true"] = edge_attr_global_noise
@@ -1171,6 +1117,7 @@ class Trainer(pl.LightningModule):
         property_guidance: bool = False,
         ckpt_property_model: str = None,
         property_self_guidance: bool = False,
+        property_guidance_complex: bool = False,
         guidance_scale: float = 1.0e-4,
         save_dir: str = None,
         relax_mol=False,
@@ -1178,22 +1125,38 @@ class Trainer(pl.LightningModule):
         sanitize=False,
         build_obabel_mol=False,
         iteration: int = 0,
+        importance_sampling: bool = False,
+        tau: float = 0.1,
+        every_importance_t: int = 5,
+        importance_sampling_start: int = 0,
+        importance_sampling_end: int = 200,
+        maximize_score: bool = True,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         pos_pocket = pocket_data.pos_pocket.to(self.device)
         batch_pocket = pocket_data.pos_pocket_batch.to(self.device)
         x_pocket = pocket_data.x_pocket.to(self.device)
+
+        try:
+            ca_mask = pocket_data.ca_mask.to(self.device)
+        except:
+            ca_mask = None
 
         batch = torch.arange(num_graphs, device=self.device).repeat_interleave(
             num_nodes_lig, dim=0
         )
         bs = int(batch.max()) + 1
 
-        if property_self_guidance or property_guidance:
+        if property_self_guidance or property_guidance or property_guidance_complex:
             t = torch.arange(0, self.hparams.timesteps)
             alphas = self.sde_pos.alphas_cumprod[t]
-        if property_guidance and ckpt_property_model is not None:
+        if (
+            property_guidance or property_guidance_complex
+        ) and ckpt_property_model is not None:
             property_model = load_property_model(
-                ckpt_property_model, self.num_atom_features
+                ckpt_property_model,
+                self.num_atom_features,
+                self.num_bond_classes,
+                with_complex=property_guidance_complex,
             )
             property_model.to(self.device)
             property_model.eval()
@@ -1366,8 +1329,8 @@ class Trainer(pl.LightningModule):
                 edge_mask=edge_mask,
                 edge_mask_pocket=edge_mask_pocket,
                 batch_lig=batch,
-                ca_mask=pocket_data.pocket_ca_mask.to(self.device),
-                batch_pocket=pocket_data.pos_pocket_batch.to(self.device),
+                ca_mask=ca_mask,
+                batch_pocket=batch_pocket,
             )
 
             coords_pred = out["coords_pred"].squeeze()
@@ -1453,6 +1416,9 @@ class Trainer(pl.LightningModule):
                     edge_index_global=edge_index_global_lig,
                     num_classes=self.num_bond_classes,
                 )
+            else:
+                edge_attr_global_lig = edges_pred
+
             (
                 edge_index_global,
                 edge_attr_global,
@@ -1468,16 +1434,15 @@ class Trainer(pl.LightningModule):
                 self.num_bond_classes,
                 self.device,
             )
-            if property_self_guidance:
-                signal = 1.0  # alphas[timestep] / (guidance_scale * 10)
+
+            if property_self_guidance or property_guidance_complex:
+                signal = alphas[timestep] / (guidance_scale * 10)
                 (
-                    pos_joint,
-                    atom_types_joint,
-                    charge_types_joint,
-                    batch_full,
-                    pocket_mask,
-                ) = self_guidance(
-                    model=self.model,
+                    pos,
+                    atom_types,
+                    charge_types,
+                ) = property_guidance_lig_pocket(
+                    model=self.model if property_self_guidance else property_model,
                     pos=pos,
                     pos_pocket=pos_pocket,
                     atom_types=atom_types,
@@ -1491,20 +1456,21 @@ class Trainer(pl.LightningModule):
                     batch_pocket=batch_pocket,
                     batch_full=batch_full,
                     batch_edge_global=batch_edge_global,
-                    batch_size=bs,
                     pocket_mask=pocket_mask,
                     edge_mask=edge_mask,
                     edge_mask_pocket=edge_mask_pocket,
                     ca_mask=pocket_data.pocket_ca_mask.to(batch.device),
                     num_atom_types=self.num_atom_types,
+                    atoms_continuous=self.hparams.atoms_continuous,
                     temb=temb,
                     context=context,
                     signal=signal,
                     guidance_scale=guidance_scale,
-                    optimization="maximize",
+                    optimization="minimize",
                 )
+
             elif property_guidance:
-                signal = alphas[timestep] / (guidance_scale * 10)
+                signal = 1.0  # alphas[timestep] / (guidance_scale * 10)
                 pos, atom_types, charge_types = property_classifier_guidance(
                     pos,
                     atom_types,
@@ -1515,27 +1481,87 @@ class Trainer(pl.LightningModule):
                     num_atom_types=self.num_atom_types,
                     signal=signal,
                     guidance_scale=guidance_scale,
-                    optimization="maximize",
+                    optimization="minimize",
                 )
-            if not property_self_guidance:
-                # pos, pos_pocket = remove_mean_pocket(pos, pos_pocket, batch, batch_pocket)
+
+            elif (
+                importance_sampling
+                and i % every_importance_t == 0
+                and importance_sampling_start <= i <= importance_sampling_end
+            ):
+                node_feats_in = torch.cat(
+                    [atom_types_joint, charge_types_joint], dim=-1
+                )
                 (
-                    pos_joint,
-                    atom_types_joint,
-                    charge_types_joint,
-                    batch_full,
-                    pocket_mask,
-                ) = concat_ligand_pocket(
                     pos,
-                    pos_pocket,
-                    atom_types,
-                    atom_types_pocket,
-                    charge_types,
-                    charges_pocket,
+                    node_feats_in,
+                    edge_index_global_lig,
+                    edge_attr_global_lig,
                     batch,
-                    batch_pocket,
-                    sorting=False,
+                    _,
+                    num_nodes_lig,
+                ) = self.importance_sampling(
+                    node_feats_in=node_feats_in,
+                    pos=pos_joint,
+                    temb=temb,
+                    edge_index_local=None,
+                    edge_index_global=edge_index_global,
+                    edge_attr_global=edge_attr_global,
+                    batch=batch_full,
+                    batch_lig=batch,
+                    batch_edge_global=batch_edge_global,
+                    batch_num_nodes=num_nodes_lig,
+                    context=None,
+                    tau=tau,
+                    maximize_score=maximize_score,
+                    edge_index_global_lig=edge_index_global_lig,
+                    edge_attr_global_lig=edge_attr_global_lig,
+                    pocket_mask=pocket_mask,
+                    ca_mask=ca_mask,
+                    edge_mask=edge_mask,
+                    batch_pocket=batch_pocket,
+                    edge_mask_pocket=edge_mask_pocket,
                 )
+                atom_types, charge_types = node_feats_in.split(
+                    [self.num_atom_types, self.num_charge_classes], dim=-1
+                )
+                j, i = edge_index_global_lig
+                mask = j < i
+                mask_i = i[mask]
+
+            (
+                edge_index_global,
+                edge_attr_global,
+                batch_edge_global,
+                edge_mask,
+                edge_mask_pocket,
+            ) = get_joint_edge_attrs(
+                pos,
+                pos_pocket,
+                batch,
+                batch_pocket,
+                edge_attr_global_lig,
+                self.num_bond_classes,
+                self.device,
+            )
+
+            (
+                pos_joint,
+                atom_types_joint,
+                charge_types_joint,
+                batch_full,
+                pocket_mask,
+            ) = concat_ligand_pocket(
+                pos,
+                pos_pocket,
+                atom_types,
+                atom_types_pocket,
+                charge_types,
+                charges_pocket,
+                batch,
+                batch_pocket,
+                sorting=False,
+            )
 
             if save_traj:
                 atom_decoder = self.dataset_info.atom_decoder
@@ -1553,7 +1579,7 @@ class Trainer(pl.LightningModule):
                 )
 
         # Move generated molecule back to the original pocket position for docking
-        pos += pocket_cog_batch
+        pos += pocket_cog[batch]
         pos_pocket += pocket_cog[batch_pocket]
 
         out_dict = {

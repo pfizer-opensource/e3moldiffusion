@@ -5,9 +5,10 @@ from typing import Sequence, Union
 
 import numpy as np
 import torch
+from pytorch_lightning import LightningDataModule
 from rdkit import Chem, RDLogger
 from torch import Tensor
-from torch_geometric.data import DataLoader, InMemoryDataset
+from torch_geometric.data import DataLoader, Dataset, InMemoryDataset
 from torch_geometric.data.data import BaseData
 from tqdm import tqdm
 
@@ -329,52 +330,64 @@ class LigandPocketDataset(InMemoryDataset):
             return self.index_select(idx)
 
 
-class LigandPocketDataModule(AbstractDataModuleLigand):
-    def __init__(self, cfg, bootstrapping=False):
-        self.datadir = cfg.dataset_root
-        root_path = cfg.dataset_root
+class LigandPocketDataModule(LightningDataModule):
+    def __init__(self, hparams, bootstrapping=False):
+        self.save_hyperparameters(hparams)
+        self.bootstrapping = bootstrapping
         self.pin_memory = True
+        self.prepare_data_per_node = False
+        self.allow_zero_length_dataloader_with_multiple_devices = True
 
-        train_dataset = LigandPocketDataset(
+    def setup(self, stage: str):
+        self.train_dataset = LigandPocketDataset(
             split="train",
-            root=root_path,
+            root=self.hparams.dataset_root,
             with_docking_scores=(
-                cfg.joint_property_prediction
-                and cfg.regression_property == "docking_score"
+                self.hparams.joint_property_prediction
+                and self.hparams.regression_property == "docking_score"
             )
-            or (cfg.property_training and cfg.regression_property == "docking_score"),
-            remove_hs=cfg.remove_hs,
+            or (
+                self.hparams.property_training
+                and self.hparams.regression_property == "docking_score"
+            ),
+            remove_hs=self.hparams.remove_hs,
         )
-        if bootstrapping:
-            train_dataset = ExpandableDataset(train_dataset)
+        if self.bootstrapping:
+            self.train_dataset = ExpandableDataset(self.train_dataset)
 
-        val_dataset = LigandPocketDataset(
+        self.val_dataset = LigandPocketDataset(
             split="val",
-            root=root_path,
+            root=self.hparams.dataset_root,
             with_docking_scores=(
-                cfg.joint_property_prediction
-                and cfg.regression_property == "docking_score"
+                self.hparams.joint_property_prediction
+                and self.hparams.regression_property == "docking_score"
             )
-            or (cfg.property_training and cfg.regression_property == "docking_score"),
-            remove_hs=cfg.remove_hs,
+            or (
+                self.hparams.property_training
+                and self.hparams.regression_property == "docking_score"
+            ),
+            remove_hs=self.hparams.remove_hs,
         )
-        test_dataset = LigandPocketDataset(
+        self.test_dataset = LigandPocketDataset(
             split="test",
-            root=root_path,
+            root=self.hparams.dataset_root,
             with_docking_scores=(
-                cfg.joint_property_prediction
-                and cfg.regression_property == "docking_score"
+                self.hparams.joint_property_prediction
+                and self.hparams.regression_property == "docking_score"
             )
-            or (cfg.property_training and cfg.regression_property == "docking_score"),
-            remove_hs=cfg.remove_hs,
+            or (
+                self.hparams.property_training
+                and self.hparams.regression_property == "docking_score"
+            ),
+            remove_hs=self.hparams.remove_hs,
         )
-        self.remove_hs = cfg.remove_hs
+        self.remove_hs = self.hparams.remove_hs
         self.statistics = {
-            "train": train_dataset.statistics,
-            "val": val_dataset.statistics,
-            "test": test_dataset.statistics,
+            "train": self.train_dataset.statistics,
+            "val": self.val_dataset.statistics,
+            "test": self.test_dataset.statistics,
         }
-        super().__init__(cfg, train_dataset, val_dataset, test_dataset)
+        # super().__init__(cfg, train_dataset, val_dataset, test_dataset)
 
     def setup_(self, dataset, stage="train"):
         if stage == "train":
@@ -384,33 +397,36 @@ class LigandPocketDataModule(AbstractDataModuleLigand):
         elif stage == "test":
             self.test_dataset = dataset
 
-    def _train_dataloader(self, shuffle=True):
+    def train_dataloader(self, shuffle=True):
         dataloader = DataLoader(
             dataset=self.train_dataset,
-            batch_size=self.cfg.batch_size,
-            num_workers=self.cfg.num_workers,
+            batch_size=self.hparams.batch_size,
+            num_workers=self.hparams.num_workers,
+            follow_batch=["pos", "pos_pocket"],
             pin_memory=self.pin_memory,
             shuffle=shuffle,
             persistent_workers=False,
         )
         return dataloader
 
-    def _val_dataloader(self, shuffle=False):
+    def val_dataloader(self, shuffle=False):
         dataloader = DataLoader(
             dataset=self.val_dataset,
-            batch_size=self.cfg.batch_size,
-            num_workers=self.cfg.num_workers,
+            batch_size=self.hparams.inference_batch_size,
+            num_workers=self.hparams.num_workers,
+            follow_batch=["pos", "pos_pocket"],
             pin_memory=self.pin_memory,
             shuffle=shuffle,
             persistent_workers=False,
         )
         return dataloader
 
-    def _test_dataloader(self, shuffle=False):
+    def test_dataloader(self, shuffle=False):
         dataloader = DataLoader(
             dataset=self.test_dataset,
-            batch_size=self.cfg.batch_size,
-            num_workers=self.cfg.num_workers,
+            batch_size=1,
+            num_workers=self.hparams.num_workers,
+            follow_batch=["pos", "pos_pocket"],
             pin_memory=self.pin_memory,
             shuffle=shuffle,
             persistent_workers=False,
@@ -418,10 +434,10 @@ class LigandPocketDataModule(AbstractDataModuleLigand):
         return dataloader
 
     def compute_mean_mad(self, properties_list):
-        if self.cfg.dataset == "qm9" or self.cfg.dataset == "drugs":
+        if self.hparams.dataset == "qm9" or self.hparams.dataset == "drugs":
             dataloader = self.get_dataloader(self.train_dataset, "val")
             return self.compute_mean_mad_from_dataloader(dataloader, properties_list)
-        elif self.cfg.dataset == "qm9_1half" or self.cfg.dataset == "qm9_2half":
+        elif self.hparams.dataset == "qm9_1half" or self.hparams.dataset == "qm9_2half":
             dataloader = self.get_dataloader(self.val_dataset, "val")
             return self.compute_mean_mad_from_dataloader(dataloader, properties_list)
         else:
@@ -451,16 +467,16 @@ class LigandPocketDataModule(AbstractDataModuleLigand):
 
     def get_dataloader(self, dataset, stage):
         if stage == "train":
-            batch_size = self.cfg.batch_size
+            batch_size = self.hparams.batch_size
             shuffle = True
         elif stage in ["val", "test"]:
-            batch_size = self.cfg.inference_batch_size
+            batch_size = self.hparams.inference_batch_size
             shuffle = False
 
         dl = DataLoader(
             dataset=dataset,
             batch_size=batch_size,
-            num_workers=self.cfg.num_workers,
+            num_workers=self.hparams.num_workers,
             pin_memory=True,
             shuffle=shuffle,
         )

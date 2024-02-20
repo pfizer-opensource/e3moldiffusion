@@ -85,7 +85,17 @@ def evaluate(args):
     train_smiles = list(datamodule.train_dataset.smiles)
 
     prop_norm, prop_dist = None, None
-    if len(hparams.properties_list) > 0 and hparams.context_mapping:
+    if (
+        len(hparams.properties_list) > 0
+        and hparams.context_mapping
+        and not hparams.use_centroid_context_embed
+    ) or (
+        hparams.property_training
+        and not (
+            hparams.regression_property == "sascore"
+            or hparams.regression_property == "docking_score"
+        )
+    ):
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
@@ -94,14 +104,21 @@ def evaluate(args):
         from experiments.diffusion_discrete_pocket_addfeats import Trainer
 
         # from experiments.diffusion_discrete_pocket_addfeats_reduced import Trainer
-    elif hparams.latent_dim is None:
-        from experiments.diffusion_discrete_pocket import Trainer
     else:
-        from experiments.diffusion_discrete_latent_pocket_ligand import Trainer
+        from experiments.diffusion_discrete_pocket import Trainer
 
     torch.cuda.empty_cache()
 
-    # if you want bond_model_guidance, flag this here in the Trainer
+    # backward compatibility
+    if "use_centroid_context_embed" not in hparams:
+        hparams.use_centroid_context_embed = False
+    if "use_latent_encoder" not in hparams:
+        hparams.use_latent_encoder = False
+    if "use_scaffold_latent_embed" not in hparams:
+        hparams.use_scaffold_latent_embed = False
+    if "flow_matching" not in hparams:
+        hparams.flow_matching = False
+
     device = "cuda"
     model = Trainer.load_from_checkpoint(
         args.model_path,
@@ -111,7 +128,10 @@ def evaluate(args):
         prop_norm=prop_norm,
         prop_dist=prop_dist,
         load_ckpt_from_pretrained=None,
-        # ligand_pocket_interaction=False,
+        use_centroid_context_embed=hparams.use_centroid_context_embed,
+        use_latent_encoder=hparams.use_latent_encoder,
+        use_scaffold_latent_embed=hparams.use_scaffold_latent_embed,
+        flow_matching=hparams.flow_matching,
         load_ckpt=None,
         run_evaluation=True,
         strict=False,
@@ -194,7 +214,7 @@ def evaluate(args):
 
         k = 0
         while (
-            len(valid_and_unique_molecules) < args.num_ligands_per_pocket
+            len(valid_and_unique_molecules) < args.num_ligands_per_pocket_to_sample
             and k <= args.max_sample_iter
         ):
             k += 1
@@ -229,12 +249,12 @@ def evaluate(args):
             valid_and_unique_molecules = valid_molecules.copy()
             tmp_molecules = valid_molecules.copy()
 
-        if len(valid_and_unique_molecules) < args.num_ligands_per_pocket and (
+        if len(valid_and_unique_molecules) < args.num_ligands_per_pocket_to_sample and (
             args.filter_by_posebusters or args.filter_by_lipinski
         ):
             k = 0
             while (
-                len(valid_and_unique_molecules) < args.num_ligands_per_pocket
+                len(valid_and_unique_molecules) < args.num_ligands_per_pocket_to_sample
                 and k <= args.max_sample_iter
             ):
                 k += 1
@@ -272,39 +292,22 @@ def evaluate(args):
                 f"Reached {args.max_sample_iter} sampling iterations, but could not find any ligands for pdb file {pdb_file}. Skipping."
             )
             continue
-        elif len(valid_and_unique_molecules) < args.num_ligands_per_pocket:
+        elif len(valid_and_unique_molecules) < args.num_ligands_per_pocket_to_sample:
             print(
                 f"FYI: Reached {args.max_sample_iter} sampling iterations, but could only find {len(valid_and_unique_molecules)} ligands for pdb file {pdb_file}."
             )
 
-        torch.cuda.empty_cache()
+        run_time = datetime.now() - start
+        print(f"\n Run time={run_time} for {len(valid_molecules)} valid molecules \n")
 
-        (
-            _,
-            validity_dict,
-            statistics,
-            _,
-            _,
-            valid_molecules,
-        ) = analyze_stability_for_molecules(
-            molecule_list=tmp_molecules,
-            dataset_info=dataset_info,
-            smiles_train=train_smiles,
-            local_rank=0,
-            return_molecules=True,
-            calculate_statistics=True,
-            calculate_distribution_statistics=False,
-            return_stats_per_molecule=False,
-            remove_hs=hparams.remove_hs,
-            device="cpu",
-        )
+        torch.cuda.empty_cache()
 
         if args.filter_by_docking_scores:
             temp_file = tempfile.NamedTemporaryFile(
                 suffix=f"{random.randint(0, 100000)}.sdf", delete=False
             )
             temp_path = temp_file.name
-            write_sdf_file(temp_path, valid_molecules, extract_mol=True)
+            write_sdf_file(temp_path, valid_and_unique_molecules, extract_mol=True)
             target = ("-").join(
                 ligand_name.split("-")[:5]
             )  # get the target, chain and ligand name
@@ -320,33 +323,79 @@ def evaluate(args):
                 return_rdmol=True,
                 filtering=True,
             )
-            valid_molecules = [
-                m for i, m in enumerate(valid_molecules) if i in valid_ids
+            valid_and_unique_molecules = [
+                m for i, m in enumerate(valid_and_unique_molecules) if i in valid_ids
             ]
-            valid_molecules = [
-                m for m, s in zip(valid_molecules, scores) if ground_truth_score < s
+            valid_and_unique_molecules = [
+                m
+                for m, s in zip(valid_and_unique_molecules, scores)
+                if ground_truth_score < s
             ]
             write_sdf_file(sdf_out_file_docked, rdmols)
 
             temp_file.close()
             os.remove(temp_path)
 
-            if len(valid_molecules) == 0:
+            if len(tmp_molecules) == 0:
                 print("No sample found with better docking score. Skipping!")
                 continue
 
-        run_time = datetime.now() - start
-        print(f"\n Run time={run_time} for {len(valid_molecules)} valid molecules \n")
+        (
+            _,
+            validity_dict,
+            statistics,
+            _,
+            _,
+            valid_molecules,
+        ) = analyze_stability_for_molecules(
+            molecule_list=valid_and_unique_molecules,
+            dataset_info=dataset_info,
+            smiles_train=train_smiles,
+            local_rank=0,
+            return_molecules=True,
+            calculate_statistics=True,
+            return_mean_stats=False,
+            return_stats_per_molecule=True,
+            calculate_distribution_statistics=False,
+            remove_hs=hparams.remove_hs,
+            device="cpu",
+        )
+        if len(valid_molecules) == 0:
+            print("No samples found. Skipping!")
+            continue
 
-        statistics_dict["QED"].append(statistics["QED"])
-        statistics_dict["SA"].append(statistics["SA"])
-        statistics_dict["Lipinski"].append(statistics["Lipinski"])
-        statistics_dict["Diversity"].append(statistics["Diversity"])
+        if len(valid_molecules) > args.num_ligands_per_pocket_to_save:
 
-        if len(valid_molecules) > args.num_ligands_per_pocket:
-            valid_molecules = valid_molecules[
-                : args.num_ligands_per_pocket
-            ]  # we could sort them by QED, SA or whatever
+            if args.filter_by_sascore:
+                sorted_indices = np.flip(np.argsort(statistics["SAs"]))
+                indices = [
+                    i
+                    for i in sorted_indices
+                    if statistics["SAs"][i] >= args.sascore_threshold
+                ][: args.num_ligands_per_pocket_to_save]
+                if len(indices) == 0:
+                    indices = [i for i in sorted_indices][
+                        : args.num_ligands_per_pocket_to_save
+                    ]
+                valid_molecules = [
+                    mol for i, mol in enumerate(valid_molecules) if i in indices
+                ]
+            else:
+                indices = [i for i in range(args.num_ligands_per_pocket_to_save)]
+                valid_molecules = valid_molecules[: args.num_ligands_per_pocket_to_save]
+        else:
+            indices = [i for i in range(len(valid_molecules))]
+
+        for k, v in statistics.items():
+            if isinstance(v, list):
+                if len(v) >= len(indices):
+                    v = [p for i, p in enumerate(v) if i in indices]
+                    violin_dict[k].extend(v)
+                    statistics_dict[k + "_mean"].append(np.mean(v))
+                elif len(v) == 1:
+                    statistics_dict[k].append(v[0])
+            else:
+                statistics_dict[k].append(v)
 
         if args.encode_ligands:
             ligand_data = [
@@ -361,13 +410,7 @@ def evaluate(args):
             ]
             ligand_data = Batch.from_data_list(ligand_data).to(device)
             with torch.no_grad():
-                ligand_embeds = model.encode_ligand(
-                    pos=ligand_data.pos,
-                    atom_types=ligand_data.x,
-                    data_batch=ligand_data.batch,
-                    bond_edge_index=ligand_data.edge_index,
-                    bond_edge_attr=ligand_data.edge_attr,
-                )
+                ligand_embeds = model.encode_ligand(ligand_data)
             embedding_dict[ligand_name]["sampled"].append(ligand_embeds)
 
         write_sdf_file(sdf_out_file_raw, valid_molecules, extract_mol=True)
@@ -478,8 +521,10 @@ def get_args():
                         help='Whether or not to store generated molecules in xyz files')
     parser.add_argument('--calculate-energy', default=False, action="store_true",
                         help='Whether or not to calculate xTB energies and forces')
-    parser.add_argument('--num-ligands-per-pocket', default=100, type=int,
-                            help='How many ligands per pocket to sample. Defaults to 10')
+    parser.add_argument('--num-ligands-per-pocket-to-sample', default=100, type=int,
+                            help='How many ligands per pocket to sample. Should be higher than num-ligands-per-pocket-to-save if filters, like sascore filtering, are active. Defaults to 100')
+    parser.add_argument('--num-ligands-per-pocket-to-save', default=100, type=int,
+                            help='How many ligands per pocket to save. Must be <= num-ligands-per-pocket-to-sample. Defaults to 100')
     parser.add_argument("--build-obabel-mol", default=False, action="store_true")
     parser.add_argument('--batch-size', default=100, type=int)
     parser.add_argument('--ddim', default=False, action="store_true",
@@ -514,6 +559,8 @@ def get_args():
     parser.add_argument("--guidance-scale", default=1.e-4, type=float)
     parser.add_argument("--filter-by-posebusters", action="store_true")
     parser.add_argument("--filter-by-lipinski", action="store_true")
+    parser.add_argument("--filter-by-sascore", action="store_true")
+    parser.add_argument("--sascore-threshold", default=0.7, type=float)
     parser.add_argument("--filter-by-docking-scores", action="store_true", 
                         help="Samples will be docked directly after generation and filtered versus a ground truth docking score. Only higher score will be kept.")
     parser.add_argument("--docking-scores", type=Path, default=None, 
