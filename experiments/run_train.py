@@ -174,8 +174,9 @@ if __name__ == "__main__":
     ) or (
         hparams.property_training
         and not (
-            hparams.regression_property == "sascore"
+            hparams.regression_property == "sa_score"
             or hparams.regression_property == "docking_score"
+            or hparams.regression_property == "polarizability"
         )
     ):
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
@@ -197,7 +198,11 @@ if __name__ == "__main__":
         elif hparams.bond_prediction:
             print("Starting bond prediction model via discrete diffusion")
             from experiments.diffusion_discrete import Trainer
-        elif hparams.property_prediction:
+        elif (
+            hparams.joint_property_prediction
+            and dataset != "crossdocked"
+            and dataset != "bindningmoad"
+        ):
             print("Starting property prediction model via discrete diffusion")
             from experiments.diffusion_discrete import Trainer
         elif (

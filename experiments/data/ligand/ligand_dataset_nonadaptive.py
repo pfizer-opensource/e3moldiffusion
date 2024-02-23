@@ -486,7 +486,7 @@ class ExpandableDataset(InMemoryDataset):
     def __getitem__(self, idx):
         if idx < len(self.base_dataset):
             return self.base_dataset[idx]
-        return self.additional_samples[idx - len(self.base_dataset)]
+        return self.additional_samples[idx - len(self.base_dataset) - 1]
 
     def __len__(self):
         return len(self.base_dataset) + len(self.additional_samples)

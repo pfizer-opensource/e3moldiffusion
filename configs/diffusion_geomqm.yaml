@@ -1,21 +1,26 @@
 # load_ckpt: /sharedhome/seumej/logs/run0/last.ckpt
 #load_ckpt_from_pretrained: /hpfs/userws/cremej01/workspace/logs/pubchem/pretrain_x0_3_adaptive/run0/epoch=12-step=1649674.ckpt
 
+joint_property_prediction: false
+regression_property: [polarizability]
+
 bond_prediction: false
 seed: 42
 
+use_pos_norm: true
+
 # batch_size 40 without adaptive, and 200 with adaptive
-batch_size: 200
+batch_size: 400
 inference_batch_size: 70
 ema_decay: 0.999
 grad_clip_val: 10
 accum_batch: 1
 gamma: 0.99
 
-use_adaptive_loader: false
+use_adaptive_loader: true
 remove_hs: false
 
-gpus: 4
+gpus: 2
 num_epochs: 400
 test_interval: 20
 
@@ -32,12 +37,12 @@ vector_aggr: mean
 
 #DATA
 dataset: geomqm
-dataset_root: /scratch1/seumej/geom_qm
+dataset_root: /hpfs/projects/mlcs/mlhub/e3moldiffusion/data/geom_qm
 max_num_conformers: 5
 
 # DIFFUSION
 additional_feats: false
-use_qm_props: true
+use_qm_props: false
 continuous: false
 noise_scheduler: adaptive
 eps_min: 1.e-3
@@ -49,8 +54,8 @@ loss_weighting: snr_t
 use_pos_norm: true
 
 #CONTEXT
-context_mapping: true
-num_context_features: 2
+context_mapping: false
+num_context_features: 0
 properties_list: [dipole_norm, polarizability] #[dipole_norm, total_energy, HOMO-LUMO_gap, dispersion, atomisation_energy, polarizability]
 
 #LOGGING
