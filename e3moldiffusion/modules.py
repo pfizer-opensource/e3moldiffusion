@@ -52,14 +52,17 @@ class PredictionHeadEdge(nn.Module):
                 self.property_map = DenseLayer(
                     self.sdim, self.sdim, activation=nn.SiLU(), bias=True
                 )
-            if "docking_score" in self.regression_property:
-                self.dock_map = GatedEquivBlock(
+            if (
+                "docking_score" in self.regression_property
+                or "polarizability" in self.regression_property
+            ):
+                self.prop_map = GatedEquivBlock(
                     in_dims=hn_dim,
                     out_dims=(self.sdim, None),
                     use_mlp=True,
                     return_vector=False,
                 )
-                self.dock_mlp = DenseLayer(
+                self.prop_mlp = DenseLayer(
                     self.sdim, 1, bias=True, activation=nn.Identity()
                 )
             if "sa_score" in self.regression_property:
@@ -84,9 +87,12 @@ class PredictionHeadEdge(nn.Module):
                 and "sa_score" in self.regression_property
             ):
                 self.property_map.reset_parameters()
-            if "docking_score" in self.regression_property:
-                reset(self.dock_map)
-                reset(self.dock_mlp)
+            if (
+                "docking_score" in self.regression_property
+                or "polarizability" in self.regression_property
+            ):
+                reset(self.prop_map)
+                reset(self.prop_mlp)
             if "sa_score" in self.regression_property:
                 reset(self.sa_map)
                 reset(self.sa_mlp)
@@ -154,6 +160,7 @@ class PredictionHeadEdge(nn.Module):
 
         if self.joint_property_prediction:
             batch_size = len(batch.bincount())
+            aggr_idx = batch if batch_lig is None else batch_lig
             if (
                 "docking_score" in self.regression_property
                 and "sa_score" in self.regression_property
@@ -161,24 +168,28 @@ class PredictionHeadEdge(nn.Module):
                 s_prop = self.property_map(s)
             else:
                 s_prop = s.clone()
-            if "docking_score" in self.regression_property:
-                v = (v * pocket_mask.unsqueeze(-1))[pocket_mask.squeeze(), :]
-                dock_pred = self.dock_map((s_prop, v))
-                dock_pred = self.dock_mlp(dock_pred)
-                dock_pred = scatter_add(
-                    dock_pred, index=batch_lig, dim=0, dim_size=batch_size
+            if (
+                "docking_score" in self.regression_property
+                or "polarizability" in self.regression_property
+            ):
+                if pocket_mask is not None:
+                    v = (v * pocket_mask.unsqueeze(-1))[pocket_mask.squeeze(), :]
+                prop_pred = self.prop_map((s_prop, v))
+                prop_pred = self.prop_mlp(prop_pred)
+                prop_pred = scatter_add(
+                    prop_pred, index=aggr_idx, dim=0, dim_size=batch_size
                 )
             else:
-                dock_pred = None
+                prop_pred = None
             if "sa_score" in self.regression_property:
                 sa_pred = self.sa_map(s_prop)
                 sa_pred = scatter_mean(
-                    sa_pred, index=batch_lig, dim=0, dim_size=batch_size
+                    sa_pred, index=aggr_idx, dim=0, dim_size=batch_size
                 )
                 sa_pred = self.sa_mlp(sa_pred)
             else:
                 sa_pred = None
-            property_pred = (sa_pred, dock_pred)
+            property_pred = (sa_pred, prop_pred)
         else:
             property_pred = None
 
