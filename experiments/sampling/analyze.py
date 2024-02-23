@@ -11,7 +11,6 @@ import torch
 from posebusters import PoseBusters
 from rdkit import Chem, RDLogger
 from rdkit.Chem import QED, Crippen, Descriptors, Lipinski
-from rdkit.Chem.QED import qed
 from rdkit.DataStructs import BulkTanimotoSimilarity, TanimotoSimilarity
 from torchmetrics import MaxMetric, MeanMetric
 from tqdm import tqdm
@@ -269,7 +268,7 @@ class BasicMolecularMetrics(object):
         if not remove_hs:
             # Atom and molecule stability
             if local_rank == 0:
-                print(f"Analyzing molecule stability")
+                print("Analyzing molecule stability")
             for i, mol in enumerate(molecules):
                 if mol.bond_types is None:
                     mol_stable, at_stable, num_bonds = check_stability_without_bonds(
@@ -290,7 +289,7 @@ class BasicMolecularMetrics(object):
         else:
             stability_dict = {}
             if local_rank == 0:
-                print(f"No explicit hydrogens - skipping molecule stability metric")
+                print("No explicit hydrogens - skipping molecule stability metric")
 
         # Validity, uniqueness, novelty
         (
@@ -396,6 +395,12 @@ class BasicMolecularMetrics(object):
                     statistics_dict["HAcceptors"] = hacceptors
                     statistics_dict["HDonors"] = hdonors
                     statistics_dict["Lipinskis"] = lipinski
+                    if not return_mean_stats:
+                        if len(mols) > 1000:
+                            diversity = calculate_bulk_diversity(mols, rdkit_fp=True)
+                        else:
+                            diversity = self.calculate_diversity(mols)
+                        statistics_dict["Diversity"] = diversity
             else:
                 print(
                     "No valid smiles have been generated. No molecule statistics calculated."
@@ -454,7 +459,7 @@ class BasicMolecularMetrics(object):
         self.bond_lengths_w1(bond_lengths_w1)
         if sparsity_level < 0.7:
             if local_rank == 0:
-                print(f"Too many edges, skipping angle distance computation.")
+                print("Too many edges, skipping angle distance computation.")
             angles_w1 = 0
             angles_w1_per_type = [-1] * len(self.atom_decoder)
         else:

@@ -18,13 +18,15 @@ class PredictionHeadEdge(nn.Module):
         num_atom_features: int,
         num_bond_types: int = 5,
         coords_param: str = "data",
-        joint_property_prediction: int = 0,  # gives the number of output nodes for property prediction.
+        joint_property_prediction: bool = False,
+        regression_property: list = None,
     ) -> None:
         super(PredictionHeadEdge, self).__init__()
         self.sdim, self.vdim = hn_dim
         self.num_atom_features = num_atom_features
         self.coords_param = coords_param
         self.joint_property_prediction = joint_property_prediction
+        self.regression_property = regression_property
 
         self.shared_mapping = DenseLayer(
             self.sdim, self.sdim, bias=True, activation=nn.SiLU()
@@ -43,21 +45,30 @@ class PredictionHeadEdge(nn.Module):
             in_features=self.sdim, out_features=num_atom_features, bias=True
         )
         if self.joint_property_prediction:
-            self.property_mlp = GatedEquivBlock(
-                in_dims=hn_dim,
-                out_dims=(self.sdim, None),
-                use_mlp=True,
-                return_vector=False,
-            )
-            self.sa_mlp = nn.Sequential(
-                DenseLayer(self.sdim, self.sdim, activation=nn.SiLU(), bias=True),
-                DenseLayer(self.sdim, 1, bias=True, activation=nn.Identity()),
-            )
-
-            self.docking_mlp = nn.Sequential(
-                DenseLayer(self.sdim, self.sdim, activation=nn.ReLU(), bias=True),
-                DenseLayer(self.sdim, 1, bias=True, activation=nn.Identity()),
-            )
+            if (
+                "docking_score" in self.regression_property
+                and "sa_score" in self.regression_property
+            ):
+                self.property_map = DenseLayer(
+                    self.sdim, self.sdim, activation=nn.SiLU(), bias=True
+                )
+            if "docking_score" in self.regression_property:
+                self.dock_map = GatedEquivBlock(
+                    in_dims=hn_dim,
+                    out_dims=(self.sdim, None),
+                    use_mlp=True,
+                    return_vector=False,
+                )
+                self.dock_mlp = DenseLayer(
+                    self.sdim, 1, bias=True, activation=nn.Identity()
+                )
+            if "sa_score" in self.regression_property:
+                self.sa_map = DenseLayer(
+                    self.sdim, self.sdim, activation=nn.SiLU(), bias=True
+                )
+                self.sa_mlp = DenseLayer(
+                    self.sdim, 1, bias=True, activation=nn.Sigmoid()
+                )
 
         self.reset_parameters()
 
@@ -68,9 +79,17 @@ class PredictionHeadEdge(nn.Module):
         self.bonds_lin_0.reset_parameters()
         self.bonds_lin_1.reset_parameters()
         if self.joint_property_prediction:
-            self.node_lin.reset_parameters()
-            reset(self.sa_mlp)
-            reset(self.docking_mlp)
+            if (
+                "docking_score" in self.regression_property
+                and "sa_score" in self.regression_property
+            ):
+                self.property_map.reset_parameters()
+            if "docking_score" in self.regression_property:
+                reset(self.dock_map)
+                reset(self.dock_mlp)
+            if "sa_score" in self.regression_property:
+                reset(self.sa_map)
+                reset(self.sa_mlp)
 
     def forward(
         self,
@@ -135,15 +154,31 @@ class PredictionHeadEdge(nn.Module):
 
         if self.joint_property_prediction:
             batch_size = len(batch.bincount())
-            v = (v * pocket_mask.unsqueeze(-1))[pocket_mask.squeeze(), :]
-            property_pred = self.property_mlp((s, v))
-            property_pred = scatter_mean(
-                property_pred, index=batch_lig, dim=0, dim_size=batch_size
-            )
-            sa_pred, docking_pred = self.sa_mlp(property_pred), self.docking_mlp(
-                property_pred
-            )
-            property_pred = (sa_pred, docking_pred)
+            if (
+                "docking_score" in self.regression_property
+                and "sa_score" in self.regression_property
+            ):
+                s_prop = self.property_map(s)
+            else:
+                s_prop = s.clone()
+            if "docking_score" in self.regression_property:
+                v = (v * pocket_mask.unsqueeze(-1))[pocket_mask.squeeze(), :]
+                dock_pred = self.dock_map((s_prop, v))
+                dock_pred = self.dock_mlp(dock_pred)
+                dock_pred = scatter_add(
+                    dock_pred, index=batch_lig, dim=0, dim_size=batch_size
+                )
+            else:
+                dock_pred = None
+            if "sa_score" in self.regression_property:
+                sa_pred = self.sa_map(s_prop)
+                sa_pred = scatter_mean(
+                    sa_pred, index=batch_lig, dim=0, dim_size=batch_size
+                )
+                sa_pred = self.sa_mlp(sa_pred)
+            else:
+                sa_pred = None
+            property_pred = (sa_pred, dock_pred)
         else:
             property_pred = None
 
@@ -262,21 +297,20 @@ class PropertyPredictionMLP(nn.Module):
             use_mlp=True,
             return_vector=False,
         )
-        self.property_mapping = DenseLayer(
-            self.sdim,
-            1,
-            bias=True,
-            activation=activation,
+        self.property_mapping = nn.Sequential(
+            DenseLayer(self.sdim, self.sdim, bias=True, activation=nn.SiLU()),
+            DenseLayer(self.sdim, 1, bias=True),
         )
 
         self.reset_parameters()
 
     def reset_parameters(self):
         self.edge_mapping.reset_parameters()
-        self.property_mapping.reset_parameters()
+        reset(self.property_mapping)
         self.s_v_mapping.reset_parameters()
 
     def forward(self, x: Dict, batch: Tensor, edge_index_global: Tensor) -> Dict:
+        bs = len(batch.unique())
         s, v, p, e = x["s"], x["v"], x["p"], x["e"]
         e = 0.5 * scatter_mean(
             e,
@@ -286,6 +320,8 @@ class PropertyPredictionMLP(nn.Module):
         )
         e = self.edge_mapping(e)
         s = self.s_v_mapping((s, v)) + p.sum() * 0
+        s = scatter_mean(s, index=batch, dim=0, dim_size=bs)
+        e = scatter_mean(e, index=batch, dim=0, dim_size=bs)
         out = self.property_mapping(s + e)
 
         return out

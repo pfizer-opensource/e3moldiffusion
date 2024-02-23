@@ -1,8 +1,8 @@
 from typing import List, Optional
 
 import torch
-from torch.utils.data import Dataset, Subset
-from torch_geometric.data import Data
+from torch.utils.data import Subset
+from torch_geometric.data import Data, Dataset
 from torch_geometric.data.collate import collate
 from torch_geometric.data.separate import separate
 
@@ -216,17 +216,6 @@ class AbstractDatasetInfos:
             self.is_h_acceptor = statistics["train"].is_h_acceptor
 
 
-class CustomDataset(Dataset):
-    def __init__(self, data):
-        self.data = data
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, index):
-        return self.data[index]
-
-
 class CustomPyGDataset(Dataset):
     def __init__(self, data_list):
         super().__init__()
@@ -242,6 +231,9 @@ class CustomPyGDataset(Dataset):
             decrement=False,
         )
         return data
+
+    def len(self):
+        return len(self.data)
 
 
 def _collate(data_list: List[Data]):

@@ -20,7 +20,7 @@ bond_prediction: false
 
 #REGRESSION
 joint_property_prediction: false
-regression_property: docking_score
+regression_property: [sa_score]
 
 #LIG-POCKET INTERACTION
 ligand_pocket_interaction: true

@@ -1,4 +1,3 @@
-import os
 import tempfile
 from itertools import zip_longest
 from typing import Sequence, Union
@@ -8,7 +7,6 @@ import torch
 from rdkit import Chem, RDLogger
 from torch import Tensor
 from torch_geometric.data import DataLoader, InMemoryDataset
-from torch_geometric.data.data import BaseData
 from tqdm import tqdm
 
 import experiments.data.utils as dataset_utils
@@ -334,15 +332,16 @@ class LigandPocketDataModule(AbstractDataModuleLigand):
         self.datadir = cfg.dataset_root
         root_path = cfg.dataset_root
         self.pin_memory = True
+        self.test_batch_size = 1
 
         train_dataset = LigandPocketDataset(
             split="train",
             root=root_path,
             with_docking_scores=(
                 cfg.joint_property_prediction
-                and cfg.regression_property == "docking_score"
+                and "docking_score" in cfg.regression_property
             )
-            or (cfg.property_training and cfg.regression_property == "docking_score"),
+            or (cfg.property_training and "docking_score" in cfg.regression_property),
             remove_hs=cfg.remove_hs,
         )
         if bootstrapping:
@@ -353,9 +352,9 @@ class LigandPocketDataModule(AbstractDataModuleLigand):
             root=root_path,
             with_docking_scores=(
                 cfg.joint_property_prediction
-                and cfg.regression_property == "docking_score"
+                and "docking_score" in cfg.regression_property
             )
-            or (cfg.property_training and cfg.regression_property == "docking_score"),
+            or (cfg.property_training and "docking_score" in cfg.regression_property),
             remove_hs=cfg.remove_hs,
         )
         test_dataset = LigandPocketDataset(
@@ -363,9 +362,9 @@ class LigandPocketDataModule(AbstractDataModuleLigand):
             root=root_path,
             with_docking_scores=(
                 cfg.joint_property_prediction
-                and cfg.regression_property == "docking_score"
+                and "docking_score" in cfg.regression_property
             )
-            or (cfg.property_training and cfg.regression_property == "docking_score"),
+            or (cfg.property_training and "docking_score" in cfg.regression_property),
             remove_hs=cfg.remove_hs,
         )
         self.remove_hs = cfg.remove_hs
@@ -384,10 +383,11 @@ class LigandPocketDataModule(AbstractDataModuleLigand):
         elif stage == "test":
             self.test_dataset = dataset
 
-    def _train_dataloader(self, shuffle=True):
+    def _train_dataloader_(self, shuffle=True):
         dataloader = DataLoader(
             dataset=self.train_dataset,
             batch_size=self.cfg.batch_size,
+            follow_batch=["pos", "pos_pocket"],
             num_workers=self.cfg.num_workers,
             pin_memory=self.pin_memory,
             shuffle=shuffle,
@@ -395,10 +395,11 @@ class LigandPocketDataModule(AbstractDataModuleLigand):
         )
         return dataloader
 
-    def _val_dataloader(self, shuffle=False):
+    def _val_dataloader_(self, shuffle=False):
         dataloader = DataLoader(
             dataset=self.val_dataset,
             batch_size=self.cfg.batch_size,
+            follow_batch=["pos", "pos_pocket"],
             num_workers=self.cfg.num_workers,
             pin_memory=self.pin_memory,
             shuffle=shuffle,
@@ -406,13 +407,13 @@ class LigandPocketDataModule(AbstractDataModuleLigand):
         )
         return dataloader
 
-    def _test_dataloader(self, shuffle=False):
+    def test_dataloader_(self, shuffle=False):
         dataloader = DataLoader(
-            dataset=self.test_dataset,
-            batch_size=self.cfg.batch_size,
+            self.test_dataset,
+            batch_size=self.test_batch_size,
+            follow_batch=["pos", "pos_pocket"],
             num_workers=self.cfg.num_workers,
-            pin_memory=self.pin_memory,
-            shuffle=shuffle,
+            shuffle=False,
             persistent_workers=False,
         )
         return dataloader

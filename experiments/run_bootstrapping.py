@@ -4,7 +4,6 @@ import warnings
 
 import numpy as np
 import pytorch_lightning as pl
-from callbacks.data_scheduler import DataScheduler
 from callbacks.ema import ExponentialMovingAverage
 from pytorch_lightning.callbacks import (
     LearningRateMonitor,
@@ -51,7 +50,9 @@ def bootstrap(args):
     ckpt["hyper_parameters"]["num_ligands_per_pocket"] = args.num_ligands_per_pocket
     ckpt["hyper_parameters"]["select_train_subset"] = False
     ckpt["hyper_parameters"]["diffusion_pretraining"] = False
-    ckpt["hyper_parameters"]["load_ckpt_from_pretrained"] = False
+    ckpt["hyper_parameters"]["load_ckpt_from_pretrained"] = None
+    ckpt["hyper_parameters"]["regression_property"] = ["docking_score", "sa_score"]
+    ckpt["hyper_parameters"]["joint_property_prediction"] = True
 
     ckpt["epoch"] = 0
     ckpt["global_step"] = 0
@@ -62,6 +63,8 @@ def bootstrap(args):
         ckpt["optimizer_states"][0]["param_groups"][0]["initial_lr"] = args.lr
 
     ckpt_path = os.path.join(args.save_dir, f"bootstrap_model_lr{args.lr}.ckpt")
+    if os.path.exists(ckpt_path):
+        os.remove(ckpt_path)
     torch.save(ckpt, ckpt_path)
 
     hparams = ckpt["hyper_parameters"]
@@ -89,7 +92,17 @@ def bootstrap(args):
     train_smiles = list(datamodule.train_dataset.smiles)
 
     prop_norm, prop_dist = None, None
-    if len(hparams.properties_list) > 0 and hparams.context_mapping:
+    if (
+        len(hparams.properties_list) > 0
+        and hparams.context_mapping
+        and not hparams.use_centroid_context_embed
+    ) or (
+        hparams.property_training
+        and not (
+            hparams.regression_property == "sascore"
+            or hparams.regression_property == "docking_score"
+        )
+    ):
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
@@ -109,7 +122,6 @@ def bootstrap(args):
 
     from pytorch_lightning.plugins.environments import LightningEnvironment
 
-    data_callback = DataScheduler()
     ema_callback = ExponentialMovingAverage(decay=hparams.ema_decay)
     checkpoint_callback = ModelCheckpoint(
         dirpath=hparams.save_dir + f"/run{hparams.id}/",
@@ -124,7 +136,6 @@ def bootstrap(args):
     strategy = "ddp" if hparams.gpus > 1 else "auto"
     # strategy = 'ddp_find_unused_parameters_true'
     callbacks = [
-        data_callback,
         ema_callback,
         lr_logger,
         checkpoint_callback,
@@ -158,8 +169,8 @@ def bootstrap(args):
 
     trainer.fit(
         model=model,
-        datamodule=datamodule,
-        ckpt_path=ckpt_path if hparams.load_ckpt is not None else None,
+        # datamodule=datamodule,
+        ckpt_path=ckpt_path,
     )
 
 

@@ -427,11 +427,28 @@ def extract_scaffolds_(batch_data):
 
 
 def extract_scaffolds_from_batch(batch_data):
-    scaffolds = [GetScaffoldForMol(mol) for mol in batch_data.mol]
-    data_list = []
-    for scaffold in scaffolds:
-        data_list.append(mol_to_torch_geometric(scaffold, atom_encoder=atom_encoder))
+    bs = len(batch_data.batch.bincount())
+    scaffolds = []
+    for mol in batch_data.mol:
+        if mol.GetNumAtoms() > 1:
+            scaffold = GetScaffoldForMol(mol)
+            if scaffold is not None and scaffold.GetNumAtoms() > 1:
+                scaffolds.append(scaffold)
+            else:
+                scaffolds.append(mol)
+        else:
+            scaffolds.append(mol)
+    # scaffolds = [GetScaffoldForMol(mol) for mol in batch_data.mol]
+
+    data_list = [
+        mol_to_torch_geometric(scaffold, atom_encoder=atom_encoder)
+        for scaffold in scaffolds
+    ]
     batch_data = Batch.from_data_list(data_list)
+    if len(batch_data.batch.bincount()) != bs:
+        import pdb
+
+        pdb.set_trace()
     return batch_data
 
 

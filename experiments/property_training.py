@@ -7,14 +7,13 @@ from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 
-from e3moldiffusion.coordsatomsbonds import EQGATEnergyNetwork
+from e3moldiffusion.coordsatomsbonds import PropertyEdgeNetwork
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.data.abstract_dataset import AbstractDatasetInfos
-from experiments.data.distributions import PROP_TO_IDX_GEOMQM as prop_to_idx
 from experiments.data.distributions import prepare_context
 from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
-from experiments.sampling.utils import calculate_sascore
+from experiments.sampling.utils import calculate_sa
 from experiments.utils import (
     coalesce_edges,
     zero_mean,
@@ -122,45 +121,45 @@ class Trainer(pl.LightningModule):
                 num_charge_types=self.num_charge_classes,
             )
 
-        # self.model = PropertyEdgeNetwork(
-        #     hn_dim=(hparams["sdim"], hparams["vdim"]),
-        #     num_layers=hparams["num_layers"],
-        #     latent_dim=None,
-        #     use_cross_product=hparams["use_cross_product"],
-        #     num_atom_features=self.num_atom_features,
-        #     num_bond_types=self.num_bond_classes,
-        #     edge_dim=hparams["edim"],
-        #     cutoff_local=hparams["cutoff_local"],
-        #     vector_aggr=hparams["vector_aggr"],
-        #     fully_connected=hparams["fully_connected"],
-        #     local_global_model=hparams["local_global_model"],
-        #     recompute_edge_attributes=True,
-        #     recompute_radius_graph=False,
-        #     edge_mp=hparams["edge_mp"],
-        #     context_mapping=hparams["context_mapping"],
-        #     num_context_features=hparams["num_context_features"],
-        #     coords_param=hparams["continuous_param"],
-        #     use_pos_norm=hparams["use_pos_norm"],
-        #     ligand_pocket_interaction=hparams["ligand_pocket_interaction"],
-        #     bond_prediction=hparams["bond_prediction"],
-        #     property_prediction=hparams["property_prediction"],
-        #     joint_property_prediction=hparams["joint_property_prediction"],
-        # )
-
-        self.model = EQGATEnergyNetwork(
+        self.model = PropertyEdgeNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
-            num_rbfs=hparams["rbf_dim"],
+            latent_dim=None,
             use_cross_product=hparams["use_cross_product"],
             num_atom_features=self.num_atom_features,
+            num_bond_types=self.num_bond_classes,
+            edge_dim=hparams["edim"],
             cutoff_local=hparams["cutoff_local"],
             vector_aggr=hparams["vector_aggr"],
+            fully_connected=hparams["fully_connected"],
+            local_global_model=hparams["local_global_model"],
+            recompute_edge_attributes=True,
+            recompute_radius_graph=False,
+            edge_mp=hparams["edge_mp"],
+            context_mapping=hparams["context_mapping"],
+            num_context_features=hparams["num_context_features"],
+            coords_param=hparams["continuous_param"],
+            use_pos_norm=hparams["use_pos_norm"],
+            ligand_pocket_interaction=hparams["ligand_pocket_interaction"],
+            bond_prediction=hparams["bond_prediction"],
+            property_prediction=hparams["property_prediction"],
+            joint_property_prediction=hparams["joint_property_prediction"],
         )
 
-        if self.hparams.regression_property == "docking_score":
+        # self.model = EQGATEnergyNetwork(
+        #     hn_dim=(hparams["sdim"], hparams["vdim"]),
+        #     num_layers=hparams["num_layers"],
+        #     num_rbfs=hparams["rbf_dim"],
+        #     use_cross_product=hparams["use_cross_product"],
+        #     num_atom_features=self.num_atom_features,
+        #     cutoff_local=hparams["cutoff_local"],
+        #     vector_aggr=hparams["vector_aggr"],
+        # )
+
+        if "docking_score" in self.hparams.regression_property:
             self.loss = torch.nn.MSELoss(reduce=False, reduction="none")
-        elif self.hparams.regression_property == "sascore":
-            self.loss = torch.nn.BCEWithLogitsLoss(reduce=False, reduction="none")
+        elif "sa_score" in self.hparams.regression_property:
+            self.loss = torch.nn.MSELoss(reduce=False, reduction="none")
 
         # initialize loss collection
         self.losses = None
@@ -196,7 +195,7 @@ class Trainer(pl.LightningModule):
             result_dict = {k: v for k, v in result_dict.items() if k.startswith("test")}
             self.log_dict(result_dict, sync_dist=True)
 
-            print(f"Test run finished!")
+            print("Test run finished!")
 
     def _reset_losses_dict(self):
         self.losses = {}
@@ -261,19 +260,17 @@ class Trainer(pl.LightningModule):
 
         out_dict = self(batch=batch, t=t)
 
-        if self.hparams.regression_property == "sascore":
-                labels = (
-                    torch.tensor([calculate_sascore(mol) for mol in batch.mol])
-                    .to(self.device)
-                    .float()
+        if "sa_score" in self.hparams.regression_property:
+            labels = (
+                torch.tensor([calculate_sa(mol) for mol in batch.mol])
+                .to(self.device)
+                .float()
             )
-        elif self.hparams.regression_property == "docking_score":
+        elif "docking_score" in self.hparams.regression_property:
             labels = batch.docking_scores.float()
 
         if stage == "train" and weights is not None:
-            loss = weights * self.loss(
-                out_dict["property_pred"].squeeze(-1), labels
-            )
+            loss = weights * self.loss(out_dict["property_pred"].squeeze(-1), labels)
         else:
             loss = self.loss(out_dict["property_pred"].squeeze(-1), labels)
         loss = torch.mean(loss, dim=0)
@@ -346,9 +343,9 @@ class Trainer(pl.LightningModule):
             # create block diagonal matrix
             dense_edge = torch.zeros(n, n, device=pos.device, dtype=torch.long)
             # populate entries with integer features
-            dense_edge[
-                edge_index_global[0, :], edge_index_global[1, :]
-            ] = edge_attr_global
+            dense_edge[edge_index_global[0, :], edge_index_global[1, :]] = (
+                edge_attr_global
+            )
             dense_edge_ohe = (
                 F.one_hot(dense_edge.view(-1, 1), num_classes=BOND_FEATURE_DIMS + 1)
                 .view(n, n, -1)
@@ -433,20 +430,20 @@ class Trainer(pl.LightningModule):
             [atom_types_perturbed, charges_perturbed], dim=-1
         )
 
-        out = self.model(
-            x=atom_feats_in_perturbed, t=temb, pos=pos_perturbed, batch=data_batch
-        )
         # out = self.model(
-        #     x=atom_feats_in_perturbed,
-        #     t=temb,
-        #     pos=pos_perturbed,
-        #     edge_index_local=edge_index_local,
-        #     edge_index_global=edge_index_global,
-        #     edge_attr_global=edge_attr_global_perturbed,
-        #     batch=data_batch,
-        #     batch_edge_global=batch_edge_global,
-        #     context=context,
+        #     x=atom_feats_in_perturbed, t=temb, pos=pos_perturbed, batch=data_batch
         # )
+        out = self.model(
+            x=atom_feats_in_perturbed,
+            t=temb,
+            pos=pos_perturbed,
+            edge_index_local=edge_index_local,
+            edge_index_global=edge_index_global,
+            edge_attr_global=edge_attr_global_perturbed,
+            batch=data_batch,
+            batch_edge_global=batch_edge_global,
+            context=context,
+        )
 
         return out
 

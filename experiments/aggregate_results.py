@@ -93,8 +93,9 @@ def aggregate(args):
         std_score = np.std(scores_mean)
         print(f"Mean docking score: {mean_score}")
         print(f"Docking score standard deviation: {std_score}")
+
         mean_top10_score = np.mean(
-            [sorted(r)[:10] for r in score_dict["scores"] if len(r) >= 1]
+            [np.mean(sorted(r)[:10]) for r in score_dict["scores"] if len(r) >= 1]
         )
         print(f"Top-10 mean score: {mean_top10_score}")
 

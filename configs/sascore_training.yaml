@@ -2,7 +2,7 @@
 property_training: true
 regression_property: sascore
 
-atoms_continuous: true
+atoms_continuous: false
 
 joint_property_prediction: false
 ligand_pocket_interaction: false
@@ -27,8 +27,8 @@ test_interval: 20
 #EQGAT
 sdim: 256
 vdim: 64
-edim: 128
-num_layers: 8
+edim: 64
+num_layers: 12
 use_cross_product: false
 edge_mp: false
 fully_connected: true
@@ -55,7 +55,7 @@ id: 0
 
 #LEARNING
 lr_scheduler: reduce_on_plateau
-lr: 1.e-4
+lr: 3.e-4
 lr_min: 5.e-5 #used for cyclic scheduler
 lr_step_size: 5.e-5 #used for cyclic scheduler
 lr_factor: 0.75

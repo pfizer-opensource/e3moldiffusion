@@ -164,7 +164,7 @@ class EQGATEdgeGNN(nn.Module):
         for conv, norm in zip(self.convs, self.norms):
             conv.reset_parameters()
             norm.reset_parameters()
-        # self.out_norm.reset_parameters()
+        self.out_norm.reset_parameters()
 
     def calculate_edge_attrs(
         self,

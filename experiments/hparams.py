@@ -96,21 +96,7 @@ def add_arguments(parser):
     parser.add_argument("--cutoff-global", default=10.0, type=float)
     parser.add_argument("--energy-training", default=False, action="store_true")
     parser.add_argument("--property-training", default=False, action="store_true")
-    parser.add_argument(
-        "--regression-property",
-        default="polarizability",
-        type=str,
-        choices=[
-            "dipole_norm",
-            "total_energy",
-            "HOMO-LUMO_gap",
-            "dispersion",
-            "atomisation_energy",
-            "polarizability",
-            "docking_score",
-            "sascore",
-        ],
-    )
+    parser.add_argument("--regression-property", default=[], nargs="+", type=str)
     parser.add_argument("--energy-loss", default="l2", type=str, choices=["l2", "l1"])
     parser.add_argument("--use-pos-norm", default=False, action="store_true")
 
@@ -182,6 +168,7 @@ def add_arguments(parser):
     )
     parser.add_argument("--atoms-continuous", default=False, action="store_true")
     parser.add_argument("--bonds-continuous", default=False, action="store_true")
+    parser.add_argument("--flow-matching", default=False, action="store_true")
 
     parser.add_argument("--atom-type-masking", default=False, action="store_true")
     parser.add_argument("--use-absorbing-state", default=False, action="store_true")
@@ -214,9 +201,7 @@ def add_arguments(parser):
     # PROPERTY PREDICTION
     parser.add_argument("--property-prediction", default=False, action="store_true")
     parser.add_argument(
-        "--joint-property-prediction",
-        default=0,
-        type=int,
+        "--joint-property-prediction", default=False, action="store_true"
     )
     # SAMPLING
     parser.add_argument(
@@ -235,7 +220,6 @@ def add_arguments(parser):
     parser.add_argument("--latent-dim", default=None, type=int)
     parser.add_argument("--edim-latent", default=32, type=int)
     parser.add_argument("--num-layers-latent", default=7, type=int)
-    parser.add_argument("--latent-layers", default=7, type=int)
     parser.add_argument("--latentmodel", default="diffusion", type=str)
     parser.add_argument("--latent-detach", default=False, action="store_true")
 
