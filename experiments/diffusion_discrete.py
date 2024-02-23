@@ -440,7 +440,7 @@ class Trainer(pl.LightningModule):
             + self.hparams.lc_charges * loss["charges"]
         )
 
-        sa_loss, docking_loss = None, None
+        sa_loss, docking_loss, polar_loss = None, None, None
         if self.hparams.joint_property_prediction:
             assert (
                 "sa_score" in self.hparams.regression_property
@@ -1109,7 +1109,7 @@ class Trainer(pl.LightningModule):
         To make it more "uniform", we can use temperature annealing in the softmax
         """
 
-        sa = out["property_pred"].squeeze(dim=1).sigmoid()  # [B,]
+        sa = out["property_pred"][0].squeeze(dim=1) # [B,]        
         if not maximize_score:
             sa = 1.0 - sa
         n = pos.size(0)
