@@ -1,15 +1,13 @@
 import logging
 import math
 from collections import Counter
-from itertools import zip_longest
-from typing import Any, Collection, Iterable, List, Optional, Tuple
+from typing import Any, Collection, Iterable, List, Optional
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from rdkit import Chem, DataStructs, RDLogger
 from rdkit.Chem import (
-    QED,
     AllChem,
     Crippen,
     Descriptors,
@@ -1301,7 +1299,9 @@ def processMols(mols):
 
 def calculate_sa(rdmol):
     sa = calculateScore(rdmol)
-    return round((10 - sa) / 9, 2)  # from pocket2mol
+    sa = (sa - 1.0) / (10.0 - 1.0)
+    sa = 1.0 - sa
+    return sa
 
 
 def calculate_logp(rdmol):

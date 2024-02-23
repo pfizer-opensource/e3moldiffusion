@@ -56,8 +56,14 @@ def mol_to_torch_geometric(
     remove_hydrogens: bool = False,
     cog_proj: bool = True,
     add_ad=True,
+    add_pocket=False,
     **kwargs,
 ):
+    from experiments.molecule_utils import Molecule
+
+    if isinstance(mol, Molecule):
+        m = mol.copy()
+        mol = m.rdkit_mol
     if remove_hydrogens:
         # mol = Chem.RemoveAllHs(mol)
         mol = Chem.RemoveHs(
@@ -141,6 +147,14 @@ def mol_to_torch_geometric(
     if "grad" in kwargs:
         grad = torch.Tensor(kwargs["grad"]).float()
         additional["grad"] = grad
+
+    if add_pocket:
+        pocket = {
+            "pos_pocket": m.positions_pocket,
+            "x_pocket": m.atom_types_pocket,
+            "pocket_ca_mask": [],
+        }
+        additional.update(pocket)
 
     data = Data(
         x=atom_types,

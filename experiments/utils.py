@@ -19,7 +19,6 @@ from torch_geometric.data import Batch, Data
 from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from torch_geometric.utils.num_nodes import maybe_num_nodes
-from torch_geometric.utils.sort_edge_index import sort_edge_index
 from torch_geometric.utils.subgraph import subgraph
 from torch_scatter import scatter_add, scatter_mean
 from torch_sparse import coalesce
@@ -519,7 +518,6 @@ def assert_zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0, eps: float 
 
 
 def load_model(filepath, num_atom_features, device="cpu", **kwargs):
-    import re
 
     ckpt = torch.load(filepath, map_location="cpu")
     args = ckpt["hyper_parameters"]
@@ -546,7 +544,6 @@ def load_model(filepath, num_atom_features, device="cpu", **kwargs):
 def load_model_ligand(
     filepath, num_atom_features, num_bond_classes=5, device="cpu", hparams=None
 ):
-    import re
 
     ckpt = torch.load(filepath, map_location="cpu")
     args = ckpt["hyper_parameters"]
@@ -582,7 +579,6 @@ def _get_state_dict(ckpt, namestr):
 
 
 def load_latent_encoder(filepath, max_n_nodes, device="cpu"):
-    import re
 
     ckpt = torch.load(filepath, map_location="cpu")
     args = ckpt["hyper_parameters"]
@@ -674,7 +670,7 @@ def create_encoder_model(hparams, max_n_nodes):
         LatentEncoderNetwork,
         SoftMaxAttentionAggregation,
     )
-    from e3moldiffusion.latent import LatentCache, PriorLatentLoss, get_latent_model
+    from e3moldiffusion.latent import get_latent_model
     from e3moldiffusion.modules import DenseLayer, GatedEquivBlock
 
     encoder = LatentEncoderNetwork(
@@ -703,7 +699,6 @@ def create_encoder_model(hparams, max_n_nodes):
 
 
 def load_energy_model(filepath, num_atom_features, device="cpu"):
-    import re
 
     ckpt = torch.load(filepath, map_location="cpu")
     args = ckpt["hyper_parameters"]
@@ -742,7 +737,6 @@ def create_energy_model(hparams, num_atom_features):
 def load_property_model(
     filepath, num_atom_features, num_bond_classes, with_complex=False, device="cpu"
 ):
-    import re
 
     ckpt = torch.load(filepath, map_location="cpu")
     args = ckpt["hyper_parameters"]
@@ -825,7 +819,6 @@ def create_property_model(
 
 
 def load_bond_model(filepath, dataset_statistics, device="cpu", **kwargs):
-    import re
 
     ckpt = torch.load(filepath, map_location="cpu")
     args = ckpt["hyper_parameters"]
@@ -977,7 +970,6 @@ def dropout_node(
 
 
 def load_force_model(filepath, num_atom_features, device="cpu"):
-    import re
 
     ckpt = torch.load(filepath, map_location="cpu")
     args = ckpt["hyper_parameters"]
@@ -1192,15 +1184,18 @@ def get_molecules(
     return molecule_list
 
 
-def molecules_to_torch_geometric(molecule_list, add_feats, remove_hs, cog_proj):
+def molecules_to_torch_geometric(
+    molecule_list, add_feats, remove_hs, pocket=False, cog_proj=True
+):
     data_list = []
     for molecule in molecule_list:
         data_list.append(
             mol_to_torch_geometric(
-                molecule.rdkit_mol,
+                molecule,
                 full_atom_encoder,
                 remove_hydrogens=remove_hs,
                 cog_proj=cog_proj,
+                add_pocket=pocket,
                 add_ad=add_feats,
             )
         )
@@ -1556,6 +1551,7 @@ def prepare_data_and_generate_ligands(
             tau1=args.tau1,
             docking_t_start=args.docking_t_start,
             docking_t_end=args.docking_t_end,
+            encode_ligand=args.encode_ligands,
         )
     del pocket_data
     torch.cuda.empty_cache()

@@ -5,13 +5,13 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=12G
 #SBATCH --cpus-per-task=12
-#SBATCH --partition=ondemand-8xv100m32-1a
+#SBATCH --partition=ondemand-8xv100m32-1b
 #SBATCH --gres=gpu:1
-#SBATCH --array=1-14
+#SBATCH --array=1-16
 #SBATCH --output=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.out
 #SBATCH --error=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.err
 
-num_gpus=14
+num_gpus=16
 
 cd /sharedhome/cremej01/workspace/e3moldiffusion
 source activate e3mol
@@ -20,7 +20,7 @@ conda activate e3mol
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
 main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_norm_joint-sa-dock"
-output_dir="$main_dir/evaluation/docking/nodes_bias_10"
+output_dir="$main_dir/evaluation/docking/nodes_bias_vary_10_sa0-450_dock-200-400"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
@@ -33,7 +33,6 @@ python experiments/generate_ligands_multi.py \
     --save-dir "$output_dir" \
     --pdbqt-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/test/pdbqt \
     --test-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/test \
-    --dataset-root /scratch1/cremej01/data/crossdocked_noH_cutoff5_new \
     --skip-existing \
     --num-ligands-per-pocket-to-sample 100 \
     --num-ligands-per-pocket-to-save 100 \
@@ -43,32 +42,23 @@ python experiments/generate_ligands_multi.py \
     --vary-n-nodes \
     --importance-sampling \
     --importance-sampling-start 0 \
-    --importance-sampling-end 250 \
-    --tau 0.1 \
+    --importance-sampling-end 450 \
     --every-importance-t 5 \
-    #--encode-ligands \
+    --tau 0.1 \
+    --docking-guidance \
+    --docking-t-start 200 \
+    --docking-t-end 400 \
+    --tau1 0.1
+    # --fix-n-nodes \
+    # --encode-ligands \
     # --filter-by-sascore \
     # --sascore-threshold 0.6
-    # --importance-sampling \
-    # --importance-sampling-start 0 \
-    # --importance-sampling-end 250 \
-    # --tau 0.1 \
-    # --every-importance-t 5 \
-    # --tau1 0.1 \
-    # --docking-guidance \
-    # --docking-t-start 250 \
-    # --docking-t-end 300 \
     # --property-guidance-complex \
     # --ckpt-property-model /scratch1/e3moldiffusion/logs/crossdocked/docking_score_training/run0/last-v5.ckpt \
     # --guidance-scale 1.
-    #--fix-n-nodes
-    #--n-nodes-bias 10 \
     #--property-guidance \
     #--ckpt-property-model /scratch1/e3moldiffusion/logs/crossdocked/sascore_training/run0/last-v11.ckpt \
     #--guidance-scale 1.
-    #--fix-n-nodes \
-    #--vary-n-nodes \
-    #--encode-ligands \
     #--omit-posebusters \
     #--omit-posecheck \
     #--docking-scores /scratch1/e3moldiffusion/logs/crossdocked/ground_truth/evaluation/docking/crossdocked_scores.pickle

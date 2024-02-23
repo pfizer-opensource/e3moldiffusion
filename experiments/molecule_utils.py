@@ -1,4 +1,3 @@
-import logging
 import tempfile
 import warnings
 
@@ -211,7 +210,7 @@ class Molecule:
                 if self.sanitize:
                     Chem.SanitizeMol(mol_uff)
                 return mol_uff
-            except (RuntimeError, ValueError) as e:
+            except (RuntimeError, ValueError):
                 if self.check_validity:
                     return self.compute_validity(mol)
                 else:
@@ -326,7 +325,7 @@ class Molecule:
                 if self.sanitize:
                     # sanitize the updated molecule
                     Chem.SanitizeMol(mol)
-            except (RuntimeError, ValueError) as e:
+            except (RuntimeError, ValueError):
                 return None
 
         return mol
@@ -454,6 +453,11 @@ class Molecule:
                     A[i, j] = 1
                     E[i, j] = order
         return X, A, E
+
+    def copy(self):
+        obj = type(self).__new__(self.__class__)
+        obj.__dict__.update(self.__dict__)
+        return obj
 
 
 class PlaceHolder:

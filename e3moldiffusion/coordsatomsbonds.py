@@ -62,12 +62,14 @@ class DenoisingEdgeNetwork(nn.Module):
         distance_ligand_pocket: bool = False,
         property_prediction: bool = False,
         joint_property_prediction: bool = False,
+        regression_property: list = None,
         bond_prediction: bool = False,
     ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
         self.property_prediction = property_prediction
         self.joint_property_prediction = joint_property_prediction
+        self.regression_property = regression_property
         self.bond_prediction = bond_prediction
         self.num_bond_types = num_bond_types
 
@@ -147,6 +149,7 @@ class DenoisingEdgeNetwork(nn.Module):
                 num_bond_types=num_bond_types,
                 coords_param=coords_param,
                 joint_property_prediction=self.joint_property_prediction,
+                regression_property=self.regression_property,
             )
 
         self.distance_ligand_pocket = distance_ligand_pocket
@@ -1069,17 +1072,13 @@ class PropertyEdgeNetwork(nn.Module):
             batch_lig=batch_lig,
             pocket_mask=pocket_mask,
             edge_mask_pocket=edge_mask_pocket,
-            norm_output=True,
         )
 
-        property_atoms = self.prediction_head(out, batch, edge_index_global)
+        property_mol = self.prediction_head(out, batch, edge_index_global)
 
-        bs = len(batch.unique())
-        property_molecule = scatter_add(property_atoms, index=batch, dim=0, dim_size=bs)
+        assert property_mol.size(1) == 1
 
-        assert property_molecule.size(1) == 1
-
-        out = {"property_pred": property_molecule}
+        out = {"property_pred": property_mol}
         return out
 
 

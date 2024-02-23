@@ -3,13 +3,24 @@
 #/hpfs/userws/cremej01/projects/logs/pubchem/pretrain_x0_3_adaptive/run0/last.ckpt
 # ckpt_bond_model: /hpfs/userws/cremej01/projects/logs/geom/bond_pred_seed1/run0/last.ckpt
 
-#FOR TEST EVAL
-save_xyz: true
-calculate_energy: true
-num_test_graphs: 1000
-inference_batch_size: 8
-use_ligand_dataset_sizes: true
-test_save_dir: /scratch1/e3moldiffusion/logs/crossdocked/test
+# LATENT
+use_latent_encoder: true
+use_scaffold_latent_embed: false
+latentmodel: mmd
+sdim_latent: 128
+vdim_latent: 128
+edim_latent: 16
+num_layers_latent: 8
+local_edge_attrs: false
+latent_dim: 128 #IMPORTANT! If use_centroid_context_embed, latent_dim must be set as well
+
+#CONTEXT
+use_lipinski_properties: false
+use_centroid_context_embed: false
+context_mapping: false
+num_context_features: 5
+properties_list: [sa, logp, molweight, hacceptors, hdonors] #[DIP, HLgap, eMBD, mPOL]
+
 
 remove_hs: true
 
@@ -47,7 +58,7 @@ test_interval: 20
 sdim: 256
 vdim: 256
 edim: 128
-num_layers: 10
+num_layers: 12
 use_cross_product: false
 edge_mp: false
 fully_connected: true
@@ -57,23 +68,6 @@ vector_aggr: mean
 #DATA
 dataset: crossdocked
 dataset_root: /scratch1/cremej01/data/crossdocked_noH_cutoff5_new
-
-# LATENT
-use_latent_encoder: true
-use_scaffold_latent_embed: false
-sdim_latent: 256
-vdim_latent: 128
-edim_latent: 64
-num_layers_latent: 5
-local_edge_attrs: false
-latent_dim: 128 #IMPORTANT! If use_centroid_context_embed, latent_dim must be set as well
-
-#CONTEXT
-use_lipinski_properties: true
-use_centroid_context_embed: true
-context_mapping: true
-num_context_features: 5
-properties_list: [sa, logp, molweight, hacceptors, hdonors] #[DIP, HLgap, eMBD, mPOL]
 
 
 # DIFFUSION
@@ -93,7 +87,7 @@ id: 0
 
 #LEARNING
 lr_scheduler: reduce_on_plateau
-lr: 2.e-4
+lr: 1.e-4
 lr_min: 5.e-5 #used for cyclic scheduler
 lr_step_size: 5.e-5 #used for cyclic scheduler
 lr_factor: 0.75
