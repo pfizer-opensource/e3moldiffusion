@@ -1799,9 +1799,6 @@ class Trainer(pl.LightningModule):
             "charges_pred": charge_types,
             "bonds_pred": edge_attr_global,
         }
-        import pdb
-
-        pdb.set_trace()
         molecules = get_molecules(
             out_dict,
             batch,
