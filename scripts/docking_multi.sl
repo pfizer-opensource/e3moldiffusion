@@ -18,8 +18,8 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_norm_joint-sa-dock"
-output_dir="$main_dir/evaluation/docking/nodes_bias_vary_10_sa0-450_dock-200-400"
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_norm_joint-dock"
+output_dir="$main_dir/evaluation/docking/nodes_bias_vary_10_dock200-400_every-5"
 mkdir "$output_dir/docked"
 
 

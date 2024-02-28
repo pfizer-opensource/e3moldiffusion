@@ -26,6 +26,27 @@ full_atom_encoder = {
     # "C": 16 #placeholder absorbing
 }
 
+full_atom_encoder_kino = {
+    "H": 0,
+    "B": 1,
+    "C": 2,
+    "N": 3,
+    "O": 4,
+    "F": 5,
+    "Al": 6,
+    "Si": 7,
+    "P": 8,
+    "S": 9,
+    "Cl": 10,
+    "As": 11,
+    "Se": 12,
+    "Br": 13,
+    "I": 14,
+    "Hg": 15,
+    "Bi": 16,
+}
+atom_decoder_kino = {v: k for k, v in full_atom_encoder.items()}
+
 
 class GeneralInfos(AbstractDatasetInfos):
     def __init__(self, datamodule, cfg):
@@ -35,7 +56,9 @@ class GeneralInfos(AbstractDatasetInfos):
         )
         self.statistics = datamodule.statistics
         self.name = "drugs"
-        self.atom_encoder = full_atom_encoder
+        self.atom_encoder = (
+            full_atom_encoder if cfg.dataset != "kinodata" else full_atom_encoder_kino
+        )
         self.num_bond_classes = cfg.num_bond_classes
         self.num_charge_classes = cfg.num_charge_classes
         self.charge_offset = 2

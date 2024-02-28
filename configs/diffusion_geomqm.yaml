@@ -1,13 +1,14 @@
 # load_ckpt: /sharedhome/seumej/logs/run0/last.ckpt
 #load_ckpt_from_pretrained: /hpfs/userws/cremej01/workspace/logs/pubchem/pretrain_x0_3_adaptive/run0/epoch=12-step=1649674.ckpt
+seed: 42
+
+use_pos_norm: true
+use_out_norm: false
 
 joint_property_prediction: false
 regression_property: [polarizability]
 
 bond_prediction: false
-seed: 42
-
-use_pos_norm: true
 
 # batch_size 40 without adaptive, and 200 with adaptive
 batch_size: 400

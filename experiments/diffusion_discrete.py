@@ -45,6 +45,7 @@ from experiments.utils import (
     load_bond_model,
     load_energy_model,
     load_model,
+    load_property_model,
     zero_mean,
 )
 
@@ -70,6 +71,10 @@ class Trainer(pl.LightningModule):
         **kwargs,
     ):
         super().__init__()
+
+        if "use_out_norm" not in hparams.keys():
+            hparams["use_out_norm"] = True
+
         self.save_hyperparameters(hparams)
         self.i = 0
         self.mol_stab = 0.5
@@ -153,6 +158,7 @@ class Trainer(pl.LightningModule):
                 num_context_features=hparams["num_context_features"],
                 coords_param=hparams["continuous_param"],
                 use_pos_norm=hparams["use_pos_norm"],
+                use_out_norm=hparams["use_out_norm"],
                 ligand_pocket_interaction=hparams["ligand_pocket_interaction"],
                 store_intermediate_coords=hparams["store_intermediate_coords"],
                 distance_ligand_pocket=hparams["ligand_pocket_hidden_distance"],
@@ -440,7 +446,7 @@ class Trainer(pl.LightningModule):
             + self.hparams.lc_charges * loss["charges"]
         )
 
-        sa_loss, docking_loss, polar_loss = None, None, None
+        sa_loss, polar_loss = None, None
         if self.hparams.joint_property_prediction:
             assert (
                 "sa_score" in self.hparams.regression_property
@@ -602,7 +608,11 @@ class Trainer(pl.LightningModule):
             else:
                 label_sa = None
             if "polarizability" in self.hparams.regression_property:
-                label_polar = batch.y[:, -1].float()
+                mean, mad = (
+                    self.prop_dist.normalizer["polarizability"]["mean"],
+                    self.prop_dist.normalizer["polarizability"]["mad"],
+                )
+                label_polar = (batch.y[:, -1].float() - mean) / mad
             else:
                 label_polar = None
             out["properties_true"] = {
@@ -642,6 +652,13 @@ class Trainer(pl.LightningModule):
         optimization: str = "minimize",
         relax_sampling: bool = False,
         relax_steps: int = 10,
+        importance_sampling: bool = False,
+        property_tau: float = 0.1,
+        every_importance_t: int = 5,
+        importance_sampling_start: int = 0,
+        importance_sampling_end: int = 200,
+        ckpt_property_model: str = None,
+        maximize_score: bool = True,
         device: str = "cpu",
     ):
         energy_model = None
@@ -689,6 +706,13 @@ class Trainer(pl.LightningModule):
                 optimization=optimization,
                 relax_sampling=relax_sampling,
                 relax_steps=relax_steps,
+                importance_sampling=importance_sampling,
+                property_tau=property_tau,
+                every_importance_t=every_importance_t,
+                importance_sampling_start=importance_sampling_start,
+                importance_sampling_end=importance_sampling_end,
+                ckpt_property_model=ckpt_property_model,
+                maximize_score=maximize_score,
             )
 
             molecule_list.extend(molecules)
@@ -787,6 +811,13 @@ class Trainer(pl.LightningModule):
         optimization: str = "minimize",
         relax_sampling: bool = False,
         relax_steps: int = 10,
+        importance_sampling: bool = False,
+        property_tau: float = 0.1,
+        every_importance_t: int = 5,
+        importance_sampling_start: int = 0,
+        importance_sampling_end: int = 200,
+        ckpt_property_model: str = None,
+        maximize_score: bool = True,
         device: str = "cpu",
     ):
         energy_model = None
@@ -836,6 +867,13 @@ class Trainer(pl.LightningModule):
                     optimization=optimization,
                     relax_sampling=relax_sampling,
                     relax_steps=relax_steps,
+                    importance_sampling=importance_sampling,
+                    property_tau=property_tau,
+                    every_importance_t=every_importance_t,
+                    importance_sampling_start=importance_sampling_start,
+                    importance_sampling_end=importance_sampling_end,
+                    ckpt_property_model=ckpt_property_model,
+                    maximize_score=maximize_score,
                 )
 
                 molecule_list.extend(molecules)
@@ -1083,39 +1121,73 @@ class Trainer(pl.LightningModule):
         batch_edge_global,
         context,
         batch_num_nodes,
-        tau: float = 1.0,
         maximize_score: bool = True,
+        sa_tau: float = 0.1,
+        property_tau: float = 0.1,
+        sa_model=None,
+        property_model=None,
+        kind: str = "polarizability",
     ):
-
-        out = self.model(
-            x=node_feats_in,
-            t=temb,
-            pos=pos,
-            edge_index_local=edge_index_local,
-            edge_index_global=edge_index_global,
-            edge_attr_global=edge_attr_global,
-            batch=batch,
-            batch_edge_global=batch_edge_global,
-            context=context,
-        )
-
         """
-        Idea: 
-        The point clouds / graphs have an intermediate predicted synthesizability. 
+        Idea:
+        The point clouds / graphs have an intermediate predicted synthesizability.
         Given a set/population of B graphs/point clouds we want to __bias__ the sampling process towards "regions" where the fitness (here the synth.) is maximized.
-        Hence we can compute importance weights for each sample i=1,2,...,B and draw a new population with replacement. 
-        As the sampling process is stochastic, repeated samples will evolve differently. 
-        However we need to think about ways to also include/enforce uniformity such that some samples are not drawn too often. 
+        Hence we can compute importance weights for each sample i=1,2,...,B and draw a new population with replacement.
+        As the sampling process is stochastic, repeated samples will evolve differently.
+        However we need to think about ways to also include/enforce uniformity such that some samples are not drawn too often.
         To make it more "uniform", we can use temperature annealing in the softmax
         """
 
-        sa = out["property_pred"][0].squeeze(dim=1) # [B,]        
+        assert kind in ["polarizability"]
+
+        if property_model is None:
+            out = self.model(
+                x=node_feats_in,
+                t=temb,
+                pos=pos,
+                edge_index_local=edge_index_local,
+                edge_index_global=edge_index_global,
+                edge_attr_global=edge_attr_global,
+                batch=batch,
+                batch_edge_global=batch_edge_global,
+                context=context,
+            )
+        elif kind == "polarizability" and property_model is not None:
+            out = property_model(
+                x=node_feats_in,
+                t=temb,
+                pos=pos,
+                edge_index_local=edge_index_local,
+                edge_index_global=edge_index_global,
+                edge_attr_global=edge_attr_global,
+                batch=batch,
+                batch_edge_global=batch_edge_global,
+                context=context,
+            )
+
+        prop_pred = out["property_pred"]
+        _, prop = prop_pred
+
+        if prop.dim() == 2:
+            prop = prop.squeeze()
+
+        if kind == "polarizability":
+            prop = (
+                prop * self.prop_dist.normalizer["polarizability"]["mad"]
+                + self.prop_dist.normalizer["polarizability"]["mean"]
+            )
+
         if not maximize_score:
-            sa = 1.0 - sa
+            prop = -1.0 * prop
+
         n = pos.size(0)
         b = len(batch_num_nodes)
-        weights = (sa / tau).softmax(dim=0)
-        select = torch.multinomial(weights, num_samples=len(weights), replacement=True)
+
+        weights_prop = (prop / property_tau).softmax(dim=0)
+
+        select = torch.multinomial(
+            weights_prop, num_samples=len(weights_prop), replacement=True
+        )
         select = select.sort()[0]
         ptr = torch.concat(
             [
@@ -1124,6 +1196,7 @@ class Trainer(pl.LightningModule):
             ],
             dim=0,
         )
+
         batch_num_nodes_new = batch_num_nodes[select]
         # select
         batch_new = torch.arange(b, device=pos.device).repeat_interleave(
@@ -1215,10 +1288,11 @@ class Trainer(pl.LightningModule):
         fixed_context: float = None,
         resample_steps: int = 1,
         importance_sampling: bool = False,
-        tau: float = 0.1,
+        property_tau: float = 0.1,
         every_importance_t: int = 5,
         importance_sampling_start: int = 0,
         importance_sampling_end: int = 200,
+        ckpt_property_model: str = None,
         maximize_score: bool = True,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         if num_nodes is not None:
@@ -1251,8 +1325,18 @@ class Trainer(pl.LightningModule):
             t = torch.arange(0, self.hparams.timesteps)
             alphas = self.sde_pos.alphas_cumprod[t]
 
+        if importance_sampling and ckpt_property_model is not None:
+            property_model = load_property_model(
+                ckpt_property_model,
+                self.num_atom_features,
+                self.num_bond_classes,
+                joint_prediction=importance_sampling,
+            )
+            property_model.to(self.device)
+            property_model.eval()
+
         # sample context condition
-        if self.prop_dist is not None:
+        if self.prop_dist is not None and self.hparams.context_mapping:
             if fixed_context is not None:
                 fixed_context = (
                     torch.tensor(fixed_context).unsqueeze(0).repeat(num_graphs, 1)
@@ -1656,8 +1740,10 @@ class Trainer(pl.LightningModule):
                         batch_edge_global=batch_edge_global,
                         batch_num_nodes=batch_num_nodes,
                         context=None,
-                        tau=tau,
                         maximize_score=maximize_score,
+                        property_tau=property_tau,
+                        property_model=property_model,
+                        kind="polarizability",
                     )
                     atom_types, charge_types = node_feats_in.split(
                         [self.num_atom_types, self.num_charge_classes], dim=-1
@@ -1713,6 +1799,9 @@ class Trainer(pl.LightningModule):
             "charges_pred": charge_types,
             "bonds_pred": edge_attr_global,
         }
+        import pdb
+
+        pdb.set_trace()
         molecules = get_molecules(
             out_dict,
             batch,

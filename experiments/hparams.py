@@ -99,6 +99,7 @@ def add_arguments(parser):
     parser.add_argument("--regression-property", default=[], nargs="+", type=str)
     parser.add_argument("--energy-loss", default="l2", type=str, choices=["l2", "l1"])
     parser.add_argument("--use-pos-norm", default=False, action="store_true")
+    parser.add_argument("--use-out-norm", default=True, action="store_true")
 
     # For Discrete: Include more features: (is_aromatic, is_in_ring, hybridization)
     parser.add_argument("--additional-feats", default=False, action="store_true")
@@ -222,6 +223,8 @@ def add_arguments(parser):
     parser.add_argument("--num-layers-latent", default=7, type=int)
     parser.add_argument("--latentmodel", default="diffusion", type=str)
     parser.add_argument("--latent-detach", default=False, action="store_true")
+    parser.add_argument("--use-pos-norm-latent", default=False, action="store_true")
+    parser.add_argument("--use-out-norm-latent", default=False, action="store_true")
 
     # GENERAL
     parser.add_argument("-i", "--id", type=int, default=0)

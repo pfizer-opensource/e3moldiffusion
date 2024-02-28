@@ -116,6 +116,12 @@ if __name__ == "__main__":
             from experiments.data.ligand.ligand_dataset_nonadaptive import (
                 LigandPocketDataModule as DataModule,
             )
+    elif hparams.dataset == "kinodata":
+        dataset = hparams.dataset
+        print(f"Using non-adaptive dataloader for {dataset}")
+        from experiments.data.ligand.kino_dataset_nonadaptive import (
+            LigandPocketDataModule as DataModule,
+        )
     elif hparams.dataset == "pepconf":
         dataset = "pepconf"
         if hparams.use_adaptive_loader:
@@ -174,9 +180,13 @@ if __name__ == "__main__":
     ) or (
         hparams.property_training
         and not (
-            hparams.regression_property == "sa_score"
-            or hparams.regression_property == "docking_score"
-            or hparams.regression_property == "polarizability"
+            "sa_score" in hparams.regression_property
+            or "docking_score" in hparams.regression_property
+        )
+        or hparams.joint_property_prediction
+        and not (
+            "sa_score" in hparams.regression_property
+            or "docking_score" in hparams.regression_property
         )
     ):
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
@@ -233,7 +243,11 @@ if __name__ == "__main__":
                     )
                     from experiments.diffusion_pretrain_latent_discrete import Trainer
             elif (
-                (dataset == "crossdocked" or dataset == "bindingmoad")
+                (
+                    dataset == "crossdocked"
+                    or dataset == "bindingmoad"
+                    or dataset == "kinodata"
+                )
                 and hparams.additional_feats
                 and not hparams.use_qm_props
             ):
@@ -252,7 +266,11 @@ if __name__ == "__main__":
                     Trainer,
                 )
             else:
-                if dataset == "crossdocked" or dataset == "bindingmoad":
+                if (
+                    dataset == "crossdocked"
+                    or dataset == "bindingmoad"
+                    or dataset == "kinodata"
+                ):
                     histogram = os.path.join(
                         hparams.dataset_root, "size_distribution.npy"
                     )

@@ -54,6 +54,7 @@ class DenoisingEdgeNetwork(nn.Module):
         edge_mp: bool = False,
         p1: bool = True,
         use_pos_norm: bool = True,
+        use_out_norm: bool = True,
         context_mapping: bool = False,
         num_context_features: int = 0,
         coords_param: str = "data",
@@ -132,6 +133,7 @@ class DenoisingEdgeNetwork(nn.Module):
             edge_mp=edge_mp,
             p1=p1,
             use_pos_norm=use_pos_norm,
+            use_out_norm=use_out_norm,
             ligand_pocket_interaction=ligand_pocket_interaction,
             store_intermediate_coords=store_intermediate_coords,
         )
@@ -151,6 +153,14 @@ class DenoisingEdgeNetwork(nn.Module):
                 joint_property_prediction=self.joint_property_prediction,
                 regression_property=self.regression_property,
             )
+            # self.prediction_head = PredictionHeadEdge_Old(
+            #     hn_dim=hn_dim,
+            #     edge_dim=edge_dim,
+            #     num_atom_features=num_atom_features,
+            #     num_bond_types=num_bond_types,
+            #     coords_param=coords_param,
+            #     joint_property_prediction=self.joint_property_prediction,
+            # )
 
         self.distance_ligand_pocket = distance_ligand_pocket
         if distance_ligand_pocket:
@@ -357,6 +367,7 @@ class LatentEncoderNetwork(nn.Module):
         bond_mapping: bool = True,
         intermediate_outs: bool = False,
         use_pos_norm: bool = False,
+        use_out_norm: bool = False,
     ) -> None:
         super(LatentEncoderNetwork, self).__init__()
 
@@ -381,6 +392,7 @@ class LatentEncoderNetwork(nn.Module):
             vector_aggr=vector_aggr,
             intermediate_outs=intermediate_outs,
             use_pos_norm=use_pos_norm,
+            use_out_norm=use_out_norm,
             coords_update=False,
         )
 

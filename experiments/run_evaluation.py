@@ -25,30 +25,9 @@ class dotdict(dict):
     __delattr__ = dict.__delitem__
 
 
-def evaluate(
-    model_path,
-    save_dir,
-    save_xyz=False,
-    calculate_energy=False,
-    calculate_props=False,
-    use_energy_guidance=False,
-    ckpt_energy_model=None,
-    guidance_scale=1.0e-4,
-    ngraphs=5000,
-    save_traj=False,
-    batch_size=80,
-    step=0,
-    ddpm=True,
-    eta_ddim=1.0,
-    fix_noise_and_nodes=False,
-    guidance_steps=100,
-    optimization="minimize",
-    relax_sampling=False,
-    relax_steps=10,
-    sample_only_valid=False,
-):
+def evaluate(args):
     # load hyperparameter
-    hparams = torch.load(model_path)["hyper_parameters"]
+    hparams = torch.load(args.model_path)["hyper_parameters"]
     hparams["select_train_subset"] = False
     hparams["diffusion_pretraining"] = False
     hparams["num_charge_classes"] = 6
@@ -73,6 +52,11 @@ def evaluate(
             from experiments.data.geom.geom_dataset_nonadaptive import (
                 GeomDataModule as DataModule,
             )
+    elif hparams.dataset == "geomqm":
+        dataset = "geomqm"
+        from experiments.data.geom.geom_dataset_adaptive_qm import (
+            GeomQMDataModule as DataModule,
+        )
     elif hparams.dataset == "qm9":
         dataset = "qm9"
         from experiments.data.qm9.qm9_dataset import QM9DataModule as DataModule
@@ -117,7 +101,22 @@ def evaluate(
         else datamodule.train_smiles
     )
     prop_norm, prop_dist = None, None
-    if len(hparams.properties_list) > 0 and hparams.context_mapping:
+    if (
+        len(hparams.properties_list) > 0
+        and hparams.context_mapping
+        and not hparams.use_centroid_context_embed
+    ) or (
+        hparams.property_training
+        and not (
+            "sa_score" in hparams.regression_property
+            or "docking_score" in hparams.regression_property
+        )
+        or hparams.joint_property_prediction
+        and not (
+            "sa_score" in hparams.regression_property
+            or "docking_score" in hparams.regression_property
+        )
+    ):
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
@@ -143,76 +142,88 @@ def evaluate(
     # if you want bond_model_guidance, flag this here in the Trainer
     device = "cuda"
     model = Trainer.load_from_checkpoint(
-        model_path,
+        args.model_path,
         dataset_info=dataset_info,
         smiles_list=train_smiles,
         prop_norm=prop_norm,
         prop_dist=prop_dist,
         load_ckpt_from_pretrained=None,
         load_ckpt=None,
-        # energy_model_guidance=True if use_energy_guidance else False,
-        # ckpt_energy_model=ckpt_energy_model,
         run_evaluation=True,
         strict=False,
     ).to(device)
     model = model.eval()
 
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
+    if not os.path.exists(args.save_dir):
+        os.makedirs(args.save_dir)
 
-    if sample_only_valid:
+    if args.sample_only_valid:
         print("\nStarting sampling of only valid molecules...\n")
         results_dict, generated_smiles, stable_molecules = model.generate_valid_samples(
             dataset_info=model.dataset_info,
-            ngraphs=ngraphs,
-            bs=batch_size,
+            ngraphs=args.ngraphs,
+            bs=args.batch_size,
             return_molecules=True,
             verbose=True,
             inner_verbose=True,
-            save_dir=save_dir,
-            ddpm=ddpm,
-            eta_ddim=eta_ddim,
-            save_traj=save_traj,
-            guidance_scale=guidance_scale,
-            use_energy_guidance=use_energy_guidance,
-            ckpt_energy_model=ckpt_energy_model,
-            fix_noise_and_nodes=fix_noise_and_nodes,
-            guidance_steps=guidance_steps,
-            optimization=optimization,
-            relax_sampling=relax_sampling,
-            relax_steps=relax_steps,
+            save_dir=args.save_dir,
+            ddpm=not args.ddim,
+            eta_ddim=args.eta_ddim,
+            save_traj=args.save_traj,
+            guidance_scale=args.guidance_scale,
+            use_energy_guidance=args.use_energy_guidance,
+            ckpt_energy_model=args.ckpt_energy_model,
+            fix_noise_and_nodes=args.fix_noise_and_nodes,
+            guidance_steps=args.guidance_steps,
+            optimization=args.optimization,
+            relax_sampling=args.relax_sampling,
+            relax_steps=args.relax_steps,
+            importance_sampling=args.importance_sampling,
+            property_tau=args.property_tau,
+            every_importance_t=args.every_importance_t,
+            importance_sampling_start=args.importance_sampling_start,
+            importance_sampling_end=args.importance_sampling_end,
+            ckpt_property_model=args.ckpt_property_model,
+            maximize_score=args.maximize_score,
             device="cpu",
         )
     else:
         print("\nStarting sampling...\n")
         results_dict, generated_smiles, stable_molecules = model.run_evaluation(
-            step=step,
+            step=0,
             dataset_info=model.dataset_info,
-            ngraphs=ngraphs,
-            bs=batch_size,
+            ngraphs=args.ngraphs,
+            bs=args.batch_size,
             return_molecules=True,
             verbose=True,
             inner_verbose=True,
-            save_dir=save_dir,
-            ddpm=ddpm,
-            eta_ddim=eta_ddim,
+            save_dir=args.save_dir,
+            ddpm=not args.ddim,
+            eta_ddim=args.eta_ddim,
             run_test_eval=True,
-            save_traj=save_traj,
-            guidance_scale=guidance_scale,
-            use_energy_guidance=use_energy_guidance,
-            ckpt_energy_model=ckpt_energy_model,
-            fix_noise_and_nodes=fix_noise_and_nodes,
-            guidance_steps=guidance_steps,
-            optimization=optimization,
-            relax_sampling=relax_sampling,
-            relax_steps=relax_steps,
+            save_traj=args.save_traj,
+            guidance_scale=args.guidance_scale,
+            use_energy_guidance=args.use_energy_guidance,
+            ckpt_energy_model=args.ckpt_energy_model,
+            fix_noise_and_nodes=args.fix_noise_and_nodes,
+            guidance_steps=args.guidance_steps,
+            optimization=args.optimization,
+            relax_sampling=args.relax_sampling,
+            relax_steps=args.relax_steps,
+            importance_sampling=args.importance_sampling,
+            property_tau=args.property_tau,
+            every_importance_t=args.every_importance_t,
+            importance_sampling_start=args.importance_sampling_start,
+            importance_sampling_end=args.importance_sampling_end,
+            ckpt_property_model=args.ckpt_property_model,
+            maximize_score=args.maximize_score,
             device="cpu",
         )
 
     print("\nFinished sampling!\n")
     atom_decoder = stable_molecules[0].atom_decoder
 
-    if calculate_energy:
+    if args.calculate_energy:
         energies = []
         forces_norms = []
         print("Calculating energies...")
@@ -230,7 +241,7 @@ def evaluate(
         print(f"Mean energies: {np.mean(energies)}")
         print(f"Mean force norms: {np.mean(forces_norms)}")
 
-    if calculate_props:
+    if args.calculate_props:
         polarizabilities = []
         sm = stable_molecules.copy()
         stable_molecules = []
@@ -264,14 +275,14 @@ def evaluate(
                 continue
         print(f"Mean polarizability: {np.mean(polarizabilities)}")
 
-    if save_xyz:
+    if args.save_xyz:
         context = []
         for i in range(len(stable_molecules)):
             types = [atom_decoder[int(a)] for a in stable_molecules[i].atom_types]
             write_xyz_file(
                 stable_molecules[i].positions,
                 types,
-                os.path.join(save_dir, f"mol_{i}.xyz"),
+                os.path.join(args.save_dir, f"mol_{i}.xyz"),
             )
             if prop_dist is not None:
                 tmp = []
@@ -284,19 +295,19 @@ def evaluate(
                     tmp.append(float(prop))
                 context.append(tmp)
 
-    if prop_dist is not None and save_xyz:
-        with open(os.path.join(save_dir, "context.pickle"), "wb") as f:
+    if prop_dist is not None and args.save_xyz:
+        with open(os.path.join(args.save_dir, "context.pickle"), "wb") as f:
             pickle.dump(context, f)
-    if calculate_energy:
-        with open(os.path.join(save_dir, "energies.pickle"), "wb") as f:
+    if args.calculate_energy:
+        with open(os.path.join(args.save_dir, "energies.pickle"), "wb") as f:
             pickle.dump(energies, f)
-        with open(os.path.join(save_dir, "forces_norms.pickle"), "wb") as f:
+        with open(os.path.join(args.save_dir, "forces_norms.pickle"), "wb") as f:
             pickle.dump(forces_norms, f)
-    with open(os.path.join(save_dir, "generated_smiles.pickle"), "wb") as f:
+    with open(os.path.join(args.save_dir, "generated_smiles.pickle"), "wb") as f:
         pickle.dump(generated_smiles, f)
-    with open(os.path.join(save_dir, "stable_molecules.pickle"), "wb") as f:
+    with open(os.path.join(args.save_dir, "stable_molecules.pickle"), "wb") as f:
         pickle.dump(stable_molecules, f)
-    with open(os.path.join(save_dir, "evaluation.pickle"), "wb") as f:
+    with open(os.path.join(args.save_dir, "evaluation.pickle"), "wb") as f:
         pickle.dump(results_dict, f)
 
 
@@ -338,6 +349,15 @@ def get_args():
                         help='How to scale the std of noise in the reverse posterior. \
                             Can also be used for DDPM to track a deterministic trajectory. \
                             Defaults to 1.0')
+        #load external models
+    parser.add_argument("--ckpt-property-model", default=None, type=str)
+    # importance sampling
+    parser.add_argument("--importance-sampling", default=False, action="store_true")
+    parser.add_argument("--property-tau", default=0.1, type=float)
+    parser.add_argument("--every-importance-t", default=5, type=int)
+    parser.add_argument("--importance-sampling-start", default=None, type=int)
+    parser.add_argument("--importance-sampling-end", default=None, type=int)
+    parser.add_argument("--maximize-score", default=False, action="store_true")
     args = parser.parse_args()
     return args
 
@@ -345,24 +365,4 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     # Evaluate negative log-likelihood for the test partitions
-    evaluate(
-        model_path=args.model_path,
-        save_dir=args.save_dir,
-        ngraphs=args.ngraphs,
-        batch_size=args.batch_size,
-        ddpm=not args.ddim,
-        eta_ddim=args.eta_ddim,
-        save_xyz=args.save_xyz,
-        save_traj=args.save_traj,
-        calculate_energy=args.calculate_energy,
-        calculate_props=args.calculate_props,
-        use_energy_guidance=args.use_energy_guidance,
-        ckpt_energy_model=args.ckpt_energy_model,
-        guidance_steps=args.guidance_steps,
-        guidance_scale=args.guidance_scale,
-        fix_noise_and_nodes=args.fix_noise_and_nodes,
-        optimization=args.optimization,
-        relax_sampling=args.relax_sampling,
-        relax_steps=args.relax_steps,
-        sample_only_valid=args.sample_only_valid,
-    )
+    evaluate(args)

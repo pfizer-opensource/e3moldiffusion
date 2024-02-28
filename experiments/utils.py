@@ -635,11 +635,13 @@ def create_model(hparams, num_atom_features, num_bond_classes):
         hparams["ligand_pocket_distance_loss"] = False
     if "ligand_pocket_hidden_distance" not in hparams.keys():
         hparams["ligand_pocket_hidden_distance"] = False
+    if "use_out_norm" not in hparams.keys():
+        hparams["use_out_norm"] = True
 
     model = DenoisingEdgeNetwork(
         hn_dim=(hparams["sdim"], hparams["vdim"]),
         num_layers=hparams["num_layers"],
-        latent_dim=None,
+        latent_dim=hparams["latent_dim"],
         use_cross_product=hparams["use_cross_product"],
         num_atom_features=num_atom_features,
         num_bond_types=num_bond_classes,
@@ -655,12 +657,14 @@ def create_model(hparams, num_atom_features, num_bond_classes):
         num_context_features=hparams["num_context_features"],
         coords_param=hparams["continuous_param"],
         use_pos_norm=hparams["use_pos_norm"],
+        use_out_norm=hparams["use_out_norm"],
         ligand_pocket_interaction=hparams["ligand_pocket_interaction"],
         store_intermediate_coords=hparams["store_intermediate_coords"],
         distance_ligand_pocket=hparams["ligand_pocket_hidden_distance"],
         bond_prediction=hparams["bond_prediction"],
         property_prediction=hparams["property_prediction"],
         joint_property_prediction=hparams["joint_property_prediction"],
+        regression_property=hparams["regression_property"],
     )
     return model
 
@@ -735,13 +739,13 @@ def create_energy_model(hparams, num_atom_features):
 
 
 def load_property_model(
-    filepath, num_atom_features, num_bond_classes, with_complex=False, device="cpu"
+    filepath, num_atom_features, num_bond_classes, joint_prediction=False, device="cpu"
 ):
 
     ckpt = torch.load(filepath, map_location="cpu")
     args = ckpt["hyper_parameters"]
     model = create_property_model(
-        args, num_atom_features, num_bond_classes, with_complex=with_complex
+        args, num_atom_features, num_bond_classes, joint_prediction=joint_prediction
     )
 
     state_dict = ckpt["state_dict"]
@@ -760,12 +764,12 @@ def load_property_model(
 
 
 def create_property_model(
-    hparams, num_atom_features, num_bond_classes, with_complex=False
+    hparams, num_atom_features, num_bond_classes, joint_prediction=False
 ):
     from e3moldiffusion.coordsatomsbonds import EQGATEnergyNetwork
 
-    if with_complex:
-        from e3moldiffusion.coordsatomsbonds import PropertyEdgeNetwork
+    if joint_prediction:
+        from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 
         # backward compatability:
         if "joint_property_prediction" not in hparams.keys():
@@ -780,11 +784,13 @@ def create_property_model(
             hparams["ligand_pocket_distance_loss"] = False
         if "ligand_pocket_hidden_distance" not in hparams.keys():
             hparams["ligand_pocket_hidden_distance"] = False
+        if "use_out_norm" not in hparams.keys():
+            hparams["use_out_norm"] = True
 
-        model = PropertyEdgeNetwork(
+        model = DenoisingEdgeNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
             num_layers=hparams["num_layers"],
-            latent_dim=None,
+            latent_dim=hparams["latent_dim"],
             use_cross_product=hparams["use_cross_product"],
             num_atom_features=num_atom_features,
             num_bond_types=num_bond_classes,
@@ -800,11 +806,16 @@ def create_property_model(
             num_context_features=hparams["num_context_features"],
             coords_param=hparams["continuous_param"],
             use_pos_norm=hparams["use_pos_norm"],
+            use_out_norm=hparams["use_out_norm"],
             ligand_pocket_interaction=hparams["ligand_pocket_interaction"],
+            store_intermediate_coords=hparams["store_intermediate_coords"],
+            distance_ligand_pocket=hparams["ligand_pocket_hidden_distance"],
             bond_prediction=hparams["bond_prediction"],
             property_prediction=hparams["property_prediction"],
             joint_property_prediction=hparams["joint_property_prediction"],
+            regression_property=hparams["regression_property"],
         )
+        return model
     else:
         model = EQGATEnergyNetwork(
             hn_dim=(hparams["sdim"], hparams["vdim"]),
@@ -1528,11 +1539,6 @@ def prepare_data_and_generate_ligands(
             fix_n_nodes=args.fix_n_nodes,
             vary_n_nodes=args.vary_n_nodes,
             n_nodes_bias=args.n_nodes_bias,
-            property_guidance=args.property_guidance,
-            ckpt_property_model=args.ckpt_property_model,
-            property_self_guidance=args.property_self_guidance,
-            property_guidance_complex=args.property_guidance_complex,
-            guidance_scale=args.guidance_scale,
             build_obabel_mol=args.build_obabel_mol,
             inner_verbose=False,
             save_traj=False,
@@ -1541,16 +1547,23 @@ def prepare_data_and_generate_ligands(
             relax_mol=args.relax_mol,
             max_relax_iter=args.max_relax_iter,
             sanitize=args.sanitize,
-            importance_sampling=args.importance_sampling,  # True
-            tau=args.tau,  # 0.1,
-            every_importance_t=args.every_importance_t,  # 5,
-            importance_sampling_start=args.importance_sampling_start,  # 0,
-            importance_sampling_end=args.importance_sampling_end,  # 200,
-            maximize_score=not args.minimize_score,
-            docking_guidance=args.docking_guidance,
-            tau1=args.tau1,
-            docking_t_start=args.docking_t_start,
-            docking_t_end=args.docking_t_end,
+            ckpt_property_model=args.ckpt_property_model,
+            ckpt_sa_model=args.ckpt_sa_model,
+            property_classifier_guidance=args.property_classifier_guidance,
+            property_classifier_guidance_complex=args.property_classifier_guidance_complex,
+            property_classifier_self_guidance=args.property_classifier_self_guidance,
+            classifier_guidance_scale=args.classifier_guidance_scale,
+            sa_importance_sampling=args.sa_importance_sampling,
+            sa_importance_sampling_start=args.sa_importance_sampling_start,
+            sa_importance_sampling_end=args.sa_importance_sampling_end,
+            sa_every_importance_t=args.sa_every_importance_t,
+            sa_tau=args.sa_tau,
+            property_importance_sampling=args.property_importance_sampling,
+            property_importance_sampling_start=args.property_importance_sampling_start,
+            property_importance_sampling_end=args.property_importance_sampling_end,
+            property_every_importance_t=args.property_every_importance_t,
+            property_tau=args.property_tau,
+            maximize_property=not args.minimize_property,
             encode_ligand=args.encode_ligands,
         )
     del pocket_data

@@ -101,6 +101,7 @@ class EQGATEdgeGNN(nn.Module):
         edge_mp: bool = False,
         p1: bool = True,
         use_pos_norm: bool = True,
+        use_out_norm: bool = True,
         property_prediction: bool = False,
         store_intermediate_coords: bool = False,
         ligand_pocket_interaction: bool = False,
@@ -156,7 +157,7 @@ class EQGATEdgeGNN(nn.Module):
         self.norms = nn.ModuleList(
             [norm_module(dims=hn_dim, latent_dim=latent_dim) for _ in range(num_layers)]
         )
-        self.out_norm = LayerNorm(dims=hn_dim)
+        self.out_norm = LayerNorm(dims=hn_dim) if use_out_norm else None
 
         self.reset_parameters()
 
@@ -164,7 +165,8 @@ class EQGATEdgeGNN(nn.Module):
         for conv, norm in zip(self.convs, self.norms):
             conv.reset_parameters()
             norm.reset_parameters()
-        self.out_norm.reset_parameters()
+        if self.out_norm is not None:
+            self.out_norm.reset_parameters()
 
     def calculate_edge_attrs(
         self,
@@ -262,7 +264,8 @@ class EQGATEdgeGNN(nn.Module):
 
             e = edge_attr_global[-1]
 
-        s, v = self.out_norm(x={"s": s, "v": v, "z": z}, batch=batch)
+        if self.out_norm is not None:
+            s, v = self.out_norm(x={"s": s, "v": v, "z": z}, batch=batch)
         out = {"s": s, "v": v, "e": e, "p": p, "p_list": pos_list}
 
         return out
@@ -459,6 +462,7 @@ class EQGATLocalGNN(nn.Module):
         vector_aggr: str = "mean",
         intermediate_outs: bool = False,
         use_pos_norm: bool = False,
+        use_out_norm: bool = True,
         coords_update: bool = False,
     ):
         super(EQGATLocalGNN, self).__init__()
@@ -489,7 +493,8 @@ class EQGATLocalGNN(nn.Module):
 
         self.convs = nn.ModuleList(convs)
         self.norms = nn.ModuleList([LayerNorm(dims=hn_dim) for _ in range(num_layers)])
-        self.out_norm = LayerNorm(dims=hn_dim)
+
+        self.out_norm = LayerNorm(dims=hn_dim) if use_out_norm else None
 
         self.reset_parameters()
 
@@ -497,6 +502,8 @@ class EQGATLocalGNN(nn.Module):
         for conv, norm in zip(self.convs, self.norms):
             conv.reset_parameters()
             norm.reset_parameters()
+        if self.out_norm is not None:
+            self.out_norm.reset_parameters()
 
     def forward(
         self,
@@ -534,7 +541,8 @@ class EQGATLocalGNN(nn.Module):
             if self.intermediate_outs:
                 results.append(s)
 
-        s, v = self.out_norm(x={"s": s, "v": v}, batch=batch)
+        if self.out_norm is not None:
+            s, v = self.out_norm(x={"s": s, "v": v}, batch=batch)
         out = {"s": s, "v": v, "p": p if self.coords_update else None}
 
         if self.intermediate_outs:

@@ -13,6 +13,8 @@ edim_latent: 16
 num_layers_latent: 8
 local_edge_attrs: false
 latent_dim: 128 #IMPORTANT! If use_centroid_context_embed, latent_dim must be set as well
+use_pos_norm_latent: false
+use_out_norm_latent: false
 
 #CONTEXT
 use_lipinski_properties: false

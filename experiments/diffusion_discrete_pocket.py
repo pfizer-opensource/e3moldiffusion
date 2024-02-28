@@ -42,7 +42,6 @@ from experiments.diffusion.utils import (
     extract_scaffolds_from_batch,
     get_joint_edge_attrs,
     initialize_edge_attrs_reverse,
-    property_classifier_guidance,
     property_guidance_lig_pocket,
 )
 from experiments.losses import DiffusionLoss
@@ -97,6 +96,8 @@ class Trainer(pl.LightningModule):
             hparams["ligand_pocket_distance_loss"] = False
         if "ligand_pocket_hidden_distance" not in hparams.keys():
             hparams["ligand_pocket_hidden_distance"] = False
+        if "use_out_norm" not in hparams.keys():
+            hparams["use_out_norm"] = True
 
         self.save_hyperparameters(hparams)
 
@@ -170,6 +171,7 @@ class Trainer(pl.LightningModule):
                 num_context_features=hparams["num_context_features"],
                 coords_param=hparams["continuous_param"],
                 use_pos_norm=hparams["use_pos_norm"],
+                use_out_norm=hparams["use_out_norm"],
                 ligand_pocket_interaction=hparams["ligand_pocket_interaction"],
                 store_intermediate_coords=hparams["store_intermediate_coords"],
                 distance_ligand_pocket=hparams["ligand_pocket_hidden_distance"],
@@ -212,9 +214,8 @@ class Trainer(pl.LightningModule):
                     num_layers=hparams["num_layers_latent"],
                     vector_aggr=hparams["vector_aggr"],
                     intermediate_outs=hparams["intermediate_outs"],
-                    use_pos_norm=hparams[
-                        "use_pos_norm"
-                    ],  # for old checkpoint to start sampling.
+                    use_pos_norm=hparams["use_pos_norm_latent"],
+                    use_out_norm=hparams["use_out_norm_latent"],
                 )
                 self.latent_lin = GatedEquivBlock(
                     in_dims=(hparams["sdim_latent"], hparams["vdim_latent"]),
@@ -648,7 +649,9 @@ class Trainer(pl.LightningModule):
                     out_dict["property_pred"]["sa_score"],
                 )
                 sa_loss = F.mse_loss(
-                    input=sa_pred.squeeze(dim=1), target=sa_true, reduction="none"
+                    input=sa_pred.squeeze(dim=1).sigmoid(),
+                    target=sa_true,
+                    reduction="none",
                 )
                 sa_loss = torch.mean(weights * sa_loss)
                 prop_loss = prop_loss + sa_loss
@@ -1382,32 +1385,32 @@ class Trainer(pl.LightningModule):
         eta_ddim,
         relax_mol=False,
         max_relax_iter=200,
+        build_obabel_mol=False,
         sanitize=True,
         every_k_step=1,
         fix_n_nodes=False,
         vary_n_nodes=False,
         n_nodes_bias=0,
-        property_guidance=None,
         ckpt_property_model=None,
-        property_guidance_complex=False,
-        property_self_guidance=False,
-        guidance_scale=None,
-        build_obabel_mol=False,
-        save_dir=None,
-        importance_sampling=False,
-        tau=0.1,
-        importance_sampling_start=0,
-        importance_sampling_end=200,
-        every_importance_t=5,
-        maximize_score=True,
-        tau1: float = 1.0,
-        docking_guidance: bool = False,
-        docking_t_start: int = 400,
-        docking_t_end: int = 500,
-        importance_kind: str = "sa",
+        ckpt_sa_model=None,
+        property_classifier_guidance=None,
+        property_classifier_guidance_complex=False,
+        property_classifier_self_guidance=False,
+        classifier_guidance_scale=None,
+        sa_importance_sampling=False,
+        sa_importance_sampling_start=0,
+        sa_importance_sampling_end=200,
+        sa_every_importance_t=5,
+        sa_tau=0.1,
+        property_importance_sampling: bool = False,
+        property_importance_sampling_start=0,
+        property_importance_sampling_end=200,
+        property_every_importance_t=5,
+        property_tau: float = 0.1,
+        maximize_property=True,
         encode_ligand: bool = True,
+        save_dir=None,
     ):
-        assert importance_kind in ["sa", "docking", "joint"]
         if fix_n_nodes:
             num_nodes_lig = pocket_data.batch.bincount().to(self.device)
             if vary_n_nodes:
@@ -1447,27 +1450,28 @@ class Trainer(pl.LightningModule):
             ddpm=ddpm,
             eta_ddim=eta_ddim,
             every_k_step=every_k_step,
-            property_guidance=property_guidance,
-            property_guidance_complex=property_guidance_complex,
-            ckpt_property_model=ckpt_property_model,
-            property_self_guidance=property_self_guidance,
-            guidance_scale=guidance_scale,
             relax_mol=relax_mol,
             max_relax_iter=max_relax_iter,
             sanitize=sanitize,
             build_obabel_mol=build_obabel_mol,
+            ckpt_property_model=ckpt_property_model,
+            ckpt_sa_model=ckpt_sa_model,
+            property_classifier_guidance=property_classifier_guidance,
+            property_classifier_guidance_complex=property_classifier_guidance_complex,
+            property_classifier_self_guidance=property_classifier_self_guidance,
+            classifier_guidance_scale=classifier_guidance_scale,
+            sa_importance_sampling=sa_importance_sampling,
+            sa_importance_sampling_start=sa_importance_sampling_start,
+            sa_importance_sampling_end=sa_importance_sampling_end,
+            sa_every_importance_t=sa_every_importance_t,
+            sa_tau=sa_tau,
+            property_importance_sampling=property_importance_sampling,
+            property_importance_sampling_start=property_importance_sampling_start,
+            property_importance_sampling_end=property_importance_sampling_end,
+            property_every_importance_t=property_every_importance_t,
+            property_tau=property_tau,
+            maximize_property=maximize_property,
             save_dir=save_dir,
-            importance_sampling=importance_sampling,
-            tau=tau,
-            importance_sampling_start=importance_sampling_start,
-            importance_sampling_end=importance_sampling_end,
-            every_importance_t=every_importance_t,
-            maximize_score=maximize_score,
-            tau1=tau1,
-            docking_guidance=docking_guidance,
-            docking_t_start=docking_t_start,
-            docking_t_end=docking_t_end,
-            importance_kind=importance_kind,
             encode_ligand=encode_ligand,
         )
         return molecules
@@ -1556,10 +1560,12 @@ class Trainer(pl.LightningModule):
         ca_mask: Tensor,
         edge_mask_pocket: Tensor,
         batch_pocket: Tensor,
-        tau: float = 0.1,
         maximize_score: bool = True,
-        kind: str = "sa",
-        tau1: float = 0.1,
+        sa_tau: float = 0.1,
+        property_tau: float = 0.1,
+        kind: str = "sa_score",
+        sa_model=None,
+        property_model=None,
     ):
         """
         Idea:
@@ -1571,56 +1577,99 @@ class Trainer(pl.LightningModule):
         To make it more "uniform", we can use temperature annealing in the softmax
         """
 
-        assert kind in ["sa", "docking", "joint"]
+        assert kind in ["sa_score", "docking_score", "pic50", "joint"]
 
-        assert kind in ["sa", "docking", "joint"]
-
-        out = self.model(
-            x=node_feats_in,
-            t=temb,
-            pos=pos,
-            edge_index_local=edge_index_local,
-            edge_index_global=edge_index_global,
-            edge_index_global_lig=edge_index_global_lig,
-            edge_attr_global=edge_attr_global,
-            batch=batch,
-            batch_edge_global=batch_edge_global,
-            context=context,
-            pocket_mask=pocket_mask.unsqueeze(1),
-            edge_mask=edge_mask,
-            edge_mask_pocket=edge_mask_pocket,
-            batch_lig=batch_lig,
-            ca_mask=ca_mask,
-            batch_pocket=batch_pocket,
-        )
+        if sa_model is None and property_model is None:
+            assert self.hparams.joint_property_prediction
+            out = self.model(
+                x=node_feats_in,
+                t=temb,
+                pos=pos,
+                edge_index_local=edge_index_local,
+                edge_index_global=edge_index_global,
+                edge_index_global_lig=edge_index_global_lig,
+                edge_attr_global=edge_attr_global,
+                batch=batch,
+                batch_edge_global=batch_edge_global,
+                context=context,
+                pocket_mask=pocket_mask.unsqueeze(1),
+                edge_mask=edge_mask,
+                edge_mask_pocket=edge_mask_pocket,
+                batch_lig=batch_lig,
+                ca_mask=ca_mask,
+                batch_pocket=batch_pocket,
+            )
+        elif kind == "sa_score" and sa_model is not None:
+            out = sa_model(
+                x=node_feats_in,
+                t=temb,
+                pos=pos,
+                edge_index_local=edge_index_local,
+                edge_index_global=edge_index_global,
+                edge_index_global_lig=edge_index_global_lig,
+                edge_attr_global=edge_attr_global,
+                batch=batch,
+                batch_edge_global=batch_edge_global,
+                context=context,
+                pocket_mask=pocket_mask.unsqueeze(1),
+                edge_mask=edge_mask,
+                edge_mask_pocket=edge_mask_pocket,
+                batch_lig=batch_lig,
+                ca_mask=ca_mask,
+                batch_pocket=batch_pocket,
+            )
+        elif kind == "docking_score" or kind == "pic50" and property_model is not None:
+            out = property_model(
+                x=node_feats_in,
+                t=temb,
+                pos=pos,
+                edge_index_local=edge_index_local,
+                edge_index_global=edge_index_global,
+                edge_index_global_lig=edge_index_global_lig,
+                edge_attr_global=edge_attr_global,
+                batch=batch,
+                batch_edge_global=batch_edge_global,
+                context=context,
+                pocket_mask=pocket_mask.unsqueeze(1),
+                edge_mask=edge_mask,
+                edge_mask_pocket=edge_mask_pocket,
+                batch_lig=batch_lig,
+                ca_mask=ca_mask,
+                batch_pocket=batch_pocket,
+            )
 
         pocket_mask = pocket_mask.bool()
         node_feats_in = node_feats_in[pocket_mask]
         pos = pos[pocket_mask]
 
         prop_pred = out["property_pred"]
-        sa, docking = prop_pred
-        sa, docking = sa.squeeze(1), docking.squeeze(1)
-        sa = sa.sigmoid()
-        if not maximize_score:
-            sa = 1.0 - sa
+        sa, prop = prop_pred
+        sa = sa.squeeze(1).sigmoid() if sa is not None else None
+        if prop is not None and kind == "docking_score":
+            prop = -1.0 * prop.squeeze(1)
 
-        docking = -1.0 * docking
+        if not maximize_score and sa is not None:
+            sa = 1.0 - sa
 
         n = pos.size(0)
         b = len(batch_num_nodes)
 
-        weights_sa = (sa / tau).softmax(dim=0)
+        weights_sa = (sa / sa_tau).softmax(dim=0) if sa is not None else None
 
-        weights_dock = (docking / tau1).softmax(dim=0)
+        weights_prop = (
+            (prop / property_tau).softmax(dim=0) if prop is not None else None
+        )
 
         if kind == "joint":
-            weights = (weights_sa + weights_dock) / (tau + tau1)
+            assert sa is not None and prop is not None
+            weights = (weights_sa + weights_prop) / (sa_tau + property_tau)
             weights = weights.softmax(dim=0)
-        elif kind == "sa":
+        elif kind == "sa_score":
+            assert sa is not None
             weights = weights_sa
-        elif kind == "docking":
-            weights = weights_dock
+        elif kind == "docking_score" or kind == "pic50":
+            assert prop is not None
+            weights = weights_prop
 
         select = torch.multinomial(weights, num_samples=len(weights), replacement=True)
         select = select.sort()[0]
@@ -1710,28 +1759,29 @@ class Trainer(pl.LightningModule):
         ddpm: bool = True,
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
-        property_guidance: bool = False,
-        ckpt_property_model: str = None,
-        property_self_guidance: bool = False,
-        property_guidance_complex: bool = False,
-        guidance_scale: float = 1.0e-4,
         save_dir: str = None,
         relax_mol=False,
         max_relax_iter=200,
         sanitize=False,
         build_obabel_mol=False,
         iteration: int = 0,
-        importance_sampling: bool = False,
-        tau: float = 0.1,
-        every_importance_t: int = 5,
-        importance_sampling_start: int = 0,
-        importance_sampling_end: int = 200,
-        maximize_score: bool = True,
-        docking_guidance: bool = False,
-        docking_t_start: int = 400,
-        docking_t_end: int = 500,
-        tau1: float = 1.0,
-        importance_kind: str = "sa",  # not used
+        ckpt_property_model=None,
+        ckpt_sa_model=None,
+        property_classifier_guidance=None,
+        property_classifier_guidance_complex=False,
+        property_classifier_self_guidance=False,
+        classifier_guidance_scale=None,
+        sa_importance_sampling=False,
+        sa_importance_sampling_start=0,
+        sa_importance_sampling_end=200,
+        sa_every_importance_t=5,
+        sa_tau=0.1,
+        property_importance_sampling: bool = False,
+        property_importance_sampling_start=0,
+        property_importance_sampling_end=200,
+        property_every_importance_t=5,
+        property_tau: float = 0.1,
+        maximize_property=True,
         encode_ligand: bool = True,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         pos_pocket = pocket_data.pos_pocket.to(self.device)
@@ -1784,20 +1834,40 @@ class Trainer(pl.LightningModule):
                 if self.hparams.use_centroid_context_embed:
                     z = z + c
 
-        if property_self_guidance or property_guidance or property_guidance_complex:
+        if (
+            property_classifier_self_guidance
+            or property_classifier_guidance
+            or property_classifier_guidance_complex
+        ):
             t = torch.arange(0, self.hparams.timesteps)
             alphas = self.sde_pos.alphas_cumprod[t]
         if (
-            property_guidance or property_guidance_complex
+            property_classifier_guidance
+            or property_classifier_guidance_complex
+            or property_importance_sampling
         ) and ckpt_property_model is not None:
             property_model = load_property_model(
                 ckpt_property_model,
                 self.num_atom_features,
                 self.num_bond_classes,
-                with_complex=property_guidance_complex,
+                joint_prediction=property_classifier_guidance_complex
+                or property_importance_sampling,
             )
             property_model.to(self.device)
             property_model.eval()
+        else:
+            property_model = None
+        if sa_importance_sampling and ckpt_sa_model is not None:
+            sa_model = load_property_model(
+                ckpt_sa_model,
+                self.num_atom_features,
+                self.num_bond_classes,
+                joint_prediction=sa_importance_sampling,
+            )
+            sa_model.to(self.device)
+            sa_model.eval()
+        else:
+            sa_model = None
 
         # initialize the 0-mean point cloud from N(0, I) centered in the pocket
         pocket_cog = scatter_mean(pos_pocket, batch_pocket, dim=0)
@@ -2074,14 +2144,21 @@ class Trainer(pl.LightningModule):
                 self.device,
             )
 
-            if property_self_guidance or property_guidance_complex:
-                signal = alphas[timestep] / (guidance_scale * 10)
+            if (
+                property_classifier_self_guidance
+                or property_classifier_guidance_complex
+            ):
+                signal = alphas[timestep] / (classifier_guidance_scale * 10)
                 (
                     pos,
                     atom_types,
                     charge_types,
                 ) = property_guidance_lig_pocket(
-                    model=self.model if property_self_guidance else property_model,
+                    model=(
+                        self.model
+                        if property_classifier_self_guidance
+                        else property_model
+                    ),
                     pos=pos,
                     pos_pocket=pos_pocket,
                     atom_types=atom_types,
@@ -2104,11 +2181,11 @@ class Trainer(pl.LightningModule):
                     temb=temb,
                     context=context,
                     signal=signal,
-                    guidance_scale=guidance_scale,
+                    guidance_scale=classifier_guidance_scale,
                     optimization="minimize",
                 )
 
-            elif property_guidance:
+            elif property_classifier_guidance:
                 signal = 1.0  # alphas[timestep] / (guidance_scale * 10)
                 pos, atom_types, charge_types = property_classifier_guidance(
                     pos,
@@ -2119,14 +2196,14 @@ class Trainer(pl.LightningModule):
                     batch,
                     num_atom_types=self.num_atom_types,
                     signal=signal,
-                    guidance_scale=guidance_scale,
+                    guidance_scale=classifier_guidance_scale,
                     optimization="minimize",
                 )
 
             elif (
-                importance_sampling
-                and i % every_importance_t == 0
-                and importance_sampling_start <= i <= importance_sampling_end
+                sa_importance_sampling
+                and i % sa_every_importance_t == 0
+                and sa_importance_sampling_start <= i <= sa_importance_sampling_end
             ):
                 node_feats_in = torch.cat(
                     [atom_types_joint, charge_types_joint], dim=-1
@@ -2151,8 +2228,8 @@ class Trainer(pl.LightningModule):
                     batch_edge_global=batch_edge_global,
                     batch_num_nodes=num_nodes_lig,
                     context=None,
-                    tau=tau,
-                    maximize_score=maximize_score,
+                    sa_tau=sa_tau,
+                    maximize_score=True,
                     edge_index_global_lig=edge_index_global_lig,
                     edge_attr_global_lig=edge_attr_global_lig,
                     pocket_mask=pocket_mask,
@@ -2160,8 +2237,8 @@ class Trainer(pl.LightningModule):
                     edge_mask=edge_mask,
                     batch_pocket=batch_pocket,
                     edge_mask_pocket=edge_mask_pocket,
-                    tau1=tau1,
-                    kind="sa",  # "sa", importance_kind;;   # currently hardcoded
+                    kind="sa_score",
+                    sa_model=sa_model,
                 )
                 atom_types, charge_types = node_feats_in.split(
                     [self.num_atom_types, self.num_charge_classes], dim=-1
@@ -2205,9 +2282,11 @@ class Trainer(pl.LightningModule):
             )
 
             if (
-                docking_guidance
-                and i % every_importance_t == 0
-                and docking_t_start <= i <= docking_t_end
+                property_importance_sampling
+                and i % property_every_importance_t == 0
+                and property_importance_sampling_start
+                <= i
+                <= property_importance_sampling_end
             ):
                 node_feats_in = torch.cat(
                     [atom_types_joint, charge_types_joint], dim=-1
@@ -2232,8 +2311,7 @@ class Trainer(pl.LightningModule):
                     batch_edge_global=batch_edge_global,
                     batch_num_nodes=num_nodes_lig,
                     context=None,
-                    tau=tau,
-                    maximize_score=maximize_score,
+                    maximize_score=maximize_property,
                     edge_index_global_lig=edge_index_global_lig,
                     edge_attr_global_lig=edge_attr_global_lig,
                     pocket_mask=pocket_mask,
@@ -2241,8 +2319,11 @@ class Trainer(pl.LightningModule):
                     edge_mask=edge_mask,
                     batch_pocket=batch_pocket,
                     edge_mask_pocket=edge_mask_pocket,
-                    tau1=tau1,
-                    kind="docking",
+                    property_tau=property_tau,
+                    kind=property_model.regression_property[
+                        0
+                    ],  # currently hardcoded for one property. If multi-property, this needs to be changed!
+                    property_model=property_model,
                 )
                 atom_types, charge_types = node_feats_in.split(
                     [self.num_atom_types, self.num_charge_classes], dim=-1

@@ -19,8 +19,8 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_norm_joint-sa-dock"
-output_dir="$main_dir/evaluation/docking/nodes_bias_vary_10_sa0-450_dock-200-400"
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_norm_joint-dock"
+output_dir="$main_dir/evaluation/docking/nodes_bias_vary_10_dock200-300_every-5"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
@@ -40,25 +40,27 @@ python experiments/generate_ligands_multi.py \
     --batch-size 40 \
     --n-nodes-bias 10 \
     --vary-n-nodes \
-    --importance-sampling \
-    --importance-sampling-start 0 \
-    --importance-sampling-end 450 \
-    --every-importance-t 5 \
-    --tau 0.1 \
-    --docking-guidance \
-    --docking-t-start 200 \
-    --docking-t-end 400 \
-    --tau1 0.1
+    --sa-importance-sampling \
+    --sa-importance-sampling-start 0 \
+    --sa-importance-sampling-end 200 \
+    --sa-every-importance-t 5 \
+    --sa-tau 0.1 \
+    # --ckpt-sa-model None \
+    # --ckpt-property-model None \
+    # --property-importance-sampling False \
+    # --property-importance-sampling-start 0 \
+    # --property-importance-sampling-end 200 \
+    # --property-every-importance-t 5 \
+    # --property-tau 0.1 \
+    # --minimize-property
+    # --property-classifier-guidance None \
+    # --property-classifier-guidance_complex False \
+    # --property_classifier_self_guidance False \
+    # --classifier_guidance_scale None \
     # --fix-n-nodes \
     # --encode-ligands \
     # --filter-by-sascore \
     # --sascore-threshold 0.6
-    # --property-guidance-complex \
-    # --ckpt-property-model /scratch1/e3moldiffusion/logs/crossdocked/docking_score_training/run0/last-v5.ckpt \
-    # --guidance-scale 1.
-    #--property-guidance \
-    #--ckpt-property-model /scratch1/e3moldiffusion/logs/crossdocked/sascore_training/run0/last-v11.ckpt \
-    #--guidance-scale 1.
     #--omit-posebusters \
     #--omit-posecheck \
     #--docking-scores /scratch1/e3moldiffusion/logs/crossdocked/ground_truth/evaluation/docking/crossdocked_scores.pickle

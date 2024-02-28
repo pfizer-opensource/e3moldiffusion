@@ -1,9 +1,7 @@
 import argparse
 import os
 import random
-import shutil
 import tempfile
-import time as time_sleep
 import warnings
 from collections import defaultdict
 from datetime import datetime
@@ -19,7 +17,6 @@ from rdkit import Chem
 from torch_geometric.data import Batch
 
 from experiments.data.distributions import DistributionProperty
-from experiments.data.ligand.process_pdb import get_pdb_components, write_pdb
 from experiments.data.utils import load_pickle, mol_to_torch_geometric, save_pickle
 from experiments.docking import calculate_qvina2_score
 from experiments.sampling.analyze import analyze_stability_for_molecules
@@ -552,11 +549,6 @@ def get_args():
     parser.add_argument("--fix-n-nodes", action="store_true")
     parser.add_argument("--vary-n-nodes", action="store_true")
     parser.add_argument("--n-nodes-bias", default=0, type=int)
-    parser.add_argument("--property-guidance", default=False, action="store_true")
-    parser.add_argument("--ckpt-property-model", default=None, type=str)
-    parser.add_argument("--property-self-guidance", default=False, action="store_true")
-    parser.add_argument("--property-guidance-complex", default=False, action="store_true")
-    parser.add_argument("--guidance-scale", default=1.e-4, type=float)
     parser.add_argument("--filter-by-posebusters", action="store_true")
     parser.add_argument("--filter-by-lipinski", action="store_true")
     parser.add_argument("--filter-by-sascore", action="store_true")
@@ -567,19 +559,28 @@ def get_args():
                         help="If filter-by-docking-score is set to True, you have to provide ground-truth docking scores as a dictionary containing the respective ground truth ligand names and their scores")
     parser.add_argument("--omit-posebusters", default=False, action="store_true")
     parser.add_argument("--omit-posecheck", default=False, action="store_true")
-
+    #load external models
+    parser.add_argument("--ckpt-property-model", default=None, type=str)
+    parser.add_argument("--ckpt-sa-model", default=None, type=str)
+    # classifier guidance
+    parser.add_argument("--property-classifier-guidance", default=False, action="store_true")
+    parser.add_argument("--property-classifier-self-guidance", default=False, action="store_true")
+    parser.add_argument("--property-classifier-guidance-complex", default=False, action="store_true")
+    parser.add_argument("--classifier-guidance-scale", default=1.e-4, type=float)
     # importance sampling
-    parser.add_argument("--importance-sampling", default=False, action="store_true")
-    parser.add_argument("--tau", default=0.1, type=float)
-    parser.add_argument("--every-importance-t", default=5, type=int)
-    parser.add_argument("--importance-sampling-start", default=0, type=int)
-    parser.add_argument("--importance-sampling-end", default=250, type=int)
-    parser.add_argument("--minimize-score", default=False, action="store_true")
-    
-    parser.add_argument("--docking-guidance", default=False, action="store_true")
-    parser.add_argument("--tau1", default=0.5, type=float)
-    parser.add_argument("--docking-t-start", default=250, type=int)
-    parser.add_argument("--docking-t-end", default=350, type=int)
+    parser.add_argument("--sa-importance-sampling", default=False, action="store_true")
+    parser.add_argument("--sa-tau", default=0.1, type=float)
+    parser.add_argument("--sa-every-importance-t", default=5, type=int)
+    parser.add_argument("--sa-importance-sampling-start", default=None, type=int)
+    parser.add_argument("--sa-importance-sampling-end", default=None, type=int)
+    parser.add_argument("--minimize-property", default=False, action="store_true")
+    parser.add_argument("--property-importance-sampling", default=False, action="store_true")
+    parser.add_argument("--property-tau", default=0.1, type=float)
+    parser.add_argument("--property-every-importance-t", default=5, type=int)
+    parser.add_argument("--property-importance-sampling-start", default=None, type=int)
+    parser.add_argument("--property-importance-sampling-end", default=None, type=int)
+
+
     args = parser.parse_args()
     return args
 
