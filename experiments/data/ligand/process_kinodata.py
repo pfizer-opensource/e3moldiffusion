@@ -417,7 +417,9 @@ if __name__ == "__main__":
             assert ligand_data["lig_mol"].GetProp(
                 "activities.standard_value"
             ) == mol.GetProp("activities.standard_value")
-            ic50s.append(ligand_data["lig_mol"].GetProp("activities.standard_value"))
+            ic50s.append(
+                float(ligand_data["lig_mol"].GetProp("activities.standard_value"))
+            )
             pocket_coords.append(pocket_data["pocket_coords"])
             pocket_atom.append(pocket_data["pocket_atoms"])
             pocket_mask.append(count * np.ones(len(pocket_data["pocket_coords"])))

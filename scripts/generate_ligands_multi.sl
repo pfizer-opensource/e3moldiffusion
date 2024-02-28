@@ -19,7 +19,7 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_norm_joint-dock"
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_no-norm_joint-dock"
 output_dir="$main_dir/evaluation/docking/nodes_bias_vary_10_dock200-300_every-5"
 
 mkdir "$main_dir/evaluation"
@@ -40,18 +40,18 @@ python experiments/generate_ligands_multi.py \
     --batch-size 40 \
     --n-nodes-bias 10 \
     --vary-n-nodes \
-    --sa-importance-sampling \
-    --sa-importance-sampling-start 0 \
-    --sa-importance-sampling-end 200 \
-    --sa-every-importance-t 5 \
-    --sa-tau 0.1 \
+    --property-importance-sampling \
+    --property-importance-sampling-start 200 \
+    --property-importance-sampling-end 300 \
+    --property-every-importance-t 5 \
+    --property-tau 0.1 \
+    # --sa-importance-sampling \
+    # --sa-importance-sampling-start 0 \
+    # --sa-importance-sampling-end 200 \
+    # --sa-every-importance-t 5 \
+    # --sa-tau 0.1 \
     # --ckpt-sa-model None \
     # --ckpt-property-model None \
-    # --property-importance-sampling False \
-    # --property-importance-sampling-start 0 \
-    # --property-importance-sampling-end 200 \
-    # --property-every-importance-t 5 \
-    # --property-tau 0.1 \
     # --minimize-property
     # --property-classifier-guidance None \
     # --property-classifier-guidance_complex False \

@@ -219,7 +219,7 @@ def energy_guidance(
     return pos.detach()
 
 
-def property_classifier_guidance(
+def property_classifier_guidance_cont(
     pos,
     atom_types,
     charge_types,
@@ -276,6 +276,67 @@ def property_classifier_guidance(
     return pos, atom_types, charge_types
 
 
+def property_guidance_joint(
+    model,
+    node_feats_in,
+    pos,
+    temb,
+    edge_index_local,
+    edge_index_global,
+    edge_attr_global,
+    batch,
+    batch_edge_global,
+    batch_num_nodes,
+    context,
+    minimize_property,
+    guidance_scale,
+    signal,
+):
+
+    with torch.enable_grad():
+        pos = pos.detach().requires_grad_(True)
+        out = model(
+            x=node_feats_in,
+            t=temb,
+            pos=pos,
+            edge_index_local=edge_index_local,
+            edge_index_global=edge_index_global,
+            edge_attr_global=edge_attr_global,
+            batch=batch,
+            batch_edge_global=batch_edge_global,
+            context=context,
+        )
+
+        if minimize_property:
+            sign = -1.0
+        else:
+            sign = 1.0
+
+        _, property_pred = guidance_scale * out["property_pred"]
+
+        grad_outputs: List[Optional[torch.Tensor]] = [torch.ones_like(property_pred)]
+        grad_shift = torch.autograd.grad(
+            [property_pred],
+            [pos],
+            grad_outputs=grad_outputs,
+            create_graph=False,
+            retain_graph=False,
+        )[0]
+
+    pos = pos + sign * signal * grad_shift
+    pos.detach_()
+
+    return (
+        pos,
+        node_feats_in,
+        edge_index_global,
+        edge_attr_global,
+        batch,
+        batch_edge_global,
+        batch_num_nodes,
+    )
+
+
 def property_guidance_lig_pocket(
     model,
     pos=None,
@@ -301,7 +362,7 @@ def property_guidance_lig_pocket(
     atoms_continuous=False,
     signal=1.0e-3,
     guidance_scale=100,
-    optimization="minimize",
+    minimize_property=False,
 ):
 
     pos = pos.detach()
@@ -365,12 +426,10 @@ def property_guidance_lig_pocket(
             ca_mask=ca_mask,
             batch_pocket=batch_pocket,
         )
-        if optimization == "minimize":
+        if minimize_property:
             sign = -1.0
-        elif optimization == "maximize":
-            sign = 1.0
         else:
-            raise Exception("Optimization arg needs to be 'minimize' or 'maximize'!")
+            sign = 1.0
 
         property_pred = guidance_scale * out["property_pred"]
 

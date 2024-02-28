@@ -1,4 +1,3 @@
-import os
 import tempfile
 from itertools import zip_longest
 from typing import Sequence, Union
@@ -177,27 +176,14 @@ class LigandPocketDataset(InMemoryDataset):
 
         # split data based on mask
         mol_data = {}
-        failed_ids = []
-        for k, v in data.items():
-            if k == "names":
-                ic50s = []
-                for i, name in enumerate(v):
-                    sdf = os.path.join(
-                        self.root,
-                        f'raw/{self.split}/{name.split(".pdb")[1][1:]}',
-                    )
-                    mol = Chem.SDMolSupplier(sdf, removeHs=True)[0]
-                    if mol.GetProp("activities.standard_type") == "pIC50":
-                        ic50s.append(float(mol.GetProp("activities.standard_value")))
-                    else:
-                        ic50s.append(0.0)
-                        failed_ids.append(i)
-                ic50s = torch.tensor(ic50s).float()
-
-        mol_data["ic50s"] = ic50s
+        docking_scores = []
         for k, v in data.items():
             if k == "names" or k == "receptors" or k == "lig_mol":
                 mol_data[k] = v
+                continue
+
+            if k == "ic50s":
+                ic50s = torch.tensor([float(i) for i in v]).float()
                 continue
 
             sections = (
@@ -219,8 +205,8 @@ class LigandPocketDataset(InMemoryDataset):
                         for x in np.split(pocket_one_hot_mask, sections)
                     ]
                 else:
-
                     mol_data[k] = [torch.from_numpy(x) for x in np.split(v, sections)]
+
             # add number of nodes for convenience
             if k == "lig_mask":
                 mol_data["num_lig_atoms"] = torch.tensor(
@@ -235,7 +221,6 @@ class LigandPocketDataset(InMemoryDataset):
                     [len(x) for x in mol_data["pocket_one_hot_mask"]]
                 )
 
-        assert len(mol_data["ic50s"]) == len(mol_data["lig_coords"])
         for i, (
             mol_lig,
             coords_lig,
@@ -263,8 +248,6 @@ class LigandPocketDataset(InMemoryDataset):
                 total=len(mol_data["lig_mol"]),
             )
         ):
-            if i in failed_ids:
-                continue
             try:
                 # atom_types = [atom_decoder[int(a)] for a in atoms_lig]
                 # smiles_lig, conformer_lig = get_mol_babel(coords_lig, atom_types)

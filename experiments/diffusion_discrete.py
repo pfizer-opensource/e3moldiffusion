@@ -30,10 +30,10 @@ from experiments.diffusion.categorical import CategoricalDiffusionKernel
 from experiments.diffusion.continuous import DiscreteDDPM
 from experiments.diffusion.utils import (
     bond_guidance,
-    energy_guidance,
     extract_func_groups_,
     extract_scaffolds_,
     initialize_edge_attrs_reverse,
+    property_guidance_joint,
 )
 from experiments.losses import DiffusionLoss
 from experiments.sampling.analyze import analyze_stability_for_molecules
@@ -641,33 +641,25 @@ class Trainer(pl.LightningModule):
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
         run_test_eval: bool = False,
-        guidance_scale: float = 1.0e-4,
-        use_energy_guidance: bool = False,
-        ckpt_energy_model: str = None,
         save_traj: bool = False,
         fix_noise_and_nodes: bool = False,
-        num_nodes: int = None,
+        n_nodes: int = None,
+        vary_n_nodes: bool = False,
         fixed_context: list = None,
-        guidance_steps: int = 100,
-        optimization: str = "minimize",
         relax_sampling: bool = False,
         relax_steps: int = 10,
+        ckpt_property_model: str = None,
+        minimize_property: bool = False,
+        classifier_guidance: bool = False,
+        classifier_guidance_scale: float = 1.0e-4,
+        classifier_guidance_steps: int = 100,
         importance_sampling: bool = False,
         property_tau: float = 0.1,
         every_importance_t: int = 5,
         importance_sampling_start: int = 0,
         importance_sampling_end: int = 200,
-        ckpt_property_model: str = None,
-        maximize_score: bool = True,
         device: str = "cpu",
     ):
-        energy_model = None
-        if use_energy_guidance:
-            energy_model = load_energy_model(ckpt_energy_model, self.num_atom_features)
-            # for param in self.energy_model.parameters():
-            #    param.requires_grad = False
-            energy_model.to(self.device)
-            energy_model.eval()
 
         b = ngraphs // bs
         l = [bs] * b
@@ -682,10 +674,16 @@ class Trainer(pl.LightningModule):
 
         molecule_list = []
         for i, num_graphs in enumerate(l):
-            if num_nodes is not None:
+            if n_nodes is not None:
                 fixed_num_nodes = (
-                    torch.tensor(num_nodes).repeat(num_graphs).to(self.device)
+                    torch.tensor(n_nodes).repeat(num_graphs).to(self.device)
                 )
+                if vary_n_nodes is not None:
+                    fixed_num_nodes += torch.randint(
+                        low=n_nodes - vary_n_nodes,
+                        high=n_nodes + vary_n_nodes,
+                        size=fixed_num_nodes.size(),
+                    ).to(self.device)
             else:
                 fixed_num_nodes = None
             molecules = self.reverse_sampling(
@@ -696,23 +694,22 @@ class Trainer(pl.LightningModule):
                 ddpm=ddpm,
                 eta_ddim=eta_ddim,
                 every_k_step=every_k_step,
-                guidance_scale=guidance_scale,
-                energy_model=energy_model,
                 fix_noise_and_nodes=fix_noise_and_nodes,
                 num_nodes=fixed_num_nodes,
                 fixed_context=fixed_context,
                 iteration=i,
-                guidance_steps=guidance_steps,
-                optimization=optimization,
                 relax_sampling=relax_sampling,
                 relax_steps=relax_steps,
+                classifier_guidance=classifier_guidance,
+                classifier_guidance_scale=classifier_guidance_scale,
+                classifier_guidance_steps=classifier_guidance_steps,
                 importance_sampling=importance_sampling,
                 property_tau=property_tau,
                 every_importance_t=every_importance_t,
                 importance_sampling_start=importance_sampling_start,
                 importance_sampling_end=importance_sampling_end,
                 ckpt_property_model=ckpt_property_model,
-                maximize_score=maximize_score,
+                minimize_property=minimize_property,
             )
 
             molecule_list.extend(molecules)
@@ -806,18 +803,22 @@ class Trainer(pl.LightningModule):
         save_traj: bool = False,
         fix_noise_and_nodes: bool = False,
         fixed_context: float = None,
-        num_nodes: int = None,
+        n_nodes: int = None,
+        vary_n_nodes: int = None,
         guidance_steps: int = 100,
         optimization: str = "minimize",
         relax_sampling: bool = False,
         relax_steps: int = 10,
+        ckpt_property_model: str = None,
+        classifier_guidance: bool = False,
+        classifier_guidance_steps: int = 100,
+        classifier_guidance_scale: float = 1.0e-4,
         importance_sampling: bool = False,
         property_tau: float = 0.1,
         every_importance_t: int = 5,
         importance_sampling_start: int = 0,
         importance_sampling_end: int = 200,
-        ckpt_property_model: str = None,
-        maximize_score: bool = True,
+        minimize_property: bool = True,
         device: str = "cpu",
     ):
         energy_model = None
@@ -843,10 +844,16 @@ class Trainer(pl.LightningModule):
                     print(f"Creating {ngraphs} graphs in {l} batches")
             molecule_list = []
             for num_graphs in l:
-                if num_nodes is not None:
+                if n_nodes is not None:
                     fixed_num_nodes = (
-                        torch.tensor(num_nodes).repeat(num_graphs).to(self.device)
+                        torch.tensor(n_nodes).repeat(num_graphs).to(self.device)
                     )
+                    if vary_n_nodes is not None:
+                        fixed_num_nodes += torch.randint(
+                            low=n_nodes - vary_n_nodes,
+                            high=n_nodes + vary_n_nodes,
+                            size=fixed_num_nodes.size(),
+                        ).to(self.device)
                 else:
                     fixed_num_nodes = None
                 molecules = self.reverse_sampling(
@@ -857,23 +864,22 @@ class Trainer(pl.LightningModule):
                     ddpm=ddpm,
                     eta_ddim=eta_ddim,
                     every_k_step=every_k_step,
-                    guidance_scale=guidance_scale,
-                    energy_model=energy_model,
                     fix_noise_and_nodes=fix_noise_and_nodes,
                     num_nodes=fixed_num_nodes,
                     fixed_context=fixed_context,
                     iteration=i,
-                    guidance_steps=guidance_steps,
-                    optimization=optimization,
                     relax_sampling=relax_sampling,
                     relax_steps=relax_steps,
+                    classifier_guidance=classifier_guidance,
+                    classifier_guidance_steps=classifier_guidance_steps,
+                    classifier_guidance_scale=classifier_guidance_scale,
                     importance_sampling=importance_sampling,
                     property_tau=property_tau,
                     every_importance_t=every_importance_t,
                     importance_sampling_start=importance_sampling_start,
                     importance_sampling_end=importance_sampling_end,
                     ckpt_property_model=ckpt_property_model,
-                    maximize_score=maximize_score,
+                    minimize_property=minimize_property,
                 )
 
                 molecule_list.extend(molecules)
@@ -956,24 +962,26 @@ class Trainer(pl.LightningModule):
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
         run_test_eval: bool = False,
-        guidance_scale: float = 1.0e-4,
-        use_energy_guidance: bool = False,
-        ckpt_energy_model: str = None,
         use_scaffold_dataset_sizes: bool = True,
         fraction_new_nodes: float = 0.0,
         scaffold_elaboration: bool = True,
         scaffold_hopping: bool = False,
         resample_steps: int = 0,
         max_num_batches: int = -1,
-        device: str = "cpu",
         relax_sampling: bool = False,
         relax_steps: int = 10,
+        ckpt_property_model: str = None,
+        classifier_guidance: bool = False,
+        classifier_guidance_steps: int = 100,
+        classifier_guidance_scale: float = 1.0e-4,
+        importance_sampling: bool = False,
+        property_tau: float = 0.1,
+        every_importance_t: int = 5,
+        importance_sampling_start: int = 0,
+        importance_sampling_end: int = 200,
+        minimize_property: bool = True,
+        device: str = "cpu",
     ):
-        energy_model = None
-        if use_energy_guidance:
-            energy_model = load_energy_model(ckpt_energy_model, self.num_atom_features)
-            energy_model.to(self.device)
-            energy_model.eval()
 
         g = torch.Generator()
         g.manual_seed(42)
@@ -1022,8 +1030,6 @@ class Trainer(pl.LightningModule):
                 ddpm=ddpm,
                 eta_ddim=eta_ddim,
                 every_k_step=every_k_step,
-                guidance_scale=guidance_scale,
-                energy_model=energy_model,
                 scaffold_elaboration=scaffold_elaboration,
                 scaffold_hopping=scaffold_hopping,
                 batch_data=batch_data,
@@ -1031,6 +1037,16 @@ class Trainer(pl.LightningModule):
                 resample_steps=resample_steps,
                 relax_sampling=relax_sampling,
                 relax_steps=relax_steps,
+                classifier_guidance=classifier_guidance,
+                classifier_guidance_steps=classifier_guidance_steps,
+                classifier_guidance_scale=classifier_guidance_scale,
+                importance_sampling=importance_sampling,
+                property_tau=property_tau,
+                every_importance_t=every_importance_t,
+                importance_sampling_start=importance_sampling_start,
+                importance_sampling_end=importance_sampling_end,
+                ckpt_property_model=ckpt_property_model,
+                minimize_property=minimize_property,
             )
 
             for idx, mol in enumerate(new_mols):
@@ -1271,14 +1287,11 @@ class Trainer(pl.LightningModule):
         ddpm: bool = True,
         eta_ddim: float = 1.0,
         every_k_step: int = 1,
-        guidance_scale: float = 1.0e-4,
         energy_model=None,
         save_dir: str = None,
         fix_noise_and_nodes: bool = False,
         iteration: int = 0,
         chain_iterator=None,
-        guidance_steps: int = 100,
-        optimization: str = "minimize",
         relax_sampling: bool = False,
         relax_steps: int = 10,
         scaffold_elaboration: bool = False,
@@ -1287,13 +1300,16 @@ class Trainer(pl.LightningModule):
         num_nodes: Tensor = None,
         fixed_context: float = None,
         resample_steps: int = 1,
+        classifier_guidance: bool = False,
+        classifier_guidance_steps: int = 100,
+        classifier_guidance_scale: float = 1.0e-4,
         importance_sampling: bool = False,
         property_tau: float = 0.1,
         every_importance_t: int = 5,
         importance_sampling_start: int = 0,
         importance_sampling_end: int = 200,
         ckpt_property_model: str = None,
-        maximize_score: bool = True,
+        minimize_property: bool = True,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         if num_nodes is not None:
             batch_num_nodes = num_nodes
@@ -1321,16 +1337,24 @@ class Trainer(pl.LightningModule):
         )
         bs = int(batch.max()) + 1
 
-        if energy_model is not None:
+        if classifier_guidance and ckpt_property_model is not None:
             t = torch.arange(0, self.hparams.timesteps)
             alphas = self.sde_pos.alphas_cumprod[t]
+            property_model = load_property_model(
+                ckpt_property_model,
+                self.num_atom_features,
+                self.num_bond_classes,
+                joint_prediction=True,  # HARDCODED, change if it is not a joint model
+            )
+            property_model.to(self.device)
+            property_model.eval()
 
         if importance_sampling and ckpt_property_model is not None:
             property_model = load_property_model(
                 ckpt_property_model,
                 self.num_atom_features,
                 self.num_bond_classes,
-                joint_prediction=importance_sampling,
+                joint_prediction=True,  # HARDCODED, change if it is not a joint model
             )
             property_model.to(self.device)
             property_model.eval()
@@ -1565,32 +1589,6 @@ class Trainer(pl.LightningModule):
                 else:
                     edge_attr_global = edges_pred
 
-                if self.hparams.bond_model_guidance:
-                    pos = bond_guidance(
-                        pos,
-                        node_feats_in,
-                        temb,
-                        self.bond_model,
-                        batch,
-                        batch_edge_global,
-                        edge_attr_global,
-                        edge_index_local,
-                        edge_index_global,
-                    )
-                if energy_model is not None and timestep <= guidance_steps:
-                    signal = alphas[timestep] / (guidance_scale * 10)
-                    pos = energy_guidance(
-                        pos,
-                        node_feats_in,
-                        temb,
-                        energy_model,
-                        batch,
-                        batch_size=bs,
-                        optimization=optimization,
-                        guidance_scale=guidance_scale,
-                        signal=signal,
-                    )
-
                 if scaffold_elaboration or scaffold_hopping:
                     # create noised positions
                     _, pos_perturbed = self.sde_pos.sample_pos(
@@ -1714,6 +1712,53 @@ class Trainer(pl.LightningModule):
                             cumulative=False,
                         )
 
+                if self.hparams.bond_model_guidance:
+                    pos = bond_guidance(
+                        pos,
+                        node_feats_in,
+                        temb,
+                        self.bond_model,
+                        batch,
+                        batch_edge_global,
+                        edge_attr_global,
+                        edge_index_local,
+                        edge_index_global,
+                    )
+
+                if (
+                    classifier_guidance
+                    and property_model is not None
+                    and timestep <= classifier_guidance_steps
+                ):
+                    signal = alphas[timestep] / (classifier_guidance_scale * 10)
+                    (
+                        pos,
+                        node_feats_in,
+                        edge_index_global,
+                        edge_attr_global,
+                        batch,
+                        batch_edge_global,
+                        batch_num_nodes,
+                    ) = property_guidance_joint(
+                        model=property_model,
+                        node_feats_in=node_feats_in,
+                        pos=pos,
+                        temb=temb,
+                        edge_index_local=edge_index_local,
+                        edge_index_global=edge_index_global,
+                        edge_attr_global=edge_attr_global,
+                        batch=batch,
+                        batch_edge_global=batch_edge_global,
+                        batch_num_nodes=batch_num_nodes,
+                        context=context,
+                        maximize_score=not minimize_property,
+                        property_tau=property_tau,
+                        property_model=property_model,
+                        minimize_property=minimize_property,
+                        guidance_scale=classifier_guidance_scale,
+                        signal=signal,
+                    )
+
                 # importance sampling
                 if (
                     importance_sampling
@@ -1740,7 +1785,7 @@ class Trainer(pl.LightningModule):
                         batch_edge_global=batch_edge_global,
                         batch_num_nodes=batch_num_nodes,
                         context=None,
-                        maximize_score=maximize_score,
+                        maximize_score=not minimize_property,
                         property_tau=property_tau,
                         property_model=property_model,
                         kind="polarizability",

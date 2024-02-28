@@ -177,27 +177,28 @@ class LigandPocketDataset(InMemoryDataset):
 
         # split data based on mask
         mol_data = {}
-        docking_scores = []
+        failed_ids = []
+        for k, v in data.items():
+            if k == "names":
+                ic50s = []
+                for i, name in enumerate(v):
+                    sdf = os.path.join(
+                        self.root,
+                        f'raw/{self.split}/{name.split(".pdb")[1][1:]}',
+                    )
+                    mol = Chem.SDMolSupplier(sdf, removeHs=True)[0]
+                    if mol.GetProp("activities.standard_type") == "pIC50":
+                        ic50s.append(float(mol.GetProp("activities.standard_value")))
+                    else:
+                        ic50s.append(0.0)
+                        failed_ids.append(i)
+                ic50s = torch.tensor(ic50s).float()
+
+        mol_data["ic50s"] = ic50s
         for k, v in data.items():
             if k == "names" or k == "receptors" or k == "lig_mol":
                 mol_data[k] = v
-                if k == "names":
-                    ic50s = []
-                    for name in v:
-                        sdf = os.path.join(
-                            self.root,
-                            f'raw/{self.split}/{name.split(".pdb")[1][1:]}',
-                        )
-                        mol = Chem.SDMolSupplier(sdf, removeHs=True)[0]
-                        if mol.GetProp("activities.standard_type") == "pIC50":
-                            ic50s.append(
-                                float(mol.GetProp("activities.standard_value"))
-                            )
-                    ic50s = torch.tensor(ic50s).float()
                 continue
-
-            if k == "ic50s":
-                ic50s = torch.tensor(v).float()
 
             sections = (
                 np.where(np.diff(data["lig_mask"]))[0] + 1
@@ -217,8 +218,6 @@ class LigandPocketDataset(InMemoryDataset):
                         torch.from_numpy(x)
                         for x in np.split(pocket_one_hot_mask, sections)
                     ]
-                elif k == "docking_scores" and self.with_docking_scores:
-                    docking_scores = torch.from_numpy(v)
                 else:
 
                     mol_data[k] = [torch.from_numpy(x) for x in np.split(v, sections)]
@@ -235,10 +234,8 @@ class LigandPocketDataset(InMemoryDataset):
                 mol_data["num_resids_nodes"] = torch.tensor(
                     [len(x) for x in mol_data["pocket_one_hot_mask"]]
                 )
-        import pdb
 
-        pdb.set_trace()
-
+        assert len(mol_data["ic50s"]) == len(mol_data["lig_coords"])
         for i, (
             mol_lig,
             coords_lig,
@@ -249,7 +246,6 @@ class LigandPocketDataset(InMemoryDataset):
             mask_pocket,
             pocket_ca_mask,
             ic50,
-            scores,
         ) in enumerate(
             tqdm(
                 zip_longest(
@@ -262,12 +258,13 @@ class LigandPocketDataset(InMemoryDataset):
                     mol_data["pocket_mask"],
                     mol_data["pocket_ca_mask"],
                     ic50s,
-                    docking_scores,
                     fillvalue=None,
                 ),
                 total=len(mol_data["lig_mol"]),
             )
         ):
+            if i in failed_ids:
+                continue
             try:
                 # atom_types = [atom_decoder[int(a)] for a in atoms_lig]
                 # smiles_lig, conformer_lig = get_mol_babel(coords_lig, atom_types)
@@ -292,7 +289,6 @@ class LigandPocketDataset(InMemoryDataset):
             data.pocket_ca_mask = pocket_ca_mask
             # data.pocket_one_hot = pocket_one_hot
             # data.pocket_one_hot_mask = pocket_one_hot_mask
-            data.docking_scores = scores
             data.ic50 = ic50
             all_smiles.append(smiles_lig)
             data_list_lig.append(data)

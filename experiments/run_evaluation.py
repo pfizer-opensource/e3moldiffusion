@@ -170,21 +170,21 @@ def evaluate(args):
             ddpm=not args.ddim,
             eta_ddim=args.eta_ddim,
             save_traj=args.save_traj,
-            guidance_scale=args.guidance_scale,
-            use_energy_guidance=args.use_energy_guidance,
-            ckpt_energy_model=args.ckpt_energy_model,
             fix_noise_and_nodes=args.fix_noise_and_nodes,
-            guidance_steps=args.guidance_steps,
-            optimization=args.optimization,
+            n_nodes=args.n_nodes,
+            vary_n_nodes=args.vary_n_nodes,
             relax_sampling=args.relax_sampling,
             relax_steps=args.relax_steps,
+            classifier_guidance=args.classifier_guidance,
+            classifier_guidance_scale=args.classifier_guidance_scale,
+            classifier_guidance_steps=args.classifier_guidance_steps,
             importance_sampling=args.importance_sampling,
             property_tau=args.property_tau,
             every_importance_t=args.every_importance_t,
             importance_sampling_start=args.importance_sampling_start,
             importance_sampling_end=args.importance_sampling_end,
             ckpt_property_model=args.ckpt_property_model,
-            maximize_score=args.maximize_score,
+            minimize_property=args.minimize_property,
             device="cpu",
         )
     else:
@@ -202,21 +202,21 @@ def evaluate(args):
             eta_ddim=args.eta_ddim,
             run_test_eval=True,
             save_traj=args.save_traj,
-            guidance_scale=args.guidance_scale,
-            use_energy_guidance=args.use_energy_guidance,
-            ckpt_energy_model=args.ckpt_energy_model,
             fix_noise_and_nodes=args.fix_noise_and_nodes,
-            guidance_steps=args.guidance_steps,
-            optimization=args.optimization,
+            n_nodes=args.n_nodes,
+            vary_n_nodes=args.vary_n_nodes,
             relax_sampling=args.relax_sampling,
             relax_steps=args.relax_steps,
+            classifier_guidance=args.classifier_guidance,
+            classifier_guidance_scale=args.classifier_guidance_scale,
+            classifier_guidance_steps=args.classifier_guidance_steps,
             importance_sampling=args.importance_sampling,
             property_tau=args.property_tau,
             every_importance_t=args.every_importance_t,
             importance_sampling_start=args.importance_sampling_start,
             importance_sampling_end=args.importance_sampling_end,
             ckpt_property_model=args.ckpt_property_model,
-            maximize_score=args.maximize_score,
+            minimize_property=args.minimize_property,
             device="cpu",
         )
 
@@ -249,7 +249,7 @@ def evaluate(args):
         for mol in tqdm(sm):
             atom_types = [atom_decoder[int(a)] for a in mol.atom_types]
 
-            if prop_dist is not None:
+            if prop_dist is not None and hparams.context_mapping:
                 for j, key in enumerate(hparams.properties_list):
                     mean, mad = (
                         prop_dist.normalizer[key]["mean"],
@@ -317,13 +317,6 @@ def get_args():
     parser.add_argument('--model-path', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol/best_mol_stab.ckpt", type=str,
                         help='Path to trained model')
     parser.add_argument("--sample-only-valid", default=False, action="store_true")
-    parser.add_argument("--use-energy-guidance", default=False, action="store_true")
-    parser.add_argument("--ckpt-energy-model", default=None, type=str)
-    parser.add_argument("--optimization", default="minimize", type=str, choices=["minimize", "maximize"])
-    parser.add_argument('--guidance-scale', default=1.0e-4, type=float,
-                        help='How to scale the guidance shift')
-    parser.add_argument('--guidance-steps', default=100, type=int,
-                        help='How many guidance steps')
     parser.add_argument('--save-dir', default="/hpfs/userws/cremej01/workspace/logs/aqm_qm7x/x0_t_weighting_dip_mpol", type=str,
                         help='Path to test output')
     parser.add_argument('--save-xyz', default=False, action="store_true",
@@ -334,13 +327,9 @@ def get_args():
                         help='Whether or not to calculate xTB properties')
     parser.add_argument('--save-traj', default=False, action="store_true",
                         help='Whether or not to save whole trajectory')
-    parser.add_argument('--fix-noise-and-nodes', default=False, action="store_true",
-                        help='Whether or not to fix noise, e.g., for interpolation or guidance')
     parser.add_argument('--relax-sampling', default=False, action="store_true",
                         help='Whether or not to relax using denoising with timestep 0')
     parser.add_argument('--relax-steps', default=10, type=int, help='How many denoising relaxation steps')
-    parser.add_argument('--ngraphs', default=5000, type=int,
-                            help='How many graphs to sample. Defaults to 5000')
     parser.add_argument('--batch-size', default=80, type=int,
                             help='Batch-size to generate the selected ngraphs. Defaults to 80.')
     parser.add_argument('--ddim', default=False, action="store_true",
@@ -349,15 +338,30 @@ def get_args():
                         help='How to scale the std of noise in the reverse posterior. \
                             Can also be used for DDPM to track a deterministic trajectory. \
                             Defaults to 1.0')
-        #load external models
+    # number of nodes to sample
+    parser.add_argument('--ngraphs', default=5000, type=int,
+                            help='How many graphs to sample. Defaults to 5000')
+    parser.add_argument('--fix-noise-and-nodes', default=False, action="store_true",
+                        help='Whether or not to fix noise, e.g., for interpolation or guidance')
+    parser.add_argument('--n-nodes', default=None, type=int,
+                            help='Number of pre-defined nodes per molecule to sample')
+    parser.add_argument('--vary-n-nodes', default=None, type=int,
+                            help='Adds randomly up to specified nodes to pre-defined nodes per molecule to sample')
+    # load external models
     parser.add_argument("--ckpt-property-model", default=None, type=str)
+    # classifier-guidance
+    parser.add_argument("--classifier-guidance", default=False, action="store_true")
+    parser.add_argument('--classifier-guidance-scale', default=1.0e-4, type=float,
+                        help='How to scale the guidance shift')
+    parser.add_argument('--classifier-guidance-steps', default=100, type=int,
+                        help='How many guidance steps')
     # importance sampling
     parser.add_argument("--importance-sampling", default=False, action="store_true")
     parser.add_argument("--property-tau", default=0.1, type=float)
     parser.add_argument("--every-importance-t", default=5, type=int)
     parser.add_argument("--importance-sampling-start", default=None, type=int)
     parser.add_argument("--importance-sampling-end", default=None, type=int)
-    parser.add_argument("--maximize-score", default=False, action="store_true")
+    parser.add_argument("--minimize-property", default=False, action="store_true")
     args = parser.parse_args()
     return args
 

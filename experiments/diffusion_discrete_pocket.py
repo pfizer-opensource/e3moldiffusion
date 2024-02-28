@@ -2320,9 +2320,11 @@ class Trainer(pl.LightningModule):
                     batch_pocket=batch_pocket,
                     edge_mask_pocket=edge_mask_pocket,
                     property_tau=property_tau,
-                    kind=property_model.regression_property[
-                        0
-                    ],  # currently hardcoded for one property. If multi-property, this needs to be changed!
+                    kind=(
+                        property_model.regression_property[0]
+                        if property_model is not None
+                        else self.hparams.regression_property[0]
+                    ),  # currently hardcoded for one property. If multi-property, this needs to be changed!
                     property_model=property_model,
                 )
                 atom_types, charge_types = node_feats_in.split(
