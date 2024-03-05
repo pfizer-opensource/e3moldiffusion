@@ -355,6 +355,45 @@ class DiffusionLoss(nn.Module):
                 )
             else:
                 acceptor_loss = None
+
+        sa_loss, prop_loss = 0.0, 0.0
+        if pred_data["properties"] is not None and true_data["properties"] is not None:
+            if pred_data["properties"]["sa_score"] is not None:
+                sa_true, sa_pred = (
+                    true_data["properties"]["sa_score"],
+                    pred_data["properties"]["sa_score"],
+                )
+                if weights is not None:
+                    sa_loss = F.mse_loss(
+                        input=sa_pred.squeeze().sigmoid(),
+                        target=sa_true,
+                        reduction="none",
+                    )
+                    sa_loss = torch.mean(weights * sa_loss)
+                else:
+                    sa_loss = F.mse_loss(
+                        input=sa_pred.squeeze().sigmoid(),
+                        target=sa_true,
+                    )
+
+            if pred_data["properties"]["property"] is not None:
+                prop_true, prop_pred = (
+                    true_data["properties"]["property"],
+                    pred_data["properties"]["property"],
+                )
+                if weights is not None:
+                    prop_loss = F.mse_loss(
+                        input=prop_pred.squeeze(dim=1),
+                        target=prop_true,
+                        reduction="none",
+                    )
+                    prop_loss = torch.mean(weights * prop_loss)
+                else:
+                    prop_loss = F.mse_loss(
+                        input=prop_pred.squeeze(dim=1),
+                        target=prop_true,
+                    )
+
         loss = {
             self.regression_key: regr_loss,
             "atoms": atoms_loss,
@@ -367,6 +406,8 @@ class DiffusionLoss(nn.Module):
             "wbo": wbo_loss,
             "donor": donor_loss,
             "acceptor": acceptor_loss,
+            "sa": sa_loss,
+            "property": prop_loss,
         }
 
         return loss

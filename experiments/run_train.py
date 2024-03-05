@@ -182,11 +182,13 @@ if __name__ == "__main__":
         and not (
             "sa_score" in hparams.regression_property
             or "docking_score" in hparams.regression_property
+            or "ic50" in hparams.regression_property
         )
         or hparams.joint_property_prediction
         and not (
             "sa_score" in hparams.regression_property
             or "docking_score" in hparams.regression_property
+            or "ic50" in hparams.regression_property
         )
     ):
         prop_norm = datamodule.compute_mean_mad(hparams.properties_list)
@@ -200,6 +202,7 @@ if __name__ == "__main__":
             hparams.continuous
             and dataset != "crossdocked"
             and dataset != "bindningmoad"
+            and dataset != "kinodata"
         ):
             print("Using continuous diffusion")
             if hparams.diffusion_pretraining:
@@ -212,6 +215,7 @@ if __name__ == "__main__":
             hparams.joint_property_prediction
             and dataset != "crossdocked"
             and dataset != "bindningmoad"
+            and dataset != "kinodata"
         ):
             print("Starting property prediction model via discrete diffusion")
             from experiments.diffusion_discrete import Trainer
@@ -220,6 +224,7 @@ if __name__ == "__main__":
             and hparams.dataset != "crossdocked"
             and hparams.dataset != "bindingmoad"
             and hparams.dataset != "enamine"
+            and dataset != "kinodata"
         ):
             print("Using latent diffusion")
             from experiments.diffusion_latent_discrete import Trainer

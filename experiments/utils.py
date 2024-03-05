@@ -1381,6 +1381,86 @@ def prepare_pocket(
         pocket_one_hot=pocket_one_hot.repeat(repeats, 1),
         pocket_one_hot_batch=pocket_one_hot_batch,
     )
+
+    if ligand_sdf is not None:
+        ligand = Chem.SDMolSupplier(str(ligand_sdf), sanitize=False)[0]
+        batch = (
+            torch.cat(
+                [torch.tensor([i] * ligand.GetNumAtoms()) for i in range(repeats)]
+            )
+            .long()
+            .to(device)
+        )
+        pocket.batch = batch
+
+    return pocket
+
+
+def prepare_pocket_cutoff(
+    biopython_residues,
+    full_atom_encoder,
+    ligand_sdf=None,
+    no_H=True,
+    repeats=1,
+    device="cuda",
+):
+    pocket_one_hot = []
+    ca_mask = []
+
+    # full
+    full_atoms = []
+    full_coords = []
+    m = False
+    for res in biopython_residues:
+        for atom in res.get_atoms():
+            if atom.name == "CA":
+                pocket_one_hot.append(
+                    np.eye(
+                        1,
+                        len(amino_acid_dict),
+                        amino_acid_dict[three_to_one.get(res.get_resname())],
+                    ).squeeze()
+                )
+                m = True
+            else:
+                m = False
+            ca_mask.append(m)
+            full_atoms.append(atom.element)
+            full_coords.append(atom.coord)
+
+    full_atoms = np.stack(full_atoms, axis=0)
+    full_coords = np.stack(full_coords, axis=0)
+    ca_mask = np.array(ca_mask, dtype=bool)
+
+    if no_H:
+        indices_H = np.where(full_atoms == "H")
+        if indices_H[0].size > 0:
+            mask = np.ones(full_atoms.size, dtype=bool)
+            mask[indices_H] = False
+            full_atoms = full_atoms[mask]
+            full_coords = full_coords[mask]
+            ca_mask = ca_mask[mask]
+    pocket_one_hot = torch.from_numpy(np.stack(pocket_one_hot, axis=0))
+    pocket_types = (
+        torch.tensor([full_atom_encoder[a] for a in full_atoms]).long().to(device)
+    )
+    pocket_coord = torch.from_numpy(full_coords)
+    ca_mask = torch.from_numpy(np.array(ca_mask, dtype=bool))
+    pocket_one_hot_batch = torch.arange(repeats).repeat_interleave(
+        len(pocket_one_hot), dim=0
+    )
+    pocket_mask = torch.repeat_interleave(
+        torch.arange(repeats, device=device), len(pocket_coord)
+    ).long()
+
+    pocket = Data(
+        x_pocket=pocket_types.repeat(repeats),
+        pos_pocket=pocket_coord.repeat(repeats, 1),
+        pos_pocket_batch=pocket_mask,
+        pocket_ca_mask=ca_mask.repeat(repeats),
+        pocket_one_hot=pocket_one_hot.repeat(repeats, 1),
+        pocket_one_hot_batch=pocket_one_hot_batch,
+    )
     if ligand_sdf is not None:
         ligand = Chem.SDMolSupplier(str(ligand_sdf), sanitize=False)[0]
         batch = (
@@ -1510,10 +1590,10 @@ def prepare_data_and_generate_ligands(
 ):
     batch_size = args.batch_size if batch_size is None else batch_size
 
-    pocket_data = prepare_pocket(
+    pocket_data = prepare_pocket_cutoff(
         residues,
         dataset_info.atom_encoder,
-        no_H=True,
+        no_H=hparams.remove_hs,
         repeats=batch_size,
         device=device,
         ligand_sdf=sdf_file if not args.encode_ligands else None,

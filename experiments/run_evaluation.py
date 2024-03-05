@@ -177,7 +177,9 @@ def evaluate(args):
             relax_steps=args.relax_steps,
             classifier_guidance=args.classifier_guidance,
             classifier_guidance_scale=args.classifier_guidance_scale,
-            classifier_guidance_steps=args.classifier_guidance_steps,
+            classifier_guidance_start=args.classifier_guidance_start,
+            classifier_guidance_end=args.classifier_guidance_end,
+            every_guidance_t=args.every_guidance_t,
             importance_sampling=args.importance_sampling,
             property_tau=args.property_tau,
             every_importance_t=args.every_importance_t,
@@ -209,7 +211,9 @@ def evaluate(args):
             relax_steps=args.relax_steps,
             classifier_guidance=args.classifier_guidance,
             classifier_guidance_scale=args.classifier_guidance_scale,
-            classifier_guidance_steps=args.classifier_guidance_steps,
+            classifier_guidance_start=args.classifier_guidance_start,
+            classifier_guidance_end=args.classifier_guidance_end,
+            every_guidance_t=args.every_guidance_t,
             importance_sampling=args.importance_sampling,
             property_tau=args.property_tau,
             every_importance_t=args.every_importance_t,
@@ -305,8 +309,8 @@ def evaluate(args):
             pickle.dump(forces_norms, f)
     with open(os.path.join(args.save_dir, "generated_smiles.pickle"), "wb") as f:
         pickle.dump(generated_smiles, f)
-    with open(os.path.join(args.save_dir, "stable_molecules.pickle"), "wb") as f:
-        pickle.dump(stable_molecules, f)
+    # with open(os.path.join(args.save_dir, "stable_molecules.pickle"), "wb") as f:
+    #     pickle.dump(stable_molecules, f)
     with open(os.path.join(args.save_dir, "evaluation.pickle"), "wb") as f:
         pickle.dump(results_dict, f)
 
@@ -353,8 +357,11 @@ def get_args():
     parser.add_argument("--classifier-guidance", default=False, action="store_true")
     parser.add_argument('--classifier-guidance-scale', default=1.0e-4, type=float,
                         help='How to scale the guidance shift')
-    parser.add_argument('--classifier-guidance-steps', default=100, type=int,
-                        help='How many guidance steps')
+    parser.add_argument('--classifier-guidance-start', default=100, type=int,
+                        help='When to start classifier guidance')
+    parser.add_argument('--classifier-guidance-end', default=100, type=int,
+                        help='When to stop classifier guidance')
+    parser.add_argument("--every-guidance-t", default=5, type=int)
     # importance sampling
     parser.add_argument("--importance-sampling", default=False, action="store_true")
     parser.add_argument("--property-tau", default=0.1, type=float)

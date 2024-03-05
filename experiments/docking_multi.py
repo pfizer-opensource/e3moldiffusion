@@ -1,10 +1,8 @@
 import argparse
 import os
 import re
-import shutil
 import tempfile
 from collections import defaultdict
-from glob import glob
 from pathlib import Path
 
 import numpy as np
@@ -13,8 +11,6 @@ from posecheck.posecheck import PoseCheck
 from rdkit import Chem
 from tqdm import tqdm
 
-from experiments.data.ligand.process_pdb import get_pdb_components, write_pdb
-from experiments.data.reconstruct_ob import reconstruct_from_generated
 from experiments.data.utils import save_pickle
 from experiments.utils import retrieve_interactions_per_mol, split_list, write_sdf_file
 
@@ -70,6 +66,7 @@ def calculate_qvina2_score(
     size=20,
     exhaustiveness=16,
     return_rdmol=False,
+    run_eval=True,
 ):
     """
     Calculate the QuickVina2 score
@@ -163,51 +160,54 @@ def calculate_qvina2_score(
             continue
         rdmols.append(rdmol)
 
-    write_sdf_file(out_sdf_file, rdmols)
+    if len(rdmols) > 0 and run_eval:
+        write_sdf_file(out_sdf_file, rdmols)
 
-    # PoseBusters
-    print("Starting evaluation with PoseBusters...")
-    buster = {}
-    buster_mol = PoseBusters(config="mol")
-    buster_mol_df = buster_mol.bust([str(out_sdf_file)], None, None)
-    for metric in buster_mol_df.columns:
-        violin_dict[metric].extend(list(buster_mol_df[metric]))
-        buster[metric] = buster_mol_df[metric].sum() / len(buster_mol_df[metric])
-    buster_dock = PoseBusters(config="dock")
-    buster_dock_df = buster_dock.bust([str(out_sdf_file)], None, str(pdb_file))
-    for metric in buster_dock_df:
-        if metric not in buster:
-            violin_dict[metric].extend(list(buster_dock_df[metric]))
-            buster[metric] = buster_dock_df[metric].sum() / len(buster_dock_df[metric])
-    for k, v in buster.items():
-        buster_dict[k].append(v)
-    print("Done!")
+        # PoseBusters
+        print("Starting evaluation with PoseBusters...")
+        buster = {}
+        buster_mol = PoseBusters(config="mol")
+        buster_mol_df = buster_mol.bust([str(out_sdf_file)], None, None)
+        for metric in buster_mol_df.columns:
+            violin_dict[metric].extend(list(buster_mol_df[metric]))
+            buster[metric] = buster_mol_df[metric].sum() / len(buster_mol_df[metric])
+        buster_dock = PoseBusters(config="dock")
+        buster_dock_df = buster_dock.bust([str(out_sdf_file)], None, str(pdb_file))
+        for metric in buster_dock_df:
+            if metric not in buster:
+                violin_dict[metric].extend(list(buster_dock_df[metric]))
+                buster[metric] = buster_dock_df[metric].sum() / len(
+                    buster_dock_df[metric]
+                )
+        for k, v in buster.items():
+            buster_dict[k].append(v)
+        print("Done!")
 
-    # PoseCheck
-    print("Starting evaluation with PoseCheck...")
-    pc = PoseCheck()
-    pc.load_protein_from_pdb(str(pdb_file))
-    pc.load_ligands_from_mols(rdmols, add_hs=True)
-    interactions = pc.calculate_interactions()
-    interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
-        interactions
-    )
-    for k, v in interactions_per_mol.items():
-        violin_dict[k].extend(v)
-    for k, v in interactions_mean.items():
-        posecheck_dict[k].append(v["mean"])
-    clashes = pc.calculate_clashes()
-    strain_energies = pc.calculate_strain_energy()
-    violin_dict["Clashes"].extend(clashes)
-    violin_dict["Strain Energies"].extend(strain_energies)
-    posecheck_dict["Clashes"].append(np.mean(clashes))
-    posecheck_dict["Strain Energies"].append(np.nanmedian(strain_energies))
-    print("Done!")
+        # PoseCheck
+        print("Starting evaluation with PoseCheck...")
+        pc = PoseCheck()
+        pc.load_protein_from_pdb(str(pdb_file))
+        pc.load_ligands_from_mols(rdmols, add_hs=True)
+        interactions = pc.calculate_interactions()
+        interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
+            interactions
+        )
+        for k, v in interactions_per_mol.items():
+            violin_dict[k].extend(v)
+        for k, v in interactions_mean.items():
+            posecheck_dict[k].append(v["mean"])
+        clashes = pc.calculate_clashes()
+        strain_energies = pc.calculate_strain_energy()
+        violin_dict["Clashes"].extend(clashes)
+        violin_dict["Strain Energies"].extend(strain_energies)
+        posecheck_dict["Clashes"].append(np.mean(clashes))
+        posecheck_dict["Strain Energies"].append(np.nanmedian(strain_energies))
+        print("Done!")
 
-    # try:
-    #     shutil.rmtree(temp_dir)
-    # except UnboundLocalError:
-    #     pass
+        # try:
+        #     shutil.rmtree(temp_dir)
+        # except UnboundLocalError:
+        #     pass
 
     if return_rdmol:
         return scores, rdmols
@@ -233,6 +233,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--write-csv", action="store_true")
     parser.add_argument("--write-dict", action="store_true")
+    parser.add_argument("--avoid-eval", default=False, action="store_true")
     parser.add_argument("--dataset", type=str, default="moad")
     args = parser.parse_args()
 
@@ -286,6 +287,18 @@ if __name__ == "__main__":
             receptor_name = ligand_name.split("_")[0]
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
             pdb_file = Path(args.pdb_dir, receptor_name + ".pdb")
+        elif args.dataset == "kinodata":
+            ligand_name = sdf_file.stem
+            receptor_name = ligand_name.split("_")[0]
+            receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
+            pdb_file = Path(args.pdb_dir, receptor_name + ".pdb")
+        elif args.dataset == "molecular_glue":
+            ligand_name = ("_").join(sdf_file.stem.split("_")[1:])
+            receptor_name = ligand_name.split("_")[0]
+            receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
+            pdb_file = Path(args.pdb_dir, receptor_name + ".pdb")
+        else:
+            raise Exception("Dataset not available!")
 
         # try:
         scores, rdmols = calculate_qvina2_score(
@@ -297,6 +310,7 @@ if __name__ == "__main__":
             violin_dict,
             posecheck_dict,
             return_rdmol=True,
+            run_eval=not args.avoid_eval,
         )
         # except AttributeError as e:
         #     print(e)

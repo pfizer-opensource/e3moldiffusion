@@ -1,5 +1,7 @@
 import logging
 import math
+import os
+import sys
 from collections import Counter
 from typing import Any, Collection, Iterable, List, Optional
 
@@ -13,8 +15,12 @@ from rdkit.Chem import (
     Descriptors,
     Lipinski,
     Mol,
+    RDConfig,
     rdMolDescriptors,
 )
+
+sys.path.append(os.path.join(RDConfig.RDContribDir, "SA_Score"))
+import sascorer
 from rdkit.DataStructs import TanimotoSimilarity
 from rdkit.ML.Descriptors import MoleculeDescriptors
 from scipy import histogram
@@ -1298,9 +1304,10 @@ def processMols(mols):
 
 
 def calculate_sa(rdmol):
-    sa = calculateScore(rdmol)
+    sa = np.array([sascorer.calculateScore(Chem.RemoveHs(rdmol))])
     sa = (sa - 1.0) / (10.0 - 1.0)
     sa = 1.0 - sa
+    sa = torch.from_numpy(sa).float()
     return sa
 
 

@@ -11,13 +11,25 @@ import torch.nn.functional as F
 from rdkit.Chem import RDConfig
 from torch import Tensor
 from torch_geometric.data import Batch
+from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from torch_scatter import scatter_mean
 from tqdm import tqdm
 
 sys.path.append(os.path.join(RDConfig.RDContribDir, "SA_Score"))
 
-from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
+from e3moldiffusion.coordsatomsbonds import (
+    DenoisingEdgeNetwork,
+    LatentEncoderNetwork,
+    SoftMaxAttentionAggregation,
+)
+from e3moldiffusion.latent import PriorLatentLoss, get_latent_model
+from e3moldiffusion.modules import (
+    ClusterContinuousEmbedder,
+    DenseLayer,
+    GatedEquivBlock,
+    TimestepEmbedder,
+)
 from e3moldiffusion.molfeat import get_bond_feature_dims
 from experiments.data.abstract_dataset import AbstractDatasetInfos
 from experiments.data.distributions import prepare_context
@@ -44,6 +56,7 @@ from experiments.utils import (
     get_molecules,
     load_bond_model,
     load_energy_model,
+    load_latent_encoder,
     load_model,
     load_property_model,
     zero_mean,
@@ -167,6 +180,59 @@ class Trainer(pl.LightningModule):
                 joint_property_prediction=hparams["joint_property_prediction"],
                 regression_property=hparams["regression_property"],
             )
+
+        self.max_nodes = dataset_info.max_n_nodes
+
+        if self.hparams.use_centroid_context_embed:
+            self.cluster_embed = ClusterContinuousEmbedder(
+                self.hparams.num_context_features,
+                self.hparams.latent_dim,
+                dropout_prob=0.1,
+            )
+            self.t_embedder = TimestepEmbedder(self.hparams.latent_dim)
+
+        if self.hparams.use_latent_encoder:
+            if self.hparams.load_ckpt_from_pretrained is not None:
+                (
+                    self.encoder,
+                    self.latent_lin,
+                    self.graph_pooling,
+                    self.mu_logvar_z,
+                    self.node_z,
+                    self.latentmodel,
+                ) = load_latent_encoder(
+                    filepath=self.hparams.load_ckpt_from_pretrained,
+                    max_n_nodes=self.max_nodes,
+                )
+            else:
+                self.encoder = LatentEncoderNetwork(
+                    num_atom_features=self.num_atom_types,
+                    num_bond_types=self.num_bond_classes,
+                    edge_dim=hparams["edim_latent"],
+                    cutoff_local=hparams["cutoff_local"],
+                    hn_dim=(hparams["sdim_latent"], hparams["vdim_latent"]),
+                    num_layers=hparams["num_layers_latent"],
+                    vector_aggr=hparams["vector_aggr"],
+                    intermediate_outs=hparams["intermediate_outs"],
+                    use_pos_norm=hparams[
+                        "use_pos_norm"
+                    ],  # for old checkpoint to start sampling.
+                )
+                self.latent_lin = GatedEquivBlock(
+                    in_dims=(hparams["sdim_latent"], hparams["vdim_latent"]),
+                    out_dims=(hparams["latent_dim"], None),
+                )
+                self.graph_pooling = SoftMaxAttentionAggregation(
+                    dim=hparams["latent_dim"]
+                )
+                m = 2 if hparams["latentmodel"] == "vae" else 1
+                self.mu_logvar_z = DenseLayer(
+                    hparams["latent_dim"], m * hparams["latent_dim"]
+                )
+                self.node_z = DenseLayer(hparams["latent_dim"], self.max_nodes)
+                self.latentmodel = get_latent_model(hparams)
+
+            self.latentloss = PriorLatentLoss(kind=hparams.get("latentmodel"))
 
         self.sde_pos = DiscreteDDPM(
             beta_min=hparams["beta_min"],
@@ -478,6 +544,16 @@ class Trainer(pl.LightningModule):
 
             final_loss = final_loss + prop_loss
 
+        if self.hparams.use_latent_encoder:
+            prior_loss = self.latentloss(inputdict=out_dict.get("latent"))
+            num_nodes_loss = F.cross_entropy(
+                out_dict["nodes"]["num_nodes_pred"], out_dict["nodes"]["num_nodes_true"]
+            )
+
+            final_loss = (
+                final_loss + self.hparams.prior_beta * prior_loss + num_nodes_loss
+            )
+
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
             print(f"Detected NaNs. Terminating training at epoch {self.current_epoch}")
@@ -497,6 +573,50 @@ class Trainer(pl.LightningModule):
 
         return final_loss
 
+    def encode_ligand(
+        self,
+        batch,
+    ):
+        atom_types = batch.x
+        pos = batch.pos
+        data_batch = batch.batch
+        bond_edge_index = batch.edge_index
+        bond_edge_attr = batch.edge_attr
+        bond_edge_index, bond_edge_attr = sort_edge_index(
+            edge_index=bond_edge_index, edge_attr=bond_edge_attr, sort_by_row=False
+        )
+
+        bs = len(data_batch.unique())
+        # latent encoder
+        edge_index_local = radius_graph(
+            x=pos,
+            r=self.hparams.cutoff_local,
+            batch=data_batch,
+            max_num_neighbors=128,
+            flow="source_to_target",
+        )
+        edge_index_local, edge_attr_local = coalesce_edges(
+            edge_index=edge_index_local,
+            bond_edge_index=bond_edge_index,
+            bond_edge_attr=bond_edge_attr,
+            n=pos.size(0),
+        )
+        edge_attr_local = F.one_hot(
+            edge_attr_local, num_classes=self.num_bond_classes
+        ).float()
+
+        latent_out = self.encoder(
+            x=F.one_hot(atom_types.long(), num_classes=self.num_atom_types).float(),
+            pos=pos,
+            edge_index_local=edge_index_local,
+            edge_attr_local=edge_attr_local,
+            batch=data_batch,
+        )
+        latent_out, _ = self.latent_lin(x=(latent_out["s"], latent_out["v"]))
+        z = self.graph_pooling(latent_out, data_batch, dim=0, dim_size=bs)
+        z = self.mu_logvar_z(z)
+        return z
+
     def forward(self, batch: Batch, t: Tensor):
         atom_types: Tensor = batch.x
         pos: Tensor = batch.pos
@@ -515,6 +635,56 @@ class Trainer(pl.LightningModule):
         temb = t.float() / self.hparams.timesteps
         temb = temb.clamp(min=self.hparams.eps_min)
         temb = temb.unsqueeze(dim=1)
+
+        z = None
+        if self.hparams.use_centroid_context_embed:
+            assert self.hparams.latent_dim is not None
+            c1 = self.t_embedder(t)
+            c2 = self.cluster_embed(context, self.training)
+            if self.hparams.use_latent_encoder:
+                c = c1 + c2
+            else:
+                z = c1 + c2
+            context = None
+
+        if self.hparams.use_latent_encoder:
+            z = self.encode_ligand(batch)
+            # latent prior model
+            if self.hparams.latentmodel == "diffusion":
+                # train the latent score network
+                zmean, zstd = self.sde_pos.marginal_prob(z, t)
+                zin = zmean + zstd * torch.randn_like(z)
+                if self.hparams.latent_detach:
+                    zin = zin.detach()
+                zpred = self.latentmodel.forward(zin, temb)
+                mu = logvar = w = delta_log_pw = None
+            elif self.hparams.latentmodel == "nflow":
+                # train the latent flow network
+                if self.hparams.latent_detach:
+                    zin = z.detach()
+                else:
+                    zin = z
+                w, delta_log_pw = self.latentmodel.f(zin)
+                mu = logvar = zpred = None
+            elif self.hparams.latentmodel == "mmd":
+                mu = logvar = zpred = w = delta_log_pw = None
+            elif self.hparams.latentmodel == "vae":
+                mu, logvar = z.chunk(2, dim=-1)
+                z = mu + torch.exp(0.5 * logvar) * torch.randn_like(mu)
+                zpred = w = delta_log_pw = None
+
+            if self.hparams.use_centroid_context_embed:
+                z = z + c
+            latentdict = {
+                "z_true": z,
+                "z_pred": zpred,
+                "mu": mu,
+                "logvar": logvar,
+                "w": w,
+                "delta_log_pw": delta_log_pw,
+            }
+            pred_num_nodes = self.node_z(z)
+            true_num_nodes = batch.batch.bincount()
 
         pos_centered = zero_mean(pos, data_batch, dim=0, dim_size=bs)
 
@@ -574,6 +744,7 @@ class Trainer(pl.LightningModule):
         out = self.model(
             x=atom_feats_in_perturbed,
             t=temb,
+            z=z,
             pos=pos_perturbed,
             edge_index_local=None,
             edge_index_global=edge_index_global,
@@ -595,6 +766,13 @@ class Trainer(pl.LightningModule):
         out["atoms_true"] = atom_types.argmax(dim=-1)
         out["bonds_true"] = edge_attr_global
         out["charges_true"] = charges.argmax(dim=-1)
+
+        if self.hparams.use_latent_encoder:
+            out["latent"] = latentdict
+            out["nodes"] = {
+                "num_nodes_pred": pred_num_nodes,
+                "num_nodes_true": true_num_nodes - 1,
+            }
 
         out["bond_aggregation_index"] = edge_index_global[1]
 
@@ -652,7 +830,9 @@ class Trainer(pl.LightningModule):
         minimize_property: bool = False,
         classifier_guidance: bool = False,
         classifier_guidance_scale: float = 1.0e-4,
-        classifier_guidance_steps: int = 100,
+        classifier_guidance_start: int = 200,
+        classifier_guidance_end: int = 300,
+        every_guidance_t: int = 5,
         importance_sampling: bool = False,
         property_tau: float = 0.1,
         every_importance_t: int = 5,
@@ -671,6 +851,13 @@ class Trainer(pl.LightningModule):
         if verbose:
             if self.local_rank == 0:
                 print(f"Creating {ngraphs} graphs in {l} batches")
+
+        if self.hparams.use_latent_encoder:
+            dataloader = (
+                self.trainer.datamodule.val_dataloader()
+                if not run_test_eval
+                else self.trainer.datamodule.test_dataloader()
+            )
 
         molecule_list = []
         for i, num_graphs in enumerate(l):
@@ -702,7 +889,9 @@ class Trainer(pl.LightningModule):
                 relax_steps=relax_steps,
                 classifier_guidance=classifier_guidance,
                 classifier_guidance_scale=classifier_guidance_scale,
-                classifier_guidance_steps=classifier_guidance_steps,
+                classifier_guidance_start=classifier_guidance_start,
+                classifier_guidance_end=classifier_guidance_end,
+                every_guidance_t=every_guidance_t,
                 importance_sampling=importance_sampling,
                 property_tau=property_tau,
                 every_importance_t=every_importance_t,
@@ -811,8 +1000,10 @@ class Trainer(pl.LightningModule):
         relax_steps: int = 10,
         ckpt_property_model: str = None,
         classifier_guidance: bool = False,
-        classifier_guidance_steps: int = 100,
+        classifier_guidance_start: int = 200,
+        classifier_guidance_end: int = 300,
         classifier_guidance_scale: float = 1.0e-4,
+        every_guidance_t: int = 5,
         importance_sampling: bool = False,
         property_tau: float = 0.1,
         every_importance_t: int = 5,
@@ -871,8 +1062,10 @@ class Trainer(pl.LightningModule):
                     relax_sampling=relax_sampling,
                     relax_steps=relax_steps,
                     classifier_guidance=classifier_guidance,
-                    classifier_guidance_steps=classifier_guidance_steps,
+                    classifier_guidance_start=classifier_guidance_start,
+                    classifier_guidance_end=classifier_guidance_end,
                     classifier_guidance_scale=classifier_guidance_scale,
+                    every_guidance_t=every_guidance_t,
                     importance_sampling=importance_sampling,
                     property_tau=property_tau,
                     every_importance_t=every_importance_t,
@@ -1301,7 +1494,9 @@ class Trainer(pl.LightningModule):
         fixed_context: float = None,
         resample_steps: int = 1,
         classifier_guidance: bool = False,
-        classifier_guidance_steps: int = 100,
+        classifier_guidance_start: int = 200,
+        classifier_guidance_end: int = 300,
+        every_guidance_t: int = 5,
         classifier_guidance_scale: float = 1.0e-4,
         importance_sampling: bool = False,
         property_tau: float = 0.1,
@@ -1310,6 +1505,7 @@ class Trainer(pl.LightningModule):
         importance_sampling_end: int = 200,
         ckpt_property_model: str = None,
         minimize_property: bool = True,
+        data_batch=None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         if num_nodes is not None:
             batch_num_nodes = num_nodes
@@ -1337,6 +1533,32 @@ class Trainer(pl.LightningModule):
         )
         bs = int(batch.max()) + 1
 
+        z = None
+        context = None
+        if self.prop_dist is not None:
+            if fixed_context is not None:
+                fixed_context = (
+                    torch.tensor(fixed_context).unsqueeze(0).repeat(num_graphs, 1)
+                )
+                context = self.prop_dist.sample_fixed(fixed_context).to(self.device)
+            else:
+                context = self.prop_dist.sample_batch(batch_num_nodes).to(self.device)
+
+            if self.hparams.use_centroid_context_embed:
+                assert self.hparams.latent_dim is not None
+                c2 = self.cluster_embed(context, self.training)
+                if self.hparams.use_latent_encoder:
+                    c = c2
+                else:
+                    z = c2
+            context = context[batch]
+
+        if self.hparams.use_latent_encoder:
+            # encode ligand
+            z = self.encode_ligand(data_batch.to(self.device))
+            if self.hparams.use_centroid_context_embed:
+                z = z + c
+
         if classifier_guidance and ckpt_property_model is not None:
             t = torch.arange(0, self.hparams.timesteps)
             alphas = self.sde_pos.alphas_cumprod[t]
@@ -1358,22 +1580,6 @@ class Trainer(pl.LightningModule):
             )
             property_model.to(self.device)
             property_model.eval()
-
-        # sample context condition
-        if self.prop_dist is not None and self.hparams.context_mapping:
-            if fixed_context is not None:
-                fixed_context = (
-                    torch.tensor(fixed_context).unsqueeze(0).repeat(num_graphs, 1)
-                )
-                context = self.prop_dist.sample_fixed(fixed_context).to(self.device)[
-                    batch
-                ]
-            else:
-                context = self.prop_dist.sample_batch(batch_num_nodes).to(self.device)[
-                    batch
-                ]
-        else:
-            context = None
 
         # initialiaze the 0-mean point cloud from N(0, I)
         pos = torch.randn(
@@ -1508,6 +1714,9 @@ class Trainer(pl.LightningModule):
             )
             t = s + 1
 
+            if self.hparams.use_centroid_context_embed:
+                z_t = z + self.t_embedder(t)
+
             temb = t / self.hparams.timesteps
             temb = temb.unsqueeze(dim=1)
 
@@ -1515,6 +1724,7 @@ class Trainer(pl.LightningModule):
                 node_feats_in = torch.cat([atom_types, charge_types], dim=-1)
                 out = self.model(
                     x=node_feats_in,
+                    z=z_t if self.hparams.use_centroid_context_embed else z,
                     t=temb,
                     pos=pos,
                     edge_index_local=edge_index_local,
@@ -1728,7 +1938,8 @@ class Trainer(pl.LightningModule):
                 if (
                     classifier_guidance
                     and property_model is not None
-                    and timestep <= classifier_guidance_steps
+                    and i % every_guidance_t == 0
+                    and classifier_guidance_start <= i <= classifier_guidance_end
                 ):
                     signal = alphas[timestep] / (classifier_guidance_scale * 10)
                     (
@@ -1751,9 +1962,6 @@ class Trainer(pl.LightningModule):
                         batch_edge_global=batch_edge_global,
                         batch_num_nodes=batch_num_nodes,
                         context=context,
-                        maximize_score=not minimize_property,
-                        property_tau=property_tau,
-                        property_model=property_model,
                         minimize_property=minimize_property,
                         guidance_scale=classifier_guidance_scale,
                         signal=signal,

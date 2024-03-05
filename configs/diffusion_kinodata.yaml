@@ -56,7 +56,7 @@ vector_aggr: mean
 
 #DATA
 dataset: kinodata
-dataset_root: /scratch1/cremej01/data/kinodata
+dataset_root: /scratch1/cremej01/data/kinodata_noH_cutoff5
 
 # DIFFUSION
 additional_feats: false

@@ -26,6 +26,12 @@ def pdb_to_pdbqt(pdb_file, pdbqt_file, dataset):
                 pdb_file, pdbqt_file
             )
         )
+    elif dataset == "kinodata":
+        os.system(
+            "prepare_receptor4.py -r {} -o {} -A checkhydrogens -e".format(
+                pdb_file, pdbqt_file
+            )
+        )
     else:
         raise NotImplementedError
     return pdbqt_file

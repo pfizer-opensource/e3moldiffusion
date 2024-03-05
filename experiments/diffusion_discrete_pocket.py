@@ -464,7 +464,7 @@ class Trainer(pl.LightningModule):
         charges_loss,
         bonds_loss,
         sa_loss,
-        docking_loss,
+        property_loss,
         dloss,
         batch_size,
         stage,
@@ -524,10 +524,10 @@ class Trainer(pl.LightningModule):
                 sync_dist=self.hparams.gpus > 1 and stage == "val",
             )
 
-        if docking_loss is not None:
+        if property_loss is not None:
             self.log(
-                f"{stage}/docking_loss",
-                docking_loss,
+                f"{stage}/property_loss",
+                property_loss,
                 on_step=True,
                 batch_size=batch_size,
                 prog_bar=(stage == "train"),
@@ -603,6 +603,7 @@ class Trainer(pl.LightningModule):
             "atoms": out_dict["atoms_true"],
             "charges": out_dict["charges_true"],
             "bonds": out_dict["bonds_true"],
+            "properties": out_dict["property_true"],
         }
 
         coords_pred = out_dict["coords_pred"]
@@ -616,6 +617,7 @@ class Trainer(pl.LightningModule):
             "atoms": atoms_pred,
             "charges": charges_pred,
             "bonds": edges_pred,
+            "properties": out_dict["property_pred"],
         }
 
         loss = self.diffusion_loss(
@@ -634,41 +636,9 @@ class Trainer(pl.LightningModule):
             + self.hparams.lc_atoms * loss["atoms"]
             + self.hparams.lc_bonds * loss["bonds"]
             + self.hparams.lc_charges * loss["charges"]
+            + self.hparams.lc_properties * loss["sa"]
+            + self.hparams.lc_properties * loss["property"]
         )
-
-        sa_loss, docking_loss = None, None
-        if self.hparams.joint_property_prediction:
-            assert (
-                "sa_score" in self.hparams.regression_property
-                or "docking_score" in self.hparams.regression_property
-            )
-            prop_loss = 0.0
-            if "sa_score" in self.hparams.regression_property:
-                sa_true, sa_pred = (
-                    out_dict["properties_true"]["sa_score"],
-                    out_dict["property_pred"]["sa_score"],
-                )
-                sa_loss = F.mse_loss(
-                    input=sa_pred.squeeze(dim=1).sigmoid(),
-                    target=sa_true,
-                    reduction="none",
-                )
-                sa_loss = torch.mean(weights * sa_loss)
-                prop_loss = prop_loss + sa_loss
-            if "docking_score" in self.hparams.regression_property:
-                docking_true, docking_pred = (
-                    out_dict["properties_true"]["docking_score"],
-                    out_dict["property_pred"]["docking_score"],
-                )
-                docking_loss = F.mse_loss(
-                    input=docking_pred.squeeze(dim=1),
-                    target=docking_true,
-                    reduction="none",
-                )
-                docking_loss = torch.mean(weights * docking_loss)
-                prop_loss = prop_loss + docking_loss
-
-            final_loss = final_loss + prop_loss
 
         if self.hparams.use_latent_encoder:
             prior_loss = self.latentloss(inputdict=out_dict.get("latent"))
@@ -728,8 +698,8 @@ class Trainer(pl.LightningModule):
             loss["atoms"],
             loss["charges"],
             loss["bonds"],
-            sa_loss,
-            docking_loss,
+            loss["sa"],
+            loss["property"],
             dloss,
             batch_size,
             stage,
@@ -1092,6 +1062,11 @@ class Trainer(pl.LightningModule):
             }
 
         if self.hparams.joint_property_prediction:
+            assert (
+                "sa_score" in self.hparams.regression_property
+                or "docking_score" in self.hparams.regression_property
+                or "ic50" in self.hparams.regression_property
+            )
             if "sa_score" in self.hparams.regression_property:
                 label_sa = (
                     torch.tensor([calculate_sa(mol) for mol in batch.mol])
@@ -1100,15 +1075,26 @@ class Trainer(pl.LightningModule):
                 )
             else:
                 label_sa = None
-            if "docking_score" in self.hparams.regression_property:
-                label_dock = batch.docking_scores.float()
+            if (
+                "docking_score" in self.hparams.regression_property
+                or "ic50" in self.hparams.regression_property
+            ):
+                if "docking_score" in self.hparams.regression_property:
+                    label_prop = batch.docking_scores.float()
+                elif "ic50" in self.hparams.regression_property:
+                    label_prop = batch.ic50.float()
+                else:
+                    raise Exception(
+                        "Specified regression property ot supported. Choose docking_score or ic50"
+                    )
             else:
-                label_dock = None
-            out["properties_true"] = {"sa_score": label_sa, "docking_score": label_dock}
-            sa_pred, docking_pred = out["property_pred"]
-            out["property_pred"] = {"sa_score": sa_pred, "docking_score": docking_pred}
+                label_prop = None
+            out["property_true"] = {"sa_score": label_sa, "property": label_prop}
+            sa_pred, prop_pred = out["property_pred"]
+            out["property_pred"] = {"sa_score": sa_pred, "property": prop_pred}
         else:
-            out["properties_true"] = None
+            out["property_true"] = None
+            out["property_pred"] = None
 
         if self.hparams.bonds_continuous:
             out["bonds_noise_true"] = edge_attr_global_noise
@@ -1262,7 +1248,10 @@ class Trainer(pl.LightningModule):
         build_obabel_mol: bool = False,
         run_test_eval: bool = False,
         guidance_scale: float = 1.0e-4,
-        property_guidance: bool = False,
+        property_classifier_guidance=None,
+        property_classifier_guidance_complex=False,
+        property_classifier_self_guidance=False,
+        classifier_guidance_scale=None,
         ckpt_property_model: str = None,
         n_nodes_bias: int = 0,
         device: str = "cpu",
@@ -1297,9 +1286,11 @@ class Trainer(pl.LightningModule):
                 ddpm=ddpm,
                 eta_ddim=eta_ddim,
                 every_k_step=every_k_step,
-                guidance_scale=guidance_scale,
-                property_guidance=property_guidance,
                 ckpt_property_model=ckpt_property_model,
+                property_classifier_guidance=property_classifier_guidance,
+                property_classifier_guidance_complex=property_classifier_guidance_complex,
+                property_classifier_self_guidance=property_classifier_self_guidance,
+                classifier_guidance_scale=classifier_guidance_scale,
                 save_dir=save_dir,
                 build_obabel_mol=build_obabel_mol,
                 iteration=i,
@@ -1415,7 +1406,9 @@ class Trainer(pl.LightningModule):
             num_nodes_lig = pocket_data.batch.bincount().to(self.device)
             if vary_n_nodes:
                 num_nodes_lig += torch.randint(
-                    low=0, high=n_nodes_bias, size=num_nodes_lig.size()
+                    low=-n_nodes_bias // 2,
+                    high=n_nodes_bias // 2,
+                    size=num_nodes_lig.size(),
                 ).to(self.device)
             else:
                 num_nodes_lig += n_nodes_bias
@@ -1577,7 +1570,7 @@ class Trainer(pl.LightningModule):
         To make it more "uniform", we can use temperature annealing in the softmax
         """
 
-        assert kind in ["sa_score", "docking_score", "pic50", "joint"]
+        assert kind in ["sa_score", "docking_score", "ic50", "joint"]
 
         if sa_model is None and property_model is None:
             assert self.hparams.joint_property_prediction
@@ -1618,7 +1611,7 @@ class Trainer(pl.LightningModule):
                 ca_mask=ca_mask,
                 batch_pocket=batch_pocket,
             )
-        elif kind == "docking_score" or kind == "pic50" and property_model is not None:
+        elif kind == "docking_score" or kind == "ic50" and property_model is not None:
             out = property_model(
                 x=node_feats_in,
                 t=temb,
@@ -1645,8 +1638,12 @@ class Trainer(pl.LightningModule):
         prop_pred = out["property_pred"]
         sa, prop = prop_pred
         sa = sa.squeeze(1).sigmoid() if sa is not None else None
-        if prop is not None and kind == "docking_score":
-            prop = -1.0 * prop.squeeze(1)
+
+        if prop is not None:
+            if prop.dim() == 2:
+                prop = prop.squeeze()
+            if kind == "docking_score":
+                prop = -1.0 * prop
 
         if not maximize_score and sa is not None:
             sa = 1.0 - sa
@@ -1667,7 +1664,7 @@ class Trainer(pl.LightningModule):
         elif kind == "sa_score":
             assert sa is not None
             weights = weights_sa
-        elif kind == "docking_score" or kind == "pic50":
+        elif kind == "docking_score" or kind == "ic50":
             assert prop is not None
             weights = weights_prop
 
