@@ -2,6 +2,7 @@ import argparse
 import os
 import pickle
 import warnings
+import json
 
 import numpy as np
 import torch
@@ -186,6 +187,7 @@ def evaluate(args):
             ckpt_property_model=args.ckpt_property_model,
             minimize_property=args.minimize_property,
             device="cpu",
+            renormalize_property=args.renormalize_property,
         )
     else:
         print("\nStarting sampling...\n")
@@ -218,6 +220,7 @@ def evaluate(args):
             ckpt_property_model=args.ckpt_property_model,
             minimize_property=args.minimize_property,
             device="cpu",
+            renormalize_property=args.renormalize_property,
         )
 
     print("\nFinished sampling!\n")
@@ -309,7 +312,15 @@ def evaluate(args):
         pickle.dump(stable_molecules, f)
     with open(os.path.join(args.save_dir, "evaluation.pickle"), "wb") as f:
         pickle.dump(results_dict, f)
-
+        
+    if args.calculate_props:
+        with open(os.path.join(args.save_dir, "polarizabilities.pickle"), "wb") as f:
+            pickle.dump(polarizabilities, f)
+            
+    # save arguments
+    argsdicts = vars(args)
+    with open(os.path.join(args.save_dir, "args.json"), "w") as f:
+        json.dump(argsdicts, f)
 
 def get_args():
     # fmt: off
@@ -362,6 +373,8 @@ def get_args():
     parser.add_argument("--importance-sampling-start", default=None, type=int)
     parser.add_argument("--importance-sampling-end", default=None, type=int)
     parser.add_argument("--minimize-property", default=False, action="store_true")
+    parser.add_argument("--renormalize-property", default=False, action="store_true")
+
     args = parser.parse_args()
     return args
 

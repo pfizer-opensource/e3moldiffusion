@@ -65,6 +65,7 @@ class DenoisingEdgeNetwork(nn.Module):
         joint_property_prediction: bool = False,
         regression_property: list = None,
         bond_prediction: bool = False,
+        dynamic_graph: bool = False,
     ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
@@ -136,6 +137,7 @@ class DenoisingEdgeNetwork(nn.Module):
             use_out_norm=use_out_norm,
             ligand_pocket_interaction=ligand_pocket_interaction,
             store_intermediate_coords=store_intermediate_coords,
+            dynamic_graph=dynamic_graph,
         )
 
         if property_prediction:
@@ -312,7 +314,10 @@ class DenoisingEdgeNetwork(nn.Module):
             batch_lig=batch_lig,
             pocket_mask=pocket_mask,
             edge_mask_pocket=edge_mask_pocket,
+            edge_mask_ligand=edge_mask,
+            batch_pocket=batch_pocket,
         )
+        edge_mask, edge_mask_pocket = out["edge_mask_ligand"], out["edge_mask_pocket"]
 
         coords_pred, atoms_pred, bonds_pred, property_pred = self.prediction_head(
             x=out,

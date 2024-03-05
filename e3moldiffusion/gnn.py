@@ -16,6 +16,8 @@ from e3moldiffusion.convs import (
 )
 from e3moldiffusion.modules import AdaptiveLayerNorm, DenseLayer, LayerNorm, SE3Norm
 
+from torch_geometric.utils import remove_self_loops, sort_edge_index
+from experiments.utils import get_edges
 
 class EQGATEnergyGNN(nn.Module):
     def __init__(
@@ -105,6 +107,7 @@ class EQGATEdgeGNN(nn.Module):
         property_prediction: bool = False,
         store_intermediate_coords: bool = False,
         ligand_pocket_interaction: bool = False,
+        dynamic_graph: bool = False,
     ):
         super(EQGATEdgeGNN, self).__init__()
 
@@ -124,8 +127,11 @@ class EQGATEdgeGNN(nn.Module):
 
         self.sdim, self.vdim = hn_dim
         self.edge_dim = edge_dim
-
+        self.dynamic_graph = dynamic_graph
         convs = []
+        
+        self.cutoff_p = 4.0
+        self.cutoff_lp = 4.0
 
         for i in range(num_layers):
             ## second or second last layer
@@ -221,11 +227,22 @@ class EQGATEdgeGNN(nn.Module):
         batch_lig: OptTensor = None,
         pocket_mask: OptTensor = None,
         edge_mask_pocket: OptTensor = None,
+        edge_mask_ligand: OptTensor = None,
+        batch_pocket: OptTensor = None,
     ) -> Dict:
         # edge_attr_xyz (distances, cosines, relative_positions, edge_features)
         # (E, E, E x 3, E x F)
 
         pos_list = []
+        
+        if self.dynamic_graph:
+            E_dense = self.to_dense_edge_tensor(edge_index=edge_index_global,
+                                                edge_attr=edge_attr_global[-1],
+                                                num_nodes=s.size(0),
+                                                )
+        else:
+            E_dense = 0.0
+            
         for i in range(len(self.convs)):
             edge_index_in = edge_index_global
             edge_attr_in = edge_attr_global
@@ -244,7 +261,28 @@ class EQGATEdgeGNN(nn.Module):
             )
 
             s, v, p, e = out["s"], out["v"], out["p"], out["e"]
-            # p = p - scatter_mean(p, batch, dim=0)[batch]
+            
+            if self.dynamic_graph:
+                E_dense[edge_index_global[0], edge_index_global[1], :] = e
+                with torch.no_grad():
+                    pos_pocket = p[(~pocket_mask).squeeze()]
+                    pos_ligand = p[pocket_mask.squeeze()]
+                
+                edge_index_global = get_edges(batch_mask_lig=batch_lig,
+                                              batch_mask_pocket=batch_pocket,
+                                              pos_lig=pos_ligand,
+                                              pos_pocket=pos_pocket,
+                                              cutoff_p=self.cutoff_p,
+                                              cutoff_lp=self.cutoff_lp,
+                                              return_full_adj=False,
+                                              )
+                edge_index_global = sort_edge_index(edge_index=edge_index_global,
+                                                    sort_by_row=False)
+                edge_index_global, _ = remove_self_loops(edge_index_global)
+                edge_mask_ligand = (edge_index_global[0] < len(batch_lig)) & (edge_index_global[1] < len(batch_lig))
+                edge_mask_pocket = (edge_index_global[0] >= len(batch_lig)) & (edge_index_global[1] >= len(batch_lig))
+                e = E_dense[edge_index_global[0], edge_index_global[1], :]
+                
             if self.recompute_edge_attributes:
                 edge_attr_global = self.calculate_edge_attrs(
                     edge_index=edge_index_global,
@@ -253,6 +291,7 @@ class EQGATEdgeGNN(nn.Module):
                     sqrt=True,
                     batch=batch if self.ligand_pocket_interaction else None,
                 )
+                
             if self.store_intermediate_coords and self.training:
                 if i < len(self.convs) - 1:
                     if pocket_mask is not None:
@@ -266,7 +305,9 @@ class EQGATEdgeGNN(nn.Module):
 
         if self.out_norm is not None:
             s, v = self.out_norm(x={"s": s, "v": v, "z": z}, batch=batch)
-        out = {"s": s, "v": v, "e": e, "p": p, "p_list": pos_list}
+        out = {"s": s, "v": v, "e": e, "p": p, "p_list": pos_list,
+               "edge_mask_ligand": edge_mask_ligand, "edge_mask_pocket": edge_mask_pocket
+               }
 
         return out
 

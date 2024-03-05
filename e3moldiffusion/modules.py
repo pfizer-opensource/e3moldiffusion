@@ -64,7 +64,7 @@ class PredictionHeadEdge(nn.Module):
                     return_vector=False,
                 )
             if "sa_score" in self.regression_property:
-                self.sa_mlp = nn.Sequential(
+                self.property_mlp = nn.Sequential(
                     DenseLayer(self.sdim, self.sdim, activation=nn.SiLU()),
                     DenseLayer(self.sdim, 1, activation=nn.Identity()),
                 )
@@ -89,7 +89,7 @@ class PredictionHeadEdge(nn.Module):
             ):
                 reset(self.prop_mlp)
             if "sa_score" in self.regression_property:
-                reset(self.sa_mlp)
+                reset(self.property_mlp)
 
     def forward(
         self,
@@ -178,7 +178,7 @@ class PredictionHeadEdge(nn.Module):
                 sa_pred = scatter_mean(
                     s_prop, index=aggr_idx, dim=0, dim_size=batch_size
                 )
-                sa_pred = self.sa_mlp(sa_pred)
+                sa_pred = self.property_mlp(sa_pred)
             else:
                 sa_pred = None
             property_pred = (sa_pred, prop_pred)

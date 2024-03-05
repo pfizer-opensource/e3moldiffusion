@@ -619,7 +619,7 @@ def load_latent_encoder(filepath, max_n_nodes, device="cpu"):
     return encoder, latent_lin, graph_pooling, mu_logvar_z, node_z, latentmodel
 
 
-def create_model(hparams, num_atom_features, num_bond_classes):
+def create_model(hparams, num_atom_features, num_bond_classes=5):
     from e3moldiffusion.coordsatomsbonds import DenoisingEdgeNetwork
 
     # backward compatability:
@@ -637,6 +637,8 @@ def create_model(hparams, num_atom_features, num_bond_classes):
         hparams["ligand_pocket_hidden_distance"] = False
     if "use_out_norm" not in hparams.keys():
         hparams["use_out_norm"] = True
+    if "dynamic_graph" not in hparams.keys():
+        hparams["dynamic_graph"] = False
 
     model = DenoisingEdgeNetwork(
         hn_dim=(hparams["sdim"], hparams["vdim"]),
@@ -665,6 +667,7 @@ def create_model(hparams, num_atom_features, num_bond_classes):
         property_prediction=hparams["property_prediction"],
         joint_property_prediction=hparams["joint_property_prediction"],
         regression_property=hparams["regression_property"],
+        dynamic_graph=hparams["dynamic_graph"],
     )
     return model
 
@@ -1024,7 +1027,7 @@ def effective_batch_size(
 
 
 def get_edges(
-    batch_mask_lig, batch_mask_pocket, pos_lig, pos_pocket, cutoff_p, cutoff_lp
+    batch_mask_lig, batch_mask_pocket, pos_lig, pos_pocket, cutoff_p, cutoff_lp, return_full_adj=False,
 ):
     adj_ligand = batch_mask_lig[:, None] == batch_mask_lig[None, :]
     adj_pocket = batch_mask_pocket[:, None] == batch_mask_pocket[None, :]
@@ -1045,7 +1048,10 @@ def get_edges(
     )
     edges = torch.stack(torch.where(adj), dim=0)
 
-    return edges
+    if not return_full_adj:
+        return edges
+    else:
+        return edges, adj
 
 
 def get_molecules(
@@ -1565,6 +1571,7 @@ def prepare_data_and_generate_ligands(
             property_tau=args.property_tau,
             maximize_property=not args.minimize_property,
             encode_ligand=args.encode_ligands,
+            prior_n_atoms=args.prior_n_atoms,
         )
     del pocket_data
     torch.cuda.empty_cache()

@@ -60,6 +60,16 @@ from experiments.utils import (
 )
 from experiments.xtb_energy import calculate_xtb_energy
 
+import numpy as np
+from rdkit import Chem
+from rdkit.Chem import RDConfig
+import os
+import sys
+sys.path.append(os.path.join(RDConfig.RDContribDir, 'SA_Score'))
+import sascorer
+
+from experiments.data.ligand.utils import sample_atom_num, get_space_size
+
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(
     logging.NullHandler()
@@ -98,8 +108,13 @@ class Trainer(pl.LightningModule):
             hparams["ligand_pocket_hidden_distance"] = False
         if "use_out_norm" not in hparams.keys():
             hparams["use_out_norm"] = True
-
+        if "dynamic_graph" not in hparams.keys():
+            hparams["dynamic_graph"] = False
+            
         self.save_hyperparameters(hparams)
+        
+        self.cutoff_p = 4.0
+        self.cutoff_lp = 4.0
 
         self.i = 0
         self.validity = 0.0
@@ -179,6 +194,7 @@ class Trainer(pl.LightningModule):
                 property_prediction=hparams["property_prediction"],
                 joint_property_prediction=hparams["joint_property_prediction"],
                 regression_property=hparams["regression_property"],
+                dynamic_graph=hparams["dynamic_graph"],
             )
 
         self.max_nodes = dataset_info.max_n_nodes
@@ -784,7 +800,7 @@ class Trainer(pl.LightningModule):
         z = self.mu_logvar_z(z)
         return z
 
-    def forward(self, batch: Batch, t: Tensor):
+    def forward(self, batch: Batch, t: Tensor, rdkit_sa: bool = False):
         atom_types: Tensor = batch.x
         atom_types_pocket: Tensor = batch.x_pocket
         pos: Tensor = batch.pos
@@ -1026,6 +1042,8 @@ class Trainer(pl.LightningModule):
             edge_attr_global_perturbed_lig,
             self.num_bond_classes,
             self.device,
+            cutoff_p=self.cutoff_p,
+            cutoff_lp=self.cutoff_lp,
         )
         # Concatenate Ligand-Pocket
         (
@@ -1093,11 +1111,17 @@ class Trainer(pl.LightningModule):
 
         if self.hparams.joint_property_prediction:
             if "sa_score" in self.hparams.regression_property:
-                label_sa = (
-                    torch.tensor([calculate_sa(mol) for mol in batch.mol])
-                    .to(self.device)
-                    .float()
-                )
+                if not rdkit_sa:
+                    label_sa = (
+                        torch.tensor([calculate_sa(mol) for mol in batch.mol])
+                        .to(self.device)
+                        .float()
+                    )
+                else:
+                    label_sa = np.array([sascorer.calculateScore(Chem.RemoveHs(mol)) for mol in batch.mol])
+                    label_sa = (label_sa - 1.0) / (10.0 - 1.0)
+                    label_sa = 1.0 - label_sa
+                    label_sa = torch.from_numpy(label_sa).float().to(pos.device)
             else:
                 label_sa = None
             if "docking_score" in self.hparams.regression_property:
@@ -1261,12 +1285,13 @@ class Trainer(pl.LightningModule):
         use_ligand_dataset_sizes: bool = False,
         build_obabel_mol: bool = False,
         run_test_eval: bool = False,
-        guidance_scale: float = 1.0e-4,
-        property_guidance: bool = False,
+        classifier_guidance_scale: float = 1.0e-4,
+        property_classifier_guidance: bool = False,
         ckpt_property_model: str = None,
         n_nodes_bias: int = 0,
         device: str = "cpu",
         encode_ligand: bool = True,
+        prior_n_atoms: str = "conditional"
     ):
         """
         Runs the evaluation on the entire validation dataloader. Generates 1 ligand in 1 receptor structure
@@ -1281,13 +1306,19 @@ class Trainer(pl.LightningModule):
         start = datetime.now()
         for i, pocket_data in enumerate(dataloader):
             num_graphs = len(pocket_data.batch.bincount())
-            if use_ligand_dataset_sizes:
+            if use_ligand_dataset_sizes or prior_n_atoms == "reference":
                 num_nodes_lig = pocket_data.batch.bincount().to(self.device)
-            else:
+            elif prior_n_atoms == "conditional":
                 num_nodes_lig = self.conditional_size_distribution.sample_conditional(
                     n1=None, n2=pocket_data.pos_pocket_batch.bincount()
                 ).to(self.device)
                 num_nodes_lig += n_nodes_bias
+            elif prior_n_atoms == "targetdiff":
+                _num_nodes_pockets = pocket_data.pos_pocket_batch.bincount()
+                _pos_pocket_splits = pocket_data.pos_pocket.split(_num_nodes_pockets.cpu().numpy().tolist(), dim=0)
+                num_nodes_lig = torch.tensor([sample_atom_num(get_space_size(n.cpu().numpy())) for n in _pos_pocket_splits]).to(self.device)
+                num_nodes_lig += n_nodes_bias
+                
             molecules = self.reverse_sampling(
                 num_graphs=num_graphs,
                 num_nodes_lig=num_nodes_lig,
@@ -1297,8 +1328,8 @@ class Trainer(pl.LightningModule):
                 ddpm=ddpm,
                 eta_ddim=eta_ddim,
                 every_k_step=every_k_step,
-                guidance_scale=guidance_scale,
-                property_guidance=property_guidance,
+                classifier_guidance_scale=classifier_guidance_scale,
+                property_classifier_guidance=property_classifier_guidance,
                 ckpt_property_model=ckpt_property_model,
                 save_dir=save_dir,
                 build_obabel_mol=build_obabel_mol,
@@ -1410,37 +1441,51 @@ class Trainer(pl.LightningModule):
         maximize_property=True,
         encode_ligand: bool = True,
         save_dir=None,
-    ):
-        if fix_n_nodes:
-            num_nodes_lig = pocket_data.batch.bincount().to(self.device)
-            if vary_n_nodes:
-                num_nodes_lig += torch.randint(
-                    low=0, high=n_nodes_bias, size=num_nodes_lig.size()
-                ).to(self.device)
-            else:
-                num_nodes_lig += n_nodes_bias
-        else:
-            try:
-                pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(0)
-                num_nodes_lig = (
-                    self.conditional_size_distribution.sample_conditional(
-                        n1=None, n2=pocket_size
-                    )
-                    .repeat(num_graphs)
-                    .to(self.device)
-                )
-            except Exception:
-                print(
-                    "Could not retrieve ligand size from the conditional size distribution given the pocket size. Taking the ground truth size."
-                )
+        prior_n_atoms: str = "conditional"
+    ):  
+        
+        if prior_n_atoms == "conditional":
+            if fix_n_nodes:
                 num_nodes_lig = pocket_data.batch.bincount().to(self.device)
+                if vary_n_nodes:
+                    num_nodes_lig += torch.randint(
+                        low=0, high=n_nodes_bias, size=num_nodes_lig.size()
+                    ).to(self.device)
+                else:
+                    num_nodes_lig += n_nodes_bias
+            else:
+                try:
+                    pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(0)
+                    num_nodes_lig = (
+                        self.conditional_size_distribution.sample_conditional(
+                            n1=None, n2=pocket_size
+                        )
+                        .repeat(num_graphs)
+                        .to(self.device)
+                    )
+                except Exception:
+                    print(
+                        "Could not retrieve ligand size from the conditional size distribution given the pocket size. Taking the ground truth size."
+                    )
+                    num_nodes_lig = pocket_data.batch.bincount().to(self.device)
+                if vary_n_nodes:
+                    num_nodes_lig += torch.randint(
+                        low=0, high=n_nodes_bias, size=num_nodes_lig.size()
+                    ).to(self.device)
+                else:
+                    num_nodes_lig += n_nodes_bias
+        elif prior_n_atoms == "targetdiff":
+            _num_nodes_pockets = pocket_data.pos_pocket_batch.bincount()
+            _pos_pocket_splits = pocket_data.pos_pocket.split(_num_nodes_pockets.cpu().numpy().tolist(), dim=0)
+            num_nodes_lig = torch.tensor([sample_atom_num(get_space_size(n.cpu().numpy())) for n in _pos_pocket_splits]).to(self.device)
+            
             if vary_n_nodes:
                 num_nodes_lig += torch.randint(
                     low=0, high=n_nodes_bias, size=num_nodes_lig.size()
-                ).to(self.device)
+                    ).to(self.device)
             else:
                 num_nodes_lig += n_nodes_bias
-
+                    
         molecules = self.reverse_sampling(
             num_graphs=num_graphs,
             num_nodes_lig=num_nodes_lig,
@@ -1977,6 +2022,8 @@ class Trainer(pl.LightningModule):
             edge_attr_global_lig,
             self.num_bond_classes,
             self.device,
+            cutoff_p=self.cutoff_p,
+            cutoff_lp=self.cutoff_lp,
         )
 
         (
@@ -2142,6 +2189,8 @@ class Trainer(pl.LightningModule):
                 edge_attr_global_lig,
                 self.num_bond_classes,
                 self.device,
+                cutoff_p=self.cutoff_p,
+                cutoff_lp=self.cutoff_lp,
             )
 
             if (
@@ -2261,6 +2310,8 @@ class Trainer(pl.LightningModule):
                 edge_attr_global_lig,
                 self.num_bond_classes,
                 self.device,
+                cutoff_p=self.cutoff_p,
+                cutoff_lp=self.cutoff_lp,
             )
 
             (
@@ -2348,6 +2399,8 @@ class Trainer(pl.LightningModule):
                 edge_attr_global_lig,
                 self.num_bond_classes,
                 self.device,
+                cutoff_p=self.cutoff_p,
+                cutoff_lp=self.cutoff_lp,
             )
 
             (

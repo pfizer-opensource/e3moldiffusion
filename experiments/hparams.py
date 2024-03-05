@@ -94,6 +94,11 @@ def add_arguments(parser):
     parser.add_argument("--use-cross-product", default=False, action="store_true")
     parser.add_argument("--cutoff-local", default=5.0, type=float)
     parser.add_argument("--cutoff-global", default=10.0, type=float)
+    parser.add_argument("--dynamic-graph", 
+                        default=False,
+                        action="store_true",
+                        help="If the graph is dynamic for ligand-pocket learning",
+                        )
     parser.add_argument("--energy-training", default=False, action="store_true")
     parser.add_argument("--property-training", default=False, action="store_true")
     parser.add_argument("--regression-property", default=[], nargs="+", type=str)

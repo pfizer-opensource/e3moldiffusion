@@ -659,6 +659,7 @@ class Trainer(pl.LightningModule):
         importance_sampling_start: int = 0,
         importance_sampling_end: int = 200,
         device: str = "cpu",
+        renormalize_property: bool = True,
     ):
 
         b = ngraphs // bs
@@ -710,6 +711,7 @@ class Trainer(pl.LightningModule):
                 importance_sampling_end=importance_sampling_end,
                 ckpt_property_model=ckpt_property_model,
                 minimize_property=minimize_property,
+                renormalize_property=renormalize_property,
             )
 
             molecule_list.extend(molecules)
@@ -820,6 +822,7 @@ class Trainer(pl.LightningModule):
         importance_sampling_end: int = 200,
         minimize_property: bool = True,
         device: str = "cpu",
+        renormalize_property: bool = True,
     ):
         energy_model = None
         if use_energy_guidance:
@@ -880,6 +883,7 @@ class Trainer(pl.LightningModule):
                     importance_sampling_end=importance_sampling_end,
                     ckpt_property_model=ckpt_property_model,
                     minimize_property=minimize_property,
+                    renormalize_property=renormalize_property,
                 )
 
                 molecule_list.extend(molecules)
@@ -981,6 +985,7 @@ class Trainer(pl.LightningModule):
         importance_sampling_end: int = 200,
         minimize_property: bool = True,
         device: str = "cpu",
+        renormalize_property: bool = True,
     ):
 
         g = torch.Generator()
@@ -1047,6 +1052,7 @@ class Trainer(pl.LightningModule):
                 importance_sampling_end=importance_sampling_end,
                 ckpt_property_model=ckpt_property_model,
                 minimize_property=minimize_property,
+                renormalize_property=renormalize_property,
             )
 
             for idx, mol in enumerate(new_mols):
@@ -1143,6 +1149,7 @@ class Trainer(pl.LightningModule):
         sa_model=None,
         property_model=None,
         kind: str = "polarizability",
+        renormalize_property: bool = True,
     ):
         """
         Idea:
@@ -1188,10 +1195,11 @@ class Trainer(pl.LightningModule):
             prop = prop.squeeze()
 
         if kind == "polarizability":
-            prop = (
-                prop * self.prop_dist.normalizer["polarizability"]["mad"]
-                + self.prop_dist.normalizer["polarizability"]["mean"]
-            )
+            if renormalize_property:
+                prop = (
+                    prop * self.prop_dist.normalizer["polarizability"]["mad"]
+                    + self.prop_dist.normalizer["polarizability"]["mean"]
+                )
 
         if not maximize_score:
             prop = -1.0 * prop
@@ -1310,6 +1318,7 @@ class Trainer(pl.LightningModule):
         importance_sampling_end: int = 200,
         ckpt_property_model: str = None,
         minimize_property: bool = True,
+        renormalize_property: bool = True,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         if num_nodes is not None:
             batch_num_nodes = num_nodes
@@ -1789,6 +1798,7 @@ class Trainer(pl.LightningModule):
                         property_tau=property_tau,
                         property_model=property_model,
                         kind="polarizability",
+                        renormalize_property=renormalize_property,
                     )
                     atom_types, charge_types = node_feats_in.split(
                         [self.num_atom_types, self.num_charge_classes], dim=-1

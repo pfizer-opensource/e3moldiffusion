@@ -7,6 +7,7 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from time import time
+import json
 
 import numpy as np
 import torch
@@ -502,6 +503,12 @@ def evaluate(args):
     if args.encode_ligands:
         embedding_dict = {k: v for k, v in embedding_dict.items()}
         torch.save(embedding_dict, embed_out_file)
+        
+    # save arguments
+    argsdicts = vars(args)
+    savedirjson = Path(args.save_dir, "args.json")
+    with open(savedirjson, "w") as f:
+        json.dump(argsdicts, f)
 
 
 def get_args():
@@ -549,6 +556,8 @@ def get_args():
     parser.add_argument("--fix-n-nodes", action="store_true")
     parser.add_argument("--vary-n-nodes", action="store_true")
     parser.add_argument("--n-nodes-bias", default=0, type=int)
+    parser.add_argument("--prior-n-atoms", default="conditional", type=str, choices=["conditional", "targetdiff"])
+
     parser.add_argument("--filter-by-posebusters", action="store_true")
     parser.add_argument("--filter-by-lipinski", action="store_true")
     parser.add_argument("--filter-by-sascore", action="store_true")
