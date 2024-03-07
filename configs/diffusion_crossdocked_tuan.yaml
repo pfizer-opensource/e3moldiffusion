@@ -49,6 +49,7 @@ use_rbfs: true
 dataset: crossdocked
 # dataset_root: /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff8_new
 dataset_root: /hpfs/projects/mlcs/mlhub/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff8_new
+dataset_cutoff: 8.0  # 5.0
 
 # DIFFUSION
 additional_feats: false

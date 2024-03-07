@@ -115,6 +115,8 @@ class Trainer(pl.LightningModule):
             hparams["kNN"] = None
         if "use_rbfs" not in hparams.keys():
             hparams["use_rbfs"] = None
+        if "dataset_cutoff" not in hparams.keys():
+            hparams["dataset_cutoff"] = 8.0
             
         self.save_hyperparameters(hparams)
         
@@ -1314,7 +1316,8 @@ class Trainer(pl.LightningModule):
             elif prior_n_atoms == "targetdiff":
                 _num_nodes_pockets = pocket_data.pos_pocket_batch.bincount()
                 _pos_pocket_splits = pocket_data.pos_pocket.split(_num_nodes_pockets.cpu().numpy().tolist(), dim=0)
-                num_nodes_lig = torch.tensor([sample_atom_num(get_space_size(n.cpu().numpy())) for n in _pos_pocket_splits]).to(self.device)
+                num_nodes_lig = torch.tensor([sample_atom_num(get_space_size(n.cpu().numpy()), 
+                                                              cutoff=self.hparams.dataset_cutoff) for n in _pos_pocket_splits]).to(self.device)
                 num_nodes_lig += n_nodes_bias
                 
             molecules = self.reverse_sampling(
@@ -1483,7 +1486,7 @@ class Trainer(pl.LightningModule):
             _num_nodes_pockets = pocket_data.pos_pocket_batch.bincount()
             _pos_pocket_splits = pocket_data.pos_pocket.split(_num_nodes_pockets.cpu().numpy().tolist(), dim=0)
             num_nodes_lig = torch.tensor([sample_atom_num(get_space_size(n.cpu().numpy()), 
-                                                          cutoff=5.0) for n in _pos_pocket_splits]).to(self.device)
+                                                          cutoff=self.hparams.dataset_cutoff) for n in _pos_pocket_splits]).to(self.device)
             
             if vary_n_nodes:
                 num_nodes_lig += torch.randint(
