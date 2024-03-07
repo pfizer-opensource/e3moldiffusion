@@ -67,9 +67,10 @@ def get_joint_edge_attrs(
     cutoff_p: float = 5.0,
     cutoff_lp: float = 5.0,
     return_adj: bool = False,
+    kNN: Optional[int] = None,
 ):
     edge_index_global = get_edges(
-        batch, batch_pocket, pos, pos_pocket, cutoff_p=cutoff_p, cutoff_lp=cutoff_lp
+        batch, batch_pocket, pos, pos_pocket, cutoff_p=cutoff_p, cutoff_lp=cutoff_lp, kNN=kNN
     )
     edge_index_global = sort_edge_index(edge_index=edge_index_global, sort_by_row=False)
     edge_index_global, _ = remove_self_loops(edge_index_global)

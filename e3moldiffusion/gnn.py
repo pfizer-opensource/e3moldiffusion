@@ -108,6 +108,8 @@ class EQGATEdgeGNN(nn.Module):
         store_intermediate_coords: bool = False,
         ligand_pocket_interaction: bool = False,
         dynamic_graph: bool = False,
+        kNN: Optional[int] = None,
+        use_rbfs: bool = False,
     ):
         super(EQGATEdgeGNN, self).__init__()
 
@@ -130,8 +132,9 @@ class EQGATEdgeGNN(nn.Module):
         self.dynamic_graph = dynamic_graph
         convs = []
         
-        self.cutoff_p = 4.0
-        self.cutoff_lp = 4.0
+        self.cutoff_p = cutoff_local
+        self.cutoff_lp = cutoff_local
+        self.kNN = kNN
 
         for i in range(num_layers):
             ## second or second last layer
@@ -150,6 +153,8 @@ class EQGATEdgeGNN(nn.Module):
                     use_cross_product=use_cross_product,
                     edge_mp=edge_mp_select,
                     use_pos_norm=use_pos_norm,
+                    cutoff=cutoff_local,
+                    use_rbfs=use_rbfs,
                 )
             )
 
@@ -275,6 +280,7 @@ class EQGATEdgeGNN(nn.Module):
                                               cutoff_p=self.cutoff_p,
                                               cutoff_lp=self.cutoff_lp,
                                               return_full_adj=False,
+                                              kNN=self.kNN,
                                               )
                 edge_index_global = sort_edge_index(edge_index=edge_index_global,
                                                     sort_by_row=False)

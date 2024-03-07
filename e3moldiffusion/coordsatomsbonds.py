@@ -66,6 +66,8 @@ class DenoisingEdgeNetwork(nn.Module):
         regression_property: list = None,
         bond_prediction: bool = False,
         dynamic_graph: bool = False,
+        kNN: Optional[int] = None,
+        use_rbfs: bool = False,
     ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
@@ -138,6 +140,8 @@ class DenoisingEdgeNetwork(nn.Module):
             ligand_pocket_interaction=ligand_pocket_interaction,
             store_intermediate_coords=store_intermediate_coords,
             dynamic_graph=dynamic_graph,
+            kNN=kNN,
+            use_rbfs=use_rbfs,
         )
 
         if property_prediction:

@@ -110,11 +110,17 @@ class Trainer(pl.LightningModule):
             hparams["use_out_norm"] = True
         if "dynamic_graph" not in hparams.keys():
             hparams["dynamic_graph"] = False
+        
+        if "kNN" not in hparams.keys():
+            hparams["kNN"] = None
+        if "use_rbfs" not in hparams.keys():
+            hparams["use_rbfs"] = None
             
         self.save_hyperparameters(hparams)
         
-        self.cutoff_p = 4.0
-        self.cutoff_lp = 4.0
+        self.kNN = hparams["kNN"]
+        self.cutoff_p = hparams["cutoff_local"]
+        self.cutoff_lp = hparams["cutoff_local"]
 
         self.i = 0
         self.validity = 0.0
@@ -195,6 +201,8 @@ class Trainer(pl.LightningModule):
                 joint_property_prediction=hparams["joint_property_prediction"],
                 regression_property=hparams["regression_property"],
                 dynamic_graph=hparams["dynamic_graph"],
+                kNN=hparams["kNN"],
+                use_rbfs=hparams["use_rbfs"],
             )
 
         self.max_nodes = dataset_info.max_n_nodes
@@ -1044,6 +1052,7 @@ class Trainer(pl.LightningModule):
             self.device,
             cutoff_p=self.cutoff_p,
             cutoff_lp=self.cutoff_lp,
+            kNN=self.kNN,
         )
         # Concatenate Ligand-Pocket
         (

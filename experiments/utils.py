@@ -1026,18 +1026,35 @@ def effective_batch_size(
     return math.floor(1.8 * x) if sampling else math.floor(x)
 
 
+def get_kNN_edges(A, top_k: int = 32):
+    A[(A==0.0)] = 1e10
+    values, indices = A.topk(k=top_k, dim=-1, largest=False, sorted=True)
+    AA = torch.ones_like(A) 
+    AA = AA * 1000.
+    AA[np.arange(AA.shape[0])[:, None], indices] = values
+    return AA
+
 def get_edges(
-    batch_mask_lig, batch_mask_pocket, pos_lig, pos_pocket, cutoff_p, cutoff_lp, return_full_adj=False,
+    batch_mask_lig, batch_mask_pocket, pos_lig, pos_pocket, cutoff_p, cutoff_lp, return_full_adj=False, kNN=None,
 ):
     adj_ligand = batch_mask_lig[:, None] == batch_mask_lig[None, :]
     adj_pocket = batch_mask_pocket[:, None] == batch_mask_pocket[None, :]
     adj_cross = batch_mask_lig[:, None] == batch_mask_pocket[None, :]
-
+    
+    with torch.no_grad():
+        D_pocket = torch.cdist(pos_pocket, pos_pocket)
+        D_cross = torch.cdist(pos_lig, pos_pocket)
+    
+    if kNN is not None:
+        D_pocket = adj_pocket.float() * D_pocket
+        D_cross = adj_cross.float() * D_cross
+        D_pocket = get_kNN_edges(D_pocket, top_k=kNN)
+        D_cross = get_kNN_edges(D_cross, top_k=kNN)
+    
     if cutoff_p is not None:
-        adj_pocket = adj_pocket & (torch.cdist(pos_pocket, pos_pocket) <= cutoff_p)
-
+        adj_pocket = adj_pocket & (D_pocket <= cutoff_p) 
     if cutoff_lp is not None:
-        adj_cross = adj_cross & (torch.cdist(pos_lig, pos_pocket) <= cutoff_lp)
+        adj_cross = adj_cross & (D_cross <= cutoff_lp)
 
     adj = torch.cat(
         (

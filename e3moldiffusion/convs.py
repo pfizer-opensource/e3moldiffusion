@@ -24,7 +24,37 @@ def cross_product(a: Tensor, b: Tensor, dim: int) -> Tensor:
         cross = torch.stack([s1, s2, s3], dim=dim)
         return cross
 
+    
+class CosineCutoff(nn.Module):
+    def __init__(self, cutoff_lower=0.0, cutoff_upper=5.0):
+        super(CosineCutoff, self).__init__()
+        self.cutoff_lower = cutoff_lower
+        self.cutoff_upper = cutoff_upper
 
+    def forward(self, distances: Tensor) -> Tensor:
+        if self.cutoff_lower > 0:
+            cutoffs = 0.5 * (
+                torch.cos(
+                    math.pi
+                    * (
+                        2
+                        * (distances - self.cutoff_lower)
+                        / (self.cutoff_upper - self.cutoff_lower)
+                        + 1.0
+                    )
+                )
+                + 1.0
+            )
+            # remove contributions below the cutoff radius
+            cutoffs = cutoffs * (distances < self.cutoff_upper)
+            cutoffs = cutoffs * (distances > self.cutoff_lower)
+            return cutoffs
+        else:
+            cutoffs = 0.5 * (torch.cos(distances * math.pi / self.cutoff_upper) + 1.0)
+            # remove contributions beyond the cutoff radius
+            cutoffs = cutoffs * (distances < self.cutoff_upper)
+            return cutoffs
+        
 class PolynomialCutoff(nn.Module):
     def __init__(self, cutoff, p: int = 6):
         super(PolynomialCutoff, self).__init__()
@@ -83,6 +113,16 @@ class BesselExpansion(nn.Module):
         out *= math.sqrt(2 / self.max_value)
         return out
 
+class GaussianExpansion(torch.nn.Module):
+    def __init__(self, max_value=5.0, K=20):
+        super(GaussianExpansion, self).__init__()
+        offset = torch.linspace(0.0, max_value, K)
+        self.coeff = -0.5 / (offset[1] - offset[0]).item()**2
+        self.register_buffer('offset', offset)
+
+    def forward(self, dist):
+        dist = dist.view(-1, 1) - self.offset.view(1, -1)
+        return torch.exp(self.coeff * torch.pow(dist, 2))
 
 class EQGATConv(MessagePassing):
     def __init__(
@@ -265,6 +305,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         use_cross_product: bool = False,
         edge_mp: bool = False,
         use_pos_norm: bool = True,
+        use_rbfs: bool = False,
+        cutoff: float = 5.0,
     ):
         super(EQGATGlobalEdgeConvFinal, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
@@ -301,7 +343,14 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         #     else 2 * self.si + edge_dim + 2
         # )
         input_edge_dim = 2 * self.si + edge_dim + 2 + 2
-
+        
+        self.use_rbfs = use_rbfs
+        self.cutoff = cutoff
+        if use_rbfs:
+            self.radial_basis_func = GaussianExpansion(max_value=cutoff, K=20)
+            self.cutoff_func = CosineCutoff(cutoff_lower=0.0, cutoff_upper=cutoff)
+            input_edge_dim += 20
+            
         self.edge_net = nn.Sequential(
             DenseLayer(input_edge_dim, self.si, bias=True, activation=nn.SiLU()),
             DenseLayer(
@@ -445,7 +494,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         batch: Tensor,
         batch_lig: Tensor = None,
         pocket_mask: Tensor = None,
-        edge_mask_pocket: Tensor = None,
+        edge_mask_ligand: OptTensor = None,
+        edge_mask_pocket: OptTensor = None,
     ):
         s, v, p = x
         d, a, r, e = edge_attr
@@ -466,6 +516,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
             edge_attr=(d, a, r, e),
             edge_index=edge_index,
             dim_size=s.size(0),
+            edge_mask_ligand=edge_mask_ligand,
+            edge_mask_pocket=edge_mask_pocket,
         )
 
         s = ms + s
@@ -519,6 +571,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         index: Tensor,
         edge_attr: Tuple[Tensor, Tensor, Tensor, Tensor],
         dim_size: Optional[int],
+        edge_mask_ligand: OptTensor = None,
+        edge_mask_pocket: OptTensor = None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         d, a, r, e = edge_attr
 
@@ -534,7 +588,15 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
             d_i, d_j = torch.zeros_like(a0).to(a.device), torch.zeros_like(a0).to(
                 a.device
             )
+        
         aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e, d_i, d_j], dim=-1)
+        
+        if self.use_rbfs:
+            rbf = self.radial_basis_func(d)
+            c = self.cutoff_func(d)
+            aij = torch.cat([aij, rbf], dim=-1)
+            aij = c.view(-1, 1) * aij
+            
         # else:
         #     aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e], dim=-1)
         aij = self.edge_net(aij)

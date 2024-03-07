@@ -99,6 +99,9 @@ def add_arguments(parser):
                         action="store_true",
                         help="If the graph is dynamic for ligand-pocket learning",
                         )
+    parser.add_argument("--kNN", default=None, type=int, help="Number of nearest neighbors for dynamic graph")
+    parser.add_argument("--use-rbfs", default=False, action="store_true",
+                        help="If Gaussian Distance Expansion should be used. Currently Defaults to 20 RBFs evenly spaced between 0 and cutoff_local param")
     parser.add_argument("--energy-training", default=False, action="store_true")
     parser.add_argument("--property-training", default=False, action="store_true")
     parser.add_argument("--regression-property", default=[], nargs="+", type=str)
