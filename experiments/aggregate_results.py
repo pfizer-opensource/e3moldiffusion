@@ -86,7 +86,7 @@ def aggregate(args):
         save_pickle(
             score_dict,
             os.path.join(args.files_dir, "qvina2_scores.pickle"),
-            exist_ok=False,
+            exist_ok=True,
         )
         scores_mean = [np.mean(r) for r in score_dict["scores"] if len(r) >= 1]
         mean_score = np.mean(scores_mean)

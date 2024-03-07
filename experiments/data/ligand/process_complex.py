@@ -1,21 +1,16 @@
 import argparse
-import os
 import subprocess
 from pathlib import Path
 from time import time
 
-import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 import torch
 from Bio.PDB import PDBParser
 from Bio.PDB.Polypeptide import is_aa
 from Bio.PDB.Polypeptide import protein_letters_3to1 as three_to_one
-from kinodata.data.dataset import process_raw_data
 from posecheck.utils.constants import REDUCE_PATH
 from rdkit import Chem
 from scipy.ndimage import gaussian_filter
-from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
 from experiments.data.ligand import constants
@@ -25,7 +20,6 @@ from experiments.data.ligand.constants import (
     dataset_params,
 )
 from experiments.data.ligand.molecule_builder import build_molecule
-from experiments.utils import write_sdf_file
 
 dataset_info = dataset_params["kinodata_full"]
 amino_acid_dict = dataset_info["aa_encoder"]
@@ -175,7 +169,7 @@ def compute_smiles(positions, atom_types, mask):
         mol = build_molecule(pos, atom_type, dataset_info)
         try:
             mol = Chem.MolToSmiles(mol)
-        except:
+        except Exception:
             fail += 1
             continue
         if mol is not None:
@@ -296,7 +290,6 @@ def saveall(
     pocket_mask,
     pocket_one_hot,
     pocket_ca_mask,
-    ic50s,
 ):
     np.savez(
         filename,
@@ -310,14 +303,14 @@ def saveall(
         pocket_mask=pocket_mask,
         pocket_one_hot=pocket_one_hot,
         pocket_ca_mask=pocket_ca_mask,
-        ic50s=ic50s,
     )
     return True
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--basedir", type=Path)
+    parser.add_argument("--pdbfile", type=Path)
+    parser.add_argument("--sdffile", type=Path)
     parser.add_argument("--outdir", type=Path)
     parser.add_argument("--no-H", action="store_true")
     parser.add_argument("--ca-only", action="store_true")
@@ -325,193 +318,111 @@ if __name__ == "__main__":
     parser.add_argument("--random-seed", type=int, default=42)
     args = parser.parse_args()
 
-    datadir = args.basedir
-
     processed_dir = args.outdir
 
     processed_dir.mkdir(exist_ok=True, parents=True)
 
-    df = process_raw_data(
-        raw_dir=args.basedir, file_name="kinodata_docked_with_rmsd.sdf.gz"
-    )
-    df = df[df["activities.standard_type"] == "pIC50"].reset_index()
+    lig_coords = []
+    lig_atom = []
+    lig_mask = []
+    lig_mol = []
+    pocket_coords = []
+    pocket_atom = []
+    pocket_mask = []
+    pocket_one_hot_resids = []
+    pocket_ca_mask = []
+    pdb_and_mol_ids = []
+    count_protein = []
+    count_ligand = []
+    count_total = []
+    count = 0
 
-    # get train, val, test split by target ID
-    target_list = list(df["target_dictionary.chembl_id"])
-    target_indices = {}
-    for idx, target in enumerate(target_list):
-        if target in target_indices:
-            target_indices[target].append(idx)
-        else:
-            target_indices[target] = [idx]
-    seed = 676
-    train_indices, test_val_indices = train_test_split(
-        list(target_indices.values()), test_size=20, random_state=seed
-    )
-    val_indices, test_indices = train_test_split(
-        test_val_indices, test_size=0.5, random_state=42
-    )
+    pdb_sdf_dir = processed_dir
+    pdb_sdf_dir.mkdir(exist_ok=True)
 
-    train_indices = [idx for sublist in train_indices for idx in sublist]
-    val_indices = [idx for sublist in val_indices for idx in sublist]
-    test_indices = [idx for sublist in test_indices for idx in sublist]
+    pocket_fn = Path(args.pdbfile.stem)
+    ligand_fn = Path(args.sdffile.stem)
 
-    train = df.loc[train_indices].reset_index(drop=True)
-    val = df.loc[val_indices].reset_index(drop=True)
-    test = df.loc[test_indices].reset_index(drop=True)
-    data_split = {"train": train, "val": val, "test": test}
+    tic = time()
 
-    n_train_before = len(train)
-    n_val_before = len(val)
-    n_test_before = len(test)
-
-    failed_save = []
-
-    n_samples_after = {}
-    for split in data_split.keys():
-        lig_coords = []
-        lig_atom = []
-        lig_mask = []
-        lig_mol = []
-        ic50s = []
-        docking_scores = []
-        pocket_coords = []
-        pocket_atom = []
-        pocket_mask = []
-        # new
-        pocket_one_hot_resids = []
-        pocket_ca_mask = []
-        pdb_and_mol_ids = []
-        count_protein = []
-        count_ligand = []
-        count_total = []
-        count = 0
-
-        pdb_sdf_dir = processed_dir / split
-        pdb_sdf_dir.mkdir(exist_ok=True)
-
-        tic = time()
-        num_failed = 0
-        for index, data in data_split[split].iterrows():
-
-            naming = f"{data['target_dictionary.chembl_id']}-atp-{data['similar.complex_pdb']}-lig-{data['molecule_dictionary.chembl_id']}"
-            pocket_mol2 = data["pocket_mol2_file"]
-            pocket_fn = naming
-            pdbfile = pdb_sdf_dir / f"{pocket_fn}.pdb"
-            os.system(f"obabel {str(pocket_mol2)} -O {pdbfile}")
-            mol = data["molecule"]
-            ligand_fn = f"{naming}_{naming}"
-            sdffile = pdb_sdf_dir / f"{ligand_fn}.sdf"
-            write_sdf_file(processed_dir / sdffile, [mol])
-
-            try:
-                struct_copy = PDBParser(QUIET=True).get_structure("", pdbfile)
-            except:
-                num_failed += 1
-                failed_save.append((pocket_fn, ligand_fn))
-                os.remove(sdffile)
-                os.remove(pdbfile)
-                print(failed_save[-1])
-                continue
-            try:
-                ligand_data, pocket_data = process_ligand_and_pocket(
-                    pdbfile,
-                    sdffile,
-                    dist_cutoff=args.dist_cutoff,
-                    ca_only=args.ca_only,
-                    no_H=args.no_H,
-                )
-            except (
-                KeyError,
-                AssertionError,
-                FileNotFoundError,
-                IndexError,
-                ValueError,
-            ) as e:
-                print(type(e).__name__, e, pocket_fn, ligand_fn)
-                num_failed += 1
-                os.remove(sdffile)
-                os.remove(pdbfile)
-                continue
-
-            pdb_and_mol_ids.append(f"{pocket_fn}_{ligand_fn}")
-            lig_coords.append(ligand_data["lig_coords"])
-            lig_mask.append(count * np.ones(len(ligand_data["lig_coords"])))
-            lig_atom.append(ligand_data["lig_atoms"])
-            lig_mol.append(ligand_data["lig_mol"])
-            assert ligand_data["lig_mol"].GetProp(
-                "activities.standard_value"
-            ) == mol.GetProp("activities.standard_value")
-            ic50s.append(
-                float(ligand_data["lig_mol"].GetProp("activities.standard_value"))
-            )
-            pocket_coords.append(pocket_data["pocket_coords"])
-            pocket_atom.append(pocket_data["pocket_atoms"])
-            pocket_mask.append(count * np.ones(len(pocket_data["pocket_coords"])))
-            # new
-            if not args.ca_only:
-                pocket_one_hot_resids.append(pocket_data["pocket_one_hot"])
-                pocket_ca_mask.append(pocket_data["pocket_ca_mask"])
-
-            count_protein.append(pocket_data["pocket_coords"].shape[0])
-            count_ligand.append(ligand_data["lig_coords"].shape[0])
-            count_total.append(
-                pocket_data["pocket_coords"].shape[0]
-                + ligand_data["lig_coords"].shape[0]
-            )
-            count += 1
-
-            # specify pocket residues
-            with open(Path(pdb_sdf_dir, f"{ligand_fn}.txt"), "w") as f:
-                f.write(" ".join(pocket_data["pocket_ids"]))
-
-        lig_coords = np.concatenate(lig_coords, axis=0)
-        lig_atom = np.concatenate(lig_atom, axis=0)
-        lig_mask = np.concatenate(lig_mask, axis=0)
-        lig_mol = np.array(lig_mol)
-        pocket_coords = np.concatenate(pocket_coords, axis=0)
-        pocket_atom = np.concatenate(pocket_atom, axis=0)
-        pocket_mask = np.concatenate(pocket_mask, axis=0)
-        ic50s = np.array(ic50s)
-
-        if not args.ca_only:
-            pocket_one_hot_resids = np.concatenate(pocket_one_hot_resids, axis=0)
-            pocket_ca_mask = np.concatenate(pocket_ca_mask, axis=0)
-        else:
-            pocket_one_hot_resids = np.array([])
-            pocket_ca_mask = np.array([])
-
-        saveall(
-            processed_dir / f"{split}.npz",
-            pdb_and_mol_ids,
-            lig_coords,
-            lig_atom,
-            lig_mask,
-            lig_mol,
-            pocket_coords,
-            pocket_atom,
-            pocket_mask,
-            pocket_one_hot=pocket_one_hot_resids,
-            pocket_ca_mask=pocket_ca_mask,
-            ic50s=ic50s,
+    try:
+        struct_copy = PDBParser(QUIET=True).get_structure("", args.pdbfile)
+    except Exception:
+        print("Failed!")
+    try:
+        ligand_data, pocket_data = process_ligand_and_pocket(
+            args.pdbfile,
+            args.sdffile,
+            dist_cutoff=args.dist_cutoff,
+            ca_only=args.ca_only,
+            no_H=args.no_H,
         )
+    except (
+        KeyError,
+        AssertionError,
+        FileNotFoundError,
+        IndexError,
+        ValueError,
+    ):
+        print("Failed!")
 
-        n_samples_after[split] = len(pdb_and_mol_ids)
-        print(f"Processing {split} set took {(time() - tic)/60.0:.2f} minutes")
+    pdb_and_mol_ids.append(f"{pocket_fn}_{ligand_fn}")
+    lig_coords.append(ligand_data["lig_coords"])
+    lig_mask.append(count * np.ones(len(ligand_data["lig_coords"])))
+    lig_atom.append(ligand_data["lig_atoms"])
+    lig_mol.append(ligand_data["lig_mol"])
+    pocket_coords.append(pocket_data["pocket_coords"])
+    pocket_atom.append(pocket_data["pocket_atoms"])
+    pocket_mask.append(count * np.ones(len(pocket_data["pocket_coords"])))
+    # new
+    if not args.ca_only:
+        pocket_one_hot_resids.append(pocket_data["pocket_one_hot"])
+        pocket_ca_mask.append(pocket_data["pocket_ca_mask"])
 
-    # --------------------------------------------------------------------------
-    # Compute statistics & additional information
-    # --------------------------------------------------------------------------
-    with np.load(processed_dir / "train.npz", allow_pickle=True) as data:
-        lig_mask = data["lig_mask"]
-        pocket_mask = data["pocket_mask"]
-        lig_coords = data["lig_coords"]
-        lig_atom = data["lig_atom"]
-        pocket_atom = data["pocket_atom"]
+    count_protein.append(pocket_data["pocket_coords"].shape[0])
+    count_ligand.append(ligand_data["lig_coords"].shape[0])
+    count_total.append(
+        pocket_data["pocket_coords"].shape[0] + ligand_data["lig_coords"].shape[0]
+    )
+
+    # specify pocket residues
+    with open(Path(pdb_sdf_dir, f"{ligand_fn}.txt"), "w") as f:
+        f.write(" ".join(pocket_data["pocket_ids"]))
+
+    lig_coords = np.concatenate(lig_coords, axis=0)
+    lig_atom = np.concatenate(lig_atom, axis=0)
+    lig_mask = np.concatenate(lig_mask, axis=0)
+    lig_mol = np.array(lig_mol)
+    pocket_coords = np.concatenate(pocket_coords, axis=0)
+    pocket_atom = np.concatenate(pocket_atom, axis=0)
+    pocket_mask = np.concatenate(pocket_mask, axis=0)
+
+    if not args.ca_only:
+        pocket_one_hot_resids = np.concatenate(pocket_one_hot_resids, axis=0)
+        pocket_ca_mask = np.concatenate(pocket_ca_mask, axis=0)
+    else:
+        pocket_one_hot_resids = np.array([])
+        pocket_ca_mask = np.array([])
+
+    saveall(
+        processed_dir / "test.npz",
+        pdb_and_mol_ids,
+        lig_coords,
+        lig_atom,
+        lig_mask,
+        lig_mol,
+        pocket_coords,
+        pocket_atom,
+        pocket_mask,
+        pocket_one_hot=pocket_one_hot_resids,
+        pocket_ca_mask=pocket_ca_mask,
+    )
+
+    print(f"Processing complex took {(time() - tic)/60.0:.2f} minutes")
 
     # Compute SMILES for all training examples
     train_smiles = compute_smiles(lig_coords, lig_atom, lig_mask)
-    np.save(processed_dir / "train_smiles.npy", train_smiles)
+    np.save(processed_dir / "smiles.npy", train_smiles)
 
     # Joint histogram of number of ligand and pocket nodes
     n_nodes = get_n_nodes(lig_mask, pocket_mask, smooth_sigma=1.0)
@@ -527,49 +438,3 @@ if __name__ == "__main__":
     atom_hist, aa_hist = get_type_histograms(
         lig_atom, pocket_atom, atom_dict, aa_atom_encoder
     )
-
-    # Create summary string
-    summary_string = "# SUMMARY\n\n"
-    summary_string += "# Before processing\n"
-    summary_string += f"num_samples train: {n_train_before}\n"
-    summary_string += f"num_samples val: {n_val_before}\n"
-    summary_string += f"num_samples test: {n_test_before}\n\n"
-    summary_string += "# After processing\n"
-    summary_string += f"num_samples train: {n_samples_after['train']}\n"
-    summary_string += f"num_samples val: {n_samples_after['val']}\n"
-    summary_string += f"num_samples test: {n_samples_after['test']}\n\n"
-    summary_string += "# Info\n"
-    summary_string += f"'atom_encoder': {atom_dict}\n"
-    summary_string += f"'atom_decoder': {list(atom_dict.keys())}\n"
-    summary_string += f"'aa_encoder': {amino_acid_dict}\n"
-    summary_string += f"'aa_decoder': {list(amino_acid_dict.keys())}\n"
-    summary_string += f"'aa_atom_encoder': {aa_atom_encoder}\n"
-    summary_string += f"'aa_atom_decoder': {list(aa_atom_encoder.keys())}\n"
-    summary_string += f"'bonds1': {bonds1.tolist()}\n"
-    summary_string += f"'bonds2': {bonds2.tolist()}\n"
-    summary_string += f"'bonds3': {bonds3.tolist()}\n"
-    summary_string += f"'lennard_jones_rm': {rm_LJ.tolist()}\n"
-    summary_string += f"'atom_hist': {atom_hist}\n"
-    summary_string += f"'aa_hist': {aa_hist}\n"
-    summary_string += f"'n_nodes': {n_nodes.tolist()}\n"
-
-    sns.distplot(count_protein)
-    plt.savefig(processed_dir / "protein_size_distribution.png")
-    plt.clf()
-
-    sns.distplot(count_ligand)
-    plt.savefig(processed_dir / "lig_size_distribution.png")
-    plt.clf()
-
-    sns.distplot(count_total)
-    plt.savefig(processed_dir / "total_size_distribution.png")
-    plt.clf()
-
-    # Write summary to text file
-    with open(processed_dir / "summary.txt", "w") as f:
-        f.write(summary_string)
-
-    # Print summary
-    print(summary_string)
-
-    print(failed_save)

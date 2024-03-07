@@ -8,8 +8,8 @@
 #SBATCH --partition=ondemand-8xv100m32-1a
 #SBATCH --gres=gpu:1
 #SBATCH --array=1-15
-#SBATCH --output=/scratch1/e3moldiffusion/slurm_logs_generate/array_run_%j.out
-#SBATCH --error=/scratch1/e3moldiffusion/slurm_logs_generate/array_run_%j.err
+#SBATCH --output=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.out
+#SBATCH --error=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.err
 
 num_gpus=15
 
@@ -19,8 +19,8 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_norm"
-output_dir="$main_dir/evaluation/docking/nodes_bias_vary_10_dock200-400_every-5"
+main_dir="/scratch1/e3moldiffusion/logs/kinodata/x0_snr_cutoff5_bonds5_norm"
+output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_5"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
@@ -31,27 +31,28 @@ python experiments/generate_ligands_multi.py \
     --num-gpus "$num_gpus" \
     --model-path "$main_dir/best_valid.ckpt" \
     --save-dir "$output_dir" \
-    --pdbqt-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/test/pdbqt \
-    --test-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/test \
+    --pdbqt-dir /scratch1/cremej01/data/kinodata_noH_cutoff5/test/pdbqt \
+    --test-dir /scratch1/cremej01/data/kinodata_noH_cutoff5/test \
     --skip-existing \
     --num-ligands-per-pocket-to-sample 100 \
     --num-ligands-per-pocket-to-save 100 \
     --max-sample-iter 50 \
     --batch-size 40 \
-    --n-nodes-bias 10 \
-    --vary-n-nodes \
-    --property-importance-sampling \
-    --property-importance-sampling-start 200 \
-    --property-importance-sampling-end 400 \
-    --property-every-importance-t 5 \
-    --property-tau 0.1 \
-    --ckpt-property-model /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_no-norm_joint-dock/best_valid.ckpt \
-    # --ckpt-sa-model None \
+    --fix-n-nodes \
+    --n-nodes-bias 5 \
+    --vary-n-nodes
+    # --property-importance-sampling \
+    # --property-importance-sampling-start 200 \
+    # --property-importance-sampling-end 300 \
+    # --property-every-importance-t 5 \
+    # --property-tau 0.1
     # --sa-importance-sampling \
     # --sa-importance-sampling-start 0 \
-    # --sa-importance-sampling-end 250 \
+    # --sa-importance-sampling-end 200 \
     # --sa-every-importance-t 5 \
-    # --sa-tau 0.1
+    # --sa-tau 0.1 \
+    # --ckpt-sa-model None \
+    # --ckpt-property-model None \
     # --minimize-property
     # --property-classifier-guidance None \
     # --property-classifier-guidance_complex False \

@@ -47,13 +47,14 @@ class PredictionHeadEdge(nn.Module):
         if self.joint_property_prediction:
             if (
                 "docking_score" in self.regression_property
-                and "sa_score" in self.regression_property
-            ):
+                or "ic50" in self.regression_property
+            ) and "sa_score" in self.regression_property:
                 self.property_map = DenseLayer(
                     self.sdim, self.sdim, activation=nn.SiLU(), bias=True
                 )
             if (
                 "docking_score" in self.regression_property
+                or "ic50" in self.regression_property
                 or "polarizability" in self.regression_property
             ):
                 self.prop_mlp = GatedEquivariantBlock(
@@ -64,9 +65,19 @@ class PredictionHeadEdge(nn.Module):
                     return_vector=False,
                 )
             if "sa_score" in self.regression_property:
-                self.property_mlp = nn.Sequential(
-                    DenseLayer(self.sdim, self.sdim, activation=nn.SiLU()),
-                    DenseLayer(self.sdim, 1, activation=nn.Identity()),
+                self.sa_mlp = nn.Sequential(
+                    DenseLayer(
+                        in_features=self.sdim,
+                        out_features=self.sdim,
+                        bias=True,
+                        activation=nn.SiLU(),
+                    ),
+                    DenseLayer(
+                        in_features=self.sdim,
+                        out_features=1,
+                        bias=True,
+                        activation=nn.Identity(),
+                    ),
                 )
 
         self.reset_parameters()
@@ -80,11 +91,12 @@ class PredictionHeadEdge(nn.Module):
         if self.joint_property_prediction:
             if (
                 "docking_score" in self.regression_property
-                and "sa_score" in self.regression_property
-            ):
+                or "ic50" in self.regression_property
+            ) and "sa_score" in self.regression_property:
                 self.property_map.reset_parameters()
             if (
                 "docking_score" in self.regression_property
+                or "ic50" in self.regression_property
                 or "polarizability" in self.regression_property
             ):
                 reset(self.prop_mlp)
@@ -157,13 +169,14 @@ class PredictionHeadEdge(nn.Module):
             aggr_idx = batch if batch_lig is None else batch_lig
             if (
                 "docking_score" in self.regression_property
-                and "sa_score" in self.regression_property
-            ):
+                or "ic50" in self.regression_property
+            ) and "sa_score" in self.regression_property:
                 s_prop = self.property_map(s)
             else:
                 s_prop = s.clone()
             if (
                 "docking_score" in self.regression_property
+                or "ic50" in self.regression_property
                 or "polarizability" in self.regression_property
             ):
                 if pocket_mask is not None:
@@ -176,7 +189,10 @@ class PredictionHeadEdge(nn.Module):
                 prop_pred = None
             if "sa_score" in self.regression_property:
                 sa_pred = scatter_mean(
-                    s_prop, index=aggr_idx, dim=0, dim_size=batch_size
+                    s,
+                    index=batch if batch_lig is None else batch_lig,
+                    dim=0,
+                    dim_size=batch_size,
                 )
                 sa_pred = self.property_mlp(sa_pred)
             else:

@@ -316,7 +316,8 @@ def property_guidance_joint(
         else:
             sign = 1.0
 
-        _, property_pred = guidance_scale * out["property_pred"]
+        _, property_pred = out["property_pred"]
+        property_pred = guidance_scale * property_pred
 
         grad_outputs: List[Optional[torch.Tensor]] = [torch.ones_like(property_pred)]
         grad_shift = torch.autograd.grad(

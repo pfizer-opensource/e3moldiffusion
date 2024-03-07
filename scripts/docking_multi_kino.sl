@@ -18,8 +18,8 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_norm"
-output_dir="$main_dir/evaluation/docking/nodes_bias_vary_10_dock200-400_every-5"
+main_dir="/scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-ic50"
+output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_10_ic50-200-300_every-5"
 mkdir "$output_dir/docked"
 
 
@@ -28,9 +28,9 @@ python experiments/docking_multi.py \
     --num-cpus "$num_cpus" \
     --sdf-dir "$output_dir/sampled" \
     --save-dir "$output_dir" \
-    --pdbqt-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/test/pdbqt \
-    --pdb-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/test \
-    --dataset crossdocked \
+    --pdbqt-dir /scratch1/cremej01/data/kinodata_noH_cutoff5/test/pdbqt \
+    --pdb-dir /scratch1/cremej01/data/kinodata_noH_cutoff5/test \
+    --dataset kinodata \
     --write-csv \
     --write-dict
 

@@ -7,7 +7,6 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from time import time
-import json
 
 import numpy as np
 import torch
@@ -24,7 +23,6 @@ from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import (
     prepare_data_and_generate_ligands,
     retrieve_interactions_per_mol,
-    split_list,
     write_sdf_file,
 )
 
@@ -159,11 +157,9 @@ def evaluate(args):
     times_dir.mkdir(exist_ok=args.skip_existing)
 
     test_files = list(args.test_dir.glob("[!.]*.sdf"))
-    if args.test_list is not None:
-        with open(args.test_list, "r") as f:
-            test_list = set(f.read().split(","))
-        test_files = [x for x in test_files if x.stem in test_list]
-
+    assert (
+        len(test_files) == 1
+    ), "This script is meant to be run for a single complex with batch split on multiple GPUs"
     time_per_pocket = {}
 
     statistics_dict = defaultdict(list)
@@ -183,13 +179,15 @@ def evaluate(args):
         )
     print("\nStarting sampling...\n")
 
-    assert np.sum([len(i) for i in split_list(test_files, args.num_gpus)]) == len(
-        test_files
+    num_ligands_to_sample = [
+        args.num_ligands_to_sample // args.num_gpus
+        + (1 if x < args.num_ligands_to_sample % args.num_gpus else 0)
+        for x in range(args.num_gpus)
+    ][args.mp_index - 1]
+
+    print(
+        f"Processing {len(test_files)} SDF files on job index {args.mp_index} sampling {args.num_ligands_to_sample} ligands."
     )
-
-    test_files = split_list(test_files, args.num_gpus)[args.mp_index - 1]
-
-    print(f"Processing {len(test_files)} SDF files on job index {args.mp_index}.")
 
     for sdf_file in test_files:
         ligand_name = sdf_file.stem
@@ -197,10 +195,12 @@ def evaluate(args):
         pdb_name, pocket_id, *suffix = ligand_name.split("_")
         pdb_file = Path(sdf_file.parent, f"{pdb_name}.pdb")
         txt_file = Path(sdf_file.parent, f"{ligand_name}.txt")
-        sdf_out_file_raw = Path(raw_sdf_dir, f"{ligand_name}_gen.sdf")
+        sdf_out_file_raw = Path(raw_sdf_dir, f"{args.mp_index}_{ligand_name}_gen.sdf")
         if args.filter_by_docking_scores:
-            sdf_out_file_docked = Path(docked_sdf_dir, f"{ligand_name}_out.sdf")
-        time_file = Path(times_dir, f"{ligand_name}.txt")
+            sdf_out_file_docked = Path(
+                docked_sdf_dir, f"{args.mp_index}_{ligand_name}_out.sdf"
+            )
+        time_file = Path(times_dir, f"{args.mp_index}_{ligand_name}.txt")
 
         t_pocket_start = time()
 
@@ -226,7 +226,7 @@ def evaluate(args):
 
         k = 0
         while (
-            len(valid_and_unique_molecules) < args.num_ligands_per_pocket_to_sample
+            len(valid_and_unique_molecules) < num_ligands_to_sample
             and k <= args.max_sample_iter
         ):
             k += 1
@@ -261,12 +261,12 @@ def evaluate(args):
             valid_and_unique_molecules = valid_molecules.copy()
             tmp_molecules = valid_molecules.copy()
 
-        if len(valid_and_unique_molecules) < args.num_ligands_per_pocket_to_sample and (
+        if len(valid_and_unique_molecules) < num_ligands_to_sample and (
             args.filter_by_posebusters or args.filter_by_lipinski
         ):
             k = 0
             while (
-                len(valid_and_unique_molecules) < args.num_ligands_per_pocket_to_sample
+                len(valid_and_unique_molecules) < num_ligands_to_sample
                 and k <= args.max_sample_iter
             ):
                 k += 1
@@ -304,7 +304,7 @@ def evaluate(args):
                 f"Reached {args.max_sample_iter} sampling iterations, but could not find any ligands for pdb file {pdb_file}. Skipping."
             )
             continue
-        elif len(valid_and_unique_molecules) < args.num_ligands_per_pocket_to_sample:
+        elif len(valid_and_unique_molecules) < num_ligands_to_sample:
             print(
                 f"FYI: Reached {args.max_sample_iter} sampling iterations, but could only find {len(valid_and_unique_molecules)} ligands for pdb file {pdb_file}."
             )
@@ -376,25 +376,18 @@ def evaluate(args):
             print("No samples found. Skipping!")
             continue
 
-        if len(valid_molecules) > args.num_ligands_per_pocket_to_save:
-
-            if args.filter_by_sascore:
-                sorted_indices = np.flip(np.argsort(statistics["SAs"]))
-                indices = [
-                    i
-                    for i in sorted_indices
-                    if statistics["SAs"][i] >= args.sascore_threshold
-                ][: args.num_ligands_per_pocket_to_save]
-                if len(indices) == 0:
-                    indices = [i for i in sorted_indices][
-                        : args.num_ligands_per_pocket_to_save
-                    ]
-                valid_molecules = [
-                    mol for i, mol in enumerate(valid_molecules) if i in indices
-                ]
-            else:
-                indices = [i for i in range(args.num_ligands_per_pocket_to_save)]
-                valid_molecules = valid_molecules[: args.num_ligands_per_pocket_to_save]
+        if args.filter_by_sascore:
+            sorted_indices = np.flip(np.argsort(statistics["SAs"]))
+            indices = [
+                i
+                for i in sorted_indices
+                if statistics["SAs"][i] >= args.sascore_threshold
+            ][: args.num_ligands_to_sample]
+            if len(indices) == 0:
+                indices = [i for i in sorted_indices][: args.num_ligands_to_sample]
+            valid_molecules = [
+                mol for i, mol in enumerate(valid_molecules) if i in indices
+            ]
         else:
             indices = [i for i in range(len(valid_molecules))]
 
@@ -517,12 +510,6 @@ def evaluate(args):
     if args.encode_ligands:
         embedding_dict = {k: v for k, v in embedding_dict.items()}
         torch.save(embedding_dict, embed_out_file)
-        
-    # save arguments
-    argsdicts = vars(args)
-    savedirjson = Path(args.save_dir, "args.json")
-    with open(savedirjson, "w") as f:
-        json.dump(argsdicts, f)
 
 
 def get_args():
@@ -539,10 +526,8 @@ def get_args():
                         help='Whether or not to store generated molecules in xyz files')
     parser.add_argument('--calculate-energy', default=False, action="store_true",
                         help='Whether or not to calculate xTB energies and forces')
-    parser.add_argument('--num-ligands-per-pocket-to-sample', default=100, type=int,
-                            help='How many ligands per pocket to sample. Should be higher than num-ligands-per-pocket-to-save if filters, like sascore filtering, are active. Defaults to 100')
-    parser.add_argument('--num-ligands-per-pocket-to-save', default=100, type=int,
-                            help='How many ligands per pocket to save. Must be <= num-ligands-per-pocket-to-sample. Defaults to 100')
+    parser.add_argument('--num-ligands-to-sample', default=100, type=int,
+                            help='How many ligands per pocket to sample. Defaults to 100')
     parser.add_argument("--build-obabel-mol", default=False, action="store_true")
     parser.add_argument('--batch-size', default=100, type=int)
     parser.add_argument('--dist-cutoff', default=5.0, type=float)
@@ -571,8 +556,6 @@ def get_args():
     parser.add_argument("--fix-n-nodes", action="store_true")
     parser.add_argument("--vary-n-nodes", action="store_true")
     parser.add_argument("--n-nodes-bias", default=0, type=int)
-    parser.add_argument("--prior-n-atoms", default="conditional", type=str, choices=["conditional", "targetdiff"])
-
     parser.add_argument("--filter-by-posebusters", action="store_true")
     parser.add_argument("--filter-by-lipinski", action="store_true")
     parser.add_argument("--filter-by-sascore", action="store_true")

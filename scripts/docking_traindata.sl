@@ -6,11 +6,11 @@
 #SBATCH --mem-per-cpu=12G
 #SBATCH --cpus-per-task=12
 #SBATCH --partition=ondemand-cpu-c48
-#SBATCH --array=1-40
+#SBATCH --array=1-48
 #SBATCH --output=/scratch1/e3moldiffusion/slurm_logs/dock_array_run_%j.out
 #SBATCH --error=/scratch1/e3moldiffusion/slurm_logs/dock_array_run_%j.err
 
-num_cpus=40
+num_cpus=48
 
 cd /sharedhome/cremej01/workspace/e3moldiffusion
 source activate e3mol
@@ -18,21 +18,22 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_norm"
-output_dir="$main_dir/evaluation/docking/nodes_bias_vary_10_dock200-400_every-5"
+main_dir="/scratch1/cremej01/data/crossdocked_noH_cutoff5_new/train"
+output_dir="$main_dir/evaluation/docking"
 mkdir "$output_dir/docked"
 
 
 python experiments/docking_multi.py \
     --mp-index "${SLURM_ARRAY_TASK_ID}" \
     --num-cpus "$num_cpus" \
-    --sdf-dir "$output_dir/sampled" \
+    --sdf-dir "$main_dir" \
     --save-dir "$output_dir" \
-    --pdbqt-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/test/pdbqt \
-    --pdb-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/test \
+    --pdbqt-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/train/pdbqt \
+    --pdb-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/train \
     --dataset crossdocked \
     --write-csv \
-    --write-dict
+    --write-dict \
+    --avoid-eval
 
 # wait
 

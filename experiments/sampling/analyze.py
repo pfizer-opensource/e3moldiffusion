@@ -2,6 +2,7 @@ import itertools
 import logging
 import os
 import random
+import sys
 import tempfile
 from collections import Counter
 from multiprocessing import Pool
@@ -10,14 +11,22 @@ import numpy as np
 import torch
 from posebusters import PoseBusters
 from rdkit import Chem, RDLogger
-from rdkit.Chem import QED, Crippen, Descriptors, Lipinski
+from rdkit.Chem import (
+    QED,
+    Crippen,
+    Descriptors,
+    Lipinski,
+    RDConfig,
+)
 from rdkit.DataStructs import BulkTanimotoSimilarity, TanimotoSimilarity
+
+sys.path.append(os.path.join(RDConfig.RDContribDir, "SA_Score"))
+import sascorer
 from torchmetrics import MaxMetric, MeanMetric
 from tqdm import tqdm
 
 from experiments.sampling.lipinski import lipinski_pass
 from experiments.sampling.utils import *
-from experiments.sampling.utils import calculateScore
 from experiments.utils import write_sdf_file
 
 lg = RDLogger.logger()
@@ -616,8 +625,10 @@ class BasicMolecularMetrics(object):
         return QED.qed(rdmol)
 
     def calculate_sa(self, rdmol):
-        sa = calculateScore(rdmol)
-        return round((10 - sa) / 9, 2)  # from pocket2mol
+        sa = sascorer.calculateScore(rdmol)
+        sa = (sa - 1.0) / (10.0 - 1.0)
+        sa = 1.0 - sa
+        return round(sa, 2)
 
     def calculate_logp(self, rdmol):
         return Crippen.MolLogP(rdmol)
