@@ -39,6 +39,7 @@ geom/train_gan.py
 fullerene/data/
 
 notebooks/
+!notebooks/geom-drugs-sampling.ipynb
 _old/
 
 *xlsx
