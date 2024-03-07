@@ -28,6 +28,7 @@ dependencies:
   - conda-forge::seaborn
   - conda-forge::biopython=1.81
   - conda-forge::setuptools=65.6.3
+  - conda-forge::scipy==1.11.4
   - mx::reduce
   - pip:
       - ase
@@ -37,3 +38,7 @@ dependencies:
       - torch_ema
       - tensorboard
       - xtb
+      - datamol
+      - prolif
+      - prody
+      - seaborn
