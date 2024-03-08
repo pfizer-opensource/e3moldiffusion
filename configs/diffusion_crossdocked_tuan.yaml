@@ -30,11 +30,11 @@ num_epochs: 300
 test_interval: 20
  
 #EQGAT
-sdim: 128
+sdim: 256
 vdim: 128
-edim: 32
-num_layers: 8
-dynamic_graph: true
+edim: 64
+num_layers: 10
+dynamic_graph: false
 use_cross_product: false
 edge_mp: false
 fully_connected: true
@@ -47,8 +47,8 @@ use_rbfs: true
 
 #DATA
 dataset: crossdocked
-# dataset_root: /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff8_new
-dataset_root: /hpfs/projects/mlcs/mlhub/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff8_new
+dataset_root: /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff8_new
+# dataset_root: /hpfs/projects/mlcs/mlhub/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff8_new
 dataset_cutoff: 8.0  # 5.0
 
 # DIFFUSION
@@ -64,8 +64,8 @@ max_time: 06:00:00:00
 #LOGGING
 id: 0
  
-# save_dir: /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff8_kNN32_dynamic_GaussRBFsCutoff_5A_8L_sdim128_pos-res_lig-pocket-inter_norm/
-save_dir: /hpfs/projects/mlcs/mlhub/e3moldiffusion/8A_crossdocked/x0_snr_bonds5_cutoff8_dynamic_GaussRBFsCutoff_5A_8L_sdim128_pos-res_lig-pocket-inter_norm/
+save_dir: /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff8_GaussRBFsCutoff_5A_10L_s256v128e64_pos-res_lig-pocket-inter_norm/
+# save_dir: /hpfs/projects/mlcs/mlhub/e3moldiffusion/8A_crossdocked/x0_snr_bonds5_cutoff8_GaussRBFsCutoff_5A_10L_s256v128e64_pos-res_lig-pocket-inter_norm/
 load_ckpt:
 load_ckpt_from_pretrained:
 
