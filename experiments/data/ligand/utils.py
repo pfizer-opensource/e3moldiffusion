@@ -227,7 +227,7 @@ def sample_atom_num(space_size, cutoff: float = 5.0):
         config = CONFIG_8A
     elif cutoff == 10.0:
         config = CONFIG_10A
-    bin_idx = _get_bin_idx(space_size)
+    bin_idx = _get_bin_idx(space_size, config=config)
     num_atom_list, prob_list = config['bins'][bin_idx]
     return np.random.choice(num_atom_list, p=prob_list)
   
