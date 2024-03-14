@@ -307,6 +307,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         use_pos_norm: bool = True,
         use_rbfs: bool = False,
         cutoff: float = 5.0,
+        mask_pocket_edges: bool = False,
     ):
         super(EQGATGlobalEdgeConvFinal, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
@@ -360,7 +361,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         self.edge_post = DenseLayer(edge_dim, edge_dim)
 
         self.edge_mp = edge_mp
-
+        self.mask_pocket_edges = mask_pocket_edges
+        
         emlp = False
 
         if edge_mp:
@@ -531,6 +533,11 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
             )
         else:
             p = p + mp * pocket_mask if pocket_mask is not None else p + mp
+        
+        # only enable hidden edge features from ligand-ligand interaction
+        if self.mask_pocket_edges:
+            me = me * edge_mask_ligand.unsqueeze(-1)
+            
         e = F.silu(me + e)
         e = self.edge_post(e)
 

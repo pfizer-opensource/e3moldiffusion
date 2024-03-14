@@ -68,6 +68,7 @@ class DenoisingEdgeNetwork(nn.Module):
         dynamic_graph: bool = False,
         kNN: Optional[int] = None,
         use_rbfs: bool = False,
+        mask_pocket_edges: bool = False,
     ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
@@ -142,6 +143,7 @@ class DenoisingEdgeNetwork(nn.Module):
             dynamic_graph=dynamic_graph,
             kNN=kNN,
             use_rbfs=use_rbfs,
+            mask_pocket_edges=mask_pocket_edges,
         )
 
         if property_prediction:

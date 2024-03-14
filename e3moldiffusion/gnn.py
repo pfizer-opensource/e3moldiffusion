@@ -110,6 +110,7 @@ class EQGATEdgeGNN(nn.Module):
         dynamic_graph: bool = False,
         kNN: Optional[int] = None,
         use_rbfs: bool = False,
+        mask_pocket_edges: bool = False,
     ):
         super(EQGATEdgeGNN, self).__init__()
 
@@ -155,6 +156,7 @@ class EQGATEdgeGNN(nn.Module):
                     use_pos_norm=use_pos_norm,
                     cutoff=cutoff_local,
                     use_rbfs=use_rbfs,
+                    mask_pocket_edges=mask_pocket_edges,
                 )
             )
 
@@ -263,6 +265,7 @@ class EQGATEdgeGNN(nn.Module):
                 batch_lig=batch_lig,
                 pocket_mask=pocket_mask,
                 edge_mask_pocket=edge_mask_pocket,
+                edge_mask_ligand=edge_mask_ligand,
             )
 
             s, v, p, e = out["s"], out["v"], out["p"], out["e"]
