@@ -117,6 +117,8 @@ class Trainer(pl.LightningModule):
             hparams["use_rbfs"] = None
         if "dataset_cutoff" not in hparams.keys():
             hparams["dataset_cutoff"] = 8.0
+        if "mask_pocket_edges" not in hparams.keys():
+            hparams["mask_pocket_edges"] = False
             
         self.save_hyperparameters(hparams)
         
@@ -205,6 +207,7 @@ class Trainer(pl.LightningModule):
                 dynamic_graph=hparams["dynamic_graph"],
                 kNN=hparams["kNN"],
                 use_rbfs=hparams["use_rbfs"],
+                mask_pocket_edges=hparams["mask_pocket_edges"],
             )
 
         self.max_nodes = dataset_info.max_n_nodes
@@ -1475,28 +1478,34 @@ class Trainer(pl.LightningModule):
                     num_nodes_lig = pocket_data.batch.bincount().to(self.device)
                     if vary_n_nodes:
                         num_nodes_lig += torch.randint(
-                            low=-n_nodes_bias // 2,
-                            high=n_nodes_bias // 2,
-                            size=num_nodes_lig.size(),
-                            ).to(self.device)
+                            low=0, high=n_nodes_bias, size=num_nodes_lig.size()
+                        ).to(self.device)
                     else:
                         num_nodes_lig += n_nodes_bias
         # TargetDiff settings
         elif prior_n_atoms == "targetdiff":
-            _num_nodes_pockets = pocket_data.pos_pocket_batch.bincount()
-            _pos_pocket_splits = pocket_data.pos_pocket.split(_num_nodes_pockets.cpu().numpy().tolist(), dim=0)
-            num_nodes_lig = torch.tensor([sample_atom_num(get_space_size(n.cpu().numpy()), 
-                                                          cutoff=self.hparams.dataset_cutoff) for n in _pos_pocket_splits]).to(self.device)
-            
-            if vary_n_nodes:
-                num_nodes_lig += torch.randint(
-                    low=-n_nodes_bias // 2,
-                    high=n_nodes_bias // 2,
-                    size=num_nodes_lig.size(),
+            if fix_n_nodes:
+                num_nodes_lig = pocket_data.batch.bincount().to(self.device)
+                if vary_n_nodes:
+                    num_nodes_lig += torch.randint(
+                        low=-n_nodes_bias // 2,
+                        high=n_nodes_bias // 2,
+                        size=num_nodes_lig.size(),
                     ).to(self.device)
+                else:
+                    num_nodes_lig += n_nodes_bias
             else:
-                num_nodes_lig += n_nodes_bias
-                    
+                _num_nodes_pockets = pocket_data.pos_pocket_batch.bincount()
+                _pos_pocket_splits = pocket_data.pos_pocket.split(_num_nodes_pockets.cpu().numpy().tolist(), dim=0)
+                num_nodes_lig = torch.tensor([sample_atom_num(get_space_size(n.cpu().numpy()), 
+                                                              cutoff=self.hparams.dataset_cutoff) for n in _pos_pocket_splits]).to(self.device)
+                if vary_n_nodes:
+                    num_nodes_lig += torch.randint(
+                        low=0, high=n_nodes_bias, size=num_nodes_lig.size()
+                    ).to(self.device)
+                else:
+                    num_nodes_lig += n_nodes_bias
+                                        
         molecules = self.reverse_sampling(
             num_graphs=num_graphs,
             num_nodes_lig=num_nodes_lig,
