@@ -1451,6 +1451,7 @@ class Trainer(pl.LightningModule):
     ):  
         # DiffSBDD settings
         if prior_n_atoms == "conditional":
+            
             if fix_n_nodes:
                 num_nodes_lig = pocket_data.batch.bincount().to(self.device)
                 if vary_n_nodes:
@@ -1461,7 +1462,9 @@ class Trainer(pl.LightningModule):
                     ).to(self.device)
                 else:
                     num_nodes_lig += n_nodes_bias
+                    
             else:
+                
                 try:
                     pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(0)
                     num_nodes_lig = (
@@ -1476,14 +1479,16 @@ class Trainer(pl.LightningModule):
                         "Could not retrieve ligand size from the conditional size distribution given the pocket size. Taking the ground truth size."
                     )
                     num_nodes_lig = pocket_data.batch.bincount().to(self.device)
-                    if vary_n_nodes:
-                        num_nodes_lig += torch.randint(
-                            low=0, high=n_nodes_bias, size=num_nodes_lig.size()
-                        ).to(self.device)
-                    else:
-                        num_nodes_lig += n_nodes_bias
+                    
+                if vary_n_nodes:
+                    num_nodes_lig += torch.randint(
+                        low=0, high=n_nodes_bias, size=num_nodes_lig.size()
+                    ).to(self.device)
+                else:
+                    num_nodes_lig += n_nodes_bias
         # TargetDiff settings
         elif prior_n_atoms == "targetdiff":
+            
             if fix_n_nodes:
                 num_nodes_lig = pocket_data.batch.bincount().to(self.device)
                 if vary_n_nodes:
@@ -1494,11 +1499,13 @@ class Trainer(pl.LightningModule):
                     ).to(self.device)
                 else:
                     num_nodes_lig += n_nodes_bias
+                    
             else:
                 _num_nodes_pockets = pocket_data.pos_pocket_batch.bincount()
                 _pos_pocket_splits = pocket_data.pos_pocket.split(_num_nodes_pockets.cpu().numpy().tolist(), dim=0)
                 num_nodes_lig = torch.tensor([sample_atom_num(get_space_size(n.cpu().numpy()), 
                                                               cutoff=self.hparams.dataset_cutoff) for n in _pos_pocket_splits]).to(self.device)
+                
                 if vary_n_nodes:
                     num_nodes_lig += torch.randint(
                         low=0, high=n_nodes_bias, size=num_nodes_lig.size()
