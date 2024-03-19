@@ -204,6 +204,323 @@ class PredictionHeadEdge(nn.Module):
         return coords_pred, atoms_pred, bonds_pred, property_pred
 
 
+class PredictionHeadEdge_Old(nn.Module):
+    def __init__(
+        self,
+        hn_dim: Tuple[int, int],
+        edge_dim: int,
+        num_atom_features: int,
+        num_bond_types: int = 5,
+        coords_param: str = "data",
+        joint_property_prediction: bool = False,
+        regression_property: list = None,
+    ) -> None:
+        super(PredictionHeadEdge_Old, self).__init__()
+        self.sdim, self.vdim = hn_dim
+        self.num_atom_features = num_atom_features
+        self.coords_param = coords_param
+        self.joint_property_prediction = joint_property_prediction
+        self.regression_property = regression_property
+
+        self.shared_mapping = DenseLayer(
+            self.sdim, self.sdim, bias=True, activation=nn.SiLU()
+        )
+
+        self.bond_mapping = DenseLayer(edge_dim, self.sdim, bias=True)
+
+        self.bonds_lin_0 = DenseLayer(
+            in_features=self.sdim + 1, out_features=self.sdim, bias=True
+        )
+        self.bonds_lin_1 = DenseLayer(
+            in_features=self.sdim, out_features=num_bond_types, bias=True
+        )
+        self.coords_lin = DenseLayer(in_features=self.vdim, out_features=1, bias=False)
+        self.atoms_lin = DenseLayer(
+            in_features=self.sdim, out_features=num_atom_features, bias=True
+        )
+        if self.joint_property_prediction:
+            if (
+                "docking_score" in self.regression_property
+                or "ic50" in self.regression_property
+                or "polarizability" in self.regression_property
+            ):
+                self.prop_map = GatedEquivBlock(
+                    in_dims=hn_dim,
+                    out_dims=(self.sdim, None),
+                    use_mlp=True,
+                    return_vector=False,
+                )
+                self.prop_mlp = nn.Sequential(
+                    DenseLayer(self.sdim, self.sdim, activation=nn.ReLU(), bias=True),
+                    DenseLayer(self.sdim, 1, bias=True, activation=nn.Identity()),
+                )
+
+            if "sa_score" in self.regression_property:
+                self.sa_mlp = nn.Sequential(
+                    DenseLayer(
+                        in_features=self.sdim,
+                        out_features=self.sdim,
+                        bias=True,
+                        activation=nn.SiLU(),
+                    ),
+                    DenseLayer(
+                        in_features=self.sdim,
+                        out_features=1,
+                        bias=True,
+                        activation=nn.Identity(),
+                    ),
+                )
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.shared_mapping.reset_parameters()
+        self.coords_lin.reset_parameters()
+        self.atoms_lin.reset_parameters()
+        self.bonds_lin_0.reset_parameters()
+        self.bonds_lin_1.reset_parameters()
+        if self.joint_property_prediction:
+            if (
+                "docking_score" in self.regression_property
+                or "ic50" in self.regression_property
+                or "polarizability" in self.regression_property
+            ):
+                reset(self.prop_map)
+                reset(self.prop_mlp)
+            if "sa_score" in self.regression_property:
+                reset(self.sa_mlp)
+
+    def forward(
+        self,
+        x: Dict,
+        batch: Tensor,
+        edge_index_global: Tensor,
+        edge_index_global_lig: Tensor = None,
+        batch_lig: Tensor = None,
+        pocket_mask: Tensor = None,
+        edge_mask: Tensor = None,
+    ) -> Dict:
+
+        s, v, p, e = x["s"], x["v"], x["p"], x["e"]
+        s = self.shared_mapping(s)
+        coords_pred = self.coords_lin(v).squeeze()
+        atoms_pred = self.atoms_lin(s)
+
+        if batch_lig is not None and pocket_mask is not None:
+            s = (s * pocket_mask)[pocket_mask.squeeze(), :]
+            j, i = edge_index_global_lig
+            atoms_pred = (atoms_pred * pocket_mask)[pocket_mask.squeeze(), :]
+            coords_pred = (coords_pred * pocket_mask)[pocket_mask.squeeze(), :]
+            p = (p * pocket_mask)[pocket_mask.squeeze(), :]
+            coords_pred = p + coords_pred  ## to test old model
+            d = (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)
+        elif self.coords_param == "data":
+            j, i = edge_index_global
+            n = s.size(0)
+            coords_pred = p + coords_pred
+            coords_pred = (
+                coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
+            )
+            d = (
+                (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)
+            )  # .sqrt()
+        else:
+            j, i = edge_index_global
+            n = s.size(0)
+            d = (p[i] - p[j]).pow(2).sum(-1, keepdim=True)  # .sqrt()
+            coords_pred = (
+                coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
+            )
+
+        if edge_mask is not None and edge_index_global_lig is not None:
+            n = len(batch_lig)
+            e = (e * edge_mask.unsqueeze(1))[edge_mask]
+            e_dense = torch.zeros(n, n, e.size(-1), device=e.device)
+            e_dense[edge_index_global_lig[0], edge_index_global_lig[1], :] = e
+            e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
+            e = e_dense[edge_index_global_lig[0], edge_index_global_lig[1], :]
+        else:
+            e_dense = torch.zeros(n, n, e.size(-1), device=e.device)
+            e_dense[edge_index_global[0], edge_index_global[1], :] = e
+            e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
+            e = e_dense[edge_index_global[0], edge_index_global[1], :]
+
+        f = s[i] + s[j] + self.bond_mapping(e)
+        edge = torch.cat([f, d], dim=-1)
+
+        bonds_pred = F.silu(self.bonds_lin_0(edge))
+        bonds_pred = self.bonds_lin_1(bonds_pred)
+
+        if self.joint_property_prediction:
+            batch_size = len(batch.bincount())
+            aggr_idx = batch if batch_lig is None else batch_lig
+            if pocket_mask is not None:
+                v = (v * pocket_mask.unsqueeze(-1))[pocket_mask.squeeze(), :]
+            prop_map = self.prop_map((s, v))
+            prop_map = scatter_mean(
+                prop_map, index=aggr_idx, dim=0, dim_size=batch_size
+            )
+            if (
+                "docking_score" in self.regression_property
+                or "ic50" in self.regression_property
+                or "polarizability" in self.regression_property
+            ):
+                prop_pred = self.prop_mlp(prop_map)
+            else:
+                prop_pred = None
+            if "sa_score" in self.regression_property:
+                sa_pred = self.sa_mlp(prop_map)
+            else:
+                sa_pred = None
+            property_pred = (sa_pred, prop_pred)
+        else:
+            property_pred = None
+
+        return coords_pred, atoms_pred, bonds_pred, property_pred
+
+
+class PredictionHeadEdge_old(nn.Module):
+    def __init__(
+        self,
+        hn_dim: Tuple[int, int],
+        edge_dim: int,
+        num_atom_features: int,
+        num_bond_types: int = 5,
+        coords_param: str = "data",
+        joint_property_prediction: bool = False,
+        regression_property: list = None,
+    ) -> None:
+        super(PredictionHeadEdge, self).__init__()
+        self.sdim, self.vdim = hn_dim
+        self.num_atom_features = num_atom_features
+        self.coords_param = coords_param
+        self.joint_property_prediction = joint_property_prediction
+        self.regression_property = regression_property
+
+        self.shared_mapping = DenseLayer(
+            self.sdim, self.sdim, bias=True, activation=nn.SiLU()
+        )
+
+        self.bond_mapping = DenseLayer(edge_dim, self.sdim, bias=True)
+
+        self.bonds_lin_0 = DenseLayer(
+            in_features=self.sdim + 1, out_features=self.sdim, bias=True
+        )
+        self.bonds_lin_1 = DenseLayer(
+            in_features=self.sdim, out_features=num_bond_types, bias=True
+        )
+        self.coords_lin = DenseLayer(in_features=self.vdim, out_features=1, bias=False)
+        self.atoms_lin = DenseLayer(
+            in_features=self.sdim, out_features=num_atom_features, bias=True
+        )
+        if self.joint_property_prediction:
+            self.property_mlp = GatedEquivBlock(
+                in_dims=hn_dim,
+                out_dims=(self.sdim, None),
+                use_mlp=True,
+                return_vector=False,
+            )
+            self.sa_mlp = nn.Sequential(
+                DenseLayer(self.sdim, self.sdim, activation=nn.SiLU(), bias=True),
+                DenseLayer(self.sdim, 1, bias=True, activation=nn.Identity()),
+            )
+
+            self.docking_mlp = nn.Sequential(
+                DenseLayer(self.sdim, self.sdim, activation=nn.ReLU(), bias=True),
+                DenseLayer(self.sdim, 1, bias=True, activation=nn.Identity()),
+            )
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.shared_mapping.reset_parameters()
+        self.coords_lin.reset_parameters()
+        self.atoms_lin.reset_parameters()
+        self.bonds_lin_0.reset_parameters()
+        self.bonds_lin_1.reset_parameters()
+        if self.joint_property_prediction:
+            self.node_lin.reset_parameters()
+            reset(self.sa_mlp)
+            reset(self.docking_mlp)
+
+    def forward(
+        self,
+        x: Dict,
+        batch: Tensor,
+        edge_index_global: Tensor,
+        edge_index_global_lig: Tensor = None,
+        batch_lig: Tensor = None,
+        pocket_mask: Tensor = None,
+        edge_mask: Tensor = None,
+    ) -> Dict:
+
+        s, v, p, e = x["s"], x["v"], x["p"], x["e"]
+        s = self.shared_mapping(s)
+        coords_pred = self.coords_lin(v).squeeze()
+        atoms_pred = self.atoms_lin(s)
+
+        if batch_lig is not None and pocket_mask is not None:
+            s = (s * pocket_mask)[pocket_mask.squeeze(), :]
+            j, i = edge_index_global_lig
+            atoms_pred = (atoms_pred * pocket_mask)[pocket_mask.squeeze(), :]
+            coords_pred = (coords_pred * pocket_mask)[pocket_mask.squeeze(), :]
+            p = (p * pocket_mask)[pocket_mask.squeeze(), :]
+            coords_pred = p + coords_pred  ## to test old model
+            d = (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)
+        elif self.coords_param == "data":
+            j, i = edge_index_global
+            n = s.size(0)
+            coords_pred = p + coords_pred
+            coords_pred = (
+                coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
+            )
+            d = (
+                (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)
+            )  # .sqrt()
+        else:
+            j, i = edge_index_global
+            n = s.size(0)
+            d = (p[i] - p[j]).pow(2).sum(-1, keepdim=True)  # .sqrt()
+            coords_pred = (
+                coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
+            )
+
+        if edge_mask is not None and edge_index_global_lig is not None:
+            n = len(batch_lig)
+            e = (e * edge_mask.unsqueeze(1))[edge_mask]
+            e_dense = torch.zeros(n, n, e.size(-1), device=e.device)
+            e_dense[edge_index_global_lig[0], edge_index_global_lig[1], :] = e
+            e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
+            e = e_dense[edge_index_global_lig[0], edge_index_global_lig[1], :]
+        else:
+            e_dense = torch.zeros(n, n, e.size(-1), device=e.device)
+            e_dense[edge_index_global[0], edge_index_global[1], :] = e
+            e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
+            e = e_dense[edge_index_global[0], edge_index_global[1], :]
+
+        f = s[i] + s[j] + self.bond_mapping(e)
+        edge = torch.cat([f, d], dim=-1)
+
+        bonds_pred = F.silu(self.bonds_lin_0(edge))
+        bonds_pred = self.bonds_lin_1(bonds_pred)
+
+        if self.joint_property_prediction:
+            batch_size = len(batch.bincount())
+            v = (v * pocket_mask.unsqueeze(-1))[pocket_mask.squeeze(), :]
+            property_pred = self.property_mlp((s, v))
+            property_pred = scatter_mean(
+                property_pred, index=batch_lig, dim=0, dim_size=batch_size
+            )
+            sa_pred, docking_pred = self.sa_mlp(property_pred), self.docking_mlp(
+                property_pred
+            )
+            property_pred = (sa_pred, docking_pred)
+        else:
+            property_pred = None
+
+        return coords_pred, atoms_pred, bonds_pred, property_pred
+
+
 class HiddenEdgeDistanceMLP(nn.Module):
     def __init__(self, hn_dim: Tuple[int, int]) -> None:
         super(HiddenEdgeDistanceMLP, self).__init__()
@@ -289,145 +606,6 @@ class PropertyPredictionHead(nn.Module):
         out = s + v.sum() * 0
 
         return out
-
-
-class PredictionHeadEdge_Old(nn.Module):
-    def __init__(
-        self,
-        hn_dim: Tuple[int, int],
-        edge_dim: int,
-        num_atom_features: int,
-        num_bond_types: int = 5,
-        coords_param: str = "data",
-        joint_property_prediction: int = 0,  # gives the number of output nodes for property prediction.
-    ) -> None:
-        super(PredictionHeadEdge_Old, self).__init__()
-        self.sdim, self.vdim = hn_dim
-        self.num_atom_features = num_atom_features
-        self.coords_param = coords_param
-        self.joint_property_prediction = joint_property_prediction
-
-        self.shared_mapping = DenseLayer(
-            self.sdim, self.sdim, bias=True, activation=nn.SiLU()
-        )
-
-        self.bond_mapping = DenseLayer(edge_dim, self.sdim, bias=True)
-
-        self.bonds_lin_0 = DenseLayer(
-            in_features=self.sdim + 1, out_features=self.sdim, bias=True
-        )
-        self.bonds_lin_1 = DenseLayer(
-            in_features=self.sdim, out_features=num_bond_types, bias=True
-        )
-        self.coords_lin = DenseLayer(in_features=self.vdim, out_features=1, bias=False)
-        self.atoms_lin = DenseLayer(
-            in_features=self.sdim, out_features=num_atom_features, bias=True
-        )
-        if self.joint_property_prediction:
-            self.property_mlp = GatedEquivBlock(
-                in_dims=hn_dim,
-                out_dims=(self.sdim, None),
-                use_mlp=True,
-                return_vector=False,
-            )
-            self.sa_mlp = nn.Sequential(
-                DenseLayer(self.sdim, self.sdim, activation=nn.SiLU(), bias=True),
-                DenseLayer(self.sdim, 1, bias=True, activation=nn.Identity()),
-            )
-
-            self.docking_mlp = nn.Sequential(
-                DenseLayer(self.sdim, self.sdim, activation=nn.ReLU(), bias=True),
-                DenseLayer(self.sdim, 1, bias=True, activation=nn.Identity()),
-            )
-
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        self.shared_mapping.reset_parameters()
-        self.coords_lin.reset_parameters()
-        self.atoms_lin.reset_parameters()
-        self.bonds_lin_0.reset_parameters()
-        self.bonds_lin_1.reset_parameters()
-        if self.joint_property_prediction:
-            reset(self.sa_mlp)
-            reset(self.docking_mlp)
-
-    def forward(
-        self,
-        x: Dict,
-        batch: Tensor,
-        edge_index_global: Tensor,
-        edge_index_global_lig: Tensor = None,
-        batch_lig: Tensor = None,
-        pocket_mask: Tensor = None,
-        edge_mask: Tensor = None,
-    ) -> Dict:
-
-        s, v, p, e = x["s"], x["v"], x["p"], x["e"]
-        s = self.shared_mapping(s)
-        coords_pred = self.coords_lin(v).squeeze()
-        atoms_pred = self.atoms_lin(s)
-
-        if batch_lig is not None and pocket_mask is not None:
-            s = (s * pocket_mask)[pocket_mask.squeeze(), :]
-            j, i = edge_index_global_lig
-            atoms_pred = (atoms_pred * pocket_mask)[pocket_mask.squeeze(), :]
-            coords_pred = (coords_pred * pocket_mask)[pocket_mask.squeeze(), :]
-            p = (p * pocket_mask)[pocket_mask.squeeze(), :]
-            coords_pred = p + coords_pred  ## to test old model
-            d = (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)
-        elif self.coords_param == "data":
-            j, i = edge_index_global
-            n = s.size(0)
-            coords_pred = p + coords_pred
-            coords_pred = (
-                coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
-            )
-            d = (
-                (coords_pred[i] - coords_pred[j]).pow(2).sum(-1, keepdim=True)
-            )  # .sqrt()
-        else:
-            j, i = edge_index_global
-            n = s.size(0)
-            d = (p[i] - p[j]).pow(2).sum(-1, keepdim=True)  # .sqrt()
-            coords_pred = (
-                coords_pred - scatter_mean(coords_pred, index=batch, dim=0)[batch]
-            )
-
-        if edge_mask is not None and edge_index_global_lig is not None:
-            n = len(batch_lig)
-            e = (e * edge_mask.unsqueeze(1))[edge_mask]
-            e_dense = torch.zeros(n, n, e.size(-1), device=e.device)
-            e_dense[edge_index_global_lig[0], edge_index_global_lig[1], :] = e
-            e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
-            e = e_dense[edge_index_global_lig[0], edge_index_global_lig[1], :]
-        else:
-            e_dense = torch.zeros(n, n, e.size(-1), device=e.device)
-            e_dense[edge_index_global[0], edge_index_global[1], :] = e
-            e_dense = 0.5 * (e_dense + e_dense.permute(1, 0, 2))
-            e = e_dense[edge_index_global[0], edge_index_global[1], :]
-
-        f = s[i] + s[j] + self.bond_mapping(e)
-        edge = torch.cat([f, d], dim=-1)
-
-        bonds_pred = F.silu(self.bonds_lin_0(edge))
-        bonds_pred = self.bonds_lin_1(bonds_pred)
-
-        if self.joint_property_prediction:
-            batch_size = len(batch.bincount())
-            v = (v * pocket_mask.unsqueeze(-1))[pocket_mask.squeeze(), :]
-            property_pred = self.property_mlp((s, v))
-            property_pred = scatter_mean(
-                property_pred, index=batch_lig, dim=0, dim_size=batch_size
-            )
-            sa_pred, docking_pred = self.sa_mlp(property_pred), self.docking_mlp(
-                property_pred
-            )
-            property_pred = (sa_pred, docking_pred)
-        else:
-            property_pred = None
-
-        return coords_pred, atoms_pred, bonds_pred, property_pred
 
 
 class PropertyPredictionMLP(nn.Module):

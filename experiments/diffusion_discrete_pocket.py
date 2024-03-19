@@ -1,6 +1,7 @@
 import logging
 import os
 import pickle
+import sys
 from datetime import datetime
 from typing import Dict, List, Tuple
 
@@ -8,6 +9,7 @@ import pandas as pd
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
+from rdkit.Chem import RDConfig
 from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.nn import radius_graph
@@ -60,15 +62,9 @@ from experiments.utils import (
 )
 from experiments.xtb_energy import calculate_xtb_energy
 
-import numpy as np
-from rdkit import Chem
-from rdkit.Chem import RDConfig
-import os
-import sys
-sys.path.append(os.path.join(RDConfig.RDContribDir, 'SA_Score'))
-import sascorer
+sys.path.append(os.path.join(RDConfig.RDContribDir, "SA_Score"))
 
-from experiments.data.ligand.utils import sample_atom_num, get_space_size
+from experiments.data.ligand.utils import get_space_size, sample_atom_num
 
 logging.getLogger("lightning").setLevel(logging.WARNING)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").addHandler(
@@ -110,7 +106,7 @@ class Trainer(pl.LightningModule):
             hparams["use_out_norm"] = True
         if "dynamic_graph" not in hparams.keys():
             hparams["dynamic_graph"] = False
-        
+
         if "kNN" not in hparams.keys():
             hparams["kNN"] = None
         if "use_rbfs" not in hparams.keys():
@@ -119,9 +115,9 @@ class Trainer(pl.LightningModule):
             hparams["dataset_cutoff"] = 8.0
         if "mask_pocket_edges" not in hparams.keys():
             hparams["mask_pocket_edges"] = False
-            
+
         self.save_hyperparameters(hparams)
-        
+
         self.kNN = hparams["kNN"]
         self.cutoff_p = hparams["cutoff_local"]
         self.cutoff_lp = hparams["cutoff_local"]
@@ -632,7 +628,6 @@ class Trainer(pl.LightningModule):
             "atoms": out_dict["atoms_true"],
             "charges": out_dict["charges_true"],
             "bonds": out_dict["bonds_true"],
-            "properties": out_dict["property_true"],
         }
 
         coords_pred = out_dict["coords_pred"]
@@ -646,8 +641,42 @@ class Trainer(pl.LightningModule):
             "atoms": atoms_pred,
             "charges": charges_pred,
             "bonds": edges_pred,
-            "properties": out_dict["property_pred"],
         }
+
+        if self.hparams.joint_property_prediction:
+            assert (
+                "sa_score" in self.hparams.regression_property
+                or "docking_score" in self.hparams.regression_property
+                or "ic50" in self.hparams.regression_property
+            )
+            if "sa_score" in self.hparams.regression_property:
+                label_sa = (
+                    torch.tensor([calculate_sa(mol) for mol in batch.mol])
+                    .to(self.device)
+                    .float()
+                )
+            else:
+                label_sa = None
+            if (
+                "docking_score" in self.hparams.regression_property
+                or "ic50" in self.hparams.regression_property
+            ):
+                if "docking_score" in self.hparams.regression_property:
+                    label_prop = batch.docking_scores.float()
+                elif "ic50" in self.hparams.regression_property:
+                    label_prop = batch.ic50.float()
+                else:
+                    raise Exception(
+                        "Specified regression property ot supported. Choose docking_score or ic50"
+                    )
+            else:
+                label_prop = None
+            true_data["properties"] = {"sa_score": label_sa, "property": label_prop}
+            sa_pred, prop_pred = out_dict["property_pred"]
+            pred_data["properties"] = {"sa_score": sa_pred, "property": prop_pred}
+        else:
+            true_data["properties"] = None
+            pred_data["properties"] = None
 
         loss = self.diffusion_loss(
             true_data=true_data,
@@ -1093,47 +1122,6 @@ class Trainer(pl.LightningModule):
                 "num_nodes_true": true_num_nodes - 1,
             }
 
-        if self.hparams.joint_property_prediction:
-            assert (
-                "sa_score" in self.hparams.regression_property
-                or "docking_score" in self.hparams.regression_property
-                or "ic50" in self.hparams.regression_property
-            )
-            if "sa_score" in self.hparams.regression_property:
-                if not rdkit_sa:
-                    label_sa = (
-                        torch.tensor([calculate_sa(mol) for mol in batch.mol])
-                        .to(self.device)
-                        .float()
-                    )
-                else:
-                    label_sa = np.array([sascorer.calculateScore(Chem.RemoveHs(mol)) for mol in batch.mol])
-                    label_sa = (label_sa - 1.0) / (10.0 - 1.0)
-                    label_sa = 1.0 - label_sa
-                    label_sa = torch.from_numpy(label_sa).float().to(pos.device)
-            else:
-                label_sa = None
-            if (
-                "docking_score" in self.hparams.regression_property
-                or "ic50" in self.hparams.regression_property
-            ):
-                if "docking_score" in self.hparams.regression_property:
-                    label_prop = batch.docking_scores.float()
-                elif "ic50" in self.hparams.regression_property:
-                    label_prop = batch.ic50.float()
-                else:
-                    raise Exception(
-                        "Specified regression property ot supported. Choose docking_score or ic50"
-                    )
-            else:
-                label_prop = None
-            out["property_true"] = {"sa_score": label_sa, "property": label_prop}
-            sa_pred, prop_pred = out["property_pred"]
-            out["property_pred"] = {"sa_score": sa_pred, "property": prop_pred}
-        else:
-            out["property_true"] = None
-            out["property_pred"] = None
-
         if self.hparams.bonds_continuous:
             out["bonds_noise_true"] = edge_attr_global_noise
 
@@ -1294,7 +1282,7 @@ class Trainer(pl.LightningModule):
         n_nodes_bias: int = 0,
         device: str = "cpu",
         encode_ligand: bool = True,
-        prior_n_atoms: str = "conditional"
+        prior_n_atoms: str = "conditional",
     ):
         """
         Runs the evaluation on the entire validation dataloader. Generates 1 ligand in 1 receptor structure
@@ -1318,11 +1306,20 @@ class Trainer(pl.LightningModule):
                 num_nodes_lig += n_nodes_bias
             elif prior_n_atoms == "targetdiff":
                 _num_nodes_pockets = pocket_data.pos_pocket_batch.bincount()
-                _pos_pocket_splits = pocket_data.pos_pocket.split(_num_nodes_pockets.cpu().numpy().tolist(), dim=0)
-                num_nodes_lig = torch.tensor([sample_atom_num(get_space_size(n.cpu().numpy()), 
-                                                              cutoff=self.hparams.dataset_cutoff) for n in _pos_pocket_splits]).to(self.device)
+                _pos_pocket_splits = pocket_data.pos_pocket.split(
+                    _num_nodes_pockets.cpu().numpy().tolist(), dim=0
+                )
+                num_nodes_lig = torch.tensor(
+                    [
+                        sample_atom_num(
+                            get_space_size(n.cpu().numpy()),
+                            cutoff=self.hparams.dataset_cutoff,
+                        )
+                        for n in _pos_pocket_splits
+                    ]
+                ).to(self.device)
                 num_nodes_lig += n_nodes_bias
-                
+
             molecules = self.reverse_sampling(
                 num_graphs=num_graphs,
                 num_nodes_lig=num_nodes_lig,
@@ -1430,6 +1427,7 @@ class Trainer(pl.LightningModule):
         n_nodes_bias=0,
         ckpt_property_model=None,
         ckpt_sa_model=None,
+        ckpts_ensemble=None,
         property_classifier_guidance=None,
         property_classifier_guidance_complex=False,
         property_classifier_self_guidance=False,
@@ -1447,11 +1445,11 @@ class Trainer(pl.LightningModule):
         maximize_property=True,
         encode_ligand: bool = True,
         save_dir=None,
-        prior_n_atoms: str = "conditional"
-    ):  
+        prior_n_atoms: str = "conditional",
+    ):
         # DiffSBDD settings
         if prior_n_atoms == "conditional":
-            
+
             if fix_n_nodes:
                 num_nodes_lig = pocket_data.batch.bincount().to(self.device)
                 if vary_n_nodes:
@@ -1462,11 +1460,13 @@ class Trainer(pl.LightningModule):
                     ).to(self.device)
                 else:
                     num_nodes_lig += n_nodes_bias
-                    
+
             else:
-                
+
                 try:
-                    pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(0)
+                    pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(
+                        0
+                    )
                     num_nodes_lig = (
                         self.conditional_size_distribution.sample_conditional(
                             n1=None, n2=pocket_size
@@ -1479,7 +1479,7 @@ class Trainer(pl.LightningModule):
                         "Could not retrieve ligand size from the conditional size distribution given the pocket size. Taking the ground truth size."
                     )
                     num_nodes_lig = pocket_data.batch.bincount().to(self.device)
-                    
+
                 if vary_n_nodes:
                     num_nodes_lig += torch.randint(
                         low=0, high=n_nodes_bias, size=num_nodes_lig.size()
@@ -1488,7 +1488,7 @@ class Trainer(pl.LightningModule):
                     num_nodes_lig += n_nodes_bias
         # TargetDiff settings
         elif prior_n_atoms == "targetdiff":
-            
+
             if fix_n_nodes:
                 num_nodes_lig = pocket_data.batch.bincount().to(self.device)
                 if vary_n_nodes:
@@ -1499,20 +1499,29 @@ class Trainer(pl.LightningModule):
                     ).to(self.device)
                 else:
                     num_nodes_lig += n_nodes_bias
-                    
+
             else:
                 _num_nodes_pockets = pocket_data.pos_pocket_batch.bincount()
-                _pos_pocket_splits = pocket_data.pos_pocket.split(_num_nodes_pockets.cpu().numpy().tolist(), dim=0)
-                num_nodes_lig = torch.tensor([sample_atom_num(get_space_size(n.cpu().numpy()), 
-                                                              cutoff=self.hparams.dataset_cutoff) for n in _pos_pocket_splits]).to(self.device)
-                
+                _pos_pocket_splits = pocket_data.pos_pocket.split(
+                    _num_nodes_pockets.cpu().numpy().tolist(), dim=0
+                )
+                num_nodes_lig = torch.tensor(
+                    [
+                        sample_atom_num(
+                            get_space_size(n.cpu().numpy()),
+                            cutoff=self.hparams.dataset_cutoff,
+                        )
+                        for n in _pos_pocket_splits
+                    ]
+                ).to(self.device)
+
                 if vary_n_nodes:
                     num_nodes_lig += torch.randint(
                         low=0, high=n_nodes_bias, size=num_nodes_lig.size()
                     ).to(self.device)
                 else:
                     num_nodes_lig += n_nodes_bias
-                                        
+
         molecules = self.reverse_sampling(
             num_graphs=num_graphs,
             num_nodes_lig=num_nodes_lig,
@@ -1528,6 +1537,7 @@ class Trainer(pl.LightningModule):
             build_obabel_mol=build_obabel_mol,
             ckpt_property_model=ckpt_property_model,
             ckpt_sa_model=ckpt_sa_model,
+            ckpts_ensemble=ckpts_ensemble,
             property_classifier_guidance=property_classifier_guidance,
             property_classifier_guidance_complex=property_classifier_guidance_complex,
             property_classifier_self_guidance=property_classifier_self_guidance,
@@ -1612,6 +1622,7 @@ class Trainer(pl.LightningModule):
 
         return z
 
+    @torch.no_grad()
     def importance_sampling(
         self,
         node_feats_in,
@@ -1638,6 +1649,7 @@ class Trainer(pl.LightningModule):
         kind: str = "sa_score",
         sa_model=None,
         property_model=None,
+        ensemble_models=None,
     ):
         """
         Idea:
@@ -1651,47 +1663,128 @@ class Trainer(pl.LightningModule):
 
         assert kind in ["sa_score", "docking_score", "ic50", "joint"]
 
-        if sa_model is None and property_model is None:
-            assert self.hparams.joint_property_prediction
-            out = self.model(
-                x=node_feats_in,
-                t=temb,
-                pos=pos,
-                edge_index_local=edge_index_local,
-                edge_index_global=edge_index_global,
-                edge_index_global_lig=edge_index_global_lig,
-                edge_attr_global=edge_attr_global,
-                batch=batch,
-                batch_edge_global=batch_edge_global,
-                context=context,
-                pocket_mask=pocket_mask.unsqueeze(1),
-                edge_mask=edge_mask,
-                edge_mask_pocket=edge_mask_pocket,
-                batch_lig=batch_lig,
-                ca_mask=ca_mask,
-                batch_pocket=batch_pocket,
+        assert self.hparams.joint_property_prediction
+        # out = self.get_model_predictions(
+        #     model=(
+        #         None
+        #         if sa_model is None
+        #         and property_model is None
+        #         and len(ensemble_models) == 0
+        #         else (
+        #             sa_model
+        #             if kind == "sa_score" and sa_model is not None
+        #             else (
+        #                 property_model
+        #                 if (kind == "docking_score" or kind == "ic50")
+        #                 and property_model is not None
+        #                 else ensemble_models
+        #             )
+        #         )
+        #     ),
+        #     node_feats_in=node_feats_in,
+        #     temb=temb,
+        #     pos=pos,
+        #     edge_index_local=edge_index_local,
+        #     edge_index_global=edge_index_global,
+        #     edge_index_global_lig=edge_index_global_lig,
+        #     edge_attr_global=edge_attr_global,
+        #     batch=batch,
+        #     batch_edge_global=batch_edge_global,
+        #     context=context,
+        #     pocket_mask=pocket_mask.unsqueeze(1),
+        #     edge_mask=edge_mask,
+        #     edge_mask_pocket=edge_mask_pocket,
+        #     batch_lig=batch_lig,
+        #     ca_mask=ca_mask,
+        #     batch_pocket=batch_pocket,
+        #     num_atom_features=self.num_atom_features,
+        #     num_bond_classes=self.num_bond_classes,
+        # )
+        # out = self.model(
+        #     x=node_feats_in,
+        #     t=temb,
+        #     pos=pos,
+        #     edge_index_local=edge_index_local,
+        #     edge_index_global=edge_index_global,
+        #     edge_index_global_lig=edge_index_global_lig,
+        #     edge_attr_global=edge_attr_global,
+        #     batch=batch,
+        #     batch_edge_global=batch_edge_global,
+        #     context=context,
+        #     pocket_mask=pocket_mask.unsqueeze(1),
+        #     edge_mask=edge_mask,
+        #     edge_mask_pocket=edge_mask_pocket,
+        #     batch_lig=batch_lig,
+        #     ca_mask=ca_mask,
+        #     batch_pocket=batch_pocket,
+        # )
+        if ensemble_models is not None and len(ensemble_models) > 1:
+            assert (
+                len(ensemble_models) >= 2
+            ), "Ensemble should consist of at least two models"
+            preds = {"sa": [], "property": []}
+            for ckpt in ensemble_models:
+                property_model = load_property_model(
+                    ckpt,
+                    self.num_atom_features,
+                    self.num_bond_classes,
+                    joint_prediction=True,
+                )
+                property_model.to(pos.device)
+                property_model.eval()
+                out = property_model(
+                    x=node_feats_in,
+                    t=temb,
+                    pos=pos,
+                    edge_index_local=edge_index_local,
+                    edge_index_global=edge_index_global,
+                    edge_index_global_lig=edge_index_global_lig,
+                    edge_attr_global=edge_attr_global,
+                    batch=batch,
+                    batch_edge_global=batch_edge_global,
+                    context=context,
+                    pocket_mask=pocket_mask.unsqueeze(1),
+                    edge_mask=edge_mask,
+                    edge_mask_pocket=edge_mask_pocket,
+                    batch_lig=batch_lig,
+                    ca_mask=ca_mask,
+                    batch_pocket=batch_pocket,
+                )
+                sa, prop = out["property_pred"]
+                if sa is not None:
+                    preds["sa"].append(sa)
+                if prop is not None:
+                    preds["property"].append(prop)
+            sa = (
+                torch.cat(preds["sa"], dim=1).mean(dim=1).unsqueeze(1)
+                if len(preds["sa"]) > 0
+                else None
             )
-        elif kind == "sa_score" and sa_model is not None:
-            out = sa_model(
-                x=node_feats_in,
-                t=temb,
-                pos=pos,
-                edge_index_local=edge_index_local,
-                edge_index_global=edge_index_global,
-                edge_index_global_lig=edge_index_global_lig,
-                edge_attr_global=edge_attr_global,
-                batch=batch,
-                batch_edge_global=batch_edge_global,
-                context=context,
-                pocket_mask=pocket_mask.unsqueeze(1),
-                edge_mask=edge_mask,
-                edge_mask_pocket=edge_mask_pocket,
-                batch_lig=batch_lig,
-                ca_mask=ca_mask,
-                batch_pocket=batch_pocket,
+            prop = (
+                torch.cat(preds["property"], dim=1).mean(dim=1).unsqueeze(1)
+                if len(preds["property"]) > 0
+                else None
             )
-        elif kind == "docking_score" or kind == "ic50" and property_model is not None:
-            out = property_model(
+            out["property_pred"] = (sa, prop)
+            del property_model
+        else:
+            model = (
+                self.model
+                if sa_model is None
+                and property_model is None
+                and len(ensemble_models) == 0
+                else (
+                    sa_model
+                    if kind == "sa_score" and sa_model is not None
+                    else (
+                        property_model
+                        if (kind == "docking_score" or kind == "ic50")
+                        and property_model is not None
+                        else None
+                    )
+                )
+            )
+            out = model(
                 x=node_feats_in,
                 t=temb,
                 pos=pos,
@@ -1716,13 +1809,15 @@ class Trainer(pl.LightningModule):
 
         prop_pred = out["property_pred"]
         sa, prop = prop_pred
-        sa = sa.squeeze(1).sigmoid() if sa is not None else None
+        sa = sa.squeeze(1).sigmoid() if sa is not None and kind == "sa_score" else None
 
-        if prop is not None:
+        if prop is not None and (kind == "docking_score" or kind == "ic50"):
             if prop.dim() == 2:
                 prop = prop.squeeze()
             if kind == "docking_score":
                 prop = -1.0 * prop
+        else:
+            prop = None
 
         if not maximize_score and sa is not None:
             sa = 1.0 - sa
@@ -1738,7 +1833,7 @@ class Trainer(pl.LightningModule):
 
         if kind == "joint":
             assert sa is not None and prop is not None
-            weights = (weights_sa + weights_prop) / (sa_tau + property_tau)
+            weights = weights_sa + weights_prop
             weights = weights.softmax(dim=0)
         elif kind == "sa_score":
             assert sa is not None
@@ -1843,6 +1938,7 @@ class Trainer(pl.LightningModule):
         iteration: int = 0,
         ckpt_property_model=None,
         ckpt_sa_model=None,
+        ckpts_ensemble=None,
         property_classifier_guidance=None,
         property_classifier_guidance_complex=False,
         property_classifier_self_guidance=False,
@@ -1866,7 +1962,7 @@ class Trainer(pl.LightningModule):
 
         try:
             ca_mask = pocket_data.ca_mask.to(self.device)
-        except:
+        except Exception:
             ca_mask = None
 
         batch = torch.arange(num_graphs, device=self.device).repeat_interleave(
@@ -2319,6 +2415,7 @@ class Trainer(pl.LightningModule):
                     edge_mask_pocket=edge_mask_pocket,
                     kind="sa_score",
                     sa_model=sa_model,
+                    ensemble_models=ckpts_ensemble,
                 )
                 atom_types, charge_types = node_feats_in.split(
                     [self.num_atom_types, self.num_charge_classes], dim=-1
@@ -2403,11 +2500,12 @@ class Trainer(pl.LightningModule):
                     edge_mask_pocket=edge_mask_pocket,
                     property_tau=property_tau,
                     kind=(
-                        property_model.regression_property[0]
+                        property_model.regression_property[-1]
                         if property_model is not None
-                        else self.hparams.regression_property[0]
-                    ),  # currently hardcoded for one property. If multi-property, this needs to be changed!
+                        else self.hparams.regression_property[-1]
+                    ),  # currently hardcoded for max. two properties, whereby SA is always the first and the property the last argument!
                     property_model=property_model,
+                    ensemble_models=ckpts_ensemble,
                 )
                 atom_types, charge_types = node_feats_in.split(
                     [self.num_atom_types, self.num_charge_classes], dim=-1

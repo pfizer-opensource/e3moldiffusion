@@ -19,8 +19,8 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/kinodata/x0_snr_cutoff5_bonds5_norm"
-output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_5"
+main_dir="/scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed1000"
+output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_5_sa0-200_ic50-200-400"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
@@ -40,12 +40,18 @@ python experiments/generate_ligands_multi.py \
     --batch-size 40 \
     --fix-n-nodes \
     --n-nodes-bias 5 \
-    --vary-n-nodes
-    # --property-importance-sampling \
-    # --property-importance-sampling-start 200 \
-    # --property-importance-sampling-end 300 \
-    # --property-every-importance-t 5 \
-    # --property-tau 0.1
+    --vary-n-nodes \
+    --property-importance-sampling \
+    --property-importance-sampling-start 200 \
+    --property-importance-sampling-end 400 \
+    --property-every-importance-t 5 \
+    --property-tau 0.1 \
+    --sa-importance-sampling \
+    --sa-importance-sampling-start 0 \
+    --sa-importance-sampling-end 200 \
+    --sa-every-importance-t 5 \
+    --sa-tau 0.1
+    #--ckpts-ensemble /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-ic50_seed1/best_valid.ckpt /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-ic50_seed1000/best_valid.ckpt /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-ic50_seed15/best_valid.ckpt
     # --sa-importance-sampling \
     # --sa-importance-sampling-start 0 \
     # --sa-importance-sampling-end 200 \

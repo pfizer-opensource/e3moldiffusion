@@ -8,8 +8,8 @@
 #SBATCH --partition=ondemand-8xv100m32-1b
 #SBATCH --gres=gpu:1
 #SBATCH --array=1-16
-#SBATCH --output=/scratch1/e3moldiffusion/slurm_logs_generate/array_run_%j.out
-#SBATCH --error=/scratch1/e3moldiffusion/slurm_logs_generate/array_run_%j.err
+#SBATCH --output=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.out
+#SBATCH --error=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.err
 
 num_gpus=16
 
@@ -19,39 +19,39 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_cutoff5_bonds5_norm_joint-sa-dock_Old"
-output_dir="$main_dir/evaluation/docking/nodes_bias_vary_10_sa0-250"
+main_dir="/scratch1/e3moldiffusion/logs/molecular_glue/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_norm"
+output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_10_sa0-250_every-5"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
 mkdir "$output_dir"
 
-python experiments/generate_ligands_multi.py \
+python experiments/generate_ligands_batch.py \
     --mp-index "${SLURM_ARRAY_TASK_ID}" \
     --num-gpus "$num_gpus" \
     --model-path "$main_dir/best_valid.ckpt" \
     --save-dir "$output_dir" \
-    --pdbqt-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_dock_new/test/pdbqt \
-    --test-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_dock_new/test \
+    --pdbqt-dir /scratch1/cremej01/data/molecular_glue/test/pdbqt \
+    --test-dir /scratch1/cremej01/data/cdk2 \
     --skip-existing \
-    --num-ligands-per-pocket-to-sample 100 \
-    --num-ligands-per-pocket-to-save 100 \
+    --num-ligands-to-sample 10000 \
     --max-sample-iter 50 \
     --batch-size 40 \
     --n-nodes-bias 10 \
     --vary-n-nodes \
+    --fix-n-nodes \
     --sa-importance-sampling \
     --sa-importance-sampling-start 0 \
     --sa-importance-sampling-end 250 \
     --sa-every-importance-t 5 \
+    --ckpt-sa-model /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_cutoff5_bonds5_no-norm_joint-sa/best_valid.ckpt \
     --sa-tau 0.1
     # --property-importance-sampling \
     # --property-importance-sampling-start 200 \
-    # --property-importance-sampling-end 300 \
-    # --property-every-importance-t 10 \
+    # --property-importance-sampling-end 400 \
+    # --property-every-importance-t 5 \
     # --property-tau 0.1 \
-    # --ckpt-property-model /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_no-norm_joint-dock/best_valid.ckpt \
-    # --ckpt-sa-model None \
+    # --ckpt-property-model None \
     # --minimize-property
     # --property-classifier-guidance None \
     # --property-classifier-guidance_complex False \
@@ -71,3 +71,14 @@ python experiments/generate_ligands_multi.py \
     #--sanitize 
     #--relax-mol \
     #--max-relax-iter 500 
+
+# for ((i=1; i<="$num_gpus"; i++)); do
+#     file="${i}_posebusters_sampled.pickle"
+    
+#     while [ ! -f "$file" ]; do
+#         sleep 5  # Adjust the interval between checks as needed
+#     done
+# done
+
+# python experiments/aggregate_results.py \
+#     --files-dir "$output_dir"

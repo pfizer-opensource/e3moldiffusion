@@ -10,6 +10,7 @@ import torch
 import torch.nn.functional as F
 from rdkit import Chem, DataStructs, RDLogger
 from rdkit.Chem import (
+    QED,
     AllChem,
     Crippen,
     Descriptors,
@@ -1328,3 +1329,16 @@ def calculate_hacceptors(rdmol):
 def calculate_molwt(rdmol):
     mol_weight = Descriptors.MolWt(rdmol)
     return mol_weight
+
+
+def calculate_qed(rdmol):
+    return QED.qed(rdmol)
+
+
+def calculate_lipinski(rdmol):
+    rule_1 = Descriptors.ExactMolWt(rdmol) < 500
+    rule_2 = Lipinski.NumHDonors(rdmol) <= 5
+    rule_3 = Lipinski.NumHAcceptors(rdmol) <= 10
+    rule_4 = (logp := Crippen.MolLogP(rdmol) >= -2) & (logp <= 5)
+    rule_5 = Chem.rdMolDescriptors.CalcNumRotatableBonds(rdmol) <= 10
+    return np.sum([int(a) for a in [rule_1, rule_2, rule_3, rule_4, rule_5]])

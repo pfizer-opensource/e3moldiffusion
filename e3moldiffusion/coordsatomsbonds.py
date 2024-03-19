@@ -19,6 +19,7 @@ from e3moldiffusion.modules import (
     GatedEquivBlock,
     HiddenEdgeDistanceMLP,
     PredictionHeadEdge,
+    PredictionHeadEdge_Old,
     PropertyPredictionHead,
     PropertyPredictionMLP,
 )
@@ -152,23 +153,28 @@ class DenoisingEdgeNetwork(nn.Module):
                 num_context_features=num_context_features,
             )
         else:
-            self.prediction_head = PredictionHeadEdge(
-                hn_dim=hn_dim,
-                edge_dim=edge_dim,
-                num_atom_features=num_atom_features,
-                num_bond_types=num_bond_types,
-                coords_param=coords_param,
-                joint_property_prediction=self.joint_property_prediction,
-                regression_property=self.regression_property,
-            )
-            # self.prediction_head = PredictionHeadEdge_Old(
-            #     hn_dim=hn_dim,
-            #     edge_dim=edge_dim,
-            #     num_atom_features=num_atom_features,
-            #     num_bond_types=num_bond_types,
-            #     coords_param=coords_param,
-            #     joint_property_prediction=self.joint_property_prediction,
-            # )
+            if "docking_score" in regression_property or (
+                "ic50" in regression_property and "sa_score" in regression_property
+            ):
+                self.prediction_head = PredictionHeadEdge_Old(
+                    hn_dim=hn_dim,
+                    edge_dim=edge_dim,
+                    num_atom_features=num_atom_features,
+                    num_bond_types=num_bond_types,
+                    coords_param=coords_param,
+                    joint_property_prediction=self.joint_property_prediction,
+                    regression_property=self.regression_property,
+                )
+            else:
+                self.prediction_head = PredictionHeadEdge(
+                    hn_dim=hn_dim,
+                    edge_dim=edge_dim,
+                    num_atom_features=num_atom_features,
+                    num_bond_types=num_bond_types,
+                    coords_param=coords_param,
+                    joint_property_prediction=self.joint_property_prediction,
+                    regression_property=self.regression_property,
+                )
 
         self.distance_ligand_pocket = distance_ligand_pocket
         if distance_ligand_pocket:

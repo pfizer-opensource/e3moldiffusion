@@ -586,6 +586,7 @@ def get_args():
     #load external models
     parser.add_argument("--ckpt-property-model", default=None, type=str)
     parser.add_argument("--ckpt-sa-model", default=None, type=str)
+    parser.add_argument("--ckpts-ensemble", default=[], nargs="+", type=str)
     # classifier guidance
     parser.add_argument("--property-classifier-guidance", default=False, action="store_true")
     parser.add_argument("--property-classifier-self-guidance", default=False, action="store_true")

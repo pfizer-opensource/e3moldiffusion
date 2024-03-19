@@ -24,7 +24,7 @@ def cross_product(a: Tensor, b: Tensor, dim: int) -> Tensor:
         cross = torch.stack([s1, s2, s3], dim=dim)
         return cross
 
-    
+
 class CosineCutoff(nn.Module):
     def __init__(self, cutoff_lower=0.0, cutoff_upper=5.0):
         super(CosineCutoff, self).__init__()
@@ -54,7 +54,8 @@ class CosineCutoff(nn.Module):
             # remove contributions beyond the cutoff radius
             cutoffs = cutoffs * (distances < self.cutoff_upper)
             return cutoffs
-        
+
+
 class PolynomialCutoff(nn.Module):
     def __init__(self, cutoff, p: int = 6):
         super(PolynomialCutoff, self).__init__()
@@ -113,16 +114,18 @@ class BesselExpansion(nn.Module):
         out *= math.sqrt(2 / self.max_value)
         return out
 
+
 class GaussianExpansion(torch.nn.Module):
     def __init__(self, max_value=5.0, K=20):
         super(GaussianExpansion, self).__init__()
         offset = torch.linspace(0.0, max_value, K)
-        self.coeff = -0.5 / (offset[1] - offset[0]).item()**2
-        self.register_buffer('offset', offset)
+        self.coeff = -0.5 / (offset[1] - offset[0]).item() ** 2
+        self.register_buffer("offset", offset)
 
     def forward(self, dist):
         dist = dist.view(-1, 1) - self.offset.view(1, -1)
         return torch.exp(self.coeff * torch.pow(dist, 2))
+
 
 class EQGATConv(MessagePassing):
     def __init__(
@@ -344,14 +347,14 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         #     else 2 * self.si + edge_dim + 2
         # )
         input_edge_dim = 2 * self.si + edge_dim + 2 + 2
-        
+
         self.use_rbfs = use_rbfs
         self.cutoff = cutoff
         if use_rbfs:
             self.radial_basis_func = GaussianExpansion(max_value=cutoff, K=20)
             self.cutoff_func = CosineCutoff(cutoff_lower=0.0, cutoff_upper=cutoff)
             input_edge_dim += 20
-            
+
         self.edge_net = nn.Sequential(
             DenseLayer(input_edge_dim, self.si, bias=True, activation=nn.SiLU()),
             DenseLayer(
@@ -362,7 +365,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
 
         self.edge_mp = edge_mp
         self.mask_pocket_edges = mask_pocket_edges
-        
+
         emlp = False
 
         if edge_mp:
@@ -533,11 +536,11 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
             )
         else:
             p = p + mp * pocket_mask if pocket_mask is not None else p + mp
-        
+
         # only enable hidden edge features from ligand-ligand interaction
         if self.mask_pocket_edges:
             me = me * edge_mask_ligand.unsqueeze(-1)
-            
+
         e = F.silu(me + e)
         e = self.edge_post(e)
 
@@ -595,15 +598,15 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
             d_i, d_j = torch.zeros_like(a0).to(a.device), torch.zeros_like(a0).to(
                 a.device
             )
-        
+
         aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e, d_i, d_j], dim=-1)
-        
+
         if self.use_rbfs:
             rbf = self.radial_basis_func(d)
             c = self.cutoff_func(d)
             aij = torch.cat([aij, rbf], dim=-1)
             aij = c.view(-1, 1) * aij
-            
+
         # else:
         #     aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e], dim=-1)
         aij = self.edge_net(aij)
@@ -671,7 +674,7 @@ class EQGATLocalConvFinal(MessagePassing):
         vector_aggr: str = "mean",
         use_cross_product: bool = False,
         use_pos_norm: bool = False,
-        coords_update: bool = False
+        coords_update: bool = False,
     ):
         super(EQGATLocalConvFinal, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
@@ -745,10 +748,10 @@ class EQGATLocalConvFinal(MessagePassing):
             edge_index=edge_index,
             dim_size=s.size(0),
         )
-        
+
         if self.coords_update:
             p = p + mp * pocket_mask if pocket_mask is not None else p + mp
-            
+
         s = ms + s
         v = mv + v
 
@@ -772,7 +775,11 @@ class EQGATLocalConvFinal(MessagePassing):
         )
         if self.coords_update:
             p = scatter(
-                inputs[2], index=index, dim=0, reduce=self.vector_aggr, dim_size=dim_size
+                inputs[2],
+                index=index,
+                dim=0,
+                reduce=self.vector_aggr,
+                dim_size=dim_size,
             )
         else:
             p = None
@@ -803,7 +810,7 @@ class EQGATLocalConvFinal(MessagePassing):
                 torch.pow(p_j, 2).sum(-1, keepdim=True).clamp(min=1e-6).sqrt(),
             )
         else:
-             d_i, d_j = torch.zeros_like(a0), torch.zeros_like(a0)
+            d_i, d_j = torch.zeros_like(a0), torch.zeros_like(a0)
         aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e, d_i, d_j], dim=-1)
         aij = self.edge_net(aij)
 
@@ -845,11 +852,14 @@ class EQGATLocalConvFinal(MessagePassing):
                 nv_j = nv0_j + nv1_j
         else:
             nv_j = nv0_j
-            
+
         if self.coords_update:
             # p_j_n = c.tanh() * (p_j - p_i)
-            r = (p_j - p_i) / ((p_j - p_i).pow(2).sum(dim=-1).clamp(min=1e-4).sqrt().unsqueeze(-1) + 1.0)
-            p_j_n = c * r            
+            r = (p_j - p_i) / (
+                (p_j - p_i).pow(2).sum(dim=-1).clamp(min=1e-4).sqrt().unsqueeze(-1)
+                + 1.0
+            )
+            p_j_n = c * r
         else:
             p_j_n = p_j
         return ns_j, nv_j, p_j_n
@@ -867,15 +877,13 @@ class ConvLayer(MessagePassing):
         use_mlp_update: bool = True,
         vector_aggr: str = "mean",
         cutoff=None,
-        rbf_dim=None
+        rbf_dim=None,
     ):
-        super(ConvLayer, self).__init__(
-            node_dim=0, aggr=None, flow="source_to_target"
-        )
+        super(ConvLayer, self).__init__(node_dim=0, aggr=None, flow="source_to_target")
         self.edge_dim = edge_dim if edge_dim else 0
-        use_cross_product=False
+        use_cross_product = False
         self.use_cross_product = use_cross_product
-        self.rbf_dim = rbf_dim       
+        self.rbf_dim = rbf_dim
         self.cutoff = cutoff
         if cutoff is None:
             self.rbf = None
@@ -885,7 +893,7 @@ class ConvLayer(MessagePassing):
             self.rbf = BesselExpansion(cutoff, K=rbf_dim)
             self.damp = PolynomialCutoff(cutoff, p=6)
             self.ddim = rbf_dim
-            
+
         self.vector_aggr = vector_aggr
         self.in_dims = in_dims
         self.si, self.vi = in_dims
@@ -902,7 +910,10 @@ class ConvLayer(MessagePassing):
 
         self.edge_net = nn.Sequential(
             DenseLayer(
-                2 * self.si + edge_dim + 1 + self.ddim, self.si, bias=True, activation=nn.SiLU()
+                2 * self.si + edge_dim + 1 + self.ddim,
+                self.si,
+                bias=True,
+                activation=nn.SiLU(),
             ),
             DenseLayer(self.si, self.v_mul * self.vi + self.si + 1, bias=True),
         )
@@ -944,8 +955,8 @@ class ConvLayer(MessagePassing):
             edge_index=edge_index,
             dim_size=s.size(0),
         )
-        
-        p = p + mp * pocket_mask if pocket_mask is not None else p + mp    
+
+        p = p + mp * pocket_mask if pocket_mask is not None else p + mp
         s = ms + s
         v = mv + v
 
@@ -986,7 +997,7 @@ class ConvLayer(MessagePassing):
         edge_attr: Tuple[Tensor, Tensor, Tensor, Tensor],
         dim_size: Optional[int],
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-        
+
         d, a, r, e = edge_attr
 
         if self.rbf is None:
@@ -994,7 +1005,7 @@ class ConvLayer(MessagePassing):
         else:
             de0 = self.rbf(d)
             de0 = self.damp(d).view(-1, 1) * de0
-            
+
         a0 = a.view(-1, 1)
         aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e], dim=-1)
         aij = self.edge_net(aij)
@@ -1024,11 +1035,11 @@ class ConvLayer(MessagePassing):
                 nv_j = nv0_j + nv1_j
         else:
             nv_j = nv0_j
-        
+
         # pji = (p_j - p_i)
         pji = r
-        p_j_n = c * pji            
- 
+        p_j_n = c * pji
+
         return ns_j, nv_j, p_j_n
 
 

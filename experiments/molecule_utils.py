@@ -231,7 +231,7 @@ class Molecule:
         Returns:
             rdkit molecule
         """
-        atom_types = [self.atom_decoder[a] for a in self.atom_types]
+        atom_types = [self.atom_decoder[int(a)] for a in self.atom_types]
 
         try:
             with tempfile.NamedTemporaryFile() as tmp:

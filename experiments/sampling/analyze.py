@@ -20,6 +20,8 @@ from rdkit.Chem import (
 )
 from rdkit.DataStructs import BulkTanimotoSimilarity, TanimotoSimilarity
 
+from experiments.sampling.ring_utils import substructure
+
 sys.path.append(os.path.join(RDConfig.RDContribDir, "SA_Score"))
 import sascorer
 from torchmetrics import MaxMetric, MeanMetric
@@ -784,6 +786,10 @@ class BasicMolecularMetrics(object):
 
     def num_aromatic_rings(self, mol):
         return Chem.rdMolDescriptors.CalcNumAromaticRings(mol)
+
+    def evaluate_rings(self, mol):
+        ring_size_statis = substructure([mol])
+        return ring_size_statis
 
     def evaluate_lipinski(self, smiles, molecules):
         valid_mols = []

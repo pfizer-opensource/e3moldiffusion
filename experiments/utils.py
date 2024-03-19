@@ -1652,6 +1652,7 @@ def prepare_data_and_generate_ligands(
             sanitize=args.sanitize,
             ckpt_property_model=args.ckpt_property_model,
             ckpt_sa_model=args.ckpt_sa_model,
+            ckpts_ensemble=args.ckpts_ensemble,
             property_classifier_guidance=args.property_classifier_guidance,
             property_classifier_guidance_complex=args.property_classifier_guidance_complex,
             property_classifier_self_guidance=args.property_classifier_self_guidance,
