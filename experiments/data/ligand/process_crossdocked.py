@@ -35,7 +35,7 @@ atom_decoder = dataset_info["atom_decoder"]
 
 
 def process_ligand_and_pocket(
-    pdbfile, sdffile, dist_cutoff, ca_only, no_H, reduce_path=REDUCE_PATH
+    pdbfile, sdffile, dist_cutoff, ca_only, no_H, reduce_path=REDUCE_PATH, complex_creation_mode="diffsbdd", com_weights: bool = False,
 ):
     if not no_H:
         tmp_path = str(pdbfile).split(".pdb")[0] + "_tmp.pdb"
@@ -64,9 +64,19 @@ def process_ligand_and_pocket(
     )
 
     # Find interacting pocket residues based on distance cutoff
+    
+    # diffsbdd: Iterate over _all_ atoms in a residue and compute pairwise distance between them and all ligand atoms. If one of the distances is smaller than the cutoff, then the entire residue is considered to be in the pocket. (Hence doing min selection)
+    # targediff: Choose the CoM of the atoms in a residue as representative and compute pairwise distance between the representative and all ligand atoms. If the distance is smaller than the cutoff, then the entire residue is considered to be in the pocket.
     pocket_residues = []
     for residue in pdb_struct[0].get_residues():
         res_coords = np.array([a.get_coord() for a in residue.get_atoms()])
+        
+        if complex_creation_mode == "targetdiff":
+            # https://biopython.org/docs/dev/api/Bio.PDB.Entity.html#Bio.PDB.Entity.Entity.center_of_mass
+            # https://github.com/guanjq/targetdiff/blob/main/utils/data.py#L130-L138
+            res_coords = residue.center_of_mass(geometric=not com_weights)
+            res_coords = res_coords[np.newaxis, :]
+        
         if (
             is_aa(residue.get_resname(), standard=True)
             and (
@@ -325,6 +335,12 @@ if __name__ == "__main__":
     parser.add_argument("--random-seed", type=int, default=42)
     parser.add_argument("--with-docking-scores", action="store_true")
     parser.add_argument("--path-docking-scores", type=str, default=None)
+    parser.add_argument("--complex-creation-mode", type=str, default="diffsbdd",
+                        help="Mode for creating complexes, either 'diffsbdd' or 'targetdiff'. Defaults to 'diffsbdd'."
+                        )
+    parser.add_argument("--com-weights", action="store_true", help="If the center of mass should be obtained through weighted average of atoms in a residue including atomic weights. Defaults to False")
+
+    
     args = parser.parse_args()
 
     datadir = args.basedir / "crossdocked_pocket10/"
