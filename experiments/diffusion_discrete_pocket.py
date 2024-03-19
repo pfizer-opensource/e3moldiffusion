@@ -1832,8 +1832,10 @@ class Trainer(pl.LightningModule):
         )
 
         if kind == "joint":
-            assert sa is not None and prop is not None
-            weights = weights_sa + weights_prop
+            assert sa is not None and prop is not None            
+            weights_add = 1.0 * (weights_sa + weights_prop)
+            weights_mul = weights_sa * weights_prop
+            weights = 1.0 * (weights_add + weights_mul)
             weights = weights.softmax(dim=0)
         elif kind == "sa_score":
             assert sa is not None
