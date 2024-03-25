@@ -125,6 +125,10 @@ def add_arguments(parser):
         action="store_true",
         help="If any hidden edge embeddings between pocket atoms is masked to 0 during message passing. Defaults to False",
     )
+    parser.add_argument(
+        "--model-edge-rbf-interaction", default=False, action="store_true"
+    )
+    parser.add_argument("--model-global-edge", default=False, action="store_true")
     parser.add_argument("--energy-training", default=False, action="store_true")
     parser.add_argument("--property-training", default=False, action="store_true")
     parser.add_argument("--regression-property", default=[], nargs="+", type=str)

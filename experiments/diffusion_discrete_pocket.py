@@ -2183,6 +2183,7 @@ class Trainer(pl.LightningModule):
             batch_edge_global,
             edge_mask,
             edge_mask_pocket,
+            edge_initial_interaction,
         ) = get_joint_edge_attrs(
             pos,
             pos_pocket,
@@ -2479,6 +2480,7 @@ class Trainer(pl.LightningModule):
                 batch_edge_global,
                 edge_mask,
                 edge_mask_pocket,
+                edge_initial_interaction,
             ) = get_joint_edge_attrs(
                 pos,
                 pos_pocket,
@@ -2631,6 +2633,7 @@ class Trainer(pl.LightningModule):
                 batch_edge_global,
                 edge_mask,
                 edge_mask_pocket,
+                edge_initial_interaction,
             ) = get_joint_edge_attrs(
                 pos,
                 pos_pocket,
