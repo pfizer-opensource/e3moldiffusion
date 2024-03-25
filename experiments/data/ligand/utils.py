@@ -9,7 +9,7 @@ from networkx.algorithms import isomorphism
 from rdkit import Chem
 from scipy import spatial as sc_spatial
 
-from experiments.data.ligand.priorconfig import CONFIG_5A, CONFIG_8A, CONFIG_10A, CONFIG_5A_TD
+from experiments.data.ligand.priorconfig import CONFIG_5A_TD, CONFIG_6A_TD, CONFIG_7A_TD, CONFIG_8A_TD, CONFIG_10A_TD
 
 class Queue:
     def __init__(self, max_len=50):
@@ -220,13 +220,20 @@ def _get_bin_idx(space_size, config: dict):
     return len(bounds)
 
 def sample_atom_num(space_size, cutoff: float = 5.0):
-    assert cutoff in [5.0, 8.0, 10.0]
+    assert cutoff in [5.0, 6.0, 7.0, 8.0, 10.0]
     if cutoff == 5.0:
         config = CONFIG_5A_TD
+    elif cutoff == 6.0:
+        config = CONFIG_6A_TD
+    elif cutoff == 7.0:
+        config = CONFIG_7A_TD
     elif cutoff == 8.0:
-        config = CONFIG_8A
+        config = CONFIG_8A_TD
     elif cutoff == 10.0:
-        config = CONFIG_10A
+        config = CONFIG_10A_TD
+    else:
+        raise NotImplementedError
+    
     bin_idx = _get_bin_idx(space_size, config=config)
     num_atom_list, prob_list = config['bins'][bin_idx]
     return np.random.choice(num_atom_list, p=prob_list)
