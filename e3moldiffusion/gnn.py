@@ -2,10 +2,12 @@ from typing import Dict, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
+from experiments.utils import get_edges
 from torch import Tensor, nn
 from torch_geometric.nn import radius_graph
 from torch_geometric.nn.inits import reset
 from torch_geometric.typing import OptTensor
+from torch_geometric.utils import remove_self_loops, sort_edge_index
 
 from e3moldiffusion.convs import (
     ConvLayer,
@@ -16,8 +18,6 @@ from e3moldiffusion.convs import (
 )
 from e3moldiffusion.modules import AdaptiveLayerNorm, DenseLayer, LayerNorm, SE3Norm
 
-from torch_geometric.utils import remove_self_loops, sort_edge_index
-from experiments.utils import get_edges
 
 class EQGATEnergyGNN(nn.Module):
     def __init__(
@@ -108,7 +108,8 @@ class EQGATEdgeGNN(nn.Module):
         store_intermediate_coords: bool = False,
         ligand_pocket_interaction: bool = False,
         dynamic_graph: bool = False,
-        kNN: Optional[int] = None,
+        knn: Optional[int] = None,
+        hybrid_knn: Optional[int] = None,
         use_rbfs: bool = False,
         mask_pocket_edges: bool = False,
         model_edge_rbf_interaction: bool = False,
@@ -136,10 +137,11 @@ class EQGATEdgeGNN(nn.Module):
         self.edge_dim = edge_dim
         self.dynamic_graph = dynamic_graph
         convs = []
-        
+
         self.cutoff_p = cutoff_local
         self.cutoff_lp = cutoff_local
-        self.kNN = kNN
+        self.knn = knn
+        self.hybrid_knn = hybrid_knn
 
         for i in range(num_layers):
             ## second or second last layer
@@ -249,15 +251,16 @@ class EQGATEdgeGNN(nn.Module):
         # (E, E, E x 3, E x F)
 
         pos_list = []
-        
+
         if self.dynamic_graph:
-            E_dense = self.to_dense_edge_tensor(edge_index=edge_index_global,
-                                                edge_attr=edge_attr_global[-1],
-                                                num_nodes=s.size(0),
-                                                )
+            E_dense = self.to_dense_edge_tensor(
+                edge_index=edge_index_global,
+                edge_attr=edge_attr_global[-1],
+                num_nodes=s.size(0),
+            )
         else:
             E_dense = 0.0
-            
+
         for i in range(len(self.convs)):
             edge_index_in = edge_index_global
             edge_attr_in = edge_attr_global
@@ -279,29 +282,37 @@ class EQGATEdgeGNN(nn.Module):
             )
 
             s, v, p, e = out["s"], out["v"], out["p"], out["e"]
-            
+
             if self.dynamic_graph:
                 E_dense[edge_index_global[0], edge_index_global[1], :] = e
                 with torch.no_grad():
                     pos_pocket = p[(~pocket_mask).squeeze()]
                     pos_ligand = p[pocket_mask.squeeze()]
-                
-                edge_index_global = get_edges(batch_mask_lig=batch_lig,
-                                              batch_mask_pocket=batch_pocket,
-                                              pos_lig=pos_ligand,
-                                              pos_pocket=pos_pocket,
-                                              cutoff_p=self.cutoff_p,
-                                              cutoff_lp=self.cutoff_lp,
-                                              return_full_adj=False,
-                                              kNN=self.kNN,
-                                              )
-                edge_index_global = sort_edge_index(edge_index=edge_index_global,
-                                                    sort_by_row=False)
+
+                edge_index_global = get_edges(
+                    batch_mask_lig=batch_lig,
+                    batch_mask_pocket=batch_pocket,
+                    pos_lig=pos_ligand,
+                    pos_pocket=pos_pocket,
+                    cutoff_p=self.cutoff_p,
+                    cutoff_lp=self.cutoff_lp,
+                    return_full_adj=False,
+                    knn=self.knn,
+                    hybrid_knn=self.hybrid_knn,
+                    pocket_mask=pocket_mask,
+                )
+                edge_index_global = sort_edge_index(
+                    edge_index=edge_index_global, sort_by_row=False
+                )
                 edge_index_global, _ = remove_self_loops(edge_index_global)
-                edge_mask_ligand = (edge_index_global[0] < len(batch_lig)) & (edge_index_global[1] < len(batch_lig))
-                edge_mask_pocket = (edge_index_global[0] >= len(batch_lig)) & (edge_index_global[1] >= len(batch_lig))
+                edge_mask_ligand = (edge_index_global[0] < len(batch_lig)) & (
+                    edge_index_global[1] < len(batch_lig)
+                )
+                edge_mask_pocket = (edge_index_global[0] >= len(batch_lig)) & (
+                    edge_index_global[1] >= len(batch_lig)
+                )
                 e = E_dense[edge_index_global[0], edge_index_global[1], :]
-                
+
             if self.recompute_edge_attributes:
                 edge_attr_global = self.calculate_edge_attrs(
                     edge_index=edge_index_global,
@@ -310,7 +321,7 @@ class EQGATEdgeGNN(nn.Module):
                     sqrt=True,
                     batch=batch if self.ligand_pocket_interaction else None,
                 )
-                
+
             if self.store_intermediate_coords and self.training:
                 if i < len(self.convs) - 1:
                     if pocket_mask is not None:
@@ -324,9 +335,15 @@ class EQGATEdgeGNN(nn.Module):
 
         if self.out_norm is not None:
             s, v = self.out_norm(x={"s": s, "v": v, "z": z}, batch=batch)
-        out = {"s": s, "v": v, "e": e, "p": p, "p_list": pos_list,
-               "edge_mask_ligand": edge_mask_ligand, "edge_mask_pocket": edge_mask_pocket
-               }
+        out = {
+            "s": s,
+            "v": v,
+            "e": e,
+            "p": p,
+            "p_list": pos_list,
+            "edge_mask_ligand": edge_mask_ligand,
+            "edge_mask_pocket": edge_mask_pocket,
+        }
 
         return out
 

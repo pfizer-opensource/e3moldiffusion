@@ -5,13 +5,13 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=12G
 #SBATCH --cpus-per-task=12
-#SBATCH --partition=ondemand-8xv100m32-1a
+#SBATCH --partition=ondemand-8xv100m32-1b
 #SBATCH --gres=gpu:1
-#SBATCH --array=1-15
+#SBATCH --array=1-16
 #SBATCH --output=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.out
 #SBATCH --error=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.err
 
-num_gpus=15
+num_gpus=16
 
 cd /sharedhome/cremej01/workspace/e3moldiffusion
 source activate e3mol
@@ -19,8 +19,8 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed1000"
-output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_5_sa0-200_ic50-200-400"
+main_dir="/scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed42"
+output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_5_sa0-350-every10_ic50-150-350"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
@@ -42,16 +42,17 @@ python experiments/generate_ligands_multi.py \
     --n-nodes-bias 5 \
     --vary-n-nodes \
     --property-importance-sampling \
-    --property-importance-sampling-start 200 \
-    --property-importance-sampling-end 400 \
+    --property-importance-sampling-start 150 \
+    --property-importance-sampling-end 350 \
     --property-every-importance-t 5 \
     --property-tau 0.1 \
     --sa-importance-sampling \
     --sa-importance-sampling-start 0 \
-    --sa-importance-sampling-end 200 \
-    --sa-every-importance-t 5 \
-    --sa-tau 0.1
-    #--ckpts-ensemble /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-ic50_seed1/best_valid.ckpt /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-ic50_seed1000/best_valid.ckpt /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-ic50_seed15/best_valid.ckpt
+    --sa-importance-sampling-end 350 \
+    --sa-every-importance-t 10 \
+    --sa-tau 0.1 \
+    --omit-posecheck
+    # --ckpts-ensemble /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-ic50_seed1/best_valid.ckpt /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-ic50_seed1000/best_valid.ckpt /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-ic50_seed15/best_valid.ckpt
     # --sa-importance-sampling \
     # --sa-importance-sampling-start 0 \
     # --sa-importance-sampling-end 200 \

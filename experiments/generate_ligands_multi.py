@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import random
 import tempfile
@@ -7,7 +8,6 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from time import time
-import json
 
 import numpy as np
 import torch
@@ -22,6 +22,8 @@ from experiments.data.utils import load_pickle, mol_to_torch_geometric, save_pic
 from experiments.docking import calculate_qvina2_score
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import (
+    chunks,
+    prepare_data,
     prepare_data_and_generate_ligands,
     retrieve_interactions_per_mol,
     split_list,
@@ -421,9 +423,43 @@ def evaluate(args):
                 for mol in valid_molecules
             ]
             ligand_data = Batch.from_data_list(ligand_data).to(device)
+
             with torch.no_grad():
                 ligand_embeds = model.encode_ligand(ligand_data)
             embedding_dict[ligand_name]["sampled"].append(ligand_embeds)
+        if "ic50" in hparams.regression_property:
+            # split into n chunks to avoid OOM error
+            n = 3 if len(valid_molecules) > 80 else 2
+            molecules_list = list(chunks(valid_molecules, n))
+            ic50s = []
+            for molecules in molecules_list:
+                ligand_data = [
+                    mol_to_torch_geometric(
+                        mol.rdkit_mol,
+                        dataset_info.atom_encoder,
+                        Chem.MolToSmiles(mol.rdkit_mol),
+                        remove_hydrogens=True,
+                        cog_proj=True,
+                    )
+                    for mol in molecules
+                ]
+                ligand_data = Batch.from_data_list(ligand_data).to(device)
+                pocket_data = prepare_data(
+                    residues,
+                    sdf_file,
+                    dataset_info,
+                    hparams,
+                    args,
+                    device,
+                    batch_size=len(ligand_data.batch.bincount()),
+                )
+                pocket_data.update(ligand_data)
+
+                t = torch.zeros((len(ligand_data),)).to(device).long()
+                pred = model(pocket_data, t=t)
+                ic50s.extend(pred["property_pred"][1].squeeze().detach().tolist())
+            violin_dict["pIC50"].extend(ic50s)
+            statistics_dict["pIC50_mean"].append(np.mean(ic50s))
 
         write_sdf_file(sdf_out_file_raw, valid_molecules, extract_mol=True)
         sdf_files.append(sdf_out_file_raw)
@@ -498,15 +534,14 @@ def evaluate(args):
         statistics_dict,
         os.path.join(args.save_dir, f"{args.mp_index}_statistics_dict.pickle"),
     )
+    save_pickle(
+        violin_dict,
+        os.path.join(args.save_dir, f"{args.mp_index}_violin_dict_sampled.pickle"),
+    )
     if not args.filter_by_posebusters and not args.omit_posebusters:
         save_pickle(
             buster_dict,
             os.path.join(args.save_dir, f"{args.mp_index}_posebusters_sampled.pickle"),
-        )
-    if not args.omit_posebusters and not args.omit_posecheck:
-        save_pickle(
-            violin_dict,
-            os.path.join(args.save_dir, f"{args.mp_index}_violin_dict_sampled.pickle"),
         )
     if not args.omit_posecheck:
         save_pickle(
@@ -517,10 +552,10 @@ def evaluate(args):
     if args.encode_ligands:
         embedding_dict = {k: v for k, v in embedding_dict.items()}
         torch.save(embedding_dict, embed_out_file)
-        
+
     # save arguments
     argsdicts = vars(args)
-    savedirjson = Path(args.save_dir, "args.json")
+    savedirjson = os.path.join(args.save_dir, "args.json")
     with open(savedirjson, "w") as f:
         json.dump(argsdicts, f)
 

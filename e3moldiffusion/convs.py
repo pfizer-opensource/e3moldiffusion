@@ -352,20 +352,20 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
 
         self.use_rbfs = use_rbfs
         self.cutoff = cutoff
-        
+
         if use_rbfs:
             self.radial_basis_func = GaussianExpansion(max_value=cutoff, K=20)
             if model_edge_rbf_interaction:
-                input_edge_dim += 60 # (ligand-ligand, ligand-pocket, -pocket-pocket)
+                input_edge_dim += 60  # (ligand-ligand, ligand-pocket, -pocket-pocket)
             else:
-                input_edge_dim += 20 # (just distance rbf)
-                
+                input_edge_dim += 20  # (just distance rbf)
+
         if model_global_edge:
             input_edge_dim += 1
-        
+
         self.model_edge_rbf_interaction = model_edge_rbf_interaction
         self.model_global_edge = model_global_edge
-        
+
         self.edge_net = nn.Sequential(
             DenseLayer(input_edge_dim, self.si, bias=True, activation=nn.SiLU()),
             DenseLayer(
@@ -621,18 +621,18 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         if self.model_global_edge:
             assert edgt_attr_global_embedding is not None
             aij = torch.cat([aij, edgt_attr_global_embedding], dim=-1)
-            
+
         if self.use_rbfs:
             rbf = self.radial_basis_func(d)
             if self.model_edge_rbf_interaction:
                 assert edge_attr_initial_ohe is not None
                 assert edge_attr_initial_ohe.size(1) == 3
-                rbf_ohe = torch.einsum('nk, nd -> nkd', (rbf, edge_attr_initial_ohe))
+                rbf_ohe = torch.einsum("nk, nd -> nkd", (rbf, edge_attr_initial_ohe))
                 rbf_ohe = rbf_ohe.view(d.size(0), -1)
                 aij = torch.cat([aij, rbf_ohe], dim=-1)
             else:
                 aij = torch.cat([aij, rbf], dim=-1)
-                
+
         aij = self.edge_net(aij)
 
         fdim = aij.shape[-1]

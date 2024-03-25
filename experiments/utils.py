@@ -16,7 +16,7 @@ import yaml
 from pytorch_lightning.utilities import rank_zero_warn
 from rdkit import Chem
 from torch_geometric.data import Batch, Data
-from torch_geometric.nn import radius_graph
+from torch_geometric.nn import knn_graph, radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
 from torch_geometric.utils.num_nodes import maybe_num_nodes
 from torch_geometric.utils.subgraph import subgraph
@@ -162,6 +162,14 @@ def save_argparse(args, filename, exclude=None):
         yaml.dump(args, open(filename, "w"))
     else:
         raise ValueError("Configuration file should end with yaml or yml")
+
+
+def chunks(list, n):
+    """Yield n number of sequential chunks from l."""
+    d, r = divmod(len(list), n)
+    for i in range(n):
+        si = (d + 1) * (i if i < r else r) + d * (0 if i < r else i - r)
+        yield list[si : si + (d + 1 if i < r else d)]
 
 
 def number(text):
@@ -1026,49 +1034,141 @@ def effective_batch_size(
     return math.floor(1.8 * x) if sampling else math.floor(x)
 
 
+def hybrid_edge_connection(ligand_pos, protein_pos, k, ligand_index, protein_index):
+    # fully-connected for ligand atoms
+    k = k if len(protein_index) >= k else len(protein_index)
+    dst = torch.repeat_interleave(ligand_index, len(ligand_index))
+    src = ligand_index.repeat(len(ligand_index))
+    mask = dst != src
+    dst, src = dst[mask], src[mask]
+    ll_edge_index = torch.stack([src, dst])
+
+    # knn for ligand-protein edges
+    ligand_protein_pos_dist = torch.unsqueeze(ligand_pos, 1) - torch.unsqueeze(
+        protein_pos, 0
+    )
+    ligand_protein_pos_dist = torch.norm(ligand_protein_pos_dist, p=2, dim=-1)
+    knn_p_idx = torch.topk(ligand_protein_pos_dist, k=k, largest=False, dim=1).indices
+    knn_p_idx = protein_index[knn_p_idx]
+    knn_l_idx = torch.unsqueeze(ligand_index, 1)
+    knn_l_idx = knn_l_idx.repeat(1, k)
+    lp_edge_index = torch.stack([knn_l_idx, knn_p_idx], dim=0)
+    lp_edge_index = lp_edge_index.view(2, -1)
+    return ll_edge_index, lp_edge_index
+
+
+def batch_hybrid_edge_connection(
+    full_pos, full_batch, pocket_mask, k=32, add_p_index=False
+):
+    batch_size = full_batch.max().item() + 1
+    (
+        batch_ll_edge_index,
+        batch_lp_edge_index,
+        batch_p_edge_index,
+    ) = ([], [], [])
+    with torch.no_grad():
+        for i in range(batch_size):
+            ligand_index = ((full_batch == i) & (pocket_mask == 1)).nonzero()[:, 0]
+            protein_index = ((full_batch == i) & (pocket_mask == 0)).nonzero()[:, 0]
+            ligand_pos, protein_pos = full_pos[ligand_index], full_pos[protein_index]
+
+            ll_edge_index, lp_edge_index = hybrid_edge_connection(
+                ligand_pos, protein_pos, k, ligand_index, protein_index
+            )
+            batch_ll_edge_index.append(ll_edge_index)
+            batch_lp_edge_index.append(lp_edge_index)
+            if add_p_index:
+                all_pos = torch.cat([ligand_pos, protein_pos], 0)
+                p_edge_index = knn_graph(all_pos, k=k, flow="source_to_target")
+                p_edge_index = p_edge_index[:, p_edge_index[1] >= len(ligand_pos)]
+                p_src, p_dst = p_edge_index
+                all_index = torch.cat([ligand_index, protein_index], 0)
+                p_edge_index = torch.stack([all_index[p_dst], all_index[p_src]], 0)
+                batch_p_edge_index.append(p_edge_index)
+
+    if add_p_index:
+        edge_index = [
+            torch.cat([ll, lp, p], -1)
+            for ll, lp, p in zip(
+                batch_ll_edge_index,
+                batch_lp_edge_index,
+                batch_p_edge_index,
+            )
+        ]
+    else:
+        edge_index = [
+            torch.cat([ll, pl], -1)
+            for ll, pl in zip(batch_ll_edge_index, batch_lp_edge_index)
+        ]
+    edge_index = torch.cat(edge_index, -1)
+    return edge_index
+
+
 def get_kNN_edges(A, top_k: int = 32):
-    A[(A==0.0)] = 1e10
+    A[(A == 0.0)] = 1e10
     values, indices = A.topk(k=top_k, dim=-1, largest=False, sorted=True)
-    AA = torch.ones_like(A) 
-    AA = AA * 1000.
+    AA = torch.ones_like(A)
+    AA = AA * 1000.0
     AA[np.arange(AA.shape[0])[:, None], indices] = values
     return AA
 
+
 def get_edges(
-    batch_mask_lig, batch_mask_pocket, pos_lig, pos_pocket, cutoff_p, cutoff_lp, return_full_adj=False, kNN=None, ligand_fc=True,
+    batch_mask_lig,
+    batch_mask_pocket,
+    pos_lig,
+    pos_pocket,
+    cutoff_p,
+    cutoff_lp,
+    return_full_adj=False,
+    knn=None,
+    hybrid_knn=None,
+    pocket_mask=None,
 ):
-    adj_ligand = batch_mask_lig[:, None] == batch_mask_lig[None, :]
-    adj_pocket = batch_mask_pocket[:, None] == batch_mask_pocket[None, :]
-    adj_cross = batch_mask_lig[:, None] == batch_mask_pocket[None, :]
-    
-    with torch.no_grad():
-        D_pocket = torch.cdist(pos_pocket, pos_pocket)
-        D_cross = torch.cdist(pos_lig, pos_pocket)
-    
-    if kNN is not None:
-        D_pocket = adj_pocket.float() * D_pocket
-        D_cross = adj_cross.float() * D_cross
-        D_pocket = get_kNN_edges(D_pocket, top_k=kNN)
-        D_cross = get_kNN_edges(D_cross, top_k=kNN)
-    
-    if cutoff_p is not None:
-        adj_pocket = adj_pocket & (D_pocket <= cutoff_p) 
-    if cutoff_lp is not None:
-        adj_cross = adj_cross & (D_cross <= cutoff_lp)
-
-    adj = torch.cat(
-        (
-            torch.cat((adj_ligand, adj_cross), dim=1),
-            torch.cat((adj_cross.T, adj_pocket), dim=1),
-        ),
-        dim=0,
-    )
-    edges = torch.stack(torch.where(adj), dim=0)
-
-    if not return_full_adj:
+    if hybrid_knn is not None:
+        assert not return_full_adj
+        full_pos = torch.cat([pos_lig, pos_pocket], dim=0)
+        full_batch = torch.cat([batch_mask_lig, batch_mask_pocket], dim=0)
+        edges = batch_hybrid_edge_connection(
+            full_pos, full_batch, pocket_mask, k=hybrid_knn, add_p_index=True
+        )
         return edges
     else:
-        return edges, adj
+        adj_ligand = batch_mask_lig[:, None] == batch_mask_lig[None, :]
+        adj_pocket = batch_mask_pocket[:, None] == batch_mask_pocket[None, :]
+        adj_cross = batch_mask_lig[:, None] == batch_mask_pocket[None, :]
+
+        with torch.no_grad():
+            D_pocket = torch.cdist(pos_pocket, pos_pocket)
+            D_cross = torch.cdist(pos_lig, pos_pocket)
+
+        if knn is not None:
+            D_pocket = adj_pocket.float() * D_pocket
+            D_cross = adj_cross.float() * D_cross
+            D_pocket = get_kNN_edges(D_pocket, top_k=knn)
+            D_cross = get_kNN_edges(D_cross, top_k=knn)
+            adj_pocket = adj_pocket & (D_pocket < 999)
+            adj_cross = adj_cross & (D_cross < 999)
+
+        if cutoff_p is not None and knn is None:
+            adj_pocket = adj_pocket & (D_pocket <= cutoff_p)
+        if cutoff_lp is not None and knn is None:
+            adj_cross = adj_cross & (D_cross <= cutoff_lp)
+
+        adj = torch.cat(
+            (
+                torch.cat((adj_ligand, adj_cross), dim=1),
+                torch.cat((adj_cross.T, adj_pocket), dim=1),
+            ),
+            dim=0,
+        )
+
+        edges = torch.stack(torch.where(adj), dim=0)
+
+        if not return_full_adj:
+            return edges
+        else:
+            return edges, adj
 
 
 def get_molecules(
@@ -1464,16 +1564,14 @@ def prepare_pocket_cutoff(
             full_coords = full_coords[mask]
             ca_mask = ca_mask[mask]
     pocket_one_hot = torch.from_numpy(np.stack(pocket_one_hot, axis=0))
-    pocket_types = (
-        torch.tensor([full_atom_encoder[a] for a in full_atoms]).long().to(device)
-    )
+    pocket_types = torch.tensor([full_atom_encoder[a] for a in full_atoms]).long()
     pocket_coord = torch.from_numpy(full_coords)
     ca_mask = torch.from_numpy(np.array(ca_mask, dtype=bool))
     pocket_one_hot_batch = torch.arange(repeats).repeat_interleave(
         len(pocket_one_hot), dim=0
     )
     pocket_mask = torch.repeat_interleave(
-        torch.arange(repeats, device=device), len(pocket_coord)
+        torch.arange(repeats), len(pocket_coord)
     ).long()
 
     pocket = Data(
@@ -1483,7 +1581,7 @@ def prepare_pocket_cutoff(
         pocket_ca_mask=ca_mask.repeat(repeats),
         pocket_one_hot=pocket_one_hot.repeat(repeats, 1),
         pocket_one_hot_batch=pocket_one_hot_batch,
-    )
+    ).to(device)
     if ligand_sdf is not None:
         ligand = Chem.SDMolSupplier(str(ligand_sdf), sanitize=False)[0]
         batch = (
@@ -1600,6 +1698,27 @@ def split_list(data, num_chunks):
     return chunks
 
 
+def prepare_data(
+    residues,
+    sdf_file,
+    dataset_info,
+    hparams,
+    args,
+    device,
+    batch_size=None,
+):
+
+    pocket_data = prepare_pocket_cutoff(
+        residues,
+        dataset_info.atom_encoder,
+        no_H=hparams.remove_hs,
+        repeats=batch_size,
+        device=device,
+        ligand_sdf=sdf_file if not args.encode_ligands else None,
+    )
+    return pocket_data
+
+
 def prepare_data_and_generate_ligands(
     model,
     residues,
@@ -1612,14 +1731,14 @@ def prepare_data_and_generate_ligands(
     batch_size=None,
 ):
     batch_size = args.batch_size if batch_size is None else batch_size
-
-    pocket_data = prepare_pocket_cutoff(
+    pocket_data = prepare_data(
         residues,
-        dataset_info.atom_encoder,
-        no_H=hparams.remove_hs,
-        repeats=batch_size,
-        device=device,
-        ligand_sdf=sdf_file if not args.encode_ligands else None,
+        sdf_file,
+        dataset_info,
+        hparams,
+        args,
+        device,
+        batch_size=batch_size,
     )
 
     if args.encode_ligands:

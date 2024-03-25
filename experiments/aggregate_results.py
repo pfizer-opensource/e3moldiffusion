@@ -50,19 +50,19 @@ def aggregate(args):
         if args.remove_single_dicts:
             remove_dicts(score_dicts)
 
-    buster_dicts = sorted(
-        glob(os.path.join(args.files_dir, f"*_posebusters_{name}.pickle"))
-    )
-    buster_dict = aggregate_dicts(buster_dicts)
-    if args.remove_single_dicts:
-        remove_dicts(buster_dicts)
-
     violin_dicts = sorted(
         glob(os.path.join(args.files_dir, f"*_violin_dict_{name}.pickle"))
     )
     violin_dict = aggregate_dicts(violin_dicts)
     if args.remove_single_dicts:
         remove_dicts(violin_dicts)
+
+    buster_dicts = sorted(
+        glob(os.path.join(args.files_dir, f"*_posebusters_{name}.pickle"))
+    )
+    buster_dict = aggregate_dicts(buster_dicts)
+    if args.remove_single_dicts:
+        remove_dicts(buster_dicts)
 
     posecheck_dicts = sorted(
         glob(os.path.join(args.files_dir, f"*_posecheck_{name}.pickle"))
@@ -100,19 +100,19 @@ def aggregate(args):
         print(f"Top-10 mean score: {mean_top10_score}")
 
     save_pickle(
-        buster_dict,
-        os.path.join(args.files_dir, f"posebusters_{name}.pickle"),
-        exist_ok=False,
-    )
-    save_pickle(
         violin_dict,
         os.path.join(args.files_dir, f"violin_dict_{name}.pickle"),
-        exist_ok=False,
+        exist_ok=True,
+    )
+    save_pickle(
+        buster_dict,
+        os.path.join(args.files_dir, f"posebusters_{name}.pickle"),
+        exist_ok=True,
     )
     save_pickle(
         posecheck_dict,
         os.path.join(args.files_dir, f"posecheck_{name}.pickle"),
-        exist_ok=False,
+        exist_ok=True,
     )
 
     buster_dict = {

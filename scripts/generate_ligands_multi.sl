@@ -19,8 +19,8 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_cutoff5_bonds5_norm_joint-sa-dock_Old"
-output_dir="$main_dir/evaluation/docking/nodes_bias_vary_10_sa0-250"
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_cutoff5_bonds5_no-norm_rbf"
+output_dir="$main_dir/evaluation/docking/nodes_bias_vary_10"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
@@ -40,16 +40,18 @@ python experiments/generate_ligands_multi.py \
     --batch-size 40 \
     --n-nodes-bias 10 \
     --vary-n-nodes \
-    --sa-importance-sampling \
-    --sa-importance-sampling-start 0 \
-    --sa-importance-sampling-end 250 \
-    --sa-every-importance-t 5 \
-    --sa-tau 0.1
+    --omit-posecheck
     # --property-importance-sampling \
     # --property-importance-sampling-start 200 \
     # --property-importance-sampling-end 300 \
-    # --property-every-importance-t 10 \
+    # --property-every-importance-t 5 \
     # --property-tau 0.1 \
+    # --sa-importance-sampling \
+    # --sa-importance-sampling-start 0 \
+    # --sa-importance-sampling-end 300 \
+    # --sa-every-importance-t 5 \
+    # --sa-tau 0.1 
+    # --vary-n-nodes \
     # --ckpt-property-model /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_no-norm_joint-dock/best_valid.ckpt \
     # --ckpt-sa-model None \
     # --minimize-property

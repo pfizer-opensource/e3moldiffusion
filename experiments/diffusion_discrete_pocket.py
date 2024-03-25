@@ -103,12 +103,14 @@ class Trainer(pl.LightningModule):
         if "ligand_pocket_hidden_distance" not in hparams.keys():
             hparams["ligand_pocket_hidden_distance"] = False
         if "use_out_norm" not in hparams.keys():
-            hparams["use_out_norm"] = True
+            hparams["use_out_norm"] = False
         if "dynamic_graph" not in hparams.keys():
             hparams["dynamic_graph"] = False
 
-        if "kNN" not in hparams.keys():
-            hparams["kNN"] = None
+        if "knn" not in hparams.keys():
+            hparams["knn"] = None
+        if "hybrid_knn" not in hparams.keys():
+            hparams["hybrid_knn"] = None
         if "use_rbfs" not in hparams.keys():
             hparams["use_rbfs"] = None
         if "dataset_cutoff" not in hparams.keys():
@@ -119,10 +121,11 @@ class Trainer(pl.LightningModule):
             hparams["model_edge_rbf_interaction"] = False
         if "model_global_edge" not in hparams.keys():
             hparams["model_global_edge"] = False
-            
+
         self.save_hyperparameters(hparams)
 
-        self.kNN = hparams["kNN"]
+        self.knn = hparams["knn"]
+        self.hybrid_knn = hparams["hybrid_knn"]
         self.cutoff_p = hparams["cutoff_local"]
         self.cutoff_lp = hparams["cutoff_local"]
 
@@ -205,7 +208,8 @@ class Trainer(pl.LightningModule):
                 joint_property_prediction=hparams["joint_property_prediction"],
                 regression_property=hparams["regression_property"],
                 dynamic_graph=hparams["dynamic_graph"],
-                kNN=hparams["kNN"],
+                knn=hparams["knn"],
+                hybrid_knn=hparams["hybrid_knn"],
                 use_rbfs=hparams["use_rbfs"],
                 mask_pocket_edges=hparams["mask_pocket_edges"],
                 model_edge_rbf_interaction=hparams["model_edge_rbf_interaction"],
@@ -1046,6 +1050,24 @@ class Trainer(pl.LightningModule):
                     if not self.hparams.bond_prediction
                     else None
                 )
+        # Concatenate Ligand-Pocket
+        (
+            pos_joint_perturbed,
+            atom_types_perturbed,
+            charges_perturbed,
+            batch_full,
+            pocket_mask,
+        ) = concat_ligand_pocket(
+            pos_perturbed,
+            pos_centered_pocket,
+            atom_types_perturbed,
+            atom_types_pocket,
+            charges_perturbed,
+            charges_pocket,
+            data_batch,
+            data_batch_pocket,
+            sorting=False,
+        )
         (
             edge_index_global,
             edge_attr_global_perturbed,
@@ -1063,25 +1085,9 @@ class Trainer(pl.LightningModule):
             self.device,
             cutoff_p=self.cutoff_p,
             cutoff_lp=self.cutoff_lp,
-            kNN=self.kNN,
-        )
-        # Concatenate Ligand-Pocket
-        (
-            pos_perturbed,
-            atom_types_perturbed,
-            charges_perturbed,
-            batch_full,
-            pocket_mask,
-        ) = concat_ligand_pocket(
-            pos_perturbed,
-            pos_centered_pocket,
-            atom_types_perturbed,
-            atom_types_pocket,
-            charges_perturbed,
-            charges_pocket,
-            data_batch,
-            data_batch_pocket,
-            sorting=False,
+            knn=self.knn,
+            hybrid_knn=self.hparams.hybrid_knn,
+            pocket_mask=pocket_mask,
         )
 
         # Concatenate all node features
@@ -1093,7 +1099,7 @@ class Trainer(pl.LightningModule):
             x=atom_feats_in_perturbed,
             z=z,
             t=temb,
-            pos=pos_perturbed,
+            pos=pos_joint_perturbed,
             edge_index_local=None,
             edge_index_global=edge_index_global,
             edge_index_global_lig=edge_index_global_lig,
@@ -1819,8 +1825,14 @@ class Trainer(pl.LightningModule):
 
         prop_pred = out["property_pred"]
         sa, prop = prop_pred
-        sa = sa.squeeze(1).sigmoid() if sa is not None and (kind == "sa_score" or kind == "joint") else None
-        if prop is not None and (kind == "docking_score" or kind == "ic50" or kind == "joint"):
+        sa = (
+            sa.squeeze(1).sigmoid()
+            if sa is not None and (kind == "sa_score" or kind == "joint")
+            else None
+        )
+        if prop is not None and (
+            kind == "docking_score" or kind == "ic50" or kind == "joint"
+        ):
             if prop.dim() == 2:
                 prop = prop.squeeze()
             if kind == "docking_score":
@@ -1841,9 +1853,9 @@ class Trainer(pl.LightningModule):
         )
 
         if kind == "joint":
-            assert sa is not None and prop is not None            
+            assert sa is not None and prop is not None
             # weights_add = 1.0 * (weights_sa + weights_prop)
-            weights_add = weights_prop # 0.0
+            weights_add = weights_prop  # 0.0
             weights_mul = weights_sa * weights_prop
             weights = 1.0 * (weights_add + weights_mul)
             weights = weights.softmax(dim=0)
@@ -2149,25 +2161,6 @@ class Trainer(pl.LightningModule):
                 edge_attr_global = None
 
         (
-            edge_index_global,
-            edge_attr_global,
-            batch_edge_global,
-            edge_mask,
-            edge_mask_pocket,
-            edge_initial_interaction,
-        ) = get_joint_edge_attrs(
-            pos,
-            pos_pocket,
-            batch,
-            batch_pocket,
-            edge_attr_global_lig,
-            self.num_bond_classes,
-            self.device,
-            cutoff_p=self.cutoff_p,
-            cutoff_lp=self.cutoff_lp,
-        )
-
-        (
             pos_joint,
             atom_types_joint,
             charge_types_joint,
@@ -2183,6 +2176,26 @@ class Trainer(pl.LightningModule):
             batch,
             batch_pocket,
             sorting=False,
+        )
+        (
+            edge_index_global,
+            edge_attr_global,
+            batch_edge_global,
+            edge_mask,
+            edge_mask_pocket,
+        ) = get_joint_edge_attrs(
+            pos,
+            pos_pocket,
+            batch,
+            batch_pocket,
+            edge_attr_global_lig,
+            self.num_bond_classes,
+            self.device,
+            cutoff_p=self.cutoff_p,
+            cutoff_lp=self.cutoff_lp,
+            knn=self.knn,
+            hybrid_knn=self.hparams.hybrid_knn,
+            pocket_mask=pocket_mask,
         )
 
         if self.hparams.continuous_param == "data":
@@ -2334,6 +2347,9 @@ class Trainer(pl.LightningModule):
                 self.device,
                 cutoff_p=self.cutoff_p,
                 cutoff_lp=self.cutoff_lp,
+                knn=self.knn,
+                hybrid_knn=self.hparams.hybrid_knn,
+                pocket_mask=pocket_mask,
             )
 
             if (
@@ -2441,25 +2457,6 @@ class Trainer(pl.LightningModule):
                 mask_i = ii[mask]
 
             (
-                edge_index_global,
-                edge_attr_global,
-                batch_edge_global,
-                edge_mask,
-                edge_mask_pocket,
-                edge_initial_interaction,
-            ) = get_joint_edge_attrs(
-                pos,
-                pos_pocket,
-                batch,
-                batch_pocket,
-                edge_attr_global_lig,
-                self.num_bond_classes,
-                self.device,
-                cutoff_p=self.cutoff_p,
-                cutoff_lp=self.cutoff_lp,
-            )
-
-            (
                 pos_joint,
                 atom_types_joint,
                 charge_types_joint,
@@ -2475,6 +2472,26 @@ class Trainer(pl.LightningModule):
                 batch,
                 batch_pocket,
                 sorting=False,
+            )
+            (
+                edge_index_global,
+                edge_attr_global,
+                batch_edge_global,
+                edge_mask,
+                edge_mask_pocket,
+            ) = get_joint_edge_attrs(
+                pos,
+                pos_pocket,
+                batch,
+                batch_pocket,
+                edge_attr_global_lig,
+                self.num_bond_classes,
+                self.device,
+                cutoff_p=self.cutoff_p,
+                cutoff_lp=self.cutoff_lp,
+                knn=self.knn,
+                hybrid_knn=self.hparams.hybrid_knn,
+                pocket_mask=pocket_mask,
             )
 
             if (
@@ -2531,31 +2548,34 @@ class Trainer(pl.LightningModule):
                 jj, ii = edge_index_global_lig
                 mask = jj < ii
                 mask_i = ii[mask]
-                
-            if (joint_importance_sampling
+
+            if (
+                joint_importance_sampling
                 and i % property_every_importance_t == 0
-                and property_importance_sampling_start <= i <= property_importance_sampling_end
+                and property_importance_sampling_start
+                <= i
+                <= property_importance_sampling_end
                 and i % sa_every_importance_t == 0
                 and sa_importance_sampling_start <= i <= sa_importance_sampling_end
-                ):  
-                    
-                    # print("Joint importance sampling")
-                    # SA should act as filter overlaying the property importance sampling
-                    assert sa_importance_sampling and property_importance_sampling
-                   
-                    node_feats_in = torch.cat(
+            ):
+
+                # print("Joint importance sampling")
+                # SA should act as filter overlaying the property importance sampling
+                assert sa_importance_sampling and property_importance_sampling
+
+                node_feats_in = torch.cat(
                     [atom_types_joint, charge_types_joint], dim=-1
-                    )
-                    
-                    (
-                    pos, 
+                )
+
+                (
+                    pos,
                     node_feats_in,
                     edge_index_global_lig,
                     edge_attr_global_lig,
                     batch,
                     _,
                     num_nodes_lig,
-                    ) = self.importance_sampling(
+                ) = self.importance_sampling(
                     node_feats_in=node_feats_in,
                     pos=pos_joint,
                     temb=temb,
@@ -2579,33 +2599,14 @@ class Trainer(pl.LightningModule):
                     kind="joint",  # currently hardcoded for max. two properties, whereby SA is always the first and the property the last argument!
                     property_model=property_model,
                     ensemble_models=ckpts_ensemble,
-                    )
-                    
-                    atom_types, charge_types = node_feats_in.split(
-                        [self.num_atom_types, self.num_charge_classes], dim=-1
-                    )
-                    jj, ii = edge_index_global_lig
-                    mask = jj < ii
-                    mask_i = ii[mask]
-                
-            (
-                edge_index_global,
-                edge_attr_global,
-                batch_edge_global,
-                edge_mask,
-                edge_mask_pocket,
-                edge_initial_interaction,
-            ) = get_joint_edge_attrs(
-                pos,
-                pos_pocket,
-                batch,
-                batch_pocket,
-                edge_attr_global_lig,
-                self.num_bond_classes,
-                self.device,
-                cutoff_p=self.cutoff_p,
-                cutoff_lp=self.cutoff_lp,
-            )
+                )
+
+                atom_types, charge_types = node_feats_in.split(
+                    [self.num_atom_types, self.num_charge_classes], dim=-1
+                )
+                jj, ii = edge_index_global_lig
+                mask = jj < ii
+                mask_i = ii[mask]
 
             (
                 pos_joint,
@@ -2623,6 +2624,26 @@ class Trainer(pl.LightningModule):
                 batch,
                 batch_pocket,
                 sorting=False,
+            )
+            (
+                edge_index_global,
+                edge_attr_global,
+                batch_edge_global,
+                edge_mask,
+                edge_mask_pocket,
+            ) = get_joint_edge_attrs(
+                pos,
+                pos_pocket,
+                batch,
+                batch_pocket,
+                edge_attr_global_lig,
+                self.num_bond_classes,
+                self.device,
+                cutoff_p=self.cutoff_p,
+                cutoff_lp=self.cutoff_lp,
+                knn=self.knn,
+                hybrid_knn=self.hparams.hybrid_knn,
+                pocket_mask=pocket_mask,
             )
 
             if save_traj:

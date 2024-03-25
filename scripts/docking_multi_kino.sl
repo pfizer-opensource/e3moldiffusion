@@ -18,8 +18,8 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-ic50_seed1000"
-output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_5_ic50-200-400_ensemble"
+main_dir="/scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed1000"
+output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_5_sa0-350-every10_ic50-150-350"
 mkdir "$output_dir/docked"
 
 

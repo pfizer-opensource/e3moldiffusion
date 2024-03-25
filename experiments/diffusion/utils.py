@@ -9,6 +9,7 @@ from rdkit import Chem
 from rdkit.Chem import RDConfig
 from rdkit.Chem.Scaffolds.MurckoScaffold import GetScaffoldForMol
 from torch_geometric.data import Batch
+from torch_geometric.typing import OptTensor
 from torch_geometric.utils import remove_self_loops, sort_edge_index
 from torch_scatter import scatter_mean
 
@@ -67,10 +68,20 @@ def get_joint_edge_attrs(
     cutoff_p: float = 5.0,
     cutoff_lp: float = 5.0,
     return_adj: bool = False,
-    kNN: Optional[int] = None,
+    knn: Optional[int] = None,
+    hybrid_knn: Optional[int] = None,
+    pocket_mask: OptTensor = None,
 ):
     edge_index_global = get_edges(
-        batch, batch_pocket, pos, pos_pocket, cutoff_p=cutoff_p, cutoff_lp=cutoff_lp, kNN=kNN
+        batch,
+        batch_pocket,
+        pos,
+        pos_pocket,
+        cutoff_p=cutoff_p,
+        cutoff_lp=cutoff_lp,
+        knn=knn,
+        hybrid_knn=hybrid_knn,
+        pocket_mask=pocket_mask,
     )
     edge_index_global = sort_edge_index(edge_index=edge_index_global, sort_by_row=False)
     edge_index_global, _ = remove_self_loops(edge_index_global)
