@@ -1035,7 +1035,7 @@ def get_kNN_edges(A, top_k: int = 32):
     return AA
 
 def get_edges(
-    batch_mask_lig, batch_mask_pocket, pos_lig, pos_pocket, cutoff_p, cutoff_lp, return_full_adj=False, kNN=None,
+    batch_mask_lig, batch_mask_pocket, pos_lig, pos_pocket, cutoff_p, cutoff_lp, return_full_adj=False, kNN=None, ligand_fc=True,
 ):
     adj_ligand = batch_mask_lig[:, None] == batch_mask_lig[None, :]
     adj_pocket = batch_mask_pocket[:, None] == batch_mask_pocket[None, :]
@@ -1670,6 +1670,7 @@ def prepare_data_and_generate_ligands(
             maximize_property=not args.minimize_property,
             encode_ligand=args.encode_ligands,
             prior_n_atoms=args.prior_n_atoms,
+            joint_importance_sampling=args.joint_importance_sampling,
         )
     del pocket_data
     torch.cuda.empty_cache()

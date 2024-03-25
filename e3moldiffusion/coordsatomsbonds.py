@@ -70,6 +70,8 @@ class DenoisingEdgeNetwork(nn.Module):
         kNN: Optional[int] = None,
         use_rbfs: bool = False,
         mask_pocket_edges: bool = False,
+        model_edge_rbf_interaction: bool = False,
+        model_global_edge: bool = False,
     ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
@@ -118,6 +120,18 @@ class DenoisingEdgeNetwork(nn.Module):
         assert fully_connected
         assert not local_global_model
 
+        self.use_rbfs = use_rbfs
+        self.model_edge_rbf_interaction = model_edge_rbf_interaction
+        self.model_global_edge = model_global_edge
+        
+        if self.model_global_edge and self.model_edge_rbf_interaction:
+            assert use_rbfs
+            self.edge_pre = nn.Sequential(DenseLayer(60, 2 * 60, activation=nn.Softplus()),
+                                          DenseLayer(2 * 60, 1, activation=nn.Sigmoid())
+                                          )
+        else:
+            self.edge_pre = None
+
         self.gnn = EQGATEdgeGNN(
             hn_dim=hn_dim,
             cutoff_local=cutoff_local,
@@ -145,6 +159,8 @@ class DenoisingEdgeNetwork(nn.Module):
             kNN=kNN,
             use_rbfs=use_rbfs,
             mask_pocket_edges=mask_pocket_edges,
+            model_edge_rbf_interaction = model_edge_rbf_interaction,
+            model_global_edge = model_global_edge,
         )
 
         if property_prediction:
@@ -248,6 +264,7 @@ class DenoisingEdgeNetwork(nn.Module):
         batch_edge_global_lig: OptTensor = None,
         batch_lig: OptTensor = None,
         joint_tensor: OptTensor = None,
+        edge_attr_initial_ohe=None,
     ) -> Dict:
 
         if pos is None and x is None:
@@ -311,7 +328,19 @@ class DenoisingEdgeNetwork(nn.Module):
             sqrt=True,
             batch=batch if self.ligand_pocket_interaction else None,
         )
-
+        
+        if self.model_global_edge and self.model_edge_rbf_interaction:
+            assert self.use_rbfs
+            assert edge_attr_initial_ohe is not None
+            assert edge_attr_initial_ohe.size(1) == 3
+            d = edge_attr_global_transformed[0]
+            rbf = self.gnn.convs[0].radial_basis_func(d)
+            rbf_ohe = torch.einsum('nk, nd -> nkd', (rbf, edge_attr_initial_ohe))
+            rbf_ohe = rbf_ohe.view(d.size(0), -1)
+            edgt_attr_global_embedding = self.edge_pre(rbf_ohe)
+        else:
+            edgt_attr_global_embedding = None
+            
         out = self.gnn(
             s=s,
             v=v,
@@ -328,6 +357,8 @@ class DenoisingEdgeNetwork(nn.Module):
             edge_mask_pocket=edge_mask_pocket,
             edge_mask_ligand=edge_mask,
             batch_pocket=batch_pocket,
+            edge_attr_initial_ohe=edge_attr_initial_ohe,
+            edgt_attr_global_embedding=edgt_attr_global_embedding,
         )
         edge_mask, edge_mask_pocket = out["edge_mask_ligand"], out["edge_mask_pocket"]
 

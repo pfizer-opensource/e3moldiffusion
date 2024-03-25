@@ -115,7 +115,11 @@ class Trainer(pl.LightningModule):
             hparams["dataset_cutoff"] = 8.0
         if "mask_pocket_edges" not in hparams.keys():
             hparams["mask_pocket_edges"] = False
-
+        if "model_edge_rbf_interaction" not in hparams.keys():
+            hparams["model_edge_rbf_interaction"] = False
+        if "model_global_edge" not in hparams.keys():
+            hparams["model_global_edge"] = False
+            
         self.save_hyperparameters(hparams)
 
         self.kNN = hparams["kNN"]
@@ -204,6 +208,8 @@ class Trainer(pl.LightningModule):
                 kNN=hparams["kNN"],
                 use_rbfs=hparams["use_rbfs"],
                 mask_pocket_edges=hparams["mask_pocket_edges"],
+                model_edge_rbf_interaction=hparams["model_edge_rbf_interaction"],
+                model_global_edge=hparams["model_global_edge"],
             )
 
         self.max_nodes = dataset_info.max_n_nodes
@@ -1046,6 +1052,7 @@ class Trainer(pl.LightningModule):
             batch_edge_global,
             edge_mask,
             edge_mask_pocket,
+            edge_initial_interaction,
         ) = get_joint_edge_attrs(
             pos_perturbed,
             pos_centered_pocket,
@@ -1102,6 +1109,7 @@ class Trainer(pl.LightningModule):
             batch_lig=data_batch,
             ca_mask=batch.pocket_ca_mask,
             batch_pocket=batch.pos_pocket_batch,
+            edge_attr_initial_ohe=edge_initial_interaction,
         )
 
         # Ground truth masking
@@ -1446,6 +1454,7 @@ class Trainer(pl.LightningModule):
         encode_ligand: bool = True,
         save_dir=None,
         prior_n_atoms: str = "conditional",
+        joint_importance_sampling: bool = False,
     ):
         # DiffSBDD settings
         if prior_n_atoms == "conditional":
@@ -1555,6 +1564,7 @@ class Trainer(pl.LightningModule):
             maximize_property=maximize_property,
             save_dir=save_dir,
             encode_ligand=encode_ligand,
+            joint_importance_sampling=joint_importance_sampling,
         )
         return molecules
 
@@ -1809,9 +1819,8 @@ class Trainer(pl.LightningModule):
 
         prop_pred = out["property_pred"]
         sa, prop = prop_pred
-        sa = sa.squeeze(1).sigmoid() if sa is not None and kind == "sa_score" else None
-
-        if prop is not None and (kind == "docking_score" or kind == "ic50"):
+        sa = sa.squeeze(1).sigmoid() if sa is not None and (kind == "sa_score" or kind == "joint") else None
+        if prop is not None and (kind == "docking_score" or kind == "ic50" or kind == "joint"):
             if prop.dim() == 2:
                 prop = prop.squeeze()
             if kind == "docking_score":
@@ -1833,7 +1842,8 @@ class Trainer(pl.LightningModule):
 
         if kind == "joint":
             assert sa is not None and prop is not None            
-            weights_add = 1.0 * (weights_sa + weights_prop)
+            # weights_add = 1.0 * (weights_sa + weights_prop)
+            weights_add = weights_prop # 0.0
             weights_mul = weights_sa * weights_prop
             weights = 1.0 * (weights_add + weights_mul)
             weights = weights.softmax(dim=0)
@@ -1957,6 +1967,7 @@ class Trainer(pl.LightningModule):
         property_tau: float = 0.1,
         maximize_property=True,
         encode_ligand: bool = True,
+        joint_importance_sampling=False,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         pos_pocket = pocket_data.pos_pocket.to(self.device)
         batch_pocket = pocket_data.pos_pocket_batch.to(self.device)
@@ -2143,6 +2154,7 @@ class Trainer(pl.LightningModule):
             batch_edge_global,
             edge_mask,
             edge_mask_pocket,
+            edge_initial_interaction,
         ) = get_joint_edge_attrs(
             pos,
             pos_pocket,
@@ -2216,6 +2228,7 @@ class Trainer(pl.LightningModule):
                 batch_lig=batch,
                 ca_mask=ca_mask,
                 batch_pocket=batch_pocket,
+                edge_attr_initial_ohe=edge_initial_interaction,
             )
 
             coords_pred = out["coords_pred"].squeeze()
@@ -2310,6 +2323,7 @@ class Trainer(pl.LightningModule):
                 batch_edge_global,
                 edge_mask,
                 edge_mask_pocket,
+                edge_initial_interaction,
             ) = get_joint_edge_attrs(
                 pos,
                 pos_pocket,
@@ -2432,6 +2446,7 @@ class Trainer(pl.LightningModule):
                 batch_edge_global,
                 edge_mask,
                 edge_mask_pocket,
+                edge_initial_interaction,
             ) = get_joint_edge_attrs(
                 pos,
                 pos_pocket,
@@ -2468,6 +2483,7 @@ class Trainer(pl.LightningModule):
                 and property_importance_sampling_start
                 <= i
                 <= property_importance_sampling_end
+                and not joint_importance_sampling
             ):
                 node_feats_in = torch.cat(
                     [atom_types_joint, charge_types_joint], dim=-1
@@ -2515,13 +2531,70 @@ class Trainer(pl.LightningModule):
                 jj, ii = edge_index_global_lig
                 mask = jj < ii
                 mask_i = ii[mask]
-
+                
+            if (joint_importance_sampling
+                and i % property_every_importance_t == 0
+                and property_importance_sampling_start <= i <= property_importance_sampling_end
+                and i % sa_every_importance_t == 0
+                and sa_importance_sampling_start <= i <= sa_importance_sampling_end
+                ):  
+                    
+                    # print("Joint importance sampling")
+                    # SA should act as filter overlaying the property importance sampling
+                    assert sa_importance_sampling and property_importance_sampling
+                   
+                    node_feats_in = torch.cat(
+                    [atom_types_joint, charge_types_joint], dim=-1
+                    )
+                    
+                    (
+                    pos, 
+                    node_feats_in,
+                    edge_index_global_lig,
+                    edge_attr_global_lig,
+                    batch,
+                    _,
+                    num_nodes_lig,
+                    ) = self.importance_sampling(
+                    node_feats_in=node_feats_in,
+                    pos=pos_joint,
+                    temb=temb,
+                    edge_index_local=None,
+                    edge_index_global=edge_index_global,
+                    edge_attr_global=edge_attr_global,
+                    batch=batch_full,
+                    batch_lig=batch,
+                    batch_edge_global=batch_edge_global,
+                    batch_num_nodes=num_nodes_lig,
+                    context=None,
+                    maximize_score=maximize_property,
+                    edge_index_global_lig=edge_index_global_lig,
+                    edge_attr_global_lig=edge_attr_global_lig,
+                    pocket_mask=pocket_mask,
+                    ca_mask=ca_mask,
+                    edge_mask=edge_mask,
+                    batch_pocket=batch_pocket,
+                    edge_mask_pocket=edge_mask_pocket,
+                    property_tau=property_tau,
+                    kind="joint",  # currently hardcoded for max. two properties, whereby SA is always the first and the property the last argument!
+                    property_model=property_model,
+                    ensemble_models=ckpts_ensemble,
+                    )
+                    
+                    atom_types, charge_types = node_feats_in.split(
+                        [self.num_atom_types, self.num_charge_classes], dim=-1
+                    )
+                    jj, ii = edge_index_global_lig
+                    mask = jj < ii
+                    mask_i = ii[mask]
+                
             (
                 edge_index_global,
                 edge_attr_global,
                 batch_edge_global,
                 edge_mask,
                 edge_mask_pocket,
+                edge_initial_interaction,
             ) = get_joint_edge_attrs(
                 pos,
                 pos_pocket,

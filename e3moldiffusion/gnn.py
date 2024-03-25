@@ -111,6 +111,8 @@ class EQGATEdgeGNN(nn.Module):
         kNN: Optional[int] = None,
         use_rbfs: bool = False,
         mask_pocket_edges: bool = False,
+        model_edge_rbf_interaction: bool = False,
+        model_global_edge: bool = False,
     ):
         super(EQGATEdgeGNN, self).__init__()
 
@@ -127,7 +129,9 @@ class EQGATEdgeGNN(nn.Module):
         self.property_prediction = property_prediction
         self.ligand_pocket_interaction = ligand_pocket_interaction
         self.store_intermediate_coords = store_intermediate_coords
-
+        self.model_edge_rbf_interaction = model_edge_rbf_interaction
+        self.model_global_edge = model_global_edge
+        
         self.sdim, self.vdim = hn_dim
         self.edge_dim = edge_dim
         self.dynamic_graph = dynamic_graph
@@ -157,6 +161,8 @@ class EQGATEdgeGNN(nn.Module):
                     cutoff=cutoff_local,
                     use_rbfs=use_rbfs,
                     mask_pocket_edges=mask_pocket_edges,
+                    model_edge_rbf_interaction = model_edge_rbf_interaction,
+                    model_global_edge = model_global_edge,
                 )
             )
 
@@ -236,6 +242,8 @@ class EQGATEdgeGNN(nn.Module):
         edge_mask_pocket: OptTensor = None,
         edge_mask_ligand: OptTensor = None,
         batch_pocket: OptTensor = None,
+        edge_attr_initial_ohe=None,
+        edgt_attr_global_embedding=None,
     ) -> Dict:
         # edge_attr_xyz (distances, cosines, relative_positions, edge_features)
         # (E, E, E x 3, E x F)
@@ -266,6 +274,8 @@ class EQGATEdgeGNN(nn.Module):
                 pocket_mask=pocket_mask,
                 edge_mask_pocket=edge_mask_pocket,
                 edge_mask_ligand=edge_mask_ligand,
+                edge_attr_initial_ohe=edge_attr_initial_ohe,
+                edgt_attr_global_embedding=edgt_attr_global_embedding,
             )
 
             s, v, p, e = out["s"], out["v"], out["p"], out["e"]

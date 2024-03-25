@@ -105,6 +105,8 @@ def add_arguments(parser):
                         help="If Gaussian Distance Expansion should be used. Currently Defaults to 20 RBFs evenly spaced between 0 and cutoff_local param")
     parser.add_argument("--mask-pocket-edges", default=False, action="store_true",
                         help="If any hidden edge embeddings between pocket atoms is masked to 0 during message passing. Defaults to False")
+    parser.add_argument("--model-edge-rbf-interaction", default=False, action="store_true")
+    parser.add_argument("--model-global-edge", default=False, action="store_true")
     parser.add_argument("--energy-training", default=False, action="store_true")
     parser.add_argument("--property-training", default=False, action="store_true")
     parser.add_argument("--regression-property", default=[], nargs="+", type=str)

@@ -604,6 +604,7 @@ def get_args():
     parser.add_argument("--property-every-importance-t", default=5, type=int)
     parser.add_argument("--property-importance-sampling-start", default=None, type=int)
     parser.add_argument("--property-importance-sampling-end", default=None, type=int)
+    parser.add_argument("--joint-importance-sampling", default=False, action="store_true")
 
 
     args = parser.parse_args()

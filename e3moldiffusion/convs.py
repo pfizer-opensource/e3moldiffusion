@@ -311,6 +311,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         use_rbfs: bool = False,
         cutoff: float = 5.0,
         mask_pocket_edges: bool = False,
+        model_edge_rbf_interaction: bool = False,
+        model_global_edge: bool = False,
     ):
         super(EQGATGlobalEdgeConvFinal, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
@@ -350,11 +352,20 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
 
         self.use_rbfs = use_rbfs
         self.cutoff = cutoff
+        
         if use_rbfs:
             self.radial_basis_func = GaussianExpansion(max_value=cutoff, K=20)
-            self.cutoff_func = CosineCutoff(cutoff_lower=0.0, cutoff_upper=cutoff)
-            input_edge_dim += 20
-
+            if model_edge_rbf_interaction:
+                input_edge_dim += 60 # (ligand-ligand, ligand-pocket, -pocket-pocket)
+            else:
+                input_edge_dim += 20 # (just distance rbf)
+                
+        if model_global_edge:
+            input_edge_dim += 1
+        
+        self.model_edge_rbf_interaction = model_edge_rbf_interaction
+        self.model_global_edge = model_global_edge
+        
         self.edge_net = nn.Sequential(
             DenseLayer(input_edge_dim, self.si, bias=True, activation=nn.SiLU()),
             DenseLayer(
@@ -501,6 +512,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         pocket_mask: Tensor = None,
         edge_mask_ligand: OptTensor = None,
         edge_mask_pocket: OptTensor = None,
+        edge_attr_initial_ohe=None,
+        edgt_attr_global_embedding=None,
     ):
         s, v, p = x
         d, a, r, e = edge_attr
@@ -523,6 +536,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
             dim_size=s.size(0),
             edge_mask_ligand=edge_mask_ligand,
             edge_mask_pocket=edge_mask_pocket,
+            edge_attr_initial_ohe=edge_attr_initial_ohe,
+            edgt_attr_global_embedding=edgt_attr_global_embedding,
         )
 
         s = ms + s
@@ -583,6 +598,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         dim_size: Optional[int],
         edge_mask_ligand: OptTensor = None,
         edge_mask_pocket: OptTensor = None,
+        edge_attr_initial_ohe=None,
+        edgt_attr_global_embedding=None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         d, a, r, e = edge_attr
 
@@ -601,14 +618,21 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
 
         aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e, d_i, d_j], dim=-1)
 
+        if self.model_global_edge:
+            assert edgt_attr_global_embedding is not None
+            aij = torch.cat([aij, edgt_attr_global_embedding], dim=-1)
+            
         if self.use_rbfs:
             rbf = self.radial_basis_func(d)
-            c = self.cutoff_func(d)
-            aij = torch.cat([aij, rbf], dim=-1)
-            aij = c.view(-1, 1) * aij
-
-        # else:
-        #     aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e], dim=-1)
+            if self.model_edge_rbf_interaction:
+                assert edge_attr_initial_ohe is not None
+                assert edge_attr_initial_ohe.size(1) == 3
+                rbf_ohe = torch.einsum('nk, nd -> nkd', (rbf, edge_attr_initial_ohe))
+                rbf_ohe = rbf_ohe.view(d.size(0), -1)
+                aij = torch.cat([aij, rbf_ohe], dim=-1)
+            else:
+                aij = torch.cat([aij, rbf], dim=-1)
+                
         aij = self.edge_net(aij)
 
         fdim = aij.shape[-1]

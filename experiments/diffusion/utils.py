@@ -112,12 +112,42 @@ def get_joint_edge_attrs(
     batch_full = torch.cat([batch, batch_pocket])
     batch_edge_global = batch_full[edge_index_global[0]]  #
 
+    edge_mask_ligand_pocket = (edge_index_global[0] < len(batch)) & (
+            edge_index_global[1] >= len(batch)
+        )
+    edge_mask_pocket_ligand = (edge_index_global[0] >= len(batch)) & (
+        edge_index_global[1] < len(batch)
+    )
+    
+    edge_initial_interaction = torch.zeros(
+        (edge_index_global.size(1), 3),
+        dtype=torch.float32,
+        device=device,
+    )
+    
+    edge_initial_interaction[edge_mask] = (
+            torch.tensor([1, 0, 0]).float().to(edge_attr_global.device)
+    ) # ligand-ligand
+    
+    edge_initial_interaction[edge_mask_pocket] = (
+            torch.tensor([0, 1, 0]).float().to(edge_attr_global.device)
+        ) # pocket-pocket
+
+    edge_initial_interaction[edge_mask_ligand_pocket] = (
+        torch.tensor([0, 0, 1]).float().to(edge_attr_global.device)
+    ) # ligand-pocket
+    
+    edge_initial_interaction[edge_mask_pocket_ligand] = (
+        torch.tensor([0, 0, 1]).float().to(edge_attr_global.device)
+    ) # pocket-ligand
+        
     return (
         edge_index_global,
         edge_attr_global,
         batch_edge_global,
         edge_mask,
         edge_mask_pocket,
+        edge_initial_interaction,
     )
 
 
