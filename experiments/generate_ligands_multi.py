@@ -429,7 +429,7 @@ def evaluate(args):
             embedding_dict[ligand_name]["sampled"].append(ligand_embeds)
         if "ic50" in hparams.regression_property:
             # split into n chunks to avoid OOM error
-            n = 3 if len(valid_molecules) > 80 else 2
+            n = 4 if len(valid_molecules) > 80 else 3
             molecules_list = list(chunks(valid_molecules, n))
             ic50s = []
             for molecules in molecules_list:
@@ -606,7 +606,7 @@ def get_args():
     parser.add_argument("--fix-n-nodes", action="store_true")
     parser.add_argument("--vary-n-nodes", action="store_true")
     parser.add_argument("--n-nodes-bias", default=0, type=int)
-    parser.add_argument("--prior-n-atoms", default="conditional", type=str, choices=["conditional", "targetdiff"])
+    parser.add_argument("--prior-n-atoms", default="targetdiff", type=str, choices=["conditional", "targetdiff"])
 
     parser.add_argument("--filter-by-posebusters", action="store_true")
     parser.add_argument("--filter-by-lipinski", action="store_true")

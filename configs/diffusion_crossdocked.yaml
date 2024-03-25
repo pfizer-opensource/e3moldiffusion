@@ -3,14 +3,6 @@
 #/hpfs/userws/cremej01/projects/logs/pubchem/pretrain_x0_3_adaptive/run0/last.ckpt
 # ckpt_bond_model: /hpfs/userws/cremej01/projects/logs/geom/bond_pred_seed1/run0/last.ckpt
 
-#FOR TEST EVAL
-save_xyz: true
-calculate_energy: true
-num_test_graphs: 1000
-inference_batch_size: 8
-use_ligand_dataset_sizes: true
-test_save_dir: /scratch1/e3moldiffusion/logs/crossdocked/test
-
 remove_hs: true
 
 atoms_continuous: false
@@ -24,14 +16,17 @@ regression_property: [sa_score]
 
 use_pos_norm: false
 use_out_norm: false
+use_rbfs: true
 
 #LIG-POCKET INTERACTION
 ligand_pocket_interaction: true
+model_edge-rbf_interaction: true
+model_global_edge: true
 
 molsize_loss_weighting: false
 
 seed: 42
-batch_size: 4
+batch_size: 8
 ema_decay: 0.999
 grad_clip_val: 10
 accum_batch: 1
@@ -39,7 +34,7 @@ gamma: 0.99
 
 use_adaptive_loader: false
 
-gpus: 4
+gpus: 8
 num_epochs: 301
 test_interval: 20
 
@@ -57,6 +52,7 @@ vector_aggr: mean
 #DATA
 dataset: crossdocked
 dataset_root: /scratch1/cremej01/data/crossdocked_noH_cutoff5_new
+dataset_cutoff: 5
 
 # DIFFUSION
 additional_feats: false
@@ -84,3 +80,11 @@ weight_decay: 1.e-12
 
 num_workers: 4
 precision: 32
+
+#FOR TEST EVAL
+save_xyz: true
+calculate_energy: true
+num_test_graphs: 1000
+inference_batch_size: 8
+use_ligand_dataset_sizes: true
+test_save_dir: /scratch1/e3moldiffusion/logs/crossdocked/test

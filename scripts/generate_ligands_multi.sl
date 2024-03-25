@@ -40,6 +40,7 @@ python experiments/generate_ligands_multi.py \
     --batch-size 40 \
     --n-nodes-bias 10 \
     --vary-n-nodes \
+    --prior_n_natoms targetdiff \
     --omit-posecheck
     # --property-importance-sampling \
     # --property-importance-sampling-start 200 \

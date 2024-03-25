@@ -116,7 +116,7 @@ class Trainer(pl.LightningModule):
         if "use_rbfs" not in hparams.keys():
             hparams["use_rbfs"] = None
         if "dataset_cutoff" not in hparams.keys():
-            hparams["dataset_cutoff"] = 8.0
+            hparams["dataset_cutoff"] = 5.0
         if "mask_pocket_edges" not in hparams.keys():
             hparams["mask_pocket_edges"] = False
         if "model_edge_rbf_interaction" not in hparams.keys():
@@ -1300,7 +1300,7 @@ class Trainer(pl.LightningModule):
         n_nodes_bias: int = 0,
         device: str = "cpu",
         encode_ligand: bool = True,
-        prior_n_atoms: str = "conditional",
+        prior_n_atoms: str = "targetdiff",
     ):
         """
         Runs the evaluation on the entire validation dataloader. Generates 1 ligand in 1 receptor structure
