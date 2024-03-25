@@ -111,6 +111,8 @@ class Trainer(pl.LightningModule):
             hparams["knn"] = None
         if "hybrid_knn" not in hparams.keys():
             hparams["hybrid_knn"] = None
+        if "knn_with_cutoff" not in hparams.keys():
+            hparams["knn_with_cutoff"] = None
         if "use_rbfs" not in hparams.keys():
             hparams["use_rbfs"] = None
         if "dataset_cutoff" not in hparams.keys():
@@ -126,6 +128,7 @@ class Trainer(pl.LightningModule):
 
         self.knn = hparams["knn"]
         self.hybrid_knn = hparams["hybrid_knn"]
+        self.knn_with_cutoff = hparams["knn_with_cutoff"]
         self.cutoff_p = hparams["cutoff_local"]
         self.cutoff_lp = hparams["cutoff_local"]
 
@@ -1086,7 +1089,8 @@ class Trainer(pl.LightningModule):
             cutoff_p=self.cutoff_p,
             cutoff_lp=self.cutoff_lp,
             knn=self.knn,
-            hybrid_knn=self.hparams.hybrid_knn,
+            hybrid_knn=self.hybrid_knn,
+            knn_with_cutoff=self.knn_with_cutoff,
             pocket_mask=pocket_mask,
         )
 
@@ -2195,7 +2199,8 @@ class Trainer(pl.LightningModule):
             cutoff_p=self.cutoff_p,
             cutoff_lp=self.cutoff_lp,
             knn=self.knn,
-            hybrid_knn=self.hparams.hybrid_knn,
+            hybrid_knn=self.hybrid_knn,
+            knn_with_cutoff=self.knn_with_cutoff,
             pocket_mask=pocket_mask,
         )
 
@@ -2349,7 +2354,8 @@ class Trainer(pl.LightningModule):
                 cutoff_p=self.cutoff_p,
                 cutoff_lp=self.cutoff_lp,
                 knn=self.knn,
-                hybrid_knn=self.hparams.hybrid_knn,
+                hybrid_knn=self.hybrid_knn,
+                knn_with_cutoff=self.knn_with_cutoff,
                 pocket_mask=pocket_mask,
             )
 
@@ -2492,7 +2498,8 @@ class Trainer(pl.LightningModule):
                 cutoff_p=self.cutoff_p,
                 cutoff_lp=self.cutoff_lp,
                 knn=self.knn,
-                hybrid_knn=self.hparams.hybrid_knn,
+                hybrid_knn=self.hybrid_knn,
+                knn_with_cutoff=self.knn_with_cutoff,
                 pocket_mask=pocket_mask,
             )
 
@@ -2645,7 +2652,8 @@ class Trainer(pl.LightningModule):
                 cutoff_p=self.cutoff_p,
                 cutoff_lp=self.cutoff_lp,
                 knn=self.knn,
-                hybrid_knn=self.hparams.hybrid_knn,
+                hybrid_knn=self.hybrid_knn,
+                knn_with_cutoff=self.knn_with_cutoff,
                 pocket_mask=pocket_mask,
             )
 

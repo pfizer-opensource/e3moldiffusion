@@ -1123,6 +1123,7 @@ def get_edges(
     return_full_adj=False,
     knn=None,
     hybrid_knn=None,
+    knn_with_cutoff=None,
     pocket_mask=None,
 ):
     if hybrid_knn is not None:
@@ -1142,13 +1143,14 @@ def get_edges(
             D_pocket = torch.cdist(pos_pocket, pos_pocket)
             D_cross = torch.cdist(pos_lig, pos_pocket)
 
-        if knn is not None:
+        if knn is not None or knn_with_cutoff is not None:
             D_pocket = adj_pocket.float() * D_pocket
             D_cross = adj_cross.float() * D_cross
             D_pocket = get_kNN_edges(D_pocket, top_k=knn)
             D_cross = get_kNN_edges(D_cross, top_k=knn)
-            adj_pocket = adj_pocket & (D_pocket < 999)
-            adj_cross = adj_cross & (D_cross < 999)
+            if knn is not None:
+                adj_pocket = adj_pocket & (D_pocket < 999)
+                adj_cross = adj_cross & (D_cross < 999)
 
         if cutoff_p is not None and knn is None:
             adj_pocket = adj_pocket & (D_pocket <= cutoff_p)

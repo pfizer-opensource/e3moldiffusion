@@ -114,6 +114,12 @@ def add_arguments(parser):
         help="Number of nearest neighbors for ligand-pocket and pocket-pocket graph",
     )
     parser.add_argument(
+        "--knn-with-cutoff",
+        default=None,
+        type=int,
+        help="Number of nearest neighbors for ligand-pocket and pocket-pocket graph",
+    )
+    parser.add_argument(
         "--use-rbfs",
         default=False,
         action="store_true",

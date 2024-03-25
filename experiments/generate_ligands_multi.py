@@ -439,7 +439,7 @@ def evaluate(args):
                         dataset_info.atom_encoder,
                         Chem.MolToSmiles(mol.rdkit_mol),
                         remove_hydrogens=True,
-                        cog_proj=True,
+                        cog_proj=False,
                     )
                     for mol in molecules
                 ]
