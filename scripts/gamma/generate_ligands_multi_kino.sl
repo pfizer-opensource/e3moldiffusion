@@ -5,22 +5,23 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=12G
 #SBATCH --cpus-per-task=12
-#SBATCH --partition=ondemand-8xv100m32-1a
+#SBATCH --partition=defq
 #SBATCH --gres=gpu:1
 #SBATCH --array=1-15
-#SBATCH --output=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.out
-#SBATCH --error=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.err
+#SBATCH --output=/hpfs/projects/mlcs/mlhub/e3moldiffusion/logs/slurm_outs/array_run_%j.out
+#SBATCH --error=/hpfs/projects/mlcs/mlhub/e3moldiffusion/logs/slurm_outs/array_run_%j.err
 
 num_gpus=15
 
-cd /sharedhome/cremej01/workspace/e3moldiffusion
-source activate e3mol
+cd /hpfs/userws/cremej01/projects/e3moldiffusion
+source /hpfs/userws/cremej01/projects/mambaforge/etc/profile.d/mamba.sh
+source /hpfs/userws/cremej01/projects/mambaforge/etc/profile.d/conda.sh
 conda activate e3mol
 
-export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
+export PYTHONPATH="/hpfs/userws/cremej01/projects/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed42"
-output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_6_sa0-200-every10_ic50-150-350_ensemble"
+main_dir="/hpfs/projects/mlcs/mlhub/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed42"
+output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_6_sa0-200-every10_ic50-150-400_ensemble"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
@@ -31,8 +32,8 @@ python experiments/generate_ligands_multi.py \
     --num-gpus "$num_gpus" \
     --model-path "$main_dir/best_valid.ckpt" \
     --save-dir "$output_dir" \
-    --pdbqt-dir /scratch1/cremej01/data/kinodata_noH_cutoff5/test/pdbqt \
-    --test-dir /scratch1/cremej01/data/kinodata_noH_cutoff5/test \
+    --pdbqt-dir /hpfs/projects/mlcs/mlhub/e3moldiffusion/data/kinodata_noH_cutoff5/test/pdbqt \
+    --test-dir /hpfs/projects/mlcs/mlhub/e3moldiffusion/data/kinodata_noH_cutoff5/test \
     --skip-existing \
     --num-ligands-per-pocket-to-sample 100 \
     --num-ligands-per-pocket-to-save 100 \
@@ -44,7 +45,7 @@ python experiments/generate_ligands_multi.py \
     --prior-n-atoms conditional \
     --property-importance-sampling \
     --property-importance-sampling-start 150 \
-    --property-importance-sampling-end 350 \
+    --property-importance-sampling-end 400 \
     --property-every-importance-t 5 \
     --property-tau 0.1 \
     --sa-importance-sampling \
@@ -53,7 +54,7 @@ python experiments/generate_ligands_multi.py \
     --sa-every-importance-t 10 \
     --sa-tau 0.1 \
     --omit-posecheck \
-    --ckpts-ensemble /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed42/best_valid.ckpt /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed1000/best_valid.ckpt /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed500/best_valid.ckpt
+    --ckpts-ensemble /hpfs/projects/mlcs/mlhub/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed42/best_valid.ckpt /hpfs/projects/mlcs/mlhub/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed1000/best_valid.ckpt /hpfs/projects/mlcs/mlhub/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed500/best_valid.ckpt
     # --sa-importance-sampling \
     # --sa-importance-sampling-start 0 \
     # --sa-importance-sampling-end 200 \

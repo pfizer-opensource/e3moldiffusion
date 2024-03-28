@@ -1,7 +1,7 @@
 import subprocess
 
 # Path to the text file containing wget commands
-file_path = "/hpfs/projects/mlcs/mlhub/e3moldiffusion/data/zinc3d/ZINC-downloader-3D-sdf.gz-2.wget"
+file_path = "/scratch1/cremej01/data/zinc3d/ZINC-downloader-3D-sdf.gz-2.wget"
 
 # Open the file in read mode
 with open(file_path, "r") as file:

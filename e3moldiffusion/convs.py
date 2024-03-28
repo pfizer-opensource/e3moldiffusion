@@ -313,6 +313,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         mask_pocket_edges: bool = False,
         model_edge_rbf_interaction: bool = False,
         model_global_edge: bool = False,
+        use_cutoff_damping: bool = False,
     ):
         super(EQGATGlobalEdgeConvFinal, self).__init__(
             node_dim=0, aggr=None, flow="source_to_target"
@@ -352,6 +353,12 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
 
         self.use_rbfs = use_rbfs
         self.cutoff = cutoff
+        self.use_cutoff_damping = use_cutoff_damping
+        ## new
+        if self.use_cutoff_damping:
+            self.cutoff_fnc = CosineCutoff(cutoff_lower=0.0, cutoff_upper=cutoff)
+        else:
+            self.cutoff_fnc = None
 
         if use_rbfs:
             self.radial_basis_func = GaussianExpansion(max_value=cutoff, K=20)
@@ -632,6 +639,10 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
                 aij = torch.cat([aij, rbf_ohe], dim=-1)
             else:
                 aij = torch.cat([aij, rbf], dim=-1)
+
+        if self.use_cutoff_damping:
+            c = self.cutoff_fnc(d)
+            aij = c.view(-1, 1) * aij
 
         aij = self.edge_net(aij)
 

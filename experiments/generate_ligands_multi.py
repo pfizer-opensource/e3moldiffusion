@@ -456,10 +456,13 @@ def evaluate(args):
                 pocket_data.update(ligand_data)
 
                 t = torch.zeros((len(ligand_data),)).to(device).long()
-                pred = model(pocket_data, t=t)
+                with torch.no_grad():
+                    pred = model(pocket_data, t=t)
                 ic50s.extend(pred["property_pred"][1].squeeze().detach().tolist())
             violin_dict["pIC50"].extend(ic50s)
             statistics_dict["pIC50_mean"].append(np.mean(ic50s))
+            for i, ic50 in enumerate(ic50s):
+                valid_molecules[i].rdkit_mol.SetProp("pIC50", str(ic50))
 
         write_sdf_file(sdf_out_file_raw, valid_molecules, extract_mol=True)
         sdf_files.append(sdf_out_file_raw)
@@ -555,7 +558,7 @@ def evaluate(args):
 
     # save arguments
     argsdicts = vars(args)
-    savedirjson = os.path.join(args.save_dir, "args.json")
+    savedirjson = os.path.join(str(args.save_dir), "args.json")
     with open(savedirjson, "w") as f:
         json.dump(argsdicts, f)
 

@@ -126,6 +126,12 @@ def add_arguments(parser):
         help="If Gaussian Distance Expansion should be used. Currently Defaults to 20 RBFs evenly spaced between 0 and cutoff_local param",
     )
     parser.add_argument(
+        "--use-cutoff-damping",
+        default=False,
+        action="store_true",
+        help="Applies cosine cutoff with specified cutoff to attention in message-passing",
+    )
+    parser.add_argument(
         "--mask-pocket-edges",
         default=False,
         action="store_true",

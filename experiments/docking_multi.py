@@ -124,6 +124,9 @@ def calculate_qvina2_score(
         try:
             os.stat("/sharedhome/cremej01/workspace/qvina2.1")
             PATH = "/sharedhome/cremej01/workspace/qvina2.1"
+        except FileNotFoundError:
+            os.stat("/hpfs/userws/cremej01/projects/qvina2.1")
+            PATH = "/hpfs/userws/cremej01/projects/qvina2.1"
         except PermissionError:
             PATH = "/sharedhome/let55/projects/e3moldiffusion/qvina2.1"
             # PATH = "/hpfs/userws/let55/projects/e3moldiffusion/qvina2.1"

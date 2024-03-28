@@ -1,25 +1,26 @@
 #!/bin/bash
 #SBATCH -J SampleArray
-#SBATCH --time=2-00:00:00
+#SBATCH --time=00-23:59:59
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=12G
 #SBATCH --cpus-per-task=12
-#SBATCH --partition=ondemand-8xv100m32-1b
+#SBATCH --partition=gpu_medium
 #SBATCH --gres=gpu:1
-#SBATCH --array=1-16
-#SBATCH --output=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.out
-#SBATCH --error=/scratch1/e3moldiffusion/slurm_logs_multi/array_run_%j.err
+#SBATCH --array=1-15
+#SBATCH --output=/hpfs/userws/cremej01/projects/logs/slurm_outs/array_run_%j.out
+#SBATCH --error=/hpfs/userws/cremej01/projects/logs/slurm_outs/array_run_%j.err
 
-num_gpus=16
+num_gpus=15
 
-cd /sharedhome/cremej01/workspace/e3moldiffusion
-source activate e3mol
+cd /hpfs/userws/cremej01/projects/e3moldiffusion
+source /hpfs/userws/cremej01/mambaforge/etc/profile.d/mamba.sh
+source /hpfs/userws/cremej01/mambaforge/etc/profile.d/conda.sh
 conda activate e3mol
 
-export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
+export PYTHONPATH="/hpfs/userws/cremej01/projects/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/molecular_glue/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_norm"
+main_dir="/hpfs/userws/cremej01/projects/logs/molecular_glue/x0_snr_bonds5_cutoff5_pos-res_lig-pocket-inter_norm"
 output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_10_sa0-250_every-5"
 
 mkdir "$main_dir/evaluation"
@@ -31,8 +32,8 @@ python experiments/generate_ligands_batch.py \
     --num-gpus "$num_gpus" \
     --model-path "$main_dir/best_valid.ckpt" \
     --save-dir "$output_dir" \
-    --pdbqt-dir /scratch1/cremej01/data/cdk2/pdbqt \
-    --test-dir /scratch1/cremej01/data/cdk2 \
+    --pdbqt-dir /hpfs/userws/cremej01/projects/data/molecular_glue/test/pdbqt \
+    --test-dir /hpfs/userws/cremej01/projects/data/molecular_glue/test \
     --skip-existing \
     --num-ligands-to-sample 10000 \
     --max-sample-iter 50 \
@@ -44,7 +45,7 @@ python experiments/generate_ligands_batch.py \
     --sa-importance-sampling-start 0 \
     --sa-importance-sampling-end 250 \
     --sa-every-importance-t 5 \
-    --ckpt-sa-model /scratch1/e3moldiffusion/logs/crossdocked/x0_snr_cutoff5_bonds5_no-norm_joint-sa/best_valid.ckpt \
+    --ckpt-sa-model /hpfs/userws/cremej01/projects/logs/crossdocked/x0_snr_cutoff5_bonds5_no-norm_joint-sa/best_valid.ckpt \
     --sa-tau 0.1
     # --property-importance-sampling \
     # --property-importance-sampling-start 200 \
@@ -63,7 +64,7 @@ python experiments/generate_ligands_batch.py \
     # --sascore-threshold 0.6
     #--omit-posebusters \
     #--omit-posecheck \
-    #--docking-scores /scratch1/e3moldiffusion/logs/crossdocked/ground_truth/evaluation/docking/crossdocked_scores.pickle
+    #--docking-scores /hpfs/userws/cremej01/projects/logs/crossdocked/ground_truth/evaluation/docking/crossdocked_scores.pickle
     #--filter-by-posebusters \
     #--filter-by-lipinski \
     #--filter-by-docking-scores \
@@ -71,14 +72,3 @@ python experiments/generate_ligands_batch.py \
     #--sanitize 
     #--relax-mol \
     #--max-relax-iter 500 
-
-# for ((i=1; i<="$num_gpus"; i++)); do
-#     file="${i}_posebusters_sampled.pickle"
-    
-#     while [ ! -f "$file" ]; do
-#         sleep 5  # Adjust the interval between checks as needed
-#     done
-# done
-
-# python experiments/aggregate_results.py \
-#     --files-dir "$output_dir"

@@ -123,6 +123,8 @@ class Trainer(pl.LightningModule):
             hparams["model_edge_rbf_interaction"] = False
         if "model_global_edge" not in hparams.keys():
             hparams["model_global_edge"] = False
+        if "use_cutoff_damping" not in hparams.keys():
+            hparams["use_cutoff_damping"] = False
 
         self.save_hyperparameters(hparams)
 
@@ -217,6 +219,7 @@ class Trainer(pl.LightningModule):
                 mask_pocket_edges=hparams["mask_pocket_edges"],
                 model_edge_rbf_interaction=hparams["model_edge_rbf_interaction"],
                 model_global_edge=hparams["model_global_edge"],
+                use_cutoff_damping=hparams["use_cutoff_damping"],
             )
 
         self.max_nodes = dataset_info.max_n_nodes
@@ -1684,60 +1687,6 @@ class Trainer(pl.LightningModule):
         assert kind in ["sa_score", "docking_score", "ic50", "joint"]
 
         assert self.hparams.joint_property_prediction
-        # out = self.get_model_predictions(
-        #     model=(
-        #         None
-        #         if sa_model is None
-        #         and property_model is None
-        #         and len(ensemble_models) == 0
-        #         else (
-        #             sa_model
-        #             if kind == "sa_score" and sa_model is not None
-        #             else (
-        #                 property_model
-        #                 if (kind == "docking_score" or kind == "ic50")
-        #                 and property_model is not None
-        #                 else ensemble_models
-        #             )
-        #         )
-        #     ),
-        #     node_feats_in=node_feats_in,
-        #     temb=temb,
-        #     pos=pos,
-        #     edge_index_local=edge_index_local,
-        #     edge_index_global=edge_index_global,
-        #     edge_index_global_lig=edge_index_global_lig,
-        #     edge_attr_global=edge_attr_global,
-        #     batch=batch,
-        #     batch_edge_global=batch_edge_global,
-        #     context=context,
-        #     pocket_mask=pocket_mask.unsqueeze(1),
-        #     edge_mask=edge_mask,
-        #     edge_mask_pocket=edge_mask_pocket,
-        #     batch_lig=batch_lig,
-        #     ca_mask=ca_mask,
-        #     batch_pocket=batch_pocket,
-        #     num_atom_features=self.num_atom_features,
-        #     num_bond_classes=self.num_bond_classes,
-        # )
-        # out = self.model(
-        #     x=node_feats_in,
-        #     t=temb,
-        #     pos=pos,
-        #     edge_index_local=edge_index_local,
-        #     edge_index_global=edge_index_global,
-        #     edge_index_global_lig=edge_index_global_lig,
-        #     edge_attr_global=edge_attr_global,
-        #     batch=batch,
-        #     batch_edge_global=batch_edge_global,
-        #     context=context,
-        #     pocket_mask=pocket_mask.unsqueeze(1),
-        #     edge_mask=edge_mask,
-        #     edge_mask_pocket=edge_mask_pocket,
-        #     batch_lig=batch_lig,
-        #     ca_mask=ca_mask,
-        #     batch_pocket=batch_pocket,
-        # )
         if ensemble_models is not None and len(ensemble_models) > 1:
             assert (
                 len(ensemble_models) >= 2

@@ -114,6 +114,7 @@ class EQGATEdgeGNN(nn.Module):
         mask_pocket_edges: bool = False,
         model_edge_rbf_interaction: bool = False,
         model_global_edge: bool = False,
+        use_cutoff_damping: bool = False,
     ):
         super(EQGATEdgeGNN, self).__init__()
 
@@ -132,7 +133,7 @@ class EQGATEdgeGNN(nn.Module):
         self.store_intermediate_coords = store_intermediate_coords
         self.model_edge_rbf_interaction = model_edge_rbf_interaction
         self.model_global_edge = model_global_edge
-        
+
         self.sdim, self.vdim = hn_dim
         self.edge_dim = edge_dim
         self.dynamic_graph = dynamic_graph
@@ -163,8 +164,9 @@ class EQGATEdgeGNN(nn.Module):
                     cutoff=cutoff_local,
                     use_rbfs=use_rbfs,
                     mask_pocket_edges=mask_pocket_edges,
-                    model_edge_rbf_interaction = model_edge_rbf_interaction,
-                    model_global_edge = model_global_edge,
+                    model_edge_rbf_interaction=model_edge_rbf_interaction,
+                    model_global_edge=model_global_edge,
+                    use_cutoff_damping=use_cutoff_damping,
                 )
             )
 

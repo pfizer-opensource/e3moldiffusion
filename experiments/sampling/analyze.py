@@ -373,6 +373,7 @@ class BasicMolecularMetrics(object):
                         hdonors,
                         lipinski,
                         diversity,
+                        n_atoms,
                     ) = self.evaluate_mean(mols)
                     statistics_dict["QED"] = qed
                     statistics_dict["Num_Rings"] = n_rings
@@ -384,6 +385,7 @@ class BasicMolecularMetrics(object):
                     statistics_dict["HDonor"] = hdonors
                     statistics_dict["Lipinski"] = lipinski
                     statistics_dict["Diversity"] = diversity
+                    statistics_dict["Num_Atoms"] = n_atoms
 
                 if return_stats_per_molecule:
                     (
@@ -396,6 +398,7 @@ class BasicMolecularMetrics(object):
                         hacceptors,
                         hdonors,
                         lipinski,
+                        n_atoms,
                     ) = self.evaluate_per_mol(mols)
                     statistics_dict["QEDs"] = qed
                     statistics_dict["Num_Rings_all"] = n_rings
@@ -406,6 +409,7 @@ class BasicMolecularMetrics(object):
                     statistics_dict["HAcceptors"] = hacceptors
                     statistics_dict["HDonors"] = hdonors
                     statistics_dict["Lipinskis"] = lipinski
+                    statistics_dict["Num_Atoms_all"] = n_atoms
                     if not return_mean_stats:
                         if len(mols) > 1000:
                             diversity = calculate_bulk_diversity(mols, rdkit_fp=True)
@@ -694,6 +698,7 @@ class BasicMolecularMetrics(object):
         hacceptors = np.mean([self.calculate_hacceptors(mol) for mol in rdmols])
         hdonors = np.mean([self.calculate_hdonors(mol) for mol in rdmols])
         lipinski = np.mean([self.calculate_lipinski(mol) for mol in rdmols])
+        n_atoms = np.mean([mol.GetNumAtoms() for mol in rdmols])
 
         if len(rdmols) > 1000:
             diversity = calculate_bulk_diversity(rdmols, rdkit_fp=True)
@@ -711,6 +716,7 @@ class BasicMolecularMetrics(object):
             hdonors,
             lipinski,
             diversity,
+            n_atoms,
         )
 
     def evaluate_per_mol(self, rdmols):
@@ -734,6 +740,7 @@ class BasicMolecularMetrics(object):
         hacceptors = [self.calculate_hacceptors(mol) for mol in rdmols]
         hdonors = [self.calculate_hdonors(mol) for mol in rdmols]
         lipinski = [self.calculate_lipinski(mol) for mol in rdmols]
+        n_atoms = [mol.GetNumAtoms() for mol in rdmols]
 
         return (
             qed,
@@ -745,6 +752,7 @@ class BasicMolecularMetrics(object):
             hacceptors,
             hdonors,
             lipinski,
+            n_atoms,
         )
 
     def evaluate_posebusters(self, smiles, rdmols, pdb_file):

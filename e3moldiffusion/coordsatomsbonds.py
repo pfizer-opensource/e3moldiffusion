@@ -73,6 +73,7 @@ class DenoisingEdgeNetwork(nn.Module):
         mask_pocket_edges: bool = False,
         model_edge_rbf_interaction: bool = False,
         model_global_edge: bool = False,
+        use_cutoff_damping: bool = False,
     ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
@@ -124,12 +125,13 @@ class DenoisingEdgeNetwork(nn.Module):
         self.use_rbfs = use_rbfs
         self.model_edge_rbf_interaction = model_edge_rbf_interaction
         self.model_global_edge = model_global_edge
-        
+
         if self.model_global_edge and self.model_edge_rbf_interaction:
             assert use_rbfs
-            self.edge_pre = nn.Sequential(DenseLayer(60, 2 * 60, activation=nn.Softplus()),
-                                          DenseLayer(2 * 60, 1, activation=nn.Sigmoid())
-                                          )
+            self.edge_pre = nn.Sequential(
+                DenseLayer(60, 2 * 60, activation=nn.Softplus()),
+                DenseLayer(2 * 60, 1, activation=nn.Sigmoid()),
+            )
         else:
             self.edge_pre = None
 
@@ -161,8 +163,9 @@ class DenoisingEdgeNetwork(nn.Module):
             hybrid_knn=hybrid_knn,
             use_rbfs=use_rbfs,
             mask_pocket_edges=mask_pocket_edges,
-            model_edge_rbf_interaction = model_edge_rbf_interaction,
-            model_global_edge = model_global_edge,
+            model_edge_rbf_interaction=model_edge_rbf_interaction,
+            model_global_edge=model_global_edge,
+            use_cutoff_damping=use_cutoff_damping,
         )
 
         if property_prediction:
@@ -330,19 +333,19 @@ class DenoisingEdgeNetwork(nn.Module):
             sqrt=True,
             batch=batch if self.ligand_pocket_interaction else None,
         )
-        
+
         if self.model_global_edge and self.model_edge_rbf_interaction:
             assert self.use_rbfs
             assert edge_attr_initial_ohe is not None
             assert edge_attr_initial_ohe.size(1) == 3
             d = edge_attr_global_transformed[0]
             rbf = self.gnn.convs[0].radial_basis_func(d)
-            rbf_ohe = torch.einsum('nk, nd -> nkd', (rbf, edge_attr_initial_ohe))
+            rbf_ohe = torch.einsum("nk, nd -> nkd", (rbf, edge_attr_initial_ohe))
             rbf_ohe = rbf_ohe.view(d.size(0), -1)
             edgt_attr_global_embedding = self.edge_pre(rbf_ohe)
         else:
             edgt_attr_global_embedding = None
-            
+
         out = self.gnn(
             s=s,
             v=v,
