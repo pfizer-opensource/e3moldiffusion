@@ -587,7 +587,6 @@ def get_args():
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument('--dataset-root', default=None, type=str,
                         help='If not set it will be taken from the model ckpt, otherwise it will overwrite it in the ckpt.')
-    parser.add_argument('--residues-10A', default=None, type=str,help='if specified, model takes 10A pocket config as ligand size prior.')
     parser.add_argument('--save-xyz', default=False, action="store_true",
                         help='Whether or not to store generated molecules in xyz files')
     parser.add_argument('--calculate-energy', default=False, action="store_true",
@@ -612,6 +611,7 @@ def get_args():
     parser.add_argument('--max-sample-iter', default=20, type=int,
                             help='How many iteration steps for UFF optimization')
     parser.add_argument("--test-dir", type=Path)
+    parser.add_argument("--test-dir-10A", type=Path, help="if specified, model takes 10A pocket config as ligand size prior.")
     parser.add_argument("--encode-ligands", default=False, action="store_true")
     parser.add_argument(
         "--pdbqt-dir",
