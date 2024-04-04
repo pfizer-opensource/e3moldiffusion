@@ -647,6 +647,24 @@ def create_model(hparams, num_atom_features, num_bond_classes=5):
         hparams["use_out_norm"] = True
     if "dynamic_graph" not in hparams.keys():
         hparams["dynamic_graph"] = False
+    if "knn" not in hparams.keys():
+        hparams["knn"] = None
+    if "hybrid_knn" not in hparams.keys():
+        hparams["hybrid_knn"] = None
+    if "knn_with_cutoff" not in hparams.keys():
+        hparams["knn_with_cutoff"] = None
+    if "use_rbfs" not in hparams.keys():
+        hparams["use_rbfs"] = None
+    if "dataset_cutoff" not in hparams.keys():
+        hparams["dataset_cutoff"] = 5.0
+    if "mask_pocket_edges" not in hparams.keys():
+        hparams["mask_pocket_edges"] = False
+    if "model_edge_rbf_interaction" not in hparams.keys():
+        hparams["model_edge_rbf_interaction"] = False
+    if "model_global_edge" not in hparams.keys():
+        hparams["model_global_edge"] = False
+    if "use_cutoff_damping" not in hparams.keys():
+        hparams["use_cutoff_damping"] = False
 
     model = DenoisingEdgeNetwork(
         hn_dim=(hparams["sdim"], hparams["vdim"]),
@@ -676,6 +694,13 @@ def create_model(hparams, num_atom_features, num_bond_classes=5):
         joint_property_prediction=hparams["joint_property_prediction"],
         regression_property=hparams["regression_property"],
         dynamic_graph=hparams["dynamic_graph"],
+        knn=hparams["knn"],
+        hybrid_knn=hparams["hybrid_knn"],
+        use_rbfs=hparams["use_rbfs"],
+        mask_pocket_edges=hparams["mask_pocket_edges"],
+        model_edge_rbf_interaction=hparams["model_edge_rbf_interaction"],
+        model_global_edge=hparams["model_global_edge"],
+        use_cutoff_damping=hparams["use_cutoff_damping"],
     )
     return model
 
