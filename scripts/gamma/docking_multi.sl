@@ -6,11 +6,11 @@
 #SBATCH --mem-per-cpu=12G
 #SBATCH --cpus-per-task=12
 #SBATCH --partition=defq
-#SBATCH --array=1-40
+#SBATCH --array=1-32
 #SBATCH --output=/hpfs/projects/mlcs/mlhub/e3moldiffusion/logs/slurm_outs_dock/dock_array_run_%j.out
 #SBATCH --error=/hpfs/projects/mlcs/mlhub/e3moldiffusion/logs/slurm_outs_dock/dock_array_run_%j.err
 
-num_cpus=40
+num_cpus=32
 
 cd /hpfs/userws/cremej01/projects/e3moldiffusion
 source /hpfs/userws/cremej01/projects/mambaforge/etc/profile.d/mamba.sh
@@ -19,7 +19,7 @@ conda activate e3mol
 
 export PYTHONPATH="/hpfs/userws/cremej01/projects/e3moldiffusion"
 
-main_dir="/hpfs/projects/mlcs/mlhub/e3moldiffusion/logs/crossdocked/x0_snr_cutoff5_bonds5_norm_rbf_edge-rbf_global-edge_cutoff-damping"
+main_dir="/hpfs/projects/mlcs/mlhub/e3moldiffusion/logs/crossdocked/x0_snr_cutoff5_bonds5_no-norm_rbf_hybrid-knn32"
 output_dir="$main_dir/evaluation/docking/nodes_bias_5"
 mkdir "$output_dir/docked"
 

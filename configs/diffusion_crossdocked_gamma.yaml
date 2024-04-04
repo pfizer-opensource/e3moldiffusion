@@ -21,8 +21,8 @@ use_cutoff_damping: false
 
 #LIG-POCKET INTERACTION
 ligand_pocket_interaction: true
-model_edge_rbf_interaction: true
-model_global_edge: true
+model_edge_rbf_interaction: false
+model_global_edge: false
 
 molsize_loss_weighting: false
 

@@ -40,7 +40,7 @@ FULL_ATOM_ENCODER = {
 
 
 def process_files(
-    processes: int = 16, chunk_size: int = 1024, subchunk: int = 128, removeHs=True
+    processes: int = 32, chunk_size: int = 512, subchunk: int = 256, removeHs=True
 ):
     """
     :param dataset:

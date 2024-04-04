@@ -1510,39 +1510,47 @@ class Trainer(pl.LightningModule):
                     num_nodes_lig += n_nodes_bias
         # TargetDiff settings
         elif prior_n_atoms == "targetdiff":
-
-            if fix_n_nodes:
-                num_nodes_lig = pocket_data.batch.bincount().to(self.device)
-                if vary_n_nodes:
-                    num_nodes_lig += torch.randint(
-                        low=-n_nodes_bias // 2,
-                        high=n_nodes_bias // 2,
-                        size=num_nodes_lig.size(),
-                    ).to(self.device)
-                else:
-                    num_nodes_lig += n_nodes_bias
-
-            else:
-                _num_nodes_pockets = pocket_data.pos_pocket_batch.bincount()
-                _pos_pocket_splits = pocket_data.pos_pocket.split(
-                    _num_nodes_pockets.cpu().numpy().tolist(), dim=0
-                )
-                num_nodes_lig = torch.tensor(
-                    [
-                        sample_atom_num(
-                            get_space_size(n.cpu().numpy()),
-                            cutoff=self.hparams.dataset_cutoff,
-                        )
-                        for n in _pos_pocket_splits
-                    ]
-                ).to(self.device)
-
+            if "ligand_sizes" in pocket_data:
+                num_nodes_lig = pocket_data.ligand_sizes
                 if vary_n_nodes:
                     num_nodes_lig += torch.randint(
                         low=0, high=n_nodes_bias, size=num_nodes_lig.size()
                     ).to(self.device)
                 else:
                     num_nodes_lig += n_nodes_bias
+            else:
+                if fix_n_nodes:
+                    num_nodes_lig = pocket_data.batch.bincount().to(self.device)
+                    if vary_n_nodes:
+                        num_nodes_lig += torch.randint(
+                            low=-n_nodes_bias // 2,
+                            high=n_nodes_bias // 2,
+                            size=num_nodes_lig.size(),
+                        ).to(self.device)
+                    else:
+                        num_nodes_lig += n_nodes_bias
+
+                else:
+                    _num_nodes_pockets = pocket_data.pos_pocket_batch.bincount()
+                    _pos_pocket_splits = pocket_data.pos_pocket.split(
+                        _num_nodes_pockets.cpu().numpy().tolist(), dim=0
+                    )
+                    num_nodes_lig = torch.tensor(
+                        [
+                            sample_atom_num(
+                                get_space_size(n.cpu().numpy()),
+                                cutoff=self.hparams.dataset_cutoff,
+                            )
+                            for n in _pos_pocket_splits
+                        ]
+                    ).to(self.device)
+
+                    if vary_n_nodes:
+                        num_nodes_lig += torch.randint(
+                            low=0, high=n_nodes_bias, size=num_nodes_lig.size()
+                        ).to(self.device)
+                    else:
+                        num_nodes_lig += n_nodes_bias
 
         molecules = self.reverse_sampling(
             num_graphs=num_graphs,
@@ -1673,6 +1681,7 @@ class Trainer(pl.LightningModule):
         sa_model=None,
         property_model=None,
         ensemble_models=None,
+        check_ensemble_variance=False,
     ):
         """
         Idea:
@@ -1687,6 +1696,7 @@ class Trainer(pl.LightningModule):
         assert kind in ["sa_score", "docking_score", "ic50", "joint"]
 
         assert self.hparams.joint_property_prediction
+
         if ensemble_models is not None and len(ensemble_models) > 1:
             assert (
                 len(ensemble_models) >= 2
@@ -1736,12 +1746,15 @@ class Trainer(pl.LightningModule):
             )
             out["property_pred"] = (sa, prop)
             del property_model
-        else:
+
+        if ensemble_models is None or (
+            ensemble_models is not None and check_ensemble_variance
+        ):
             model = (
                 self.model
                 if sa_model is None
                 and property_model is None
-                and len(ensemble_models) == 0
+                and (len(ensemble_models) == 0 or check_ensemble_variance)
                 else (
                     sa_model
                     if kind == "sa_score" and sa_model is not None

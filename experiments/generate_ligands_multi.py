@@ -199,6 +199,18 @@ def evaluate(args):
         pdb_name, pocket_id, *suffix = ligand_name.split("_")
         pdb_file = Path(sdf_file.parent, f"{pdb_name}.pdb")
         txt_file = Path(sdf_file.parent, f"{ligand_name}.txt")
+        if args.test_dir_10A is not None:
+            pdb_file_10A = Path(args.test_dir_10A, f"{pdb_name}.pdb")
+            txt_file_10A = Path(args.test_dir_10A, f"{ligand_name}.txt")
+            with open(txt_file_10A, "r") as f:
+                resi_list_10A = f.read().split()
+            pdb_struct_10A = PDBParser(QUIET=True).get_structure("", pdb_file_10A)[0]
+            residues_10A = [
+                pdb_struct_10A[x.split(":")[0]][(" ", int(x.split(":")[1]), " ")]
+                for x in resi_list_10A
+            ]
+        else:
+            residues_10A = None
         sdf_out_file_raw = Path(raw_sdf_dir, f"{ligand_name}_gen.sdf")
         if args.filter_by_docking_scores:
             sdf_out_file_docked = Path(docked_sdf_dir, f"{ligand_name}_out.sdf")
@@ -241,6 +253,7 @@ def evaluate(args):
                 args=args,
                 device=device,
                 embedding_dict=embedding_dict,
+                residues_10A=residues_10A,
             )
 
             all_molecules += len(molecules)
@@ -282,6 +295,7 @@ def evaluate(args):
                         args=args,
                         device=device,
                         embedding_dict=embedding_dict,
+                        residues_10A=residues_10A,
                     )
 
                 all_molecules += len(molecules)
@@ -573,6 +587,7 @@ def get_args():
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument('--dataset-root', default=None, type=str,
                         help='If not set it will be taken from the model ckpt, otherwise it will overwrite it in the ckpt.')
+    parser.add_argument('--residues-10A', default=None, type=str,help='if specified, model takes 10A pocket config as ligand size prior.')
     parser.add_argument('--save-xyz', default=False, action="store_true",
                         help='Whether or not to store generated molecules in xyz files')
     parser.add_argument('--calculate-energy', default=False, action="store_true",
