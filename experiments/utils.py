@@ -27,6 +27,7 @@ from tqdm import tqdm
 from e3moldiffusion.molfeat import atom_type_config
 from experiments.data.data_info import full_atom_encoder
 from experiments.data.ligand.process_crossdocked import amino_acid_dict, three_to_one
+from experiments.data.ligand.utils import get_space_size, sample_atom_num
 from experiments.data.utils import mol_to_torch_geometric
 from experiments.molecule_utils import Molecule
 from experiments.sampling.utils import (
@@ -1547,22 +1548,14 @@ def prepare_pocket(
     return pocket
 
 
-def prepare_pocket_cutoff(
-    biopython_residues,
-    full_atom_encoder,
-    ligand_sdf=None,
-    no_H=True,
-    repeats=1,
-    device="cuda",
-):
-    pocket_one_hot = []
-    ca_mask = []
-
+def get_res_coords(residues):
     # full
     full_atoms = []
     full_coords = []
+    pocket_one_hot = []
+    ca_mask = []
     m = False
-    for res in biopython_residues:
+    for res in residues:
         for atom in res.get_atoms():
             if atom.name == "CA":
                 pocket_one_hot.append(
@@ -1578,7 +1571,22 @@ def prepare_pocket_cutoff(
             ca_mask.append(m)
             full_atoms.append(atom.element)
             full_coords.append(atom.coord)
+    return full_coords, full_atoms, pocket_one_hot, ca_mask
 
+
+def prepare_pocket_cutoff(
+    biopython_residues,
+    full_atom_encoder,
+    ligand_sdf=None,
+    no_H=True,
+    repeats=1,
+    device="cuda",
+    residues_10A=None,
+):
+
+    full_coords, full_atoms, pocket_one_hot, ca_mask = get_res_coords(
+        biopython_residues
+    )
     full_atoms = np.stack(full_atoms, axis=0)
     full_coords = np.stack(full_coords, axis=0)
     ca_mask = np.array(ca_mask, dtype=bool)
@@ -1610,6 +1618,37 @@ def prepare_pocket_cutoff(
         pocket_one_hot=pocket_one_hot.repeat(repeats, 1),
         pocket_one_hot_batch=pocket_one_hot_batch,
     ).to(device)
+
+    if residues_10A is not None:
+        full_coords, full_atoms, _, _ = get_res_coords(residues_10A)
+        full_coords = np.stack(full_coords, axis=0)
+        full_atoms = np.stack(full_atoms, axis=0)
+        if no_H:
+            indices_H = np.where(full_atoms == "H")
+            if indices_H[0].size > 0:
+                mask = np.ones(full_atoms.size, dtype=bool)
+                mask[indices_H] = False
+                full_coords = full_coords[mask]
+        pocket_coord = torch.from_numpy(full_coords)
+        pocket_mask = torch.repeat_interleave(
+            torch.arange(repeats), len(pocket_coord)
+        ).long()
+        pocket_coord = pocket_coord.repeat(repeats, 1)
+        _num_nodes_pockets = pocket_mask.bincount()
+        _pos_pocket_splits = pocket_coord.split(
+            _num_nodes_pockets.cpu().numpy().tolist(), dim=0
+        )
+        num_nodes_lig = torch.tensor(
+            [
+                sample_atom_num(
+                    get_space_size(n.cpu().numpy()),
+                    cutoff=10,
+                )
+                for n in _pos_pocket_splits
+            ]
+        ).to(device)
+        pocket.ligand_sizes = num_nodes_lig
+
     if ligand_sdf is not None:
         ligand = Chem.SDMolSupplier(str(ligand_sdf), sanitize=False)[0]
         batch = (
@@ -1734,6 +1773,7 @@ def prepare_data(
     args,
     device,
     batch_size=None,
+    residues_10A=None,
 ):
 
     pocket_data = prepare_pocket_cutoff(
@@ -1743,6 +1783,7 @@ def prepare_data(
         repeats=batch_size,
         device=device,
         ligand_sdf=sdf_file if not args.encode_ligands else None,
+        residues_10A=residues_10A,
     )
     return pocket_data
 
@@ -1757,6 +1798,7 @@ def prepare_data_and_generate_ligands(
     device,
     embedding_dict=None,
     batch_size=None,
+    residues_10A=None,
 ):
     batch_size = args.batch_size if batch_size is None else batch_size
     pocket_data = prepare_data(
@@ -1767,6 +1809,7 @@ def prepare_data_and_generate_ligands(
         args,
         device,
         batch_size=batch_size,
+        residues_10A=residues_10A,
     )
 
     if args.encode_ligands:

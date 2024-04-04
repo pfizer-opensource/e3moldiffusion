@@ -7,11 +7,11 @@
 #SBATCH --cpus-per-task=12
 #SBATCH --partition=defq
 #SBATCH --gres=gpu:1
-#SBATCH --array=1-15
+#SBATCH --array=1-8
 #SBATCH --output=/hpfs/projects/mlcs/mlhub/e3moldiffusion/logs/slurm_outs/array_run_%j.out
 #SBATCH --error=/hpfs/projects/mlcs/mlhub/e3moldiffusion/logs/slurm_outs/array_run_%j.err
 
-num_gpus=15
+num_gpus=8
 
 cd /hpfs/userws/cremej01/projects/e3moldiffusion
 source /hpfs/userws/cremej01/projects/mambaforge/etc/profile.d/mamba.sh
@@ -21,7 +21,7 @@ conda activate e3mol
 export PYTHONPATH="/hpfs/userws/cremej01/projects/e3moldiffusion"
 
 main_dir="/hpfs/projects/mlcs/mlhub/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed42"
-output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_6_sa0-200-every10_ic50-150-400_ensemble"
+output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_6_sa0-300-every10_ic50-150-400_ensemble"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
@@ -34,11 +34,12 @@ python experiments/generate_ligands_multi.py \
     --save-dir "$output_dir" \
     --pdbqt-dir /hpfs/projects/mlcs/mlhub/e3moldiffusion/data/kinodata_noH_cutoff5/test/pdbqt \
     --test-dir /hpfs/projects/mlcs/mlhub/e3moldiffusion/data/kinodata_noH_cutoff5/test \
+    --dataset-root /hpfs/projects/mlcs/mlhub/e3moldiffusion/data/kinodata_noH_cutoff5 \
     --skip-existing \
     --num-ligands-per-pocket-to-sample 100 \
     --num-ligands-per-pocket-to-save 100 \
     --max-sample-iter 50 \
-    --batch-size 40 \
+    --batch-size 100 \
     --fix-n-nodes \
     --n-nodes-bias 6 \
     --vary-n-nodes \
@@ -50,7 +51,7 @@ python experiments/generate_ligands_multi.py \
     --property-tau 0.1 \
     --sa-importance-sampling \
     --sa-importance-sampling-start 0 \
-    --sa-importance-sampling-end 200 \
+    --sa-importance-sampling-end 300 \
     --sa-every-importance-t 10 \
     --sa-tau 0.1 \
     --omit-posecheck \
