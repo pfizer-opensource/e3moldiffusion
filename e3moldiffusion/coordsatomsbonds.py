@@ -342,9 +342,9 @@ class DenoisingEdgeNetwork(nn.Module):
             rbf = self.gnn.convs[0].radial_basis_func(d)
             rbf_ohe = torch.einsum("nk, nd -> nkd", (rbf, edge_attr_initial_ohe))
             rbf_ohe = rbf_ohe.view(d.size(0), -1)
-            edgt_attr_global_embedding = self.edge_pre(rbf_ohe)
+            edge_attr_global_embedding = self.edge_pre(rbf_ohe)
         else:
-            edgt_attr_global_embedding = None
+            edge_attr_global_embedding = None
 
         out = self.gnn(
             s=s,
@@ -363,7 +363,7 @@ class DenoisingEdgeNetwork(nn.Module):
             edge_mask_ligand=edge_mask,
             batch_pocket=batch_pocket,
             edge_attr_initial_ohe=edge_attr_initial_ohe,
-            edgt_attr_global_embedding=edgt_attr_global_embedding,
+            edge_attr_global_embedding=edge_attr_global_embedding,
         )
         edge_mask, edge_mask_pocket = out["edge_mask_ligand"], out["edge_mask_pocket"]
 

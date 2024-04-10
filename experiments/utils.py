@@ -649,7 +649,7 @@ def create_model(hparams, num_atom_features, num_bond_classes=5):
     if "dynamic_graph" not in hparams.keys():
         hparams["dynamic_graph"] = False
 
-    model = DenoisingEdgeNetwork(
+    model = model = DenoisingEdgeNetwork(
         hn_dim=(hparams["sdim"], hparams["vdim"]),
         num_layers=hparams["num_layers"],
         latent_dim=hparams["latent_dim"],
@@ -677,6 +677,13 @@ def create_model(hparams, num_atom_features, num_bond_classes=5):
         joint_property_prediction=hparams["joint_property_prediction"],
         regression_property=hparams["regression_property"],
         dynamic_graph=hparams["dynamic_graph"],
+        knn=hparams["knn"],
+        hybrid_knn=hparams["hybrid_knn"],
+        use_rbfs=hparams["use_rbfs"],
+        mask_pocket_edges=hparams["mask_pocket_edges"],
+        model_edge_rbf_interaction=hparams["model_edge_rbf_interaction"],
+        model_global_edge=hparams["model_global_edge"],
+        use_cutoff_damping=hparams["use_cutoff_damping"],
     )
     return model
 

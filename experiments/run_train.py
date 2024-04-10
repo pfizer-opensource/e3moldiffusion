@@ -214,8 +214,9 @@ if __name__ == "__main__":
         elif (
             hparams.joint_property_prediction
             and dataset != "crossdocked"
-            and dataset != "bindningmoad"
+            and dataset != "bindingmoad"
             and dataset != "kinodata"
+            and not hparams.diffusion_pretraining
         ):
             print("Starting property prediction model via discrete diffusion")
             from experiments.diffusion_discrete import Trainer

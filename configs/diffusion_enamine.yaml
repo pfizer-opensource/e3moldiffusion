@@ -4,16 +4,22 @@ continuous: false
 atoms_continuous: false
 bonds_continuous: false
 
-joint_property_prediction: false
-
 remove_hs: true
 
-use_pos_norm: false
-use_out_norm: true
-ligand_pocket_interaction: true
+#REGRESSION
+joint_property_prediction: false
+regression_property: [sa_score]
 
-bond_model_guidance: false
-bond_prediction: false
+use_pos_norm: false
+use_out_norm: false
+use_rbfs: false
+use_cutoff_damping: false
+
+#LIG-POCKET INTERACTION
+ligand_pocket_interaction: true
+model_edge_rbf_interaction: false
+model_global_edge: false
+
 
 seed: 42
 # batch_size 40 without adaptive, and 200 with adaptive
@@ -42,7 +48,7 @@ vector_aggr: mean
 
 #DATA
 dataset: enamine
-dataset_root: /scratch1/e3moldiffusion/data/enamine/database_noH
+dataset_root: /hpfs/projects/mlcs/mlhub/e3moldiffusion/data/enamine/database_noH
 
 # DIFFUSION
 additional_feats: false

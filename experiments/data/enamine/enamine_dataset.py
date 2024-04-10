@@ -12,8 +12,6 @@ from experiments.data.abstract_dataset import (
     AbstractAdaptiveDataModule,
 )
 from experiments.data.utils import load_pickle, make_splits
-from pytorch_lightning import LightningDataModule
-from rdkit import RDLogger
 from torch.utils.data import Subset
 from torch_geometric.data import DataLoader, Dataset
 
@@ -54,7 +52,7 @@ def get_data(env, index):
             serialized = f.read()
         try:
             item = pickle.loads(serialized)
-        except Exception as e:
+        except Exception:
             return None
     return item
 
@@ -74,7 +72,7 @@ class EnamineLMDBDataset(Dataset):
         self._num_graphs = 108_754_224
 
         if remove_hs:
-            self.stats_dir = f"{ENAMINE_DB_ROOT}/processed"
+            self.stats_dir = f"{root}/processed"
 
         super().__init__(root)
 

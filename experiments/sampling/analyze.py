@@ -335,7 +335,10 @@ class BasicMolecularMetrics(object):
 
         if calculate_statistics:
             if calculate_distribution_statistics:
-                statistics_dict = self.compute_statistics(molecules, local_rank)
+                try:
+                    statistics_dict = self.compute_statistics(molecules, local_rank)
+                except Exception:
+                    statistics_dict = {}
                 statistics_dict["connected_components"] = connected_components
             else:
                 statistics_dict = {"connected_components": connected_components}

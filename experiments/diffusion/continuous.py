@@ -7,6 +7,18 @@ from torch import Tensor, nn
 from experiments.utils import zero_mean
 
 
+def nonzero_wrapper(log_a):
+    ids = []
+    first_nonzero = log_a[log_a != 0.0].max()
+    for i, a in enumerate(log_a):
+        if a == 0.0:
+            ids.append(i)
+    for i in ids:
+        if i != 0:
+            log_a[i] = first_nonzero / np.exp(1 / i)
+    return log_a
+
+
 def sigmoid(x):
     return 1 / (np.exp(-x) + 1)
 
@@ -208,7 +220,7 @@ class DiscreteDDPM(nn.Module):
             log_alpha = torch.log(alphas)
             log_alpha_bar = torch.cumsum(log_alpha, dim=0)
             self._alphas = alphas
-            self._log_alpha_bar = log_alpha_bar
+            self._log_alpha_bar = nonzero_wrapper(log_alpha_bar)
             self._alphas_bar = torch.exp(log_alpha_bar)
             self._sigma2_bar = -torch.expm1(2 * log_alpha_bar)
             self._sigma_bar = torch.sqrt(self._sigma2_bar)
@@ -293,7 +305,7 @@ class DiscreteDDPM(nn.Module):
             if self.schedule == "adaptive":
                 # signal = self.get_alpha(t_int=t)
                 # std = torch.sqrt(1-signal)
-                gamma_t, gamma_s = sde.get_gamma(t_int=t), sde.get_gamma(t_int=t-1)
+                gamma_t, gamma_s = sde.get_gamma(t_int=t), sde.get_gamma(t_int=t - 1)
                 (
                     sigma2_t_given_s,
                     sigma_t_given_s,
@@ -483,7 +495,9 @@ class DiscreteDDPM(nn.Module):
                 noise_coords_true, batch=data_batch, dim_size=bs, dim=0
             )
         # get signal and noise coefficients for coords
-        mean_coords, std_coords = self.marginal_prob(x=pos, t=t[data_batch], cumulative=cumulative)
+        mean_coords, std_coords = self.marginal_prob(
+            x=pos, t=t[data_batch], cumulative=cumulative
+        )
         # perturb coords
         pos_perturbed = mean_coords + std_coords * noise_coords_true
 
@@ -493,7 +507,9 @@ class DiscreteDDPM(nn.Module):
         noise_coords_true = torch.randn_like(feature)
 
         # get signal and noise coefficients for coords
-        mean_coords, std_coords = self.marginal_prob(x=feature, t=t[data_batch], cumulative=cumulative)
+        mean_coords, std_coords = self.marginal_prob(
+            x=feature, t=t[data_batch], cumulative=cumulative
+        )
         feature_perturbed = mean_coords + std_coords * noise_coords_true
 
         return noise_coords_true, feature_perturbed
