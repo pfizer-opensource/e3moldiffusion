@@ -649,7 +649,7 @@ def create_model(hparams, num_atom_features, num_bond_classes=5):
     if "dynamic_graph" not in hparams.keys():
         hparams["dynamic_graph"] = False
 
-    model = model = DenoisingEdgeNetwork(
+    model = DenoisingEdgeNetwork(
         hn_dim=(hparams["sdim"], hparams["vdim"]),
         num_layers=hparams["num_layers"],
         latent_dim=hparams["latent_dim"],
