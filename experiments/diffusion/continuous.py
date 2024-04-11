@@ -216,11 +216,10 @@ class DiscreteDDPM(nn.Module):
         if schedule == "adaptive":
             log_alpha = torch.log(alphas)
             log_alpha_bar = torch.cumsum(log_alpha, dim=0)
+            log_alpha_bar = nonzero_wrapper(log_alpha_bar)
             alphas_cumprod = torch.exp(log_alpha_bar)
-            log_alpha = torch.log(alphas)
-            log_alpha_bar = torch.cumsum(log_alpha, dim=0)
             self._alphas = alphas
-            self._log_alpha_bar = nonzero_wrapper(log_alpha_bar)
+            self._log_alpha_bar = log_alpha_bar
             self._alphas_bar = torch.exp(log_alpha_bar)
             self._sigma2_bar = -torch.expm1(2 * log_alpha_bar)
             self._sigma_bar = torch.sqrt(self._sigma2_bar)
