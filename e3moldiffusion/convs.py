@@ -520,7 +520,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         edge_mask_ligand: OptTensor = None,
         edge_mask_pocket: OptTensor = None,
         edge_attr_initial_ohe=None,
-        edgt_attr_global_embedding=None,
+        edge_attr_global_embedding=None,
     ):
         s, v, p = x
         d, a, r, e = edge_attr
@@ -544,7 +544,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
             edge_mask_ligand=edge_mask_ligand,
             edge_mask_pocket=edge_mask_pocket,
             edge_attr_initial_ohe=edge_attr_initial_ohe,
-            edgt_attr_global_embedding=edgt_attr_global_embedding,
+            edge_attr_global_embedding=edge_attr_global_embedding,
         )
 
         s = ms + s
@@ -606,7 +606,7 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         edge_mask_ligand: OptTensor = None,
         edge_mask_pocket: OptTensor = None,
         edge_attr_initial_ohe=None,
-        edgt_attr_global_embedding=None,
+        edge_attr_global_embedding=None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         d, a, r, e = edge_attr
 
@@ -626,8 +626,8 @@ class EQGATGlobalEdgeConvFinal(MessagePassing):
         aij = torch.cat([torch.cat([sa_i, sa_j], dim=-1), de0, a0, e, d_i, d_j], dim=-1)
 
         if self.model_global_edge:
-            assert edgt_attr_global_embedding is not None
-            aij = torch.cat([aij, edgt_attr_global_embedding], dim=-1)
+            assert edge_attr_global_embedding is not None
+            aij = torch.cat([aij, edge_attr_global_embedding], dim=-1)
 
         if self.use_rbfs:
             rbf = self.radial_basis_func(d)

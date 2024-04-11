@@ -101,7 +101,7 @@ class PredictionHeadEdge(nn.Module):
             ):
                 reset(self.prop_mlp)
             if "sa_score" in self.regression_property:
-                reset(self.property_mlp)
+                reset(self.sa_mlp)
 
     def forward(
         self,
@@ -194,7 +194,7 @@ class PredictionHeadEdge(nn.Module):
                     dim=0,
                     dim_size=batch_size,
                 )
-                sa_pred = self.property_mlp(sa_pred)
+                sa_pred = self.sa_mlp(sa_pred)
             else:
                 sa_pred = None
             property_pred = (sa_pred, prop_pred)

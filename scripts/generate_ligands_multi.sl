@@ -7,11 +7,11 @@
 #SBATCH --cpus-per-task=12
 #SBATCH --partition=ondemand-8xv100m32-1a
 #SBATCH --gres=gpu:1
-#SBATCH --array=1-8
+#SBATCH --array=1-16
 #SBATCH --output=/scratch1/e3moldiffusion/slurm_logs_generate/array_run_%j.out
 #SBATCH --error=/scratch1/e3moldiffusion/slurm_logs_generate/array_run_%j.err
 
-num_gpus=8
+num_gpus=16
 
 cd /sharedhome/cremej01/workspace/e3moldiffusion
 source activate e3mol
@@ -20,7 +20,7 @@ conda activate e3mol
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
 main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_cutoff7_bonds5_no-norm_rbf_hybrid-knn32"
-output_dir="$main_dir/evaluation/docking/nodes_bias_3"
+output_dir="$main_dir/evaluation/docking/nodes_bias_2"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
@@ -33,15 +33,16 @@ python experiments/generate_ligands_multi.py \
     --save-dir "$output_dir" \
     --pdbqt-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff7_TargetDiff_atmass/test/pdbqt \
     --test-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff7_TargetDiff_atmass/test \
+    --dataset-root /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff7_TargetDiff_atmass \
     --skip-existing \
     --num-ligands-per-pocket-to-sample 100 \
     --num-ligands-per-pocket-to-save 100 \
     --max-sample-iter 50 \
     --batch-size 40 \
-    --n-nodes-bias 3 \
-    --vary-n-nodes \
-    --prior_n_natoms targetdiff \
+    --n-nodes-bias 2 \
+    --prior-n-atoms targetdiff \
     --omit-posecheck
+    # --vary-n-nodes
     # --property-importance-sampling \
     # --property-importance-sampling-start 200 \
     # --property-importance-sampling-end 300 \

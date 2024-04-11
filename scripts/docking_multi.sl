@@ -19,7 +19,7 @@ conda activate e3mol
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
 main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_cutoff7_bonds5_no-norm_rbf_hybrid-knn32"
-output_dir="$main_dir/evaluation/docking/nodes_bias_3"
+output_dir="$main_dir/evaluation/docking/nodes_bias_2"
 mkdir "$output_dir/docked"
 
 
@@ -28,14 +28,8 @@ python experiments/docking_multi.py \
     --num-cpus "$num_cpus" \
     --sdf-dir "$output_dir/sampled" \
     --save-dir "$output_dir" \
-    --pdbqt-dir /scratch1/cremej01/data/crossdocked_noH_cutoff7_TargetDiff_atmass/test/pdbqt \
-    --pdb-dir /scratch1/cremej01/data/crossdocked_noH_cutoff7_TargetDiff_atmass/test \
+    --pdbqt-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff7_TargetDiff_atmass/test/pdbqt \
+    --pdb-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff7_TargetDiff_atmass/test \
     --dataset crossdocked \
     --write-csv \
     --write-dict
-
-# wait
-
-# python experiments/aggregate_results.py \
-#     --files-dir "$output_dir" \
-#     --docked

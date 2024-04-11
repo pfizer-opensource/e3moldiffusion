@@ -572,6 +572,7 @@ def evaluate(args):
 
     # save arguments
     argsdicts = vars(args)
+    argsdicts = {str(k): str(v) for k, v in argsdicts.items()}
     savedirjson = os.path.join(str(args.save_dir), "args.json")
     with open(savedirjson, "w") as f:
         json.dump(argsdicts, f)

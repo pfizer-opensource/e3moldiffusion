@@ -292,6 +292,7 @@ class Trainer(pl.LightningModule):
             scaled_reverse_posterior_sigma=True,
             schedule=self.hparams.noise_scheduler,
             nu=1,
+            T=self.hparams.timesteps,
             enforce_zero_terminal_snr=False,
         )
         self.sde_bonds = DiscreteDDPM(
@@ -301,6 +302,7 @@ class Trainer(pl.LightningModule):
             scaled_reverse_posterior_sigma=True,
             schedule=self.hparams.noise_scheduler,
             nu=1.5,
+            T=self.hparams.timesteps,
             enforce_zero_terminal_snr=False,
         )
 
@@ -828,7 +830,7 @@ class Trainer(pl.LightningModule):
         z = self.mu_logvar_z(z)
         return z
 
-    def forward(self, batch: Batch, t: Tensor, rdkit_sa: bool = False):
+    def forward(self, batch: Batch, t: Tensor):
         atom_types: Tensor = batch.x
         atom_types_pocket: Tensor = batch.x_pocket
         pos: Tensor = batch.pos
@@ -1697,7 +1699,7 @@ class Trainer(pl.LightningModule):
 
         assert self.hparams.joint_property_prediction
 
-        if ensemble_models is not None and len(ensemble_models) > 1:
+        if len(ensemble_models) > 1:
             assert (
                 len(ensemble_models) >= 2
             ), "Ensemble should consist of at least two models"
@@ -1747,8 +1749,8 @@ class Trainer(pl.LightningModule):
             out["property_pred"] = (sa, prop)
             del property_model
 
-        if ensemble_models is None or (
-            ensemble_models is not None and check_ensemble_variance
+        if len(ensemble_models) == 0 or (
+            len(ensemble_models) > 1 and check_ensemble_variance
         ):
             model = (
                 self.model
