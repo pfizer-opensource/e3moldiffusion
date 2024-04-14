@@ -137,6 +137,7 @@ class Trainer(pl.LightningModule):
         self.i = 0
         self.validity = 0.0
         self.connected_components = 0.0
+        self.angles_w1 = 1000.0
         self.qed = 0.0
 
         self.dataset_info = dataset_info
@@ -1385,11 +1386,13 @@ class Trainer(pl.LightningModule):
                 self.validity < validity_dict["validity"]
                 and self.connected_components <= statistics_dict["connected_components"]
             )
+            save_cond = (save_cond or statistics_dict["sampling/AnglesW1"] < self.angles_w1)
         else:
             save_cond = False
         if save_cond:
             self.validity = validity_dict["validity"]
             self.connected_components = statistics_dict["connected_components"]
+            self.angles_w1 = statistics_dict["sampling/AnglesW1"]
             save_path = os.path.join(self.hparams.save_dir, "best_valid.ckpt")
             self.trainer.save_checkpoint(save_path)
 
@@ -1470,6 +1473,7 @@ class Trainer(pl.LightningModule):
         save_dir=None,
         prior_n_atoms: str = "conditional",
         joint_importance_sampling: bool = False,
+        property_normalization: bool = False,
     ):
         # DiffSBDD settings
         if prior_n_atoms == "conditional":
@@ -1588,6 +1592,7 @@ class Trainer(pl.LightningModule):
             save_dir=save_dir,
             encode_ligand=encode_ligand,
             joint_importance_sampling=joint_importance_sampling,
+            property_normalization=property_normalization,
         )
         return molecules
 
@@ -1684,6 +1689,7 @@ class Trainer(pl.LightningModule):
         property_model=None,
         ensemble_models=None,
         check_ensemble_variance=False,
+        property_normalization=False,
     ):
         """
         Idea:
@@ -1792,7 +1798,7 @@ class Trainer(pl.LightningModule):
         pos = pos[pocket_mask]
 
         prop_pred = out["property_pred"]
-        sa, prop = prop_pred
+        sa, prop = prop_pred        
         sa = (
             sa.squeeze(1).sigmoid()
             if sa is not None and (kind == "sa_score" or kind == "joint")
@@ -1805,6 +1811,9 @@ class Trainer(pl.LightningModule):
                 prop = prop.squeeze()
             if kind == "docking_score":
                 prop = -1.0 * prop
+                if property_normalization:
+                    N = batch_lig.bincount().float()
+                    prop = prop / torch.sqrt(N)
         else:
             prop = None
 
@@ -1948,6 +1957,7 @@ class Trainer(pl.LightningModule):
         maximize_property=True,
         encode_ligand: bool = True,
         joint_importance_sampling=False,
+        property_normalization=False,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         pos_pocket = pocket_data.pos_pocket.to(self.device)
         batch_pocket = pocket_data.pos_pocket_batch.to(self.device)
@@ -2419,6 +2429,7 @@ class Trainer(pl.LightningModule):
                     kind="sa_score",
                     sa_model=sa_model,
                     ensemble_models=ckpts_ensemble,
+                    property_normalization=False,
                 )
                 atom_types, charge_types = node_feats_in.split(
                     [self.num_atom_types, self.num_charge_classes], dim=-1
@@ -2514,6 +2525,7 @@ class Trainer(pl.LightningModule):
                     ),  # currently hardcoded for max. two properties, whereby SA is always the first and the property the last argument!
                     property_model=property_model,
                     ensemble_models=ckpts_ensemble,
+                    property_normalization=property_normalization,
                 )
                 atom_types, charge_types = node_feats_in.split(
                     [self.num_atom_types, self.num_charge_classes], dim=-1
@@ -2572,6 +2584,7 @@ class Trainer(pl.LightningModule):
                     kind="joint",  # currently hardcoded for max. two properties, whereby SA is always the first and the property the last argument!
                     property_model=property_model,
                     ensemble_models=ckpts_ensemble,
+                    property_normalization=property_normalization,
                 )
 
                 atom_types, charge_types = node_feats_in.split(

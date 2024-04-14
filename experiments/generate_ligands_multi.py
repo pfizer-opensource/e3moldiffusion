@@ -659,7 +659,7 @@ def get_args():
     parser.add_argument("--property-importance-sampling-start", default=None, type=int)
     parser.add_argument("--property-importance-sampling-end", default=None, type=int)
     parser.add_argument("--joint-importance-sampling", default=False, action="store_true")
-
+    parser.add_argument("--property-normalization", default=False, action="store_true")
 
     args = parser.parse_args()
     return args
