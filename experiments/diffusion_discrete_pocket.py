@@ -50,6 +50,7 @@ from experiments.losses import DiffusionLoss
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.sampling.utils import calculate_sa
 from experiments.utils import (
+    CosineAnnealingWarmupRestarts,
     coalesce_edges,
     concat_ligand_pocket,
     get_lipinski_properties,
@@ -2733,6 +2734,22 @@ class Trainer(pl.LightningModule):
                 T_max=self.hparams["lr_patience"],
                 eta_min=self.hparams["lr_min"],
             )
+        elif self.hparams["lr_scheduler"] == "exponential":
+            lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+                optimizer, gamma=0.997
+            )
+        elif self.hparams["lr_scheduler"] == "cosine_annealing_warmup":
+            lr_scheduler = CosineAnnealingWarmupRestarts(
+                optimizer,
+                first_cycle_steps=100,
+                cycle_mult=1.0,
+                max_lr=self.hparams.lr,
+                min_lr=self.hparams.lr_min,
+                warmup_steps=10,
+                gamma=0.8,
+            )
+        else:
+            raise Exception("Scheduler not found")
         scheduler = {
             "scheduler": lr_scheduler,
             "interval": "epoch",

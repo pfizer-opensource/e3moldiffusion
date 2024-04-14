@@ -19,8 +19,8 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-ic50_seed42"
-output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_6_ic50-200-400_ensemble"
+main_dir="/scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed42"
+output_dir="$main_dir/evaluation/docking/fix_nodes_bias_vary_6_sa0-300-every10_ic50-150-400_ensemble-4"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
@@ -43,16 +43,21 @@ python experiments/generate_ligands_multi.py \
     --vary-n-nodes \
     --prior-n-atoms conditional \
     --property-importance-sampling \
-    --property-importance-sampling-start 200 \
+    --property-importance-sampling-start 150 \
     --property-importance-sampling-end 400 \
     --property-every-importance-t 5 \
     --property-tau 0.1 \
+    --sa-importance-sampling \
+    --sa-importance-sampling-start 0 \
+    --sa-importance-sampling-end 300 \
+    --sa-every-importance-t 10 \
+    --sa-tau 0.1 \
     --omit-posecheck \
-    --ckpts-ensemble /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-ic50_seed42/best_valid.ckpt /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-ic50_seed1000/best_valid.ckpt /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-ic50_seed500/best_valid.ckpt
+    --ckpts-ensemble /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed42/best_valid.ckpt /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed1000/best_valid.ckpt /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed500/best_valid.ckpt /scratch1/e3moldiffusion/logs/kinodata/x0_snr_bonds5_cutoff5_norm_joint-sa-ic50_seed800/best_valid.ckpt 
     # --sa-importance-sampling \
     # --sa-importance-sampling-start 0 \
-    # --sa-importance-sampling-end 300 \
-    # --sa-every-importance-t 10 \
+    # --sa-importance-sampling-end 200 \
+    # --sa-every-importance-t 5 \
     # --sa-tau 0.1 \
     # --ckpt-sa-model None \
     # --ckpt-property-model None \
