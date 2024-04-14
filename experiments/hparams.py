@@ -64,9 +64,14 @@ def add_arguments(parser):
     parser.add_argument(
         "--lr-scheduler",
         default="reduce_on_plateau",
-        choices=["reduce_on_plateau", "cosine_annealing", "cyclic", 
-                 "one_cyclic", "exponential", "cosine_annealing_warmup",
-                 ],
+        choices=[
+            "reduce_on_plateau",
+            "cosine_annealing",
+            "cyclic",
+            "one_cyclic",
+            "exponential",
+            "cosine_annealing_warmup",
+        ],
     )
     parser.add_argument(
         "--optimizer",
@@ -149,8 +154,12 @@ def add_arguments(parser):
     parser.add_argument("--energy-loss", default="l2", type=str, choices=["l2", "l1"])
     parser.add_argument("--use-pos-norm", default=False, action="store_true")
     parser.add_argument("--use-out-norm", default=True, action="store_true")
-    parser.add_argument("--prior-n-atoms", default="targetdiff", type=str,
-                        choices=["reference", "conditional", "targetdiff"])
+    parser.add_argument(
+        "--prior-n-atoms",
+        default="targetdiff",
+        type=str,
+        choices=["reference", "conditional", "targetdiff"],
+    )
 
     # For Discrete: Include more features: (is_aromatic, is_in_ring, hybridization)
     parser.add_argument("--additional-feats", default=False, action="store_true")
