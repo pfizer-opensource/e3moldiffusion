@@ -1691,6 +1691,7 @@ class Trainer(pl.LightningModule):
         ensemble_models=None,
         check_ensemble_variance=False,
         property_normalization=False,
+        edge_attr_initial_ohe=None,
     ):
         """
         Idea:
@@ -1737,6 +1738,7 @@ class Trainer(pl.LightningModule):
                     batch_lig=batch_lig,
                     ca_mask=ca_mask,
                     batch_pocket=batch_pocket,
+                    edge_initial_interaction=edge_initial_interaction,
                 )
                 sa, prop = out["property_pred"]
                 if sa is not None:
@@ -1792,6 +1794,7 @@ class Trainer(pl.LightningModule):
                 batch_lig=batch_lig,
                 ca_mask=ca_mask,
                 batch_pocket=batch_pocket,
+                edge_attr_initial_ohe=edge_attr_initial_ohe,
             )
 
         pocket_mask = pocket_mask.bool()
@@ -2431,6 +2434,7 @@ class Trainer(pl.LightningModule):
                     sa_model=sa_model,
                     ensemble_models=ckpts_ensemble,
                     property_normalization=False,
+                    edge_attr_initial_ohe=edge_initial_interaction,
                 )
                 atom_types, charge_types = node_feats_in.split(
                     [self.num_atom_types, self.num_charge_classes], dim=-1
@@ -2527,6 +2531,7 @@ class Trainer(pl.LightningModule):
                     property_model=property_model,
                     ensemble_models=ckpts_ensemble,
                     property_normalization=property_normalization,
+                    edge_attr_initial_ohe=edge_initial_interaction,
                 )
                 atom_types, charge_types = node_feats_in.split(
                     [self.num_atom_types, self.num_charge_classes], dim=-1
@@ -2586,6 +2591,7 @@ class Trainer(pl.LightningModule):
                     property_model=property_model,
                     ensemble_models=ckpts_ensemble,
                     property_normalization=property_normalization,
+                    edge_attr_initial_ohe=edge_initial_interaction,
                 )
 
                 atom_types, charge_types = node_feats_in.split(
