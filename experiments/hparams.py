@@ -64,7 +64,9 @@ def add_arguments(parser):
     parser.add_argument(
         "--lr-scheduler",
         default="reduce_on_plateau",
-        choices=["reduce_on_plateau", "cosine_annealing", "cyclic"],
+        choices=["reduce_on_plateau", "cosine_annealing", "cyclic", 
+                 "one_cyclic", "exponential", "cosine_annealing_warmup",
+                 ],
     )
     parser.add_argument(
         "--optimizer",
