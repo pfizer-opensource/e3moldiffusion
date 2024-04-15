@@ -176,9 +176,23 @@ class LigandPocketDataset(InMemoryDataset):
         # split data based on mask
         mol_data = {}
         docking_scores = []
+        kiba_scores = []
+        ic50s = []
         for k, v in data.items():
             if k == "names" or k == "receptors" or k == "lig_mol":
                 mol_data[k] = v
+                continue
+
+            if k == "docking_scores":
+                docking_scores = torch.from_numpy(v)
+                continue
+
+            if k == "ic50s":
+                ic50s = torch.tensor([float(i) for i in v]).float()
+                continue
+
+            if k == "kiba_scores":
+                kiba_scores = torch.tensor([float(i) for i in v]).float()
                 continue
 
             sections = (
@@ -199,8 +213,6 @@ class LigandPocketDataset(InMemoryDataset):
                         torch.from_numpy(x)
                         for x in np.split(pocket_one_hot_mask, sections)
                     ]
-                elif k == "docking_scores" and self.with_docking_scores:
-                    docking_scores = torch.from_numpy(v)
                 else:
                     mol_data[k] = [torch.from_numpy(x) for x in np.split(v, sections)]
             # add number of nodes for convenience
@@ -228,7 +240,9 @@ class LigandPocketDataset(InMemoryDataset):
             pocket_ca_mask,
             # pocket_one_hot,
             # pocket_one_hot_mask,
-            scores,
+            docking_score,
+            kiba_score,
+            ic50,
         ) in enumerate(
             tqdm(
                 zip_longest(
@@ -243,6 +257,8 @@ class LigandPocketDataset(InMemoryDataset):
                     # mol_data["pocket_one_hot"],
                     # mol_data["pocket_one_hot_mask"],
                     docking_scores,
+                    kiba_scores,
+                    ic50s,
                     fillvalue=None,
                 ),
                 total=len(mol_data["lig_mol"]),
@@ -272,7 +288,9 @@ class LigandPocketDataset(InMemoryDataset):
             data.pocket_ca_mask = pocket_ca_mask
             # data.pocket_one_hot = pocket_one_hot
             # data.pocket_one_hot_mask = pocket_one_hot_mask
-            data.docking_scores = scores
+            data.docking_scores = docking_score
+            data.kiba_score = kiba_score
+            data.ic50 = ic50
             all_smiles.append(smiles_lig)
             data_list_lig.append(data)
 

@@ -445,6 +445,8 @@ if __name__ == "__main__":
                     dist_cutoff=args.dist_cutoff,
                     ca_only=args.ca_only,
                     no_H=args.no_H,
+                    complex_creation_mode=args.complex_creation_mode,
+                    com_weights=args.com_weights,
                 )
             except (
                 KeyError,

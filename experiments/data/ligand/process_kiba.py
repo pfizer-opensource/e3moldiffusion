@@ -1,17 +1,19 @@
 import argparse
 import os
+import shutil
 import subprocess
+from glob import glob
 from pathlib import Path
 from time import time
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import seaborn as sns
 import torch
 from Bio.PDB import PDBParser
 from Bio.PDB.Polypeptide import is_aa
 from Bio.PDB.Polypeptide import protein_letters_3to1 as three_to_one
-from kinodata.data.dataset import process_raw_data
 from posecheck.utils.constants import REDUCE_PATH
 from rdkit import Chem
 from scipy.ndimage import gaussian_filter
@@ -25,7 +27,7 @@ from experiments.data.ligand.constants import (
     dataset_params,
 )
 from experiments.data.ligand.molecule_builder import build_molecule
-from experiments.utils import write_sdf_file
+from experiments.data.utils import load_pickle
 
 dataset_info = dataset_params["kinodata_full"]
 amino_acid_dict = dataset_info["aa_encoder"]
@@ -314,6 +316,8 @@ def saveall(
     pocket_one_hot,
     pocket_ca_mask,
     ic50s,
+    kiba_scores,
+    docking_scores,
 ):
     np.savez(
         filename,
@@ -328,6 +332,8 @@ def saveall(
         pocket_one_hot=pocket_one_hot,
         pocket_ca_mask=pocket_ca_mask,
         ic50s=ic50s,
+        kiba_scores=kiba_scores,
+        docking_scores=docking_scores,
     )
     return True
 
@@ -336,6 +342,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--basedir", type=Path)
     parser.add_argument("--outdir", type=Path)
+    parser.add_argument("--test-targets", default=[], nargs="+", type=str)
     parser.add_argument("--no-H", action="store_true")
     parser.add_argument("--ca-only", action="store_true")
     parser.add_argument("--dist-cutoff", type=float, default=8.0)
@@ -359,34 +366,42 @@ if __name__ == "__main__":
 
     processed_dir.mkdir(exist_ok=True, parents=True)
 
-    df = process_raw_data(
-        raw_dir=args.basedir, file_name="kinodata_docked_with_rmsd.sdf.gz"
-    )
-    df = df[df["activities.standard_type"] == "pIC50"].reset_index()
+    df = load_pickle(os.path.join(args.basedir, "final_df_scores.pickle"))
 
-    # get train, val, test split by target ID
-    target_list = list(df["target_dictionary.chembl_id"])
+    # get test set
+    test_df = df[df["pdb_id"].isin(args.test_targets)]
+    test_indices = list(test_df.index)
+    test_df = test_df.dropna(subset=["pIC50 (mean)"])
+    sampled_indices = test_df.groupby("pdb_id").head(1).index.tolist()
+    remaining_sample_size = 100 - len(sampled_indices)
+    additional_sampled_indices = (
+        test_df.drop(sampled_indices)
+        .sample(n=remaining_sample_size, replace=True, random_state=1)
+        .index.tolist()
+    )
+    sampled_indices += additional_sampled_indices
+    test = test_df.loc[sampled_indices]
+
+    # get train and val set
+    df = df.drop(test_indices).reset_index(drop=True)
+    target_list = list(df["pdb_id"])
     target_indices = {}
     for idx, target in enumerate(target_list):
         if target in target_indices:
             target_indices[target].append(idx)
         else:
             target_indices[target] = [idx]
-    seed = 676
-    train_indices, test_val_indices = train_test_split(
-        list(target_indices.values()), test_size=20, random_state=seed
-    )
-    val_indices, test_indices = train_test_split(
-        test_val_indices, test_size=0.5, random_state=42
+    train_indices, val_indices = train_test_split(
+        list(target_indices.values()), test_size=5, random_state=500
     )
 
     train_indices = [idx for sublist in train_indices for idx in sublist]
     val_indices = [idx for sublist in val_indices for idx in sublist]
-    test_indices = [idx for sublist in test_indices for idx in sublist]
 
     train = df.loc[train_indices].reset_index(drop=True)
     val = df.loc[val_indices].reset_index(drop=True)
-    test = df.loc[test_indices].reset_index(drop=True)
+    val = val.sample(n=200, replace=False, random_state=1).reset_index(drop=True)
+
     data_split = {"train": train, "val": val, "test": test}
 
     n_train_before = len(train)
@@ -402,6 +417,7 @@ if __name__ == "__main__":
         lig_mask = []
         lig_mol = []
         ic50s = []
+        kiba_scores = []
         docking_scores = []
         pocket_coords = []
         pocket_atom = []
@@ -422,19 +438,35 @@ if __name__ == "__main__":
         num_failed = 0
         for index, data in data_split[split].iterrows():
 
-            naming = f"{data['target_dictionary.chembl_id']}-atp-{data['similar.complex_pdb']}-lig-{data['molecule_dictionary.chembl_id']}"
-            pocket_mol2 = data["pocket_mol2_file"]
+            naming = f"{data['pdb_id']}-atp-lig-{data['molecule_chembl_id']}"
             pocket_fn = naming
-            pdbfile = pdb_sdf_dir / f"{pocket_fn}.pdb"
-            os.system(f"obabel {str(pocket_mol2)} -O {pdbfile}")
-            mol = data["molecule"]
             ligand_fn = f"{naming}_{naming}"
             sdffile = pdb_sdf_dir / f"{ligand_fn}.sdf"
-            write_sdf_file(processed_dir / sdffile, [mol])
+            pdbfile = pdb_sdf_dir / f"{pocket_fn}.pdb"
+            try:
+                orig_sdf = Path(
+                    args.basedir, data["pdb_id"], data["molecule_chembl_id"] + ".sdf"
+                )
+                orig_pdb = glob(
+                    os.path.join(str(args.basedir), data["pdb_id"], "*.pdb")
+                )[0]
+                shutil.copy(orig_sdf, sdffile)
+                shutil.copy(orig_pdb, pdbfile)
+            except FileNotFoundError:
+                orig_sdf = Path(
+                    args.basedir,
+                    data["pdb_id"].lower(),
+                    data["molecule_chembl_id"] + ".sdf",
+                )
+                orig_pdb = glob(
+                    os.path.join(str(args.basedir), data["pdb_id"].lower(), "*.pdb")
+                )[0]
+                shutil.copy(orig_sdf, sdffile)
+                shutil.copy(orig_pdb, pdbfile)
 
             try:
                 struct_copy = PDBParser(QUIET=True).get_structure("", pdbfile)
-            except:
+            except Exception:
                 num_failed += 1
                 failed_save.append((pocket_fn, ligand_fn))
                 os.remove(sdffile)
@@ -469,12 +501,15 @@ if __name__ == "__main__":
             lig_mask.append(count * np.ones(len(ligand_data["lig_coords"])))
             lig_atom.append(ligand_data["lig_atoms"])
             lig_mol.append(ligand_data["lig_mol"])
-            assert ligand_data["lig_mol"].GetProp(
-                "activities.standard_value"
-            ) == mol.GetProp("activities.standard_value")
-            ic50s.append(
-                float(ligand_data["lig_mol"].GetProp("activities.standard_value"))
-            )
+            ic50 = data["pIC50 (mean)"]
+            if pd.isna(ic50):
+                ic50 = -100
+            ic50s.append(ic50)
+            docking_scores.append(data["g_score"])
+            kiba_score = data["KIBA_score"]
+            if pd.isna(kiba_score):
+                kiba_score = -100
+            kiba_scores.append(kiba_score)
             pocket_coords.append(pocket_data["pocket_coords"])
             pocket_atom.append(pocket_data["pocket_atoms"])
             pocket_mask.append(count * np.ones(len(pocket_data["pocket_coords"])))
@@ -503,6 +538,8 @@ if __name__ == "__main__":
         pocket_atom = np.concatenate(pocket_atom, axis=0)
         pocket_mask = np.concatenate(pocket_mask, axis=0)
         ic50s = np.array(ic50s)
+        kiba_scores = np.array(kiba_scores)
+        docking_scores = np.array(docking_scores)
 
         if not args.ca_only:
             pocket_one_hot_resids = np.concatenate(pocket_one_hot_resids, axis=0)
@@ -524,6 +561,8 @@ if __name__ == "__main__":
             pocket_one_hot=pocket_one_hot_resids,
             pocket_ca_mask=pocket_ca_mask,
             ic50s=ic50s,
+            kiba_scores=kiba_scores,
+            docking_scores=docking_scores,
         )
 
         n_samples_after[split] = len(pdb_and_mol_ids)
