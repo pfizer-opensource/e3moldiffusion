@@ -275,7 +275,7 @@ class LigandPocketDataset(InMemoryDataset):
                     remove_hydrogens=self.remove_hs,
                     cog_proj=False,
                 )
-            except:
+            except Exception:
                 print(f"Ligand {i} failed")
                 continue
             data.pos_lig = coords_lig
