@@ -238,8 +238,7 @@ class LigandPocketDataset(InMemoryDataset):
             atoms_pocket,
             mask_pocket,
             pocket_ca_mask,
-            # pocket_one_hot,
-            # pocket_one_hot_mask,
+            name,
             docking_score,
             kiba_score,
             ic50,
@@ -254,8 +253,7 @@ class LigandPocketDataset(InMemoryDataset):
                     mol_data["pocket_atom"],
                     mol_data["pocket_mask"],
                     mol_data["pocket_ca_mask"],
-                    # mol_data["pocket_one_hot"],
-                    # mol_data["pocket_one_hot_mask"],
+                    mol_data["names"],
                     docking_scores,
                     kiba_scores,
                     ic50s,
@@ -284,10 +282,8 @@ class LigandPocketDataset(InMemoryDataset):
             data.x_pocket = atoms_pocket
             data.lig_mask = mask_lig
             data.pocket_mask = mask_pocket
-            # AA information
             data.pocket_ca_mask = pocket_ca_mask
-            # data.pocket_one_hot = pocket_one_hot
-            # data.pocket_one_hot_mask = pocket_one_hot_mask
+            data.pocket_name = name
             data.docking_scores = docking_score
             data.kiba_score = kiba_score
             data.ic50 = ic50

@@ -344,6 +344,8 @@ if __name__ == "__main__":
     parser.add_argument("--test-targets", default=[], nargs="+", type=str)
     parser.add_argument("--no-H", action="store_true")
     parser.add_argument("--ca-only", action="store_true")
+    parser.add_argument("--kiba-score-only", action="store_true")
+    parser.add_argument("--pic50-only", action="store_true")
     parser.add_argument("--dist-cutoff", type=float, default=8.0)
     parser.add_argument("--random-seed", type=int, default=42)
     parser.add_argument(
@@ -383,6 +385,10 @@ if __name__ == "__main__":
 
     # get train and val set
     df = df.drop(test_indices).reset_index(drop=True)
+    if args.kiba_score_only:
+        df = df.dropna(subset=["KIBA_score"]).reset_index(drop=True)
+    if args.pic50_only:
+        df = df.dropna(subset=["pIC50 (mean)"]).reset_index(drop=True)
     target_list = list(df["pdb_id"])
     target_indices = {}
     for idx, target in enumerate(target_list):
@@ -399,7 +405,8 @@ if __name__ == "__main__":
 
     train = df.loc[train_indices].reset_index(drop=True)
     val = df.loc[val_indices].reset_index(drop=True)
-    val = val.sample(n=200, replace=False, random_state=1).reset_index(drop=True)
+    n = 200 if not args.pic50_only else 100
+    val = val.sample(n=n, replace=False, random_state=1).reset_index(drop=True)
 
     data_split = {"train": train, "val": val, "test": test}
 

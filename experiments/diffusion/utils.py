@@ -73,6 +73,7 @@ def get_joint_edge_attrs(
     knn_with_cutoff: Optional[int] = None,
     pocket_mask: OptTensor = None,
 ):
+
     edge_index_global = get_edges(
         batch,
         batch_pocket,

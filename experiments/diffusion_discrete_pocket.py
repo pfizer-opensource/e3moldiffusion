@@ -1387,7 +1387,9 @@ class Trainer(pl.LightningModule):
                 self.validity < validity_dict["validity"]
                 and self.connected_components <= statistics_dict["connected_components"]
             )
-            save_cond = (save_cond or statistics_dict["sampling/AnglesW1"] < self.angles_w1)
+            save_cond = (
+                save_cond or statistics_dict["sampling/AnglesW1"] < self.angles_w1
+            )
         else:
             save_cond = False
         if save_cond:
@@ -1738,7 +1740,7 @@ class Trainer(pl.LightningModule):
                     batch_lig=batch_lig,
                     ca_mask=ca_mask,
                     batch_pocket=batch_pocket,
-                    edge_initial_interaction=edge_initial_interaction,
+                    edge_attr_initial_ohe=edge_attr_initial_ohe,
                 )
                 sa, prop = out["property_pred"]
                 if sa is not None:
@@ -1802,7 +1804,7 @@ class Trainer(pl.LightningModule):
         pos = pos[pocket_mask]
 
         prop_pred = out["property_pred"]
-        sa, prop = prop_pred        
+        sa, prop = prop_pred
         sa = (
             sa.squeeze(1).sigmoid()
             if sa is not None and (kind == "sa_score" or kind == "joint")

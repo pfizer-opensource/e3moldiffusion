@@ -269,6 +269,7 @@ class BasicMolecularMetrics(object):
         return_molecules=False,
         return_mean_stats=True,
         return_stats_per_molecule=False,
+        return_valid=True,
         calculate_statistics=True,
         calculate_distribution_statistics=True,
         filter_by_posebusters=False,
@@ -428,10 +429,21 @@ class BasicMolecularMetrics(object):
 
         self.reset()
 
+        if not return_valid:
+            return (
+                stability_dict,
+                validity_dict,
+                statistics_dict,
+                valid_smiles,
+                stable_molecules,
+                molecules,
+            )
+
         if not return_molecules:
             valid_smiles = None
             stable_molecules = None
             valid_molecules = None
+
         return (
             stability_dict,
             validity_dict,
@@ -827,6 +839,7 @@ def analyze_stability_for_molecules(
     return_molecules=False,
     return_mean_stats=True,
     return_stats_per_molecule=False,
+    return_valid=True,
     remove_hs=False,
     device="cpu",
     calculate_statistics=True,
@@ -848,7 +861,7 @@ def analyze_stability_for_molecules(
         statistics_dict,
         sampled_smiles,
         stable_molecules,
-        valid_molecules,
+        molecules,
     ) = metrics(
         molecule_list,
         local_rank=local_rank,
@@ -856,6 +869,7 @@ def analyze_stability_for_molecules(
         return_stats_per_molecule=return_stats_per_molecule,
         return_molecules=return_molecules,
         return_mean_stats=return_mean_stats,
+        return_valid=return_valid,
         calculate_statistics=calculate_statistics,
         calculate_distribution_statistics=calculate_distribution_statistics,
         filter_by_posebusters=filter_by_posebusters,
@@ -870,7 +884,7 @@ def analyze_stability_for_molecules(
             statistics_dict,
             sampled_smiles,
             stable_molecules,
-            valid_molecules,
+            molecules,
         )
     else:
-        return valid_molecules
+        return molecules

@@ -1,8 +1,6 @@
 import argparse
 import json
 import os
-import random
-import tempfile
 import warnings
 from collections import defaultdict
 from datetime import datetime
@@ -18,8 +16,7 @@ from rdkit import Chem
 from torch_geometric.data import Batch
 
 from experiments.data.distributions import DistributionProperty
-from experiments.data.utils import load_pickle, mol_to_torch_geometric, save_pickle
-from experiments.docking import calculate_qvina2_score
+from experiments.data.utils import mol_to_torch_geometric, save_pickle
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.utils import (
     chunks,
@@ -212,8 +209,6 @@ def evaluate(args):
         else:
             residues_10A = None
         sdf_out_file_raw = Path(raw_sdf_dir, f"{ligand_name}_gen.sdf")
-        if args.filter_by_docking_scores:
-            sdf_out_file_docked = Path(docked_sdf_dir, f"{ligand_name}_out.sdf")
         time_file = Path(times_dir, f"{ligand_name}.txt")
 
         t_pocket_start = time()
@@ -233,14 +228,12 @@ def evaluate(args):
         ]
 
         all_molecules = 0
-        tmp_molecules = []
-        valid_and_unique_molecules = []
-
+        molecules_list = []
         start = datetime.now()
 
         k = 0
         while (
-            len(valid_and_unique_molecules) < args.num_ligands_per_pocket_to_sample
+            len(molecules_list) < args.num_ligands_per_pocket_to_sample
             and k <= args.max_sample_iter
         ):
             k += 1
@@ -257,116 +250,28 @@ def evaluate(args):
             )
 
             all_molecules += len(molecules)
-            tmp_molecules.extend(molecules)
-            valid_molecules = analyze_stability_for_molecules(
-                molecule_list=tmp_molecules,
-                dataset_info=dataset_info,
-                smiles_train=train_smiles,
-                local_rank=0,
-                return_molecules=True,
-                calculate_statistics=False,
-                calculate_distribution_statistics=False,
-                filter_by_posebusters=args.filter_by_posebusters,
-                filter_by_lipinski=args.filter_by_lipinski,
-                pdb_file=pdb_file,
-                remove_hs=hparams.remove_hs,
-                device="cpu",
-            )
+            molecules_list.extend(molecules)
 
-            valid_and_unique_molecules = valid_molecules.copy()
-            tmp_molecules = valid_molecules.copy()
-
-        if len(valid_and_unique_molecules) < args.num_ligands_per_pocket_to_sample and (
-            args.filter_by_posebusters or args.filter_by_lipinski
-        ):
-            k = 0
-            while (
-                len(valid_and_unique_molecules) < args.num_ligands_per_pocket_to_sample
-                and k <= args.max_sample_iter
-            ):
-                k += 1
-                with torch.no_grad():
-                    molecules = prepare_data_and_generate_ligands(
-                        model,
-                        residues,
-                        sdf_file,
-                        dataset_info,
-                        hparams=hparams,
-                        args=args,
-                        device=device,
-                        embedding_dict=embedding_dict,
-                        residues_10A=residues_10A,
-                    )
-
-                all_molecules += len(molecules)
-                tmp_molecules.extend(molecules)
-                valid_molecules = analyze_stability_for_molecules(
-                    molecule_list=tmp_molecules,
-                    dataset_info=dataset_info,
-                    smiles_train=train_smiles,
-                    local_rank=0,
-                    return_molecules=True,
-                    calculate_statistics=False,
-                    calculate_distribution_statistics=False,
-                    pdb_file=pdb_file,
-                    remove_hs=hparams.remove_hs,
-                    device="cpu",
-                )
-                valid_and_unique_molecules = valid_molecules.copy()
-                tmp_molecules = valid_molecules.copy()
-
-        if len(valid_and_unique_molecules) == 0:
+        if len(molecules_list) == 0:
             print(
                 f"Reached {args.max_sample_iter} sampling iterations, but could not find any ligands for pdb file {pdb_file}. Skipping."
             )
             continue
-        elif len(valid_and_unique_molecules) < args.num_ligands_per_pocket_to_sample:
+        elif len(molecules_list) < args.num_ligands_per_pocket_to_sample:
             print(
-                f"FYI: Reached {args.max_sample_iter} sampling iterations, but could only find {len(valid_and_unique_molecules)} ligands for pdb file {pdb_file}."
+                f"FYI: Reached {args.max_sample_iter} sampling iterations, but could only find {len(molecules_list)} ligands for pdb file {pdb_file}."
             )
 
         run_time = datetime.now() - start
-        print(f"\n Run time={run_time} for {len(valid_molecules)} valid molecules \n")
+        print(f"\n Run time={run_time} for {len(molecules_list)} valid molecules \n")
 
         torch.cuda.empty_cache()
 
-        if args.filter_by_docking_scores:
-            temp_file = tempfile.NamedTemporaryFile(
-                suffix=f"{random.randint(0, 100000)}.sdf", delete=False
-            )
-            temp_path = temp_file.name
-            write_sdf_file(temp_path, valid_and_unique_molecules, extract_mol=True)
-            target = ("-").join(
-                ligand_name.split("-")[:5]
-            )  # get the target, chain and ligand name
-            ground_truth_score = load_pickle(args.docking_scores)[
-                target
-            ]  # get the ground truth docking score of that target
-            receptor_file = Path(args.pdbqt_dir, ligand_name.split("_")[0] + ".pdbqt")
-            scores, rdmols, valid_ids = calculate_qvina2_score(
-                pdb_file,
-                receptor_file,
-                temp_path,
-                args.save_dir,
-                return_rdmol=True,
-                filtering=True,
-            )
-            valid_and_unique_molecules = [
-                m for i, m in enumerate(valid_and_unique_molecules) if i in valid_ids
-            ]
-            valid_and_unique_molecules = [
-                m
-                for m, s in zip(valid_and_unique_molecules, scores)
-                if ground_truth_score < s
-            ]
-            write_sdf_file(sdf_out_file_docked, rdmols)
-
-            temp_file.close()
-            os.remove(temp_path)
-
-            if len(tmp_molecules) == 0:
-                print("No sample found with better docking score. Skipping!")
-                continue
+        if len(molecules_list) > args.num_ligands_per_pocket_to_save:
+            indices = [i for i in range(args.num_ligands_per_pocket_to_save)]
+            molecules_list = molecules_list[: args.num_ligands_per_pocket_to_save]
+        else:
+            indices = [i for i in range(len(molecules_list))]
 
         (
             _,
@@ -374,9 +279,9 @@ def evaluate(args):
             statistics,
             _,
             _,
-            valid_molecules,
+            molecules_list,
         ) = analyze_stability_for_molecules(
-            molecule_list=valid_and_unique_molecules,
+            molecule_list=molecules_list,
             dataset_info=dataset_info,
             smiles_train=train_smiles,
             local_rank=0,
@@ -384,35 +289,11 @@ def evaluate(args):
             calculate_statistics=True,
             return_mean_stats=False,
             return_stats_per_molecule=True,
+            return_valid=False,
             calculate_distribution_statistics=False,
             remove_hs=hparams.remove_hs,
             device="cpu",
         )
-        if len(valid_molecules) == 0:
-            print("No samples found. Skipping!")
-            continue
-
-        if len(valid_molecules) > args.num_ligands_per_pocket_to_save:
-
-            if args.filter_by_sascore:
-                sorted_indices = np.flip(np.argsort(statistics["SAs"]))
-                indices = [
-                    i
-                    for i in sorted_indices
-                    if statistics["SAs"][i] >= args.sascore_threshold
-                ][: args.num_ligands_per_pocket_to_save]
-                if len(indices) == 0:
-                    indices = [i for i in sorted_indices][
-                        : args.num_ligands_per_pocket_to_save
-                    ]
-                valid_molecules = [
-                    mol for i, mol in enumerate(valid_molecules) if i in indices
-                ]
-            else:
-                indices = [i for i in range(args.num_ligands_per_pocket_to_save)]
-                valid_molecules = valid_molecules[: args.num_ligands_per_pocket_to_save]
-        else:
-            indices = [i for i in range(len(valid_molecules))]
 
         for k, v in statistics.items():
             if isinstance(v, list):
@@ -425,6 +306,10 @@ def evaluate(args):
             else:
                 statistics_dict[k].append(v)
 
+        statistics_dict["validity"].append(validity_dict["validity"])
+        statistics_dict["uniqueness"].append(validity_dict["uniqueness"])
+        statistics_dict["novelty"].append(validity_dict["novelty"])
+
         if args.encode_ligands:
             ligand_data = [
                 mol_to_torch_geometric(
@@ -434,7 +319,7 @@ def evaluate(args):
                     remove_hydrogens=True,
                     cog_proj=True,
                 )
-                for mol in valid_molecules
+                for mol in molecules_list
             ]
             ligand_data = Batch.from_data_list(ligand_data).to(device)
 
@@ -443,8 +328,8 @@ def evaluate(args):
             embedding_dict[ligand_name]["sampled"].append(ligand_embeds)
         if "ic50" in hparams.regression_property:
             # split into n chunks to avoid OOM error
-            n = 4 if len(valid_molecules) > 80 else 3
-            molecules_list = list(chunks(valid_molecules, n))
+            n = 4 if len(molecules_list) > 80 else 3
+            molecules_list = list(chunks(molecules_list, n))
             ic50s = []
             for molecules in molecules_list:
                 ligand_data = [
@@ -476,9 +361,9 @@ def evaluate(args):
             violin_dict["pIC50"].extend(ic50s)
             statistics_dict["pIC50_mean"].append(np.mean(ic50s))
             for i, ic50 in enumerate(ic50s):
-                valid_molecules[i].rdkit_mol.SetProp("pIC50", str(ic50))
+                molecules_list[i].rdkit_mol.SetProp("pIC50", str(ic50))
 
-        write_sdf_file(sdf_out_file_raw, valid_molecules, extract_mol=True)
+        write_sdf_file(sdf_out_file_raw, molecules_list, extract_mol=True)
         sdf_files.append(sdf_out_file_raw)
 
         # PoseBusters
@@ -498,6 +383,7 @@ def evaluate(args):
             for metric in buster_dock_df:
                 if metric not in buster:
                     violin_dict[metric].extend(list(buster_dock_df[metric]))
+                    value = buster_dock_df[metric].sum() / len(buster_dock_df[metric])
                     buster[metric] = value
                     buster_validity += value
             buster_validity /= len(buster)
