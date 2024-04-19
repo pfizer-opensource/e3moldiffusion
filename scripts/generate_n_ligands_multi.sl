@@ -19,14 +19,14 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff7_bonds5_out-norm_rbf-10A_edge-stuff_hybrid-knn32"
-output_dir="$main_dir/evaluation/docking/nodes_bias_2"
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff7_bonds5_out-norm_rbf-5A_edge-stuff"
+output_dir="$main_dir/evaluation/docking/validity_nodes_bias_2"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
 mkdir "$output_dir"
 
-python experiments/generate_ligands_multi.py \
+python experiments/generate_n_ligands_multi.py \
     --mp-index "${SLURM_ARRAY_TASK_ID}" \
     --num-gpus "$num_gpus" \
     --model-path "$main_dir/best_valid.ckpt" \
@@ -40,8 +40,9 @@ python experiments/generate_ligands_multi.py \
     --max-sample-iter 50 \
     --batch-size 40 \
     --n-nodes-bias 2 \
-    --prior-n-atoms targetdiff \
-    --omit-posecheck
+    --prior-n-atoms targetdiff
+    #--omit-posecheck \
+    #--omit-posebusters
     # --vary-n-nodes
     # --property-importance-sampling \
     # --property-importance-sampling-start 200 \

@@ -119,6 +119,16 @@ class Molecule:
             )
         else:
             self.rdkit_mol = rdkit_mol
+
+        if self.bond_types is None:
+            adj = torch.from_numpy(
+                Chem.rdmolops.GetAdjacencyMatrix(self.rdkit_mol, useBO=True)
+            )
+            edge_index = adj.nonzero().contiguous().T
+            bond_types = adj[edge_index[0], edge_index[1]]
+            bond_types[bond_types == 1.5] = 4
+            self.bond_types = bond_types
+
         self.num_nodes = len(atom_types)
         self.num_atom_types = len(self.atom_decoder)
 
@@ -265,7 +275,7 @@ class Molecule:
             mol = self.process_obabel_molecule(
                 mol, sanitize=self.sanitize, largest_frag=self.sanitize
             )
-        except:
+        except Exception:
             return None
 
         return mol

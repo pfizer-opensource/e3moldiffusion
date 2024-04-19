@@ -27,7 +27,6 @@ from experiments.data.ligand.constants import (
     dataset_params,
 )
 from experiments.data.ligand.molecule_builder import build_molecule
-from experiments.data.utils import load_pickle
 
 dataset_info = dataset_params["kinodata_full"]
 amino_acid_dict = dataset_info["aa_encoder"]
@@ -59,7 +58,7 @@ def process_ligand_and_pocket(
         ligand = Chem.SDMolSupplier(str(sdffile), removeHs=no_H)[0]
         if not no_H:
             ligand = Chem.AddHs(ligand, addCoords=True)
-    except:
+    except Exception:
         raise Exception(f"cannot read sdf mol ({sdffile})")
 
     # remove H atoms if not in atom_dict, other atom types that aren't allowed
@@ -345,6 +344,8 @@ if __name__ == "__main__":
     parser.add_argument("--test-targets", default=[], nargs="+", type=str)
     parser.add_argument("--no-H", action="store_true")
     parser.add_argument("--ca-only", action="store_true")
+    parser.add_argument("--kiba-score-only", action="store_true")
+    parser.add_argument("--pic50-only", action="store_true")
     parser.add_argument("--dist-cutoff", type=float, default=8.0)
     parser.add_argument("--random-seed", type=int, default=42)
     parser.add_argument(
@@ -366,7 +367,7 @@ if __name__ == "__main__":
 
     processed_dir.mkdir(exist_ok=True, parents=True)
 
-    df = load_pickle(os.path.join(args.basedir, "final_df_scores.pickle"))
+    df = pd.read_csv(os.path.join(args.basedir, "final_df_scores.csv"))
 
     # get test set
     test_df = df[df["pdb_id"].isin(args.test_targets)]
@@ -384,6 +385,10 @@ if __name__ == "__main__":
 
     # get train and val set
     df = df.drop(test_indices).reset_index(drop=True)
+    if args.kiba_score_only:
+        df = df.dropna(subset=["KIBA_score"]).reset_index(drop=True)
+    if args.pic50_only:
+        df = df.dropna(subset=["pIC50 (mean)"]).reset_index(drop=True)
     target_list = list(df["pdb_id"])
     target_indices = {}
     for idx, target in enumerate(target_list):
@@ -400,7 +405,8 @@ if __name__ == "__main__":
 
     train = df.loc[train_indices].reset_index(drop=True)
     val = df.loc[val_indices].reset_index(drop=True)
-    val = val.sample(n=200, replace=False, random_state=1).reset_index(drop=True)
+    n = 200 if not args.pic50_only else 100
+    val = val.sample(n=n, replace=False, random_state=1).reset_index(drop=True)
 
     data_split = {"train": train, "val": val, "test": test}
 
@@ -436,7 +442,7 @@ if __name__ == "__main__":
 
         tic = time()
         num_failed = 0
-        for index, data in data_split[split].iterrows():
+        for index, data in tqdm(data_split[split].iterrows()):
 
             naming = f"{data['pdb_id']}-atp-lig-{data['molecule_chembl_id']}"
             pocket_fn = naming
@@ -445,23 +451,34 @@ if __name__ == "__main__":
             pdbfile = pdb_sdf_dir / f"{pocket_fn}.pdb"
             try:
                 orig_sdf = Path(
-                    args.basedir, data["pdb_id"], data["molecule_chembl_id"] + ".sdf"
+                    args.basedir,
+                    "docking-results",
+                    data["pdb_id"],
+                    data["molecule_chembl_id"] + ".sdf",
                 )
-                orig_pdb = glob(
-                    os.path.join(str(args.basedir), data["pdb_id"], "*.pdb")
-                )[0]
                 shutil.copy(orig_sdf, sdffile)
+                orig_pdb = glob(
+                    os.path.join(
+                        str(args.basedir), "docking-results", data["pdb_id"], "*.pdb"
+                    )
+                )[0]
                 shutil.copy(orig_pdb, pdbfile)
             except FileNotFoundError:
                 orig_sdf = Path(
                     args.basedir,
+                    "docking-results",
                     data["pdb_id"].lower(),
                     data["molecule_chembl_id"] + ".sdf",
                 )
-                orig_pdb = glob(
-                    os.path.join(str(args.basedir), data["pdb_id"].lower(), "*.pdb")
-                )[0]
                 shutil.copy(orig_sdf, sdffile)
+                orig_pdb = glob(
+                    os.path.join(
+                        str(args.basedir),
+                        "docking-results",
+                        data["pdb_id"].lower(),
+                        "*.pdb",
+                    )
+                )[0]
                 shutil.copy(orig_pdb, pdbfile)
 
             try:
