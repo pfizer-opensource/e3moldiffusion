@@ -89,7 +89,7 @@ def evaluate(args):
     dataset_info = DataInfos(datamodule, hparams)
     histogram = os.path.join(hparams.dataset_root, "size_distribution.npy")
     histogram = np.load(histogram).tolist()
-    train_smiles = list(datamodule.train_dataset.smiles)
+    test_smiles = list(datamodule.test_dataset.smiles)
 
     prop_norm, prop_dist = None, None
     if (
@@ -131,7 +131,7 @@ def evaluate(args):
     model = Trainer.load_from_checkpoint(
         args.model_path,
         dataset_info=dataset_info,
-        smiles_list=train_smiles,
+        smiles_list=test_smiles,
         histogram=histogram,
         prop_norm=prop_norm,
         prop_dist=prop_dist,
@@ -283,15 +283,16 @@ def evaluate(args):
         ) = analyze_stability_for_molecules(
             molecule_list=molecules_list,
             dataset_info=dataset_info,
-            smiles_train=train_smiles,
+            smiles_train=test_smiles,
             local_rank=0,
-            return_molecules=True,
             calculate_statistics=True,
+            calculate_distribution_statistics=True,
             return_mean_stats=False,
+            return_molecules=True,
             return_stats_per_molecule=True,
             return_valid=False,
-            calculate_distribution_statistics=False,
             remove_hs=hparams.remove_hs,
+            test=True,
             device="cpu",
         )
 

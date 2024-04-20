@@ -356,7 +356,7 @@ class BasicMolecularMetrics(object):
                 diversity = self.get_bulk_diversity(valid_smiles)
                 try:
                     kl_score = self.get_kl_divergence(valid_smiles)
-                except:
+                except Exception:
                     print("kl_score could not be calculated. Setting kl_score to -1")
                     kl_score = -1.0
                 statistics_dict["bulk_similarity"] = similarity
@@ -413,7 +413,11 @@ class BasicMolecularMetrics(object):
                     statistics_dict["HAcceptors"] = hacceptors
                     statistics_dict["HDonors"] = hdonors
                     statistics_dict["Lipinskis"] = lipinski
-                    statistics_dict["Num_Atoms_all"] = n_atoms
+                    statistics_dict["Num_Atoms_all_valid"] = n_atoms
+                    if not return_valid:
+                        statistics_dict["Num_Atoms_all"] = [
+                            len(m.positions) for m in molecules
+                        ]
                     if not return_mean_stats:
                         if len(mols) > 1000:
                             diversity = calculate_bulk_diversity(mols, rdkit_fp=True)

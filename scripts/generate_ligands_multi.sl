@@ -19,7 +19,7 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff7_bonds5_out-norm_rbf-10A_edge-stuff_hybrid-knn32"
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff7_bonds5_out-norm_rbf-5A_edge-stuff"
 output_dir="$main_dir/evaluation/docking/nodes_bias_2"
 
 mkdir "$main_dir/evaluation"
@@ -41,7 +41,7 @@ python experiments/generate_ligands_multi.py \
     --batch-size 40 \
     --n-nodes-bias 2 \
     --prior-n-atoms targetdiff \
-    --omit-posecheck
+    # --omit-posecheck
     # --vary-n-nodes
     # --property-importance-sampling \
     # --property-importance-sampling-start 200 \
