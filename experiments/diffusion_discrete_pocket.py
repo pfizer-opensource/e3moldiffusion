@@ -378,6 +378,8 @@ class Trainer(pl.LightningModule):
             device="cpu",
             run_test_eval=True,
             use_ligand_dataset_sizes=self.hparams.use_ligand_dataset_sizes,
+            prior_n_atoms=self.hparams.prior_n_atoms,
+            n_nodes_bias=self.hparams.n_nodes_bias,
             build_obabel_mol=self.hparams.build_obabel_mol,
             save_dir=self.hparams.test_save_dir,
             save_traj=self.hparams.save_traj,
