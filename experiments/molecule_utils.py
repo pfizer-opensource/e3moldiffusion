@@ -7,6 +7,7 @@ from openbabel import openbabel
 from rdkit import Chem, RDLogger
 from rdkit.Chem.rdForceFieldHelpers import UFFHasAllMoleculeParams, UFFOptimizeMolecule
 from rdkit.Geometry import Point3D
+from torch_sparse import coalesce
 
 from experiments.data.utils import write_xyz_file
 from experiments.data.utils import x_map as additional_node_map
@@ -25,6 +26,21 @@ bond_dict = [
     Chem.rdchem.BondType.TRIPLE,
     Chem.rdchem.BondType.AROMATIC,
 ]
+
+
+def coalesce_edges(edge_index, bond_edge_index, bond_edge_attr, n):
+    edge_attr = torch.full(
+        size=(edge_index.size(-1),),
+        fill_value=0,
+        device=edge_index.device,
+        dtype=torch.long,
+    )
+    edge_index = torch.cat([edge_index, bond_edge_index], dim=-1)
+    edge_attr = torch.cat([edge_attr, bond_edge_attr], dim=0)
+    edge_index, edge_attr = coalesce(
+        index=edge_index, value=edge_attr, m=n, n=n, op="max"
+    )
+    return edge_index, edge_attr
 
 
 class Molecule:
@@ -124,10 +140,7 @@ class Molecule:
             adj = torch.from_numpy(
                 Chem.rdmolops.GetAdjacencyMatrix(self.rdkit_mol, useBO=True)
             )
-            edge_index = adj.nonzero().contiguous().T
-            bond_types = adj[edge_index[0], edge_index[1]]
-            bond_types[bond_types == 1.5] = 4
-            self.bond_types = bond_types
+            self.bond_types = adj.long()
 
         self.num_nodes = len(atom_types)
         self.num_atom_types = len(self.atom_decoder)

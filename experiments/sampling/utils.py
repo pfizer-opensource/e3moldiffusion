@@ -607,7 +607,7 @@ def angle_distance(
     s[s == 0] = 1
     generated_angles = generated_angles / s
     if save_histogram:
-        np.save("generated_angles_historgram.npy", generated_angles.numpy())
+        np.save("generated_angles_histogram.npy", generated_angles.numpy())
 
     if type(target_angles) in [np.array, np.ndarray]:
         target_angles = torch.from_numpy(target_angles).float()
