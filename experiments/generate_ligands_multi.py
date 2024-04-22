@@ -130,7 +130,7 @@ def evaluate(args):
     if "flow_matching" not in hparams:
         hparams.flow_matching = False
 
-    device = "cuda"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     model = Trainer.load_from_checkpoint(
         args.model_path,
         dataset_info=dataset_info,
@@ -148,8 +148,6 @@ def evaluate(args):
         strict=False,
     ).to(device)
     model = model.eval()
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     args.save_dir.mkdir(exist_ok=args.skip_existing)
     raw_sdf_dir = Path(args.save_dir, "sampled")

@@ -345,7 +345,7 @@ class Molecule:
 
             try:
                 self.uff_relax(mol, self.max_relax_iter)
-                if self.sanitize:
+                if sanitize:
                     # sanitize the updated molecule
                     Chem.SanitizeMol(mol)
             except (RuntimeError, ValueError):

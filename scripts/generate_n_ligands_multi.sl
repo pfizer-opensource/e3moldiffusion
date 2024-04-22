@@ -19,8 +19,8 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff7_bonds5_out-norm_rbf-5A_edge-stuff"
-output_dir="$main_dir/evaluation/docking/validity_nodes_bias_2"
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff5_bonds5_out-norm_rbf-5A_edge-stuff"
+output_dir="$main_dir/evaluation/docking/obabel_validity_nodes_bias_2"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"
@@ -31,16 +31,17 @@ python experiments/generate_n_ligands_multi.py \
     --num-gpus "$num_gpus" \
     --model-path "$main_dir/best_valid.ckpt" \
     --save-dir "$output_dir" \
-    --pdbqt-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff7_TargetDiff_atmass/test/pdbqt \
-    --test-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff7_TargetDiff_atmass/test \
-    --dataset-root /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff7_TargetDiff_atmass \
+    --pdbqt-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff5_new/test/pdbqt \
+    --test-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff5_new/test \
+    --dataset-root /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff5_new \
     --skip-existing \
     --num-ligands-per-pocket-to-sample 100 \
     --num-ligands-per-pocket-to-save 100 \
     --max-sample-iter 50 \
     --batch-size 40 \
     --n-nodes-bias 2 \
-    --prior-n-atoms targetdiff
+    --prior-n-atoms targetdiff \
+    --build-obabel-mol
     #--omit-posecheck \
     #--omit-posebusters
     # --vary-n-nodes
@@ -66,13 +67,10 @@ python experiments/generate_n_ligands_multi.py \
     # --encode-ligands \
     # --filter-by-sascore \
     # --sascore-threshold 0.6
-    #--omit-posebusters \
-    #--omit-posecheck \
     #--docking-scores /scratch1/e3moldiffusion/logs/crossdocked/ground_truth/evaluation/docking/crossdocked_scores.pickle
     #--filter-by-posebusters \
     #--filter-by-lipinski \
     #--filter-by-docking-scores \
-    #--build-obabel-mol \
     #--sanitize 
     #--relax-mol \
     #--max-relax-iter 500 
