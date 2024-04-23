@@ -13,15 +13,13 @@
 num_cpus=40
 
 cd /sharedhome/cremej01/workspace/e3moldiffusion
-source activate e3mol
-conda activate e3mol
+source activate vina
+conda activate vina
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
 main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff7_bonds5_out-norm_rbf-5A_edge-stuff"
 output_dir="$main_dir/evaluation/docking/nodes_bias_2"
-mkdir "$output_dir/docked"
-
 
 python experiments/docking_multi.py \
     --mp-index "${SLURM_ARRAY_TASK_ID}" \
@@ -32,4 +30,5 @@ python experiments/docking_multi.py \
     --pdb-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff7_TargetDiff_atmass/test \
     --dataset crossdocked \
     --write-csv \
-    --write-dict
+    --write-dict \
+    --docking-mode vina_score

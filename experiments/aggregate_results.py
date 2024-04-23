@@ -13,6 +13,7 @@ def get_args():
     parser = argparse.ArgumentParser(description='Aggregating evaluation dictionaries')
     parser.add_argument('--files-dir', type=str, help='Which dataset')
     parser.add_argument("--docked", default=False, action="store_true")
+    parser.add_argument("--docking-mode", default="qvina2", type=str)
     parser.add_argument("--remove-single-dicts", default=False, action="store_true")
     args = parser.parse_args()
     return args
@@ -33,7 +34,7 @@ def remove_dicts(dicts):
 
 
 def aggregate(args):
-    name = "sampled" if not args.docked else "docked"
+    name = "sampled" if not args.docked else f"docked_{args.docking_mode}"
 
     if not args.docked:
         statistics_dicts = sorted(
@@ -44,28 +45,35 @@ def aggregate(args):
             remove_dicts(statistics_dicts)
     else:
         score_dicts = sorted(
-            glob(os.path.join(args.files_dir, "*_qvina2_scores.pickle"))
+            glob(os.path.join(args.files_dir, f"*_{args.docking_mode}_scores.pickle"))
         )
         score_dict = aggregate_dicts(score_dicts)
         if args.remove_single_dicts:
             remove_dicts(score_dicts)
 
+    if (
+        args.docked and args.docking_mode != "qvina2"
+    ):  # ugly workaround for backward compatibility
+        dock_mode = args.docking_mode + "_"
+    else:
+        dock_mode = ""
+
     violin_dicts = sorted(
-        glob(os.path.join(args.files_dir, f"*_violin_dict_{name}.pickle"))
+        glob(os.path.join(args.files_dir, f"*_{dock_mode}violin_dict_{name}.pickle"))
     )
     violin_dict = aggregate_dicts(violin_dicts)
     if args.remove_single_dicts:
         remove_dicts(violin_dicts)
 
     buster_dicts = sorted(
-        glob(os.path.join(args.files_dir, f"*_posebusters_{name}.pickle"))
+        glob(os.path.join(args.files_dir, f"*_{dock_mode}posebusters_{name}.pickle"))
     )
     buster_dict = aggregate_dicts(buster_dicts)
     if args.remove_single_dicts:
         remove_dicts(buster_dicts)
 
     posecheck_dicts = sorted(
-        glob(os.path.join(args.files_dir, f"*_posecheck_{name}.pickle"))
+        glob(os.path.join(args.files_dir, f"*_{dock_mode}posecheck_{name}.pickle"))
     )
     posecheck_dict = aggregate_dicts(posecheck_dicts)
     if args.remove_single_dicts:
@@ -85,13 +93,13 @@ def aggregate(args):
     else:
         save_pickle(
             score_dict,
-            os.path.join(args.files_dir, "qvina2_scores.pickle"),
+            os.path.join(args.files_dir, f"{args.docking_mode}_scores.pickle"),
             exist_ok=True,
         )
         scores_mean = [np.mean(r) for r in score_dict["scores"] if len(r) >= 1]
         mean_score = np.mean(scores_mean)
         std_score = np.std(scores_mean)
-        print(f"Mean docking score: {mean_score}")
+        print(f"Mean docking score in mode {args.docking_mode}: {mean_score}")
         print(f"Docking score standard deviation: {std_score}")
 
         mean_top10_score = np.mean(
@@ -101,17 +109,17 @@ def aggregate(args):
 
     save_pickle(
         violin_dict,
-        os.path.join(args.files_dir, f"violin_dict_{name}.pickle"),
+        os.path.join(args.files_dir, f"{dock_mode}violin_dict_{name}.pickle"),
         exist_ok=True,
     )
     save_pickle(
         buster_dict,
-        os.path.join(args.files_dir, f"posebusters_{name}.pickle"),
+        os.path.join(args.files_dir, f"{dock_mode}posebusters_{name}.pickle"),
         exist_ok=True,
     )
     save_pickle(
         posecheck_dict,
-        os.path.join(args.files_dir, f"posecheck_{name}.pickle"),
+        os.path.join(args.files_dir, f"{dock_mode}posecheck_{name}.pickle"),
         exist_ok=True,
     )
 
@@ -126,11 +134,11 @@ def aggregate(args):
     print(f"Mean PoseCheck metrics across all sampled ligands: {posecheck_dict}")
 
     num_sdf_files = len(glob(os.path.join(args.files_dir, f"{name}/*.sdf")))
-    if len(violin_dict) > 0: 
+    if len(violin_dict) > 0:
         num_samples = len(violin_dict[list(violin_dict.keys())[0]])
     else:
         num_samples = 0
-        
+
     print(
         f"Found {num_sdf_files} sdf files in {os.path.join(args.files_dir, f'{name}')}. Check if that matches with 'num_ligands_per_pocket' specified in sampling."
     )

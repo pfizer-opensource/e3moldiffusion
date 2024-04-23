@@ -248,7 +248,7 @@ def write_xyz_file_from_batch(
     atomsxmol = batch.bincount()
     num_atoms_prev = 0
     for k, num_atoms in enumerate(atomsxmol):
-        save_dir = os.path.join(path, f"batch_{k}")
+        save_dir = os.path.join(path, f"graph_{k}")
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
 
@@ -267,7 +267,7 @@ def write_xyz_file_from_batch(
         for k, (num_atoms, num_atoms_pocket) in enumerate(
             zip(atomsxmol, atomsxmol_pocket)
         ):
-            save_dir = os.path.join(path, f"batch_{k}")
+            save_dir = os.path.join(path, f"graph_{k}")
             if not os.path.exists(save_dir):
                 os.makedirs(save_dir)
 
@@ -328,11 +328,11 @@ def write_trajectory_as_xyz(
         if valid:
             if joint_traj:
                 files = sorted(
-                    glob(os.path.join(path, f"batch_{i}/lig_pocket_*.xyz")), key=get_key
+                    glob(os.path.join(path, f"graph_{i}/lig_pocket_*.xyz")), key=get_key
                 )
             else:
                 files = sorted(
-                    glob(os.path.join(path, f"batch_{i}/mol_*.xyz")), key=get_key
+                    glob(os.path.join(path, f"graph_{i}/mol_*.xyz")), key=get_key
                 )
             traj_path = os.path.join(path, f"trajectory_{i}.xyz")
             molecules[i].trajectory = traj_path
