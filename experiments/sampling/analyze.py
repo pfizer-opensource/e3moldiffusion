@@ -123,7 +123,7 @@ class BasicMolecularMetrics(object):
                         error_message[4] += 1
                     else:
                         largest_mol = max(
-                            mol_frags, default=mol, key=lambda m: m.GetNumAtoms()
+                            mol_frags, default=rdmol, key=lambda m: m.GetNumAtoms()
                         )
                         Chem.SanitizeMol(largest_mol)
                         smiles = Chem.MolToSmiles(largest_mol)

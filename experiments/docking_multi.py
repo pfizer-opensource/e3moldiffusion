@@ -6,13 +6,19 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from posebusters import PoseBusters
 from posecheck.posecheck import PoseCheck
 from rdkit import Chem
 from tqdm import tqdm
 
-from experiments.data.utils import save_pickle
-from experiments.utils import retrieve_interactions_per_mol, split_list, write_sdf_file
+from experiments.docking_utils import (
+    VinaDockingTask,
+    retrieve_interactions_per_mol,
+    save_pickle,
+    split_list,
+    write_sdf_file,
+)
 
 
 def calculate_smina_score(pdb_file, sdf_file):
@@ -55,6 +61,113 @@ def sdf_to_pdbqt(sdf_file, pdbqt_outfile, mol_id):
     return pdbqt_outfile
 
 
+def calculate_vina_score(
+    pdb_file,
+    receptor_file,
+    sdf_file,
+    out_dir,
+    buster_dict,
+    violin_dict,
+    posecheck_dict,
+    run_eval=False,
+    exhaustiveness=16,
+    return_rdmol=True,
+    mode="vina_score",
+):
+
+    path = Path(os.path.join(out_dir, f"docked_{mode}"))
+    path.mkdir(exist_ok=True)
+
+    suppl = Chem.SDMolSupplier(str(sdf_file), sanitize=False)
+    ligand_name = sdf_file.stem
+    ligand_pdbqt_file = Path(path, ligand_name + ".pdbqt")
+    out_sdf_file = Path(path, ligand_name + "_out.sdf")
+
+    vina_scores = defaultdict(list)
+    rdmols = []
+    for i, mol in enumerate(suppl):
+        sdf_to_pdbqt(sdf_file, ligand_pdbqt_file, i)
+        try:
+            vina_task = VinaDockingTask.from_generated_mol(
+                mol,
+                str(pdb_file),
+                ligand_pdbqt=ligand_pdbqt_file,
+                protein_pdbqt=receptor_file,
+            )
+            score_only_results = vina_task.run(
+                mode="score_only", exhaustiveness=exhaustiveness
+            )
+            minimize_results = vina_task.run(
+                mode="minimize", exhaustiveness=exhaustiveness
+            )
+            score = score_only_results[0]["affinity"]
+            if score is not None or not pd.isna(score):
+                rdmols.append(mol)
+            else:
+                continue
+            vina_scores["vina_score"].append(score)
+            vina_scores["vina_minimize"].append(minimize_results[0]["affinity"])
+
+            if mode == "vina_dock":
+                docking_results = vina_task.run(
+                    mode="dock", exhaustiveness=exhaustiveness
+                )
+                vina_scores["vina_dock"].append(docking_results[0]["affinity"])
+                vina_scores["pose"].append(docking_results[0]["pose"])
+        except Exception:
+            continue
+
+    if len(rdmols) > 0 and run_eval:
+        write_sdf_file(out_sdf_file, rdmols)
+
+        # PoseBusters
+        print("Starting evaluation with PoseBusters...")
+        buster = {}
+        buster_mol = PoseBusters(config="mol")
+        buster_mol_df = buster_mol.bust([str(out_sdf_file)], None, None)
+        for metric in buster_mol_df.columns:
+            violin_dict[metric].extend(list(buster_mol_df[metric]))
+            buster[metric] = buster_mol_df[metric].sum() / len(buster_mol_df[metric])
+        buster_dock = PoseBusters(config="dock")
+        buster_dock_df = buster_dock.bust([str(out_sdf_file)], None, str(pdb_file))
+        for metric in buster_dock_df:
+            if metric not in buster:
+                violin_dict[metric].extend(list(buster_dock_df[metric]))
+                buster[metric] = buster_dock_df[metric].sum() / len(
+                    buster_dock_df[metric]
+                )
+        for k, v in buster.items():
+            buster_dict[k].append(v)
+        print("Done!")
+
+        # PoseCheck
+        print("Starting evaluation with PoseCheck...")
+        pc = PoseCheck()
+        pc.load_protein_from_pdb(str(pdb_file))
+        pc.load_ligands_from_mols(rdmols, add_hs=True)
+        interactions = pc.calculate_interactions()
+        interactions_per_mol, interactions_mean = retrieve_interactions_per_mol(
+            interactions
+        )
+        for k, v in interactions_per_mol.items():
+            violin_dict[k].extend(v)
+        for k, v in interactions_mean.items():
+            posecheck_dict[k].append(v["mean"])
+        clashes = pc.calculate_clashes()
+        strain_energies = pc.calculate_strain_energy()
+        violin_dict["Clashes"].extend(clashes)
+        violin_dict["Strain Energies"].extend(strain_energies)
+        posecheck_dict["Clashes"].append(np.mean(clashes))
+        posecheck_dict["Strain Energies"].append(np.nanmedian(strain_energies))
+        print("Done!")
+
+    scores = vina_scores["vina_score"]
+    if return_rdmol:
+        return scores, rdmols
+    else:
+        return scores, None
+
+
 def calculate_qvina2_score(
     pdb_file,
     receptor_file,
@@ -67,6 +180,7 @@ def calculate_qvina2_score(
     exhaustiveness=16,
     return_rdmol=False,
     run_eval=True,
+    mode="qvina2",
 ):
     """
     Calculate the QuickVina2 score
@@ -81,15 +195,16 @@ def calculate_qvina2_score(
 
     """
 
+    path = Path(os.path.join(out_dir, f"docked_{mode}"))
+    path.mkdir(exist_ok=True)
+
     receptor_file = Path(receptor_file)
     sdf_file = Path(sdf_file)
     pdb_file = Path(pdb_file)
 
     if receptor_file.suffix == ".pdb":
         # prepare receptor, requires Python 2.7
-        receptor_pdbqt_file = Path(
-            os.path.join(out_dir, "docked"), receptor_file.stem + ".pdbqt"
-        )
+        receptor_pdbqt_file = Path(path, receptor_file.stem + ".pdbqt")
         os.popen(f"prepare_receptor4.py -r {receptor_file} -O {receptor_pdbqt_file}")
     else:
         receptor_pdbqt_file = receptor_file
@@ -99,20 +214,8 @@ def calculate_qvina2_score(
 
     suppl = Chem.SDMolSupplier(str(sdf_file), sanitize=False)
     ligand_name = sdf_file.stem
-    ligand_pdbqt_file = Path(os.path.join(out_dir, "docked"), ligand_name + ".pdbqt")
-    out_sdf_file = Path(os.path.join(out_dir, "docked"), ligand_name + "_out.sdf")
-
-    # pdb_name = str(ligand_pdbqt_file).split("/")[-1].split("-")[0]
-    # if pdb_dir is not None:
-    #     pdbs = [str(i).split("/")[-1].split(".")[0] for i in pdb_dir.glob("[!.]*.pdb")]
-    # else:
-    #     pdbs = None
-    # if pdbs is not None and pdb_name in pdbs:
-    #     pdb_file = os.path.join(str(pdb_dir), pdb_name + ".pdb")
-    # else:
-    #     # temp_dir = tempfile.mkdtemp()
-    #     # protein, _ = get_pdb_components(pdb_name)
-    #     # pdb_file = write_pdb(temp_dir, protein, pdb_name)
+    ligand_pdbqt_file = Path(path, ligand_name + ".pdbqt")
+    out_sdf_file = Path(path, ligand_name + "_out.sdf")
 
     for i, mol in enumerate(suppl):  # sdf file may contain several ligands
         sdf_to_pdbqt(sdf_file, ligand_pdbqt_file, i)
@@ -150,9 +253,7 @@ def calculate_qvina2_score(
         assert best_line[0] == "1"
         scores.append(float(best_line[1]))
 
-        out_pdbqt_file = Path(
-            os.path.join(out_dir, "docked"), ligand_name + "_out.pdbqt"
-        )
+        out_pdbqt_file = Path(path, ligand_name + "_out.pdbqt")
         if out_pdbqt_file.exists():
             os.popen(f"obabel {out_pdbqt_file} -O {out_sdf_file}").read()
             # clean up
@@ -238,7 +339,8 @@ if __name__ == "__main__":
     parser.add_argument("--write-csv", action="store_true")
     parser.add_argument("--write-dict", action="store_true")
     parser.add_argument("--avoid-eval", default=False, action="store_true")
-    parser.add_argument("--dataset", type=str, default="moad")
+    parser.add_argument("--dataset", type=str, default="crossdocked")
+    parser.add_argument("--docking-mode", type=str, default="qvina2")
     args = parser.parse_args()
 
     print("Starting docking...")
@@ -305,17 +407,30 @@ if __name__ == "__main__":
             raise Exception("Dataset not available!")
 
         # try:
-        scores, rdmols = calculate_qvina2_score(
-            pdb_file,
-            receptor_file,
-            sdf_file,
-            args.save_dir,
-            buster_dict,
-            violin_dict,
-            posecheck_dict,
-            return_rdmol=True,
-            run_eval=not args.avoid_eval,
-        )
+        if args.docking_mode == "qvina2":
+            scores, rdmols = calculate_qvina2_score(
+                pdb_file,
+                receptor_file,
+                sdf_file,
+                args.save_dir,
+                buster_dict,
+                violin_dict,
+                posecheck_dict,
+                return_rdmol=True,
+                run_eval=not args.avoid_eval,
+            )
+        elif args.docking_mode in ["vina_score", "vina_dock"]:
+            scores, rdmols = calculate_vina_score(
+                pdb_file,
+                receptor_file,
+                sdf_file,
+                args.save_dir,
+                buster_dict,
+                violin_dict,
+                posecheck_dict,
+                return_rdmol=True,
+                run_eval=not args.avoid_eval,
+            )
         # except AttributeError as e:
         #     print(e)
         #     continue
@@ -334,17 +449,26 @@ if __name__ == "__main__":
     if args.write_dict:
         save_pickle(
             results,
-            os.path.join(args.save_dir, f"{args.mp_index}_qvina2_scores.pickle"),
+            os.path.join(
+                args.save_dir, f"{args.mp_index}_{args.docking_mode}_scores.pickle"
+            ),
         )
+        dock_mode = "" if args.docking_mode == "qvina2" else args.docking_mode + "_"
         save_pickle(
             buster_dict,
-            os.path.join(args.save_dir, f"{args.mp_index}_posebusters_docked.pickle"),
+            os.path.join(
+                args.save_dir, f"{args.mp_index}_{dock_mode}posebusters_docked.pickle"
+            ),
         )
         save_pickle(
             violin_dict,
-            os.path.join(args.save_dir, f"{args.mp_index}_violin_dict_docked.pickle"),
+            os.path.join(
+                args.save_dir, f"{args.mp_index}_{dock_mode}violin_dict_docked.pickle"
+            ),
         )
         save_pickle(
             posecheck_dict,
-            os.path.join(args.save_dir, f"{args.mp_index}_posecheck_docked.pickle"),
+            os.path.join(
+                args.save_dir, f"{args.mp_index}_{dock_mode}posecheck_docked.pickle"
+            ),
         )

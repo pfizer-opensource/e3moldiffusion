@@ -19,7 +19,7 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff5_bonds5_out-norm_rbf-5A_edge-stuff"
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_cutoff5_bonds5_norm_rbf-5A_edge-stuff_joint-sa"
 output_dir="$main_dir/evaluation/docking/nodes_bias_2"
 
 mkdir "$main_dir/evaluation"

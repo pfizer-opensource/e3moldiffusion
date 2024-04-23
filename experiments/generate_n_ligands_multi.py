@@ -302,6 +302,9 @@ def evaluate(args):
                     v = [p for i, p in enumerate(v) if i in indices]
                     violin_dict[k].extend(v)
                     statistics_dict[k + "_mean"].append(np.mean(v))
+                elif len(v) > 1 and len(v) < len(indices):
+                    violin_dict[k].extend(v)
+                    statistics_dict[k + "_mean"].append(np.mean(v))
                 elif len(v) == 1:
                     statistics_dict[k].append(v[0])
             else:

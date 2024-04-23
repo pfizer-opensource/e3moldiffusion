@@ -1218,6 +1218,7 @@ def get_molecules(
     dataset_info,
     device,
     data_batch_pocket=None,
+    pocket_name=None,
     relax_mol=False,
     max_relax_iter=200,
     sanitize=False,
@@ -1256,6 +1257,8 @@ def get_molecules(
         atom_types_integer_split_pocket = atom_types_integer_pocket.split(
             batch_num_nodes_pocket, dim=0
         )
+    if pocket_name is None:
+        pocket_name = []
 
     atom_types_integer = torch.argmax(atoms_pred, dim=-1).detach().to(mol_device)
     atom_types_integer_split = atom_types_integer.split(batch_num_nodes, dim=0)
@@ -1318,12 +1321,14 @@ def get_molecules(
         atom_types,
         charges,
         edges,
+        name,
     ) in enumerate(
         zip_longest(
             pos_splits,
             atom_types_integer_split,
             charge_types_integer_split,
             edge_attrs_splits,
+            pocket_name,
             fillvalue=None,
         )
     ):
@@ -1338,6 +1343,21 @@ def get_molecules(
             atom_types_pocket=(
                 atom_types_integer_split_pocket[i]
                 if data_batch_pocket is not None
+                else None
+            ),
+            pocket_name=(
+                ("-").join(name.split("/")[1].split(".pdb")[0].split("_")) + ".pdb"
+                if name is not None
+                else None
+            ),
+            ligand_name=(
+                ("-").join(name.split("/")[1].split(".pdb")[0].split("_"))
+                + "_"
+                + ("-")
+                .join(name.split("/")[1].split(".pdb")[0].split("_"))
+                .split("-pocket10")[0]
+                + ".sdf"
+                if name is not None
                 else None
             ),
             context=context_split[i][0] if context_split is not None else None,

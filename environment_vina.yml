@@ -1,23 +1,14 @@
-name: e3mol
+name: vina
 channels:
   - conda-forge
-  - pytorch
-  - pyg
   - nvidia
   - mx
 dependencies:
-  - python=3.10
+  - python=3.9
   - pip
   - notebook
   - matplotlib
-  - xtb
-  - pytorch::pytorch=2.0.1
-  - pyg::pyg=2.3.0
-  - pyg::pytorch-scatter
-  - pyg::pytorch-sparse
-  - pyg::pytorch-cluster
   - conda-forge::rdkit=2023.9.3
-  - conda-forge::pytorch-lightning=2.0.6
   - conda-forge::jupyter
   - conda-forge::openbabel
   - conda-forge::prody
@@ -29,16 +20,19 @@ dependencies:
   - conda-forge::setuptools=65.6.3
   - conda-forge::scipy==1.11.4
   - mx::reduce
+  - conda-forge::swig 
+  - conda-forge::boost-cpp 
+  - conda-forge::sphinx 
+  - conda-forge::sphinx_rtd_theme
   - conda-forge::biopython=1.81
   - pip:
       - ase
-      - lmdb
       - nglview
       - rmsd
-      - torch_ema
       - tensorboard
-      - xtb
       - datamol
       - prolif
       - prody
       - seaborn
+      - meeko
+      - vina

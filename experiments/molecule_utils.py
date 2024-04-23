@@ -54,6 +54,8 @@ class Molecule:
         rdkit_mol=None,
         atom_types_pocket=None,
         positions_pocket=None,
+        pocket_name=None,
+        ligand_name=None,
         context=None,
         is_aromatic=None,
         hybridization=None,
@@ -100,6 +102,8 @@ class Molecule:
         self.positions = positions
         self.positions_pocket = positions_pocket
         self.atom_types_pocket = atom_types_pocket
+        self.pocket_name = pocket_name
+        self.ligand_name = ligand_name
         self.charges = charges
         self.context = context
 

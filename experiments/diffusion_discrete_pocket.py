@@ -398,7 +398,7 @@ class Trainer(pl.LightningModule):
                     e, f = calculate_xtb_energy(
                         valid_molecules[i].positions, atom_types
                     )
-                except:
+                except Exception:
                     continue
                 valid_molecules[i].energy = e
                 valid_molecules[i].forces_norm = f
@@ -2648,10 +2648,10 @@ class Trainer(pl.LightningModule):
             if save_traj:
                 atom_decoder = self.dataset_info.atom_decoder
                 write_xyz_file_from_batch(
-                    pos,
+                    pos + pocket_cog[batch],
                     atom_types,
                     batch,
-                    pos_pocket=pos_pocket,
+                    pos_pocket=pos_pocket + pocket_cog[batch_pocket],
                     atoms_pocket=atom_types_pocket,
                     batch_pocket=batch_pocket,
                     joint_traj=True,
@@ -2680,6 +2680,9 @@ class Trainer(pl.LightningModule):
             self.num_charge_classes,
             self.dataset_info,
             data_batch_pocket=batch_pocket,
+            pocket_name=(
+                pocket_data.pocket_name if "pocket_name" in pocket_data else None
+            ),
             device=self.device,
             mol_device="cpu",
             context=context,
