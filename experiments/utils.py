@@ -1345,21 +1345,8 @@ def get_molecules(
                 if data_batch_pocket is not None
                 else None
             ),
-            pocket_name=(
-                ("-").join(name.split("/")[1].split(".pdb")[0].split("_")) + ".pdb"
-                if name is not None
-                else None
-            ),
-            ligand_name=(
-                ("-").join(name.split("/")[1].split(".pdb")[0].split("_"))
-                + "_"
-                + ("-")
-                .join(name.split("/")[1].split(".pdb")[0].split("_"))
-                .split("-pocket10")[0]
-                + ".sdf"
-                if name is not None
-                else None
-            ),
+            pocket_name=name.split("_")[0] if name is not None else None,
+            ligand_name=name.split("_")[1] if name is not None else None,
             context=context_split[i][0] if context_split is not None else None,
             is_aromatic=aromatic_feat_integer_split[i] if add_feats else None,
             hybridization=hybridization_feat_integer_split[i] if add_feats else None,
