@@ -70,12 +70,12 @@ def calculate_vina_score(
     violin_dict,
     posecheck_dict,
     run_eval=False,
-    exhaustiveness=16,
+    exhaustiveness=24,
     return_rdmol=True,
     mode="vina_score",
 ):
 
-    path = Path(os.path.join(out_dir, f"docked_{mode}"))
+    path = Path(os.path.join(out_dir, f"{mode}"))
     path.mkdir(exist_ok=True)
 
     suppl = Chem.SDMolSupplier(str(sdf_file), sanitize=False)
@@ -105,6 +105,7 @@ def calculate_vina_score(
                 rdmols.append(mol)
             else:
                 continue
+
             vina_scores["vina_score"].append(score)
             vina_scores["vina_minimize"].append(minimize_results[0]["affinity"])
 
@@ -114,7 +115,9 @@ def calculate_vina_score(
                 )
                 vina_scores["vina_dock"].append(docking_results[0]["affinity"])
                 vina_scores["pose"].append(docking_results[0]["pose"])
+            ligand_pdbqt_file.unlink()
         except Exception:
+            ligand_pdbqt_file.unlink()
             continue
 
     if len(rdmols) > 0 and run_eval:
@@ -161,11 +164,10 @@ def calculate_vina_score(
         posecheck_dict["Strain Energies"].append(np.nanmedian(strain_energies))
         print("Done!")
 
-    scores = vina_scores["vina_score"]
     if return_rdmol:
-        return scores, rdmols
+        return vina_scores, rdmols
     else:
-        return scores, None
+        return vina_scores, None
 
 
 def calculate_qvina2_score(
@@ -195,7 +197,7 @@ def calculate_qvina2_score(
 
     """
 
-    path = Path(os.path.join(out_dir, f"docked_{mode}"))
+    path = Path(os.path.join(out_dir, f"{mode}"))
     path.mkdir(exist_ok=True)
 
     receptor_file = Path(receptor_file)
@@ -347,7 +349,7 @@ if __name__ == "__main__":
 
     assert (args.sdf_dir is not None) ^ (args.sdf_files is not None)
 
-    results = {"receptor": [], "ligand": [], "scores": []}
+    results = defaultdict(list)
     results_dict = {}
 
     buster_dict = defaultdict(list)
@@ -430,13 +432,21 @@ if __name__ == "__main__":
                 posecheck_dict,
                 return_rdmol=True,
                 run_eval=not args.avoid_eval,
+                mode=args.docking_mode,
             )
         # except AttributeError as e:
         #     print(e)
         #     continue
         results["receptor"].append(str(receptor_file))
         results["ligand"].append(str(sdf_file))
-        results["scores"].append(scores)
+        if args.docking_mode == "qvina2":
+            results["scores"].append(scores)
+        else:
+
+            results["scores"].append(scores["vina_score"])
+            results["vina_minimize"].append(scores["vina_minimize"])
+            if args.docking_mode == "vina_dock":
+                results["vina_dock"].append(scores["vina_dock"])
 
         if args.write_dict:
             results_dict[ligand_name] = {
@@ -446,29 +456,27 @@ if __name__ == "__main__":
                 "rmdols": rdmols,
             }
 
+    dock_mode = args.docking_mode
     if args.write_dict:
         save_pickle(
             results,
-            os.path.join(
-                args.save_dir, f"{args.mp_index}_{args.docking_mode}_scores.pickle"
-            ),
+            os.path.join(args.save_dir, f"{args.mp_index}_{dock_mode}_scores.pickle"),
         )
-        dock_mode = "" if args.docking_mode == "qvina2" else args.docking_mode + "_"
         save_pickle(
             buster_dict,
             os.path.join(
-                args.save_dir, f"{args.mp_index}_{dock_mode}posebusters_docked.pickle"
+                args.save_dir, f"{args.mp_index}_posebusters_{dock_mode}.pickle"
             ),
         )
         save_pickle(
             violin_dict,
             os.path.join(
-                args.save_dir, f"{args.mp_index}_{dock_mode}violin_dict_docked.pickle"
+                args.save_dir, f"{args.mp_index}_violin_dict_{dock_mode}.pickle"
             ),
         )
         save_pickle(
             posecheck_dict,
             os.path.join(
-                args.save_dir, f"{args.mp_index}_{dock_mode}posecheck_docked.pickle"
+                args.save_dir, f"{args.mp_index}_posecheck_{dock_mode}.pickle"
             ),
         )

@@ -13,14 +13,13 @@
 num_cpus=40
 
 cd /sharedhome/cremej01/workspace/e3moldiffusion
-source activate e3mol
-conda activate e3mol
+source activate vina
+conda activate vina
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/cremej01/data/kinodata_noH_cutoff5/val"
+main_dir="/scratch1/cremej01/data/crossdocked_noH_cutoff5_new/val"
 output_dir="$main_dir/evaluation/docking"
-mkdir "$output_dir/docked"
 
 
 python experiments/docking_multi.py \
@@ -28,9 +27,10 @@ python experiments/docking_multi.py \
     --num-cpus "$num_cpus" \
     --sdf-dir "$main_dir" \
     --save-dir "$output_dir" \
-    --pdbqt-dir /scratch1/cremej01/data/kinodata_noH_cutoff5/val/pdbqt \
-    --pdb-dir /scratch1/cremej01/data/kinodata_noH_cutoff5/val \
+    --pdbqt-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/val/pdbqt \
+    --pdb-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/val \
     --dataset kinodata \
     --write-csv \
     --write-dict \
-    --avoid-eval
+    --avoid-eval \
+    --docking-mode vina_score

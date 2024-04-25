@@ -460,7 +460,9 @@ if __name__ == "__main__":
                 pbar.set_description(f"#failed: {num_failed}")
                 continue
 
-            pdb_and_mol_ids.append(f"{pocket_fn}_{ligand_fn}")
+            pdb_and_mol_ids.append(
+                f"{pocket_fn.split('/')[1]}_{ligand_fn.split('/')[1]}"
+            )
             lig_coords.append(ligand_data["lig_coords"])
             lig_mask.append(count * np.ones(len(ligand_data["lig_coords"])))
             lig_atom.append(ligand_data["lig_atoms"])

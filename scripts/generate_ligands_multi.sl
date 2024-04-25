@@ -19,7 +19,7 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_cutoff5_bonds5_norm_rbf-5A_edge-stuff_joint-sa"
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_cutoff7_bonds5_out-norm_rbf-5A_edge-stuff_joint-sa"
 output_dir="$main_dir/evaluation/docking/nodes_bias_2"
 
 mkdir "$main_dir/evaluation"
@@ -31,9 +31,9 @@ python experiments/generate_ligands_multi.py \
     --num-gpus "$num_gpus" \
     --model-path "$main_dir/best_valid.ckpt" \
     --save-dir "$output_dir" \
-    --pdbqt-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff5_new/test/pdbqt \
-    --test-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff5_new/test \
-    --dataset-root /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff5_new \
+    --pdbqt-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff7_TargetDiff_atmass/test/pdbqt \
+    --test-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff7_TargetDiff_atmass/test \
+    --dataset-root /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff7_TargetDiff_atmass \
     --skip-existing \
     --num-ligands-per-pocket-to-sample 100 \
     --num-ligands-per-pocket-to-save 100 \

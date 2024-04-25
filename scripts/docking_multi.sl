@@ -17,18 +17,17 @@ source activate vina
 conda activate vina
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
-
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff7_bonds5_out-norm_rbf-5A_edge-stuff"
-output_dir="$main_dir/evaluation/docking/nodes_bias_2"
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_cutoff5_bonds5_norm_joint-sa-dock_Old"
+output_dir="$main_dir/evaluation/docking/nodes_bias_vary_10_dock200-300"
 
 python experiments/docking_multi.py \
     --mp-index "${SLURM_ARRAY_TASK_ID}" \
     --num-cpus "$num_cpus" \
     --sdf-dir "$output_dir/sampled" \
     --save-dir "$output_dir" \
-    --pdbqt-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff7_TargetDiff_atmass/test/pdbqt \
-    --pdb-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff7_TargetDiff_atmass/test \
+    --pdbqt-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff5_new/test/pdbqt \
+    --pdb-dir /scratch1/e3moldiffusion/data/crossdocked/crossdocked_noH_cutoff5_new/test \
     --dataset crossdocked \
     --write-csv \
     --write-dict \
-    --docking-mode vina_score
+    --docking-mode vina_dock
