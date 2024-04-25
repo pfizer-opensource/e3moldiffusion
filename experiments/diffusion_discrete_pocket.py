@@ -745,14 +745,24 @@ class Trainer(pl.LightningModule):
                 .sqrt()
             )
             # geometry loss
-            dloss = self.dist_loss(dloss_true, dloss_pred).mean()
+            dloss = self.dist_loss(dloss_true, dloss_pred)
+            dloss = scatter_mean(dloss, ligand_i, dim=0)
+            # apply loss weighting
+            dloss = scatter_mean(dloss, batch.batch, dim=0)
+            dloss = torch.sum(weights * dloss, dim=0)
             if self.hparams.ligand_pocket_hidden_distance:
                 d_hidden = out_dict["dist_pred"]
                 # latent loss
-                dloss1 = self.dist_loss(dloss_true, d_hidden).mean()
+                dloss1 = self.dist_loss(dloss_true, d_hidden)
                 # consistency loss between geometry and latent
-                dloss2 = self.dist_loss(dloss_pred, d_hidden).mean()
-                dloss = dloss + dloss1 + dloss2
+                dloss2 = self.dist_loss(dloss_pred, d_hidden)
+                # combine and apply loss weighting
+                dloss12 = dloss1 + dloss2
+                dloss12 = scatter_mean(dloss12, ligand_i, dim=0)
+                dloss12 = scatter_mean(dloss12, batch.batch, dim=0)
+                dloss12 = weights * dloss12
+                dloss12 = torch.sum(dloss12, dim=0)
+                dloss = dloss + dloss12
             final_loss = final_loss + 1.0 * dloss
         else:
             dloss = None
