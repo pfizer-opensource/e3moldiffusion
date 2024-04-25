@@ -5,13 +5,13 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=12G
 #SBATCH --cpus-per-task=12
-#SBATCH --partition=ondemand-8xv100m32-1a
+#SBATCH --partition=ondemand-8xv100m32-1b
 #SBATCH --gres=gpu:1
-#SBATCH --array=1-14
+#SBATCH --array=1-16
 #SBATCH --output=/scratch1/e3moldiffusion/slurm_logs_generate/array_run_%j.out
 #SBATCH --error=/scratch1/e3moldiffusion/slurm_logs_generate/array_run_%j.err
 
-num_gpus=14
+num_gpus=16
 
 cd /sharedhome/cremej01/workspace/e3moldiffusion
 source activate e3mol
@@ -19,8 +19,8 @@ conda activate e3mol
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff7_bonds5_out-norm_rbf-5A_edge-stuff_joint-sa"
-output_dir="$main_dir/evaluation/docking/obabel_validity_nodes_bias_2"
+main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_cutoff7_bonds5_out-norm_rbf-5A_edge-stuff_joint-sa"
+output_dir="$main_dir/evaluation/docking/validity_nodes_bias_2"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/docking"

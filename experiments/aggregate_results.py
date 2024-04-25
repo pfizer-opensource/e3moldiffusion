@@ -34,7 +34,6 @@ def remove_dicts(dicts):
 
 
 def aggregate(args):
-    name = "sampled" if not args.docked else f"docked_{args.docking_mode}"
 
     if not args.docked:
         statistics_dicts = sorted(
@@ -54,26 +53,29 @@ def aggregate(args):
     if (
         args.docked and args.docking_mode != "qvina2"
     ):  # ugly workaround for backward compatibility
-        dock_mode = args.docking_mode + "_"
+        name = args.docking_mode
+    elif args.docked and args.docking_mode == "qvina2":
+        name = "docked"
     else:
-        dock_mode = ""
+        name = "sampled"
 
     violin_dicts = sorted(
-        glob(os.path.join(args.files_dir, f"*_{dock_mode}violin_dict_{name}.pickle"))
+        glob(os.path.join(args.files_dir, f"*_violin_dict_{name}.pickle"))
     )
+
     violin_dict = aggregate_dicts(violin_dicts)
     if args.remove_single_dicts:
         remove_dicts(violin_dicts)
 
     buster_dicts = sorted(
-        glob(os.path.join(args.files_dir, f"*_{dock_mode}posebusters_{name}.pickle"))
+        glob(os.path.join(args.files_dir, f"*_posebusters_{name}.pickle"))
     )
     buster_dict = aggregate_dicts(buster_dicts)
     if args.remove_single_dicts:
         remove_dicts(buster_dicts)
 
     posecheck_dicts = sorted(
-        glob(os.path.join(args.files_dir, f"*_{dock_mode}posecheck_{name}.pickle"))
+        glob(os.path.join(args.files_dir, f"*_posecheck_{name}.pickle"))
     )
     posecheck_dict = aggregate_dicts(posecheck_dicts)
     if args.remove_single_dicts:
@@ -96,30 +98,83 @@ def aggregate(args):
             os.path.join(args.files_dir, f"{args.docking_mode}_scores.pickle"),
             exist_ok=True,
         )
-        scores_mean = [np.mean(r) for r in score_dict["scores"] if len(r) >= 1]
-        mean_score = np.mean(scores_mean)
-        std_score = np.std(scores_mean)
-        print(f"Mean docking score in mode {args.docking_mode}: {mean_score}")
-        print(f"Docking score standard deviation: {std_score}")
+        if args.docking_mode == "qvina2":
+            import pdb
 
-        mean_top10_score = np.mean(
-            [np.mean(sorted(r)[:10]) for r in score_dict["scores"] if len(r) >= 1]
-        )
-        print(f"Top-10 mean score: {mean_top10_score}")
+            pdb.set_trace()
+            scores_mean = [np.mean(r) for r in score_dict["scores"] if len(r) >= 1]
+            mean_score = np.mean(scores_mean)
+            std_score = np.std(scores_mean)
+            mean_top10_score = np.mean(
+                [np.mean(sorted(r)[:10]) for r in score_dict["scores"] if len(r) >= 1]
+            )
+            print("\n")
+            print(f"Mean QVina2 score (re-docking): {mean_score}")
+            print(f"Std. QVina2 score (re-docking): {std_score}")
+            print(f"Top-10 QVina2 mean score  (re-docking): {mean_top10_score}")
+            print("\n")
+
+        else:
+            scores_mean = [np.mean(r) for r in score_dict["scores"] if len(r) >= 1]
+            scores_mean_min = [
+                np.mean(r) for r in score_dict["vina_minimize"] if len(r) >= 1
+            ]
+            mean_score = np.mean(scores_mean)
+            mean_score_min = np.mean(scores_mean_min)
+            std_score = np.std(scores_mean)
+            std_score_min = np.std(scores_mean_min)
+            mean_top10_score = np.mean(
+                [np.mean(sorted(r)[:10]) for r in score_dict["scores"] if len(r) >= 1]
+            )
+            mean_top10_score_min = np.mean(
+                [
+                    np.mean(sorted(r)[:10])
+                    for r in score_dict["vina_minimize"]
+                    if len(r) >= 1
+                ]
+            )
+            print("\n")
+            print(f"Mean Vina score: {mean_score}")
+            print(f"Std. Vina score: {std_score}")
+            print(f"Top-10 mean Vina score: {mean_top10_score}")
+            print("\n")
+            print(f"Mean Vina score (minimized): {mean_score_min}")
+            print(f"Std. Vina score (minimized): {std_score_min}")
+            print(f"Top-10 mean Vina score (minimized): {mean_top10_score_min}")
+            print("\n")
+
+            if args.docking_mode == "vina_dock":
+                scores_mean = [
+                    np.mean(r) for r in score_dict["vina_dock"] if len(r) >= 1
+                ]
+                mean_score = np.mean(scores_mean)
+                std_score = np.std(scores_mean)
+                mean_top10_score = np.mean(
+                    [
+                        np.mean(sorted(r)[:10])
+                        for r in score_dict["vina_dock"]
+                        if len(r) >= 1
+                    ]
+                )
+                print("\n")
+                print(f"Mean Vina score (re-docking): {mean_score}")
+                print(f"Vina score standard deviation (re-docking): {std_score}")
+                print(f"Top-10 Vina mean score (re-docking): {mean_top10_score}")
+                print("\n")
 
     save_pickle(
         violin_dict,
-        os.path.join(args.files_dir, f"{dock_mode}violin_dict_{name}.pickle"),
+        os.path.join(args.files_dir, f"violin_dict_{name}.pickle"),
         exist_ok=True,
     )
     save_pickle(
         buster_dict,
-        os.path.join(args.files_dir, f"{dock_mode}posebusters_{name}.pickle"),
+        os.path.join(args.files_dir, f"posebusters_{name}.pickle"),
         exist_ok=True,
     )
     save_pickle(
         posecheck_dict,
-        os.path.join(args.files_dir, f"{dock_mode}posecheck_{name}.pickle"),
+        os.path.join(args.files_dir, f"posecheck_{name}.pickle"),
         exist_ok=True,
     )
 
