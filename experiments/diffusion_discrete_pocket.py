@@ -126,7 +126,9 @@ class Trainer(pl.LightningModule):
             hparams["model_global_edge"] = False
         if "use_cutoff_damping" not in hparams.keys():
             hparams["use_cutoff_damping"] = False
-
+        if "not_strict_ckpt" not in hparams.keys():
+            hparams["not_strict_ckpt"] = False
+            
         self.save_hyperparameters(hparams)
 
         self.knn = hparams["knn"]
@@ -181,6 +183,7 @@ class Trainer(pl.LightningModule):
                 self.num_atom_features,
                 self.num_bond_classes,
                 hparams=self.hparams,
+                strict=not self.hparams.not_strict_ckpt,
             )
             # num_params = len(self.model.state_dict())
             # for i, param in enumerate(self.model.parameters()):
@@ -763,7 +766,7 @@ class Trainer(pl.LightningModule):
                 dloss12 = weights * dloss12
                 dloss12 = torch.sum(dloss12, dim=0)
                 dloss = dloss + dloss12
-            final_loss = final_loss + 1.0 * dloss
+            final_loss = final_loss + 3.0 * dloss
         else:
             dloss = None
 

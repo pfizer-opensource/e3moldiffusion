@@ -552,7 +552,7 @@ def load_model(filepath, num_atom_features, device="cpu", **kwargs):
 
 
 def load_model_ligand(
-    filepath, num_atom_features, num_bond_classes=5, device="cpu", hparams=None
+    filepath, num_atom_features, num_bond_classes=5, device="cpu", hparams=None, strict=True,
 ):
 
     ckpt = torch.load(filepath, map_location="cpu")
@@ -562,6 +562,16 @@ def load_model_ligand(
     if "store_intermediate_coords" not in args.keys():
         args["store_intermediate_coords"] = hparams.store_intermediate_coords
 
+    # NOTE: need to actually give the hparams from the current run that should be executed.
+    # Right now, some defaults are overwritten from the current run:
+    if not strict:
+        print("Overwriting some some `args` from the checkpoint to match from `hparams`")
+        print("This is most likely done in the fine-tuning stage since not-strict model-checkpoint-loading is set.")
+        print("Its better to take the `hparams` from the current run to pass into def create_model.")
+        for k in ["ligand_pocket_hidden_distance", "joint_property_prediction", "regression_property"]:
+            print("setting {} to {}".format(k, hparams[k]))
+            args[k] = hparams[k]
+        
     model = create_model(args, num_atom_features, num_bond_classes)
 
     state_dict = ckpt["state_dict"]
@@ -575,7 +585,7 @@ def load_model_ligand(
         for k, v in state_dict.items()
         if not any(x in k for x in ["prior", "sde", "cat", "posnorm", "se3norm"])
     }
-    model.load_state_dict(state_dict)
+    model.load_state_dict(state_dict, strict=strict)
     return model.to(device)
 
 
@@ -667,7 +677,9 @@ def create_model(hparams, num_atom_features, num_bond_classes=5):
         hparams["model_global_edge"] = False
     if "use_cutoff_damping" not in hparams.keys():
         hparams["use_cutoff_damping"] = False
-
+    if "not_strict_ckpt" not in hparams.keys():
+            hparams["not_strict_ckpt"] = False
+            
     model = DenoisingEdgeNetwork(
         hn_dim=(hparams["sdim"], hparams["vdim"]),
         num_layers=hparams["num_layers"],
