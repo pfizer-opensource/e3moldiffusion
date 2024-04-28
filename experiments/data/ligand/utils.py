@@ -9,7 +9,7 @@ from networkx.algorithms import isomorphism
 from rdkit import Chem
 from scipy import spatial as sc_spatial
 
-from experiments.data.ligand.priorconfig import CONFIG_5A_TD, CONFIG_6A_TD, CONFIG_7A_TD, CONFIG_8A_TD, CONFIG_10A_TD
+from experiments.data.ligand.priorconfig import CONFIG_5A_DIFFSBDD, CONFIG_6A_DIFFSBDD, CONFIG_7A_DIFFSBDD, CONFIG_8A_DIFFSBDD, CONFIG_10A_TD
 
 class Queue:
     def __init__(self, max_len=50):
