@@ -128,7 +128,7 @@ class Trainer(pl.LightningModule):
             hparams["use_cutoff_damping"] = False
         if "not_strict_ckpt" not in hparams.keys():
             hparams["not_strict_ckpt"] = False
-            
+
         self.save_hyperparameters(hparams)
 
         self.knn = hparams["knn"]
@@ -227,9 +227,6 @@ class Trainer(pl.LightningModule):
                 use_cutoff_damping=hparams["use_cutoff_damping"],
             )
 
-        import pdb
-
-        pdb.set_trace()
         self.max_nodes = dataset_info.max_n_nodes
 
         if self.hparams.use_centroid_context_embed:
