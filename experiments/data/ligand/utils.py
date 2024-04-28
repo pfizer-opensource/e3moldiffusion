@@ -222,13 +222,13 @@ def _get_bin_idx(space_size, config: dict):
 def sample_atom_num(space_size, cutoff: float = 5.0):
     assert cutoff in [5.0, 6.0, 7.0, 8.0, 10.0]
     if cutoff == 5.0:
-        config = CONFIG_5A_TD
+        config = CONFIG_5A_DIFFSBDD
     elif cutoff == 6.0:
-        config = CONFIG_6A_TD
+        config = CONFIG_6A_DIFFSBDD
     elif cutoff == 7.0:
-        config = CONFIG_7A_TD
+        config = CONFIG_7A_DIFFSBDD
     elif cutoff == 8.0:
-        config = CONFIG_8A_TD
+        config = CONFIG_8A_DIFFSBDD
     elif cutoff == 10.0:
         config = CONFIG_10A_TD
     else:
