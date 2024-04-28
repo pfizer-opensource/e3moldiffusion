@@ -434,15 +434,12 @@ if __name__ == "__main__":
                 run_eval=not args.avoid_eval,
                 mode=args.docking_mode,
             )
-        # except AttributeError as e:
-        #     print(e)
-        #     continue
+
         results["receptor"].append(str(receptor_file))
         results["ligand"].append(str(sdf_file))
         if args.docking_mode == "qvina2":
             results["scores"].append(scores)
         else:
-
             results["scores"].append(scores["vina_score"])
             results["vina_minimize"].append(scores["vina_minimize"])
             if args.docking_mode == "vina_dock":
@@ -480,3 +477,5 @@ if __name__ == "__main__":
                 args.save_dir, f"{args.mp_index}_posecheck_{dock_mode}.pickle"
             ),
         )
+
+    print("Docking done!")

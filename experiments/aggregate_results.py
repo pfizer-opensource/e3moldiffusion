@@ -55,7 +55,7 @@ def aggregate(args):
     ):  # ugly workaround for backward compatibility
         name = args.docking_mode
     elif args.docked and args.docking_mode == "qvina2":
-        name = "docked"
+        name = "qvina2"  # "docked"
     else:
         name = "sampled"
 
@@ -99,9 +99,6 @@ def aggregate(args):
             exist_ok=True,
         )
         if args.docking_mode == "qvina2":
-            import pdb
-
-            pdb.set_trace()
             scores_mean = [np.mean(r) for r in score_dict["scores"] if len(r) >= 1]
             mean_score = np.mean(scores_mean)
             std_score = np.std(scores_mean)
