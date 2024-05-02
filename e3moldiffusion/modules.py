@@ -797,7 +797,7 @@ class LayerNorm(nn.Module):
             self.weight.data.fill_(1.0)
             self.bias.data.fill_(0.0)
 
-    def forward(self, x: Dict, batch: Tensor) -> Tuple[Tensor, Optional[Tensor]]:
+    def forward(self, x: Dict, batch: Tensor, gamma: float = 1.0) -> Tuple[Tensor, Optional[Tensor]]:
         s, v = x.get("s"), x.get("v")
         batch_size = int(batch.max()) + 1
         smean = s.mean(dim=-1, keepdim=True)
@@ -860,7 +860,7 @@ class AdaptiveLayerNorm(nn.Module):
         self.weight_bias.bias.data[: self.sdim] = 1
         self.weight_bias.bias.data[self.sdim :] = 0
 
-    def forward(self, x: Dict, batch: Tensor) -> Tuple[Tensor, Optional[Tensor]]:
+    def forward(self, x: Dict, batch: Tensor, gamma: float = 1.0) -> Tuple[Tensor, Optional[Tensor]]:
         s, v, z = x["s"], x["v"], x["z"]
         batch_size = int(batch.max()) + 1
 
@@ -873,6 +873,8 @@ class AdaptiveLayerNorm(nn.Module):
         sout = s / var[batch]
 
         weight, bias = self.weight_bias(z).chunk(2, dim=-1)
+        weight = weight * gamma
+        bias = bias * gamma
         sout = sout * weight[batch] + bias[batch]
 
         if v is not None:

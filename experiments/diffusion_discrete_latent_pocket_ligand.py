@@ -1,3 +1,8 @@
+"""
+Script that encodes the ligand as latent and the diffusion models denoises a noisy ligand, next to the full protein pocket AND the latent ligand embedding.
+So diffusion model inputs (noisy-ligand, full-pocket, latent(ligand))
+"""
+
 import logging
 import os
 import pickle
@@ -173,9 +178,8 @@ class Trainer(pl.LightningModule):
                 num_layers=hparams["num_layers_latent"],
                 vector_aggr=hparams["vector_aggr"],
                 intermediate_outs=hparams["intermediate_outs"],
-                use_pos_norm=hparams[
-                    "use_pos_norm"
-                ],  # for old checkpoint to start sampling.
+                use_pos_norm=hparams["use_pos_norm"],
+                use_out_norm=hparams["use_out_norm"]
             )
             self.latent_lin = GatedEquivBlock(
                 in_dims=(hparams["sdim_latent"], hparams["vdim_latent"]),
@@ -518,7 +522,7 @@ class Trainer(pl.LightningModule):
             )
             batch.context = context
 
-        out_dict = self(batch=batch, t=t)
+        out_dict = self(batch=batch, t=t, latent_gamma=1.0)
 
         true_data = {
             "coords": out_dict["coords_true"]
@@ -617,7 +621,7 @@ class Trainer(pl.LightningModule):
         z = self.mu_logvar_z(z)
         return z
 
-    def forward(self, batch: Batch, t: Tensor):
+    def forward(self, batch: Batch, t: Tensor, latent_gamma: float = 1.0):
         atom_types: Tensor = batch.x
         atom_types_pocket: Tensor = batch.x_pocket
         pos: Tensor = batch.pos
@@ -799,6 +803,7 @@ class Trainer(pl.LightningModule):
             edge_mask=edge_mask,
             edge_mask_pocket=edge_mask_pocket,
             batch_lig=data_batch,
+            latent_gamma=latent_gamma,
         )
 
         # Ground truth masking
@@ -1103,6 +1108,7 @@ class Trainer(pl.LightningModule):
         build_obabel_mol=False,
         iteration: int = 0,
         encode_ligand: bool = False,
+        latent_gamma: float = 1.0,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         pos_pocket = pocket_data.pos_pocket.to(self.device)
         batch_pocket = pocket_data.pos_pocket_batch.to(self.device)
@@ -1281,6 +1287,7 @@ class Trainer(pl.LightningModule):
                 edge_mask=edge_mask,
                 edge_mask_pocket=edge_mask_pocket,
                 batch_lig=batch,
+                latent_gamma=latent_gamma,
             )
 
             coords_pred = out["coords_pred"].squeeze()

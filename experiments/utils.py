@@ -737,6 +737,7 @@ def create_encoder_model(hparams, max_n_nodes):
         vector_aggr=hparams["vector_aggr"],
         intermediate_outs=hparams["intermediate_outs"],
         use_pos_norm=hparams["use_pos_norm"],
+        use_out_norm=hparams["use_out_norm"],
     )
 
     latent_lin = GatedEquivBlock(

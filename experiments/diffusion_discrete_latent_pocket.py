@@ -1,3 +1,8 @@
+"""
+Script that encodes the protein pocket as latent z and the diffusion model denoises a noisy ligand with the latent as input.
+So diffusion model only inputs (noisy-ligand, latent(pocket))
+"""
+
 import logging
 import os
 import pickle
@@ -173,6 +178,8 @@ class Trainer(pl.LightningModule):
             num_layers=hparams["num_layers_latent"],
             vector_aggr=hparams["vector_aggr"],
             intermediate_outs=True,
+            use_pos_norm=False,
+            use_out_norm=True,
         )
 
         self.latent_jk_lin = DenseLayer(
@@ -601,7 +608,7 @@ class Trainer(pl.LightningModule):
         z = 0.5 * (pocket_latents + intermediate_latents)
         return z
 
-    def forward(self, batch: Batch, t: Tensor):
+    def forward(self, batch: Batch, t: Tensor, latent_gamma: float = 1.0):
         atom_types: Tensor = batch.x
         atom_types_pocket: Tensor = batch.x_pocket
         pos: Tensor = batch.pos
@@ -760,6 +767,7 @@ class Trainer(pl.LightningModule):
             edge_mask=edge_mask,
             edge_mask_pocket=edge_mask_pocket,
             batch_lig=data_batch,
+            latent_gamma=latent_gamma,
         )
 
         # Ground truth masking
@@ -974,6 +982,7 @@ class Trainer(pl.LightningModule):
         sanitize=False,
         build_obabel_mol=False,
         iteration: int = 0,
+        latent_gamma: float = 1.0,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         pos_pocket = pocket_data.pos_pocket.to(self.device)
         batch_pocket = pocket_data.pos_pocket_batch.to(self.device)
@@ -1116,6 +1125,7 @@ class Trainer(pl.LightningModule):
                 edge_mask=edge_mask,
                 edge_mask_pocket=edge_mask_pocket,
                 batch_lig=batch,
+                latent_gamma=latent_gamma,
             )
 
             coords_pred = out["coords_pred"].squeeze()

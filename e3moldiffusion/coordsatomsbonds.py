@@ -270,6 +270,7 @@ class DenoisingEdgeNetwork(nn.Module):
         batch_lig: OptTensor = None,
         joint_tensor: OptTensor = None,
         edge_attr_initial_ohe=None,
+        latent_gamma: float = 1.0,
     ) -> Dict:
 
         if pos is None and x is None:
@@ -364,6 +365,7 @@ class DenoisingEdgeNetwork(nn.Module):
             batch_pocket=batch_pocket,
             edge_attr_initial_ohe=edge_attr_initial_ohe,
             edge_attr_global_embedding=edge_attr_global_embedding,
+            latent_gamma=latent_gamma,
         )
         edge_mask, edge_mask_pocket = out["edge_mask_ligand"], out["edge_mask_pocket"]
 

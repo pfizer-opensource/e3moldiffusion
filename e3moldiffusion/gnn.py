@@ -180,7 +180,7 @@ class EQGATEdgeGNN(nn.Module):
         self.norms = nn.ModuleList(
             [norm_module(dims=hn_dim, latent_dim=latent_dim) for _ in range(num_layers)]
         )
-        self.out_norm = LayerNorm(dims=hn_dim) if use_out_norm else None
+        self.out_norm = norm_module(dims=hn_dim, latent_dim=latent_dim) if use_out_norm else None
 
         self.reset_parameters()
 
@@ -248,6 +248,7 @@ class EQGATEdgeGNN(nn.Module):
         batch_pocket: OptTensor = None,
         edge_attr_initial_ohe=None,
         edge_attr_global_embedding=None,
+        latent_gamma: float = 1.0,
     ) -> Dict:
         # edge_attr_xyz (distances, cosines, relative_positions, edge_features)
         # (E, E, E x 3, E x F)
@@ -269,7 +270,7 @@ class EQGATEdgeGNN(nn.Module):
 
             if context is not None and (i == 1 or i == len(self.convs) - 1):
                 s = s + context
-            s, v = self.norms[i](x={"s": s, "v": v, "z": z}, batch=batch)
+            s, v = self.norms[i](x={"s": s, "v": v, "z": z}, batch=batch, gamma=latent_gamma)
             out = self.convs[i](
                 x=(s, v, p),
                 batch=batch,
@@ -336,7 +337,7 @@ class EQGATEdgeGNN(nn.Module):
             e = edge_attr_global[-1]
 
         if self.out_norm is not None:
-            s, v = self.out_norm(x={"s": s, "v": v, "z": z}, batch=batch)
+            s, v = self.out_norm(x={"s": s, "v": v, "z": z}, batch=batch, gamma=latent_gamma)
         out = {
             "s": s,
             "v": v,
