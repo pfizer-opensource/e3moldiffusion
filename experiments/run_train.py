@@ -294,9 +294,6 @@ if __name__ == "__main__":
                         # print("Ligand-pocket training with latent protein encoding")
                         # from experiments.diffusion_discrete_latent_pocket import Trainer
                         print("Ligand-pocket training with latent ligand encoding")
-                        # from experiments.diffusion_discrete_latent_pocket_ligand import (
-                        #     Trainer,
-                        # )
                         from experiments.diffusion_discrete_pocket import (
                             Trainer,
                         )

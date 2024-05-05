@@ -632,7 +632,12 @@ def load_latent_encoder(filepath, max_n_nodes, device="cpu"):
     latent_lin.load_state_dict(state_dicts["latent_lin"])
     graph_pooling.load_state_dict(state_dicts["graph_pooling"])
     mu_logvar_z.load_state_dict(state_dicts["mu_logvar_z"])
-    # node_z.load_state_dict(state_dicts["node_z"])
+    try:
+        node_z.load_state_dict(state_dicts["node_z"])
+    except Exception as e:
+        print(e)
+        print("Not loading the node_z state_dict because output nodes (predicting max_n_nodes) differs.")
+        print("This is expected if the model is fine-tuned on a different dataset.")
     if len(state_dicts["latentmodel"]) != 0:
         latentmodel = latentmodel.load_state_dict(state_dicts["latentmodel"])
 
@@ -1828,6 +1833,7 @@ def prepare_data_and_generate_ligands(
     embedding_dict=None,
     batch_size=None,
     residues_10A=None,
+    inner_verbose=None,
 ):
     batch_size = args.batch_size if batch_size is None else batch_size
     pocket_data = prepare_data(
@@ -1862,7 +1868,7 @@ def prepare_data_and_generate_ligands(
             vary_n_nodes=args.vary_n_nodes,
             n_nodes_bias=args.n_nodes_bias,
             build_obabel_mol=args.build_obabel_mol,
-            inner_verbose=False,
+            inner_verbose=inner_verbose,
             save_traj=False,
             ddpm=not args.ddim,
             eta_ddim=args.eta_ddim,

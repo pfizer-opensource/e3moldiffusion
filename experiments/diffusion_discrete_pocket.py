@@ -485,6 +485,7 @@ class Trainer(pl.LightningModule):
                 ddpm=True,
                 every_k_step=1,
                 device="cuda",
+                prior_n_atoms="targetdiff" if not self.hparams.use_latent_encoder else "reference"
             )
             self.i += 1
             self.log(
@@ -516,6 +517,8 @@ class Trainer(pl.LightningModule):
         sa_loss,
         property_loss,
         dloss,
+        prior_loss,
+        num_nodes_loss,
         batch_size,
         stage,
     ):
@@ -573,8 +576,7 @@ class Trainer(pl.LightningModule):
                 prog_bar=(stage == "train"),
                 sync_dist=self.hparams.gpus > 1 and stage == "val",
             )
-
-        if property_loss is not None:
+        if property_loss != 0.0:
             self.log(
                 f"{stage}/property_loss",
                 property_loss,
@@ -583,11 +585,28 @@ class Trainer(pl.LightningModule):
                 prog_bar=(stage == "train"),
                 sync_dist=self.hparams.gpus > 1 and stage == "val",
             )
-
         if dloss is not None:
             self.log(
                 f"{stage}/d_loss",
                 dloss,
+                on_step=True,
+                batch_size=batch_size,
+                prog_bar=(stage == "train"),
+                sync_dist=self.hparams.gpus > 1 and stage == "val",
+            )
+        if prior_loss is not None:
+            self.log(
+                f"{stage}/prior_loss",
+                prior_loss,
+                on_step=True,
+                batch_size=batch_size,
+                prog_bar=(stage == "train"),
+                sync_dist=self.hparams.gpus > 1 and stage == "val",
+            )
+        if num_nodes_loss is not None:
+            self.log(
+                f"{stage}/num_nodes_loss",
+                num_nodes_loss,
                 on_step=True,
                 batch_size=batch_size,
                 prog_bar=(stage == "train"),
@@ -642,7 +661,7 @@ class Trainer(pl.LightningModule):
                 )
             batch.context = context
 
-        out_dict = self(batch=batch, t=t)
+        out_dict = self(batch=batch, t=t, latent_gamma=1.0)
 
         true_data = {
             "coords": (
@@ -731,6 +750,8 @@ class Trainer(pl.LightningModule):
             final_loss = (
                 final_loss + self.hparams.prior_beta * prior_loss + num_nodes_loss
             )
+        else:
+            prior_loss = num_nodes_loss = None
 
         if self.hparams.ligand_pocket_distance_loss:
             coords_pocket = out_dict["distance_loss_data"]["pos_centered_pocket"]
@@ -794,6 +815,8 @@ class Trainer(pl.LightningModule):
             loss["sa"],
             loss["property"],
             dloss,
+            prior_loss,
+            num_nodes_loss,
             batch_size,
             stage,
         )
@@ -847,7 +870,7 @@ class Trainer(pl.LightningModule):
         z = self.mu_logvar_z(z)
         return z
 
-    def forward(self, batch: Batch, t: Tensor):
+    def forward(self, batch: Batch, t: Tensor, latent_gamma: float = 1.0):
         atom_types: Tensor = batch.x
         atom_types_pocket: Tensor = batch.x_pocket
         pos: Tensor = batch.pos
@@ -906,6 +929,8 @@ class Trainer(pl.LightningModule):
 
             if self.hparams.use_centroid_context_embed:
                 z = z + c
+            pred_num_nodes = self.node_z(z)
+            true_num_nodes = batch.batch.bincount()
             latentdict = {
                 "z_true": z,
                 "z_pred": zpred,
@@ -914,8 +939,7 @@ class Trainer(pl.LightningModule):
                 "w": w,
                 "delta_log_pw": delta_log_pw,
             }
-            pred_num_nodes = self.node_z(z)
-            true_num_nodes = batch.batch.bincount()
+
 
         pocket_noise = torch.randn_like(pos_pocket) * self.hparams.pocket_noise_std
         pos_pocket = pos_pocket + pocket_noise
@@ -1121,6 +1145,13 @@ class Trainer(pl.LightningModule):
             [atom_types_perturbed, charges_perturbed], dim=-1
         )
 
+        if self.hparams.use_latent_encoder:
+            if self.training:
+                # mask the latents
+                p = torch.rand(z.size(0), device=z.device)
+                p = (p > self.hparams.dropout_prob).unsqueeze(-1).float()
+                z = z * p
+            
         out = self.model(
             x=atom_feats_in_perturbed,
             z=z,
@@ -1142,6 +1173,7 @@ class Trainer(pl.LightningModule):
             ca_mask=batch.pocket_ca_mask,
             batch_pocket=batch.pos_pocket_batch,
             edge_attr_initial_ohe=edge_initial_interaction,
+            latent_gamma=latent_gamma,
         )
 
         # Ground truth masking
@@ -2009,6 +2041,8 @@ class Trainer(pl.LightningModule):
             context = None
 
         if self.hparams.use_latent_encoder:
+            if self.hparams.latentmodel == "mmd":
+                assert encode_ligand
             if encode_ligand:
                 # encode ligand
                 z = self.encode_ligand(pocket_data.to(self.device))
@@ -2717,16 +2751,29 @@ class Trainer(pl.LightningModule):
         return molecules
 
     def configure_optimizers(self):
+        
+        if self.hparams.use_latent_encoder:
+            all_params = (
+            list(self.model.parameters())
+            + list(self.encoder.parameters())
+            + list(self.latent_lin.parameters())
+            + list(self.graph_pooling.parameters())
+            + list(self.mu_logvar_z.parameters())
+            + list(self.node_z.parameters())
+        )
+        else:
+            all_params = list(self.model.parameters())
+
         if self.hparams.optimizer == "adam":
             optimizer = torch.optim.AdamW(
-                self.model.parameters(),
+                all_params,
                 lr=self.hparams["lr"],
                 amsgrad=True,
                 weight_decay=1.0e-12,
             )
         elif self.hparams.optimizer == "sgd":
             optimizer = torch.optim.SGD(
-                self.model.parameters(),
+                all_params,
                 lr=self.hparams["lr"],
                 momentum=0.9,
                 nesterov=True,
