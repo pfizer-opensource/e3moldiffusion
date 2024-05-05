@@ -55,7 +55,7 @@ def aggregate(args):
     ):  # ugly workaround for backward compatibility
         name = args.docking_mode
     elif args.docked and args.docking_mode == "qvina2":
-        name = "docked"
+        name = "qvina2"  # "docked"
     else:
         name = "sampled"
 

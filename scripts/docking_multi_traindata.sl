@@ -18,7 +18,7 @@ conda activate vina
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/cremej01/data/crossdocked_noH_cutoff5_new/val"
+main_dir="/scratch1/cremej01/data/crossdocked_noH_cutoff5_new/train"
 output_dir="$main_dir/evaluation/docking"
 
 
@@ -27,10 +27,10 @@ python experiments/docking_multi.py \
     --num-cpus "$num_cpus" \
     --sdf-dir "$main_dir" \
     --save-dir "$output_dir" \
-    --pdbqt-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/val/pdbqt \
-    --pdb-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/val \
-    --dataset kinodata \
+    --pdbqt-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/train/pdbqt \
+    --pdb-dir /scratch1/cremej01/data/crossdocked_noH_cutoff5_new/train \
+    --dataset crossdocked \
     --write-csv \
-    --write-dict \
-    --avoid-eval \
-    --docking-mode vina_score
+    --write-dict
+    #--avoid-eval \
+    #--docking-mode vina_score

@@ -433,7 +433,7 @@ if __name__ == "__main__":
                 if args.with_docking_scores:
                     if Path(pdbfile).stem not in recs:
                         print(
-                            f"PDB {Path(pdbfile).stem} not found in list of QVina-docked files"
+                            f"PDB {Path(pdbfile).stem} not found in list of docking files"
                         )
                         continue
                     else:

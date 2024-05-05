@@ -128,7 +128,7 @@ class Trainer(pl.LightningModule):
             hparams["use_cutoff_damping"] = False
         if "not_strict_ckpt" not in hparams.keys():
             hparams["not_strict_ckpt"] = False
-            
+
         self.save_hyperparameters(hparams)
 
         self.knn = hparams["knn"]
