@@ -537,6 +537,8 @@ def extract_scaffolds_(batch_data):
 def extract_scaffolds_from_batch(batch_data):
     bs = len(batch_data.batch.bincount())
     scaffolds = []
+    if not isinstance(batch_data.mol, list):
+        batch_data.mol = [batch_data.mol]
     for mol in batch_data.mol:
         if mol.GetNumAtoms() > 1:
             scaffold = GetScaffoldForMol(mol)

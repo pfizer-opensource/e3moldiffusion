@@ -1524,6 +1524,7 @@ class Trainer(pl.LightningModule):
         prior_n_atoms: str = "conditional",
         joint_importance_sampling: bool = False,
         property_normalization: bool = False,
+        latent_gamma: float = 1.0,
     ):
         # DiffSBDD settings
         if prior_n_atoms == "conditional":
@@ -1643,6 +1644,7 @@ class Trainer(pl.LightningModule):
             encode_ligand=encode_ligand,
             joint_importance_sampling=joint_importance_sampling,
             property_normalization=property_normalization,
+            latent_gamma=latent_gamma,
         )
         return molecules
 
@@ -1741,6 +1743,8 @@ class Trainer(pl.LightningModule):
         check_ensemble_variance=False,
         property_normalization=False,
         edge_attr_initial_ohe=None,
+        z=None,
+        latent_gamma=1.0,
     ):
         """
         Idea:
@@ -1829,6 +1833,7 @@ class Trainer(pl.LightningModule):
             out = model(
                 x=node_feats_in,
                 t=temb,
+                z=z,
                 pos=pos,
                 edge_index_local=edge_index_local,
                 edge_index_global=edge_index_global,
@@ -1844,6 +1849,7 @@ class Trainer(pl.LightningModule):
                 ca_mask=ca_mask,
                 batch_pocket=batch_pocket,
                 edge_attr_initial_ohe=edge_attr_initial_ohe,
+                latent_gamma=latent_gamma,
             )
 
         pocket_mask = pocket_mask.bool()
@@ -2011,6 +2017,7 @@ class Trainer(pl.LightningModule):
         encode_ligand: bool = True,
         joint_importance_sampling=False,
         property_normalization=False,
+        latent_gamma: float = 1.0,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         pos_pocket = pocket_data.pos_pocket.to(self.device)
         batch_pocket = pocket_data.pos_pocket_batch.to(self.device)
@@ -2277,6 +2284,7 @@ class Trainer(pl.LightningModule):
                 ca_mask=ca_mask,
                 batch_pocket=batch_pocket,
                 edge_attr_initial_ohe=edge_initial_interaction,
+                latent_gamma=latent_gamma,
             )
 
             coords_pred = out["coords_pred"].squeeze()
@@ -2464,6 +2472,7 @@ class Trainer(pl.LightningModule):
                     node_feats_in=node_feats_in,
                     pos=pos_joint,
                     temb=temb,
+                    z=z,
                     edge_index_local=None,
                     edge_index_global=edge_index_global,
                     edge_attr_global=edge_attr_global,
@@ -2486,6 +2495,7 @@ class Trainer(pl.LightningModule):
                     ensemble_models=ckpts_ensemble,
                     property_normalization=False,
                     edge_attr_initial_ohe=edge_initial_interaction,
+                    latent_gamma=latent_gamma,
                 )
                 atom_types, charge_types = node_feats_in.split(
                     [self.num_atom_types, self.num_charge_classes], dim=-1
@@ -2557,6 +2567,7 @@ class Trainer(pl.LightningModule):
                     node_feats_in=node_feats_in,
                     pos=pos_joint,
                     temb=temb,
+                    z=z,
                     edge_index_local=None,
                     edge_index_global=edge_index_global,
                     edge_attr_global=edge_attr_global,
@@ -2583,6 +2594,7 @@ class Trainer(pl.LightningModule):
                     ensemble_models=ckpts_ensemble,
                     property_normalization=property_normalization,
                     edge_attr_initial_ohe=edge_initial_interaction,
+                    latent_gamma=latent_gamma,
                 )
                 atom_types, charge_types = node_feats_in.split(
                     [self.num_atom_types, self.num_charge_classes], dim=-1
@@ -2621,6 +2633,7 @@ class Trainer(pl.LightningModule):
                     node_feats_in=node_feats_in,
                     pos=pos_joint,
                     temb=temb,
+                    z=z,
                     edge_index_local=None,
                     edge_index_global=edge_index_global,
                     edge_attr_global=edge_attr_global,
@@ -2643,6 +2656,7 @@ class Trainer(pl.LightningModule):
                     ensemble_models=ckpts_ensemble,
                     property_normalization=property_normalization,
                     edge_attr_initial_ohe=edge_initial_interaction,
+                    latent_gamma=latent_gamma,
                 )
 
                 atom_types, charge_types = node_feats_in.split(

@@ -661,6 +661,7 @@ def get_args():
     parser.add_argument("--property-importance-sampling-end", default=None, type=int)
     parser.add_argument("--joint-importance-sampling", default=False, action="store_true")
     parser.add_argument("--property-normalization", default=False, action="store_true")
+    parser.add_argument("--latent-gamma", default=1.0, type=float)
 
     args = parser.parse_args()
     return args

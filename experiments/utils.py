@@ -1897,6 +1897,7 @@ def prepare_data_and_generate_ligands(
             prior_n_atoms=args.prior_n_atoms,
             joint_importance_sampling=args.joint_importance_sampling,
             property_normalization=args.property_normalization,
+            latent_gamma=args.latent_gamma,
         )
     del pocket_data
     torch.cuda.empty_cache()
