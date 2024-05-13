@@ -400,6 +400,11 @@ if __name__ == "__main__":
             receptor_name = ligand_name.split("_")[0]
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
             pdb_file = Path(args.pdb_dir, receptor_name + ".pdb")
+        elif args.dataset == "kiba":
+            ligand_name = sdf_file.stem
+            receptor_name = ligand_name.split("_")[0]
+            receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
+            pdb_file = Path(args.pdb_dir, receptor_name + ".pdb")
         elif args.dataset == "molecular_glue":
             ligand_name = ("_").join(sdf_file.stem.split("_")[1:])
             receptor_name = ligand_name.split("_")[0]

@@ -354,8 +354,13 @@ class LigandPocketDataModule(AbstractDataModuleLigand):
             with_docking_scores=(
                 cfg.joint_property_prediction
                 and "docking_score" in cfg.regression_property
+                and cfg.dataset == "crossdocked"
             )
-            or (cfg.property_training and "docking_score" in cfg.regression_property),
+            or (
+                cfg.property_training
+                and "docking_score" in cfg.regression_property
+                and cfg.dataset == "crossdocked"
+            ),
             remove_hs=cfg.remove_hs,
         )
         if bootstrapping:
@@ -367,8 +372,13 @@ class LigandPocketDataModule(AbstractDataModuleLigand):
             with_docking_scores=(
                 cfg.joint_property_prediction
                 and "docking_score" in cfg.regression_property
+                and cfg.dataset == "crossdocked"
             )
-            or (cfg.property_training and "docking_score" in cfg.regression_property),
+            or (
+                cfg.property_training
+                and "docking_score" in cfg.regression_property
+                and cfg.dataset == "crossdocked"
+            ),
             remove_hs=cfg.remove_hs,
         )
         test_dataset = LigandPocketDataset(
@@ -377,8 +387,13 @@ class LigandPocketDataModule(AbstractDataModuleLigand):
             with_docking_scores=(
                 cfg.joint_property_prediction
                 and "docking_score" in cfg.regression_property
+                and cfg.dataset == "crossdocked"
             )
-            or (cfg.property_training and "docking_score" in cfg.regression_property),
+            or (
+                cfg.property_training
+                and "docking_score" in cfg.regression_property
+                and cfg.dataset == "crossdocked"
+            ),
             remove_hs=cfg.remove_hs,
         )
         self.remove_hs = cfg.remove_hs

@@ -17,7 +17,7 @@ conda activate e3mol
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
 main_dir="/scratch1/e3moldiffusion/logs/crossdocked/x0_snr_finetune_cutoff7_bonds5_out-norm_rbf-5A_edge-stuff_joint-sa"
-output_dir="$main_dir/evaluation/test/nodes_bias_2"
+output_dir="$main_dir/evaluation/test/nodes_bias_0"
 
 mkdir "$main_dir/evaluation"
 mkdir "$main_dir/evaluation/test"
@@ -29,9 +29,8 @@ python experiments/run_evaluation_ligand.py \
 --save-xyz \
 --save-traj \
 --batch-size 100 \
---dataset-root /scratch1/cremej01/data/crossdocked_noH_cutoff5_new_names \
+--dataset-root /scratch1/cremej01/data/crossdocked_noH_cutoff7 \
 --prior-n-atoms targetdiff \
---n-nodes-bias 2
+--n-nodes-bias 0
 #--use-ligand-dataset-sizes 
 #--build-obabel-mol 
-

@@ -238,6 +238,7 @@ def write_xyz_file_from_batch(
     pos_pocket=None,
     atoms_pocket=None,
     batch_pocket=None,
+    pocket_name=None,
     joint_traj=False,
     path="/scratch1/e3moldiffusion/logs/crossdocked",
     i=0,
@@ -248,7 +249,11 @@ def write_xyz_file_from_batch(
     atomsxmol = batch.bincount()
     num_atoms_prev = 0
     for k, num_atoms in enumerate(atomsxmol):
-        save_dir = os.path.join(path, f"graph_{k}")
+        if pocket_name is not None:
+            pdb = pocket_name[k].split("_")[0].split(".pdb")[0]
+            save_dir = os.path.join(path, f"{pdb}")
+        else:
+            save_dir = os.path.join(path, f"graph_{k}")
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
 

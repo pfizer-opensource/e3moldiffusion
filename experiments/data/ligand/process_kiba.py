@@ -28,7 +28,7 @@ from experiments.data.ligand.constants import (
 )
 from experiments.data.ligand.molecule_builder import build_molecule
 
-dataset_info = dataset_params["kinodata_full"]
+dataset_info = dataset_params["crossdock_full"]
 amino_acid_dict = dataset_info["aa_encoder"]
 aa_atom_encoder = dataset_info["aa_atom_encoder"]
 atom_dict = dataset_info["atom_encoder"]
@@ -402,7 +402,6 @@ if __name__ == "__main__":
 
     train_indices = [idx for sublist in train_indices for idx in sublist]
     val_indices = [idx for sublist in val_indices for idx in sublist]
-
     train = df.loc[train_indices].reset_index(drop=True)
     val = df.loc[val_indices].reset_index(drop=True)
     n = 200 if not args.pic50_only else 100

@@ -8,7 +8,7 @@ from openeye.oeiupac import *
 from openeye.oeomega import *
 from openeye.oeshape import *
 
-license_filename = "./oe_license.txt"
+license_filename = "/sharedhome/cremej01/workspace/e3moldiffusion/oe_license.txt"
 
 if os.path.isfile(license_filename):
     license_file = open(license_filename, "r")
