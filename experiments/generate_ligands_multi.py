@@ -662,6 +662,9 @@ def get_args():
     parser.add_argument("--joint-importance-sampling", default=False, action="store_true")
     parser.add_argument("--property-normalization", default=False, action="store_true")
     parser.add_argument("--latent-gamma", default=1.0, type=float)
+    parser.add_argument("--use-lipinski-context", default=False, action="store_true",
+                        help="If set, the ligand context (as of now lipinski rule of 5) will be used in a classifier-free setting."
+                        )
 
     args = parser.parse_args()
     return args

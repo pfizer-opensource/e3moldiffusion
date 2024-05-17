@@ -1538,7 +1538,7 @@ class Trainer(pl.LightningModule):
         joint_importance_sampling: bool = False,
         property_normalization: bool = False,
         latent_gamma: float = 1.0,
-        use_ligand_context: bool = False,
+        use_lipinski_context: bool = False,
     ):
         # DiffSBDD settings
         if prior_n_atoms == "conditional":
@@ -1659,7 +1659,7 @@ class Trainer(pl.LightningModule):
             joint_importance_sampling=joint_importance_sampling,
             property_normalization=property_normalization,
             latent_gamma=latent_gamma,
-            use_ligand_context=use_ligand_context,
+            use_lipinski_context=use_lipinski_context,
         )
         return molecules
 
@@ -2033,7 +2033,7 @@ class Trainer(pl.LightningModule):
         joint_importance_sampling=False,
         property_normalization=False,
         latent_gamma: float = 1.0,
-        use_ligand_context: bool = False,
+        use_lipinski_context: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         
         pos_pocket = pocket_data.pos_pocket.to(self.device)
@@ -2052,7 +2052,7 @@ class Trainer(pl.LightningModule):
 
         # Assumption that context enters on the graph-level, e.g., for the ligand a global variable like logp, sa, or qed.
         if self.hparams.context_mapping:
-            if not use_ligand_context:
+            if not use_lipinski_context:
                 # sample context condition
                 z = None
                 context = None
