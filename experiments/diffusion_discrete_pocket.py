@@ -485,7 +485,9 @@ class Trainer(pl.LightningModule):
                 ddpm=True,
                 every_k_step=1,
                 device="cuda",
-                prior_n_atoms="targetdiff" if not self.hparams.use_latent_encoder else "reference"
+                prior_n_atoms=(
+                    "targetdiff" if not self.hparams.use_latent_encoder else "reference"
+                ),
             )
             self.i += 1
             self.log(
@@ -691,6 +693,7 @@ class Trainer(pl.LightningModule):
             assert (
                 "sa_score" in self.hparams.regression_property
                 or "docking_score" in self.hparams.regression_property
+                or "kiba_score" in self.hparams.regression_property
                 or "ic50" in self.hparams.regression_property
             )
             if "sa_score" in self.hparams.regression_property:
@@ -703,15 +706,18 @@ class Trainer(pl.LightningModule):
                 label_sa = None
             if (
                 "docking_score" in self.hparams.regression_property
+                or "kiba_score" in self.hparams.regression_property
                 or "ic50" in self.hparams.regression_property
             ):
                 if "docking_score" in self.hparams.regression_property:
                     label_prop = batch.docking_scores.float()
+                elif "kiba_score" in self.hparams.regression_property:
+                    label_prop = batch.kiba_score.float()
                 elif "ic50" in self.hparams.regression_property:
                     label_prop = batch.ic50.float()
                 else:
                     raise Exception(
-                        "Specified regression property ot supported. Choose docking_score or ic50"
+                        "Specified regression property not supported. Choose docking_score, kiba_score or ic50"
                     )
             else:
                 label_prop = None
@@ -940,7 +946,6 @@ class Trainer(pl.LightningModule):
                 "delta_log_pw": delta_log_pw,
             }
 
-
         pocket_noise = torch.randn_like(pos_pocket) * self.hparams.pocket_noise_std
         pos_pocket = pos_pocket + pocket_noise
 
@@ -1164,7 +1169,7 @@ class Trainer(pl.LightningModule):
             del context_full
         else:
             context = None
-                     
+         
         out = self.model(
             x=atom_feats_in_perturbed,
             z=z,
@@ -1380,6 +1385,7 @@ class Trainer(pl.LightningModule):
         )
         molecule_list = []
         start = datetime.now()
+
         for i, pocket_data in enumerate(dataloader):
             num_graphs = len(pocket_data.batch.bincount())
             if use_ligand_dataset_sizes or prior_n_atoms == "reference":
@@ -2287,6 +2293,7 @@ class Trainer(pl.LightningModule):
             context = context_full
             del context_full
             
+
         for i, timestep in enumerate(iterator):
             s = torch.full(
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=self.device
@@ -2752,6 +2759,11 @@ class Trainer(pl.LightningModule):
                     pos_pocket=pos_pocket + pocket_cog[batch_pocket],
                     atoms_pocket=atom_types_pocket,
                     batch_pocket=batch_pocket,
+                    pocket_name=(
+                        pocket_data.pocket_name
+                        if "pocket_name" in pocket_data
+                        else None
+                    ),
                     joint_traj=True,
                     atom_decoder=atom_decoder,
                     path=os.path.join(save_dir, f"iter_{iteration}"),
@@ -2802,16 +2814,16 @@ class Trainer(pl.LightningModule):
         return molecules
 
     def configure_optimizers(self):
-        
+
         if self.hparams.use_latent_encoder:
             all_params = (
-            list(self.model.parameters())
-            + list(self.encoder.parameters())
-            + list(self.latent_lin.parameters())
-            + list(self.graph_pooling.parameters())
-            + list(self.mu_logvar_z.parameters())
-            + list(self.node_z.parameters())
-        )
+                list(self.model.parameters())
+                + list(self.encoder.parameters())
+                + list(self.latent_lin.parameters())
+                + list(self.graph_pooling.parameters())
+                + list(self.mu_logvar_z.parameters())
+                + list(self.node_z.parameters())
+            )
         else:
             all_params = list(self.model.parameters())
 

@@ -18,18 +18,17 @@ conda activate vina
 
 export PYTHONPATH="/sharedhome/cremej01/workspace/e3moldiffusion"
 
-main_dir="/scratch1/cremej01/data/kiba_noH_cutoff5/test"
-output_dir="$main_dir/evaluation/docking"
+main_dir="/scratch1/e3moldiffusion/logs/kiba/x0_snr_finetune_cutoff5_bonds5_norm_rbf-5A_edge-stuff_joint-sa-dock"
+output_dir="$main_dir/evaluation/docking/nodes_bias_0"
 
 python experiments/docking_multi.py \
     --mp-index "${SLURM_ARRAY_TASK_ID}" \
     --num-cpus "$num_cpus" \
-    --sdf-dir "$main_dir" \
+    --sdf-dir "$output_dir/sampled" \
     --save-dir "$output_dir" \
     --pdbqt-dir /scratch1/cremej01/data/kiba_noH_cutoff5/test/pdbqt \
     --pdb-dir /scratch1/cremej01/data/kiba_noH_cutoff5/test \
     --dataset kiba \
     --write-csv \
-    --write-dict \
-    --docking-mode vina_score 
-    #--avoid-eval \
+    --write-dict 
+    #--docking-mode vina_score

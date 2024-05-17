@@ -26,7 +26,7 @@ def pdb_to_pdbqt(pdb_file, pdbqt_file, dataset):
                 pdb_file, pdbqt_file
             )
         )
-    elif dataset == "kinodata":
+    elif dataset == "kinodata" or dataset == "kiba":
         os.system(
             "prepare_receptor4.py -r {} -o {} -A checkhydrogens -e".format(
                 pdb_file, pdbqt_file

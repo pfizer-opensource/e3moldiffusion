@@ -76,6 +76,18 @@ def evaluate(args):
             from experiments.data.ligand.ligand_dataset_nonadaptive import (
                 LigandPocketDataModule as DataModule,
             )
+    elif hparams.dataset == "kiba":
+        dataset = "kiba"
+        if hparams.use_adaptive_loader:
+            print(f"Using non-adaptive dataloader for {dataset}")
+            from experiments.data.ligand.ligand_dataset_adaptive import (
+                LigandPocketDataModule as DataModule,
+            )
+        else:
+            print("Using non-adaptive dataloader")
+            from experiments.data.ligand.ligand_dataset_nonadaptive import (
+                LigandPocketDataModule as DataModule,
+            )
     elif hparams.dataset == "kinodata":
         dataset = hparams.dataset
         print(f"Using non-adaptive dataloader for {dataset}")

@@ -104,7 +104,11 @@ if __name__ == "__main__":
             from experiments.data.pubchem.pubchem_dataset_nonadaptive import (
                 PubChemDataModule as DataModule,
             )
-    elif hparams.dataset == "crossdocked" or hparams.dataset == "bindingmoad":
+    elif (
+        hparams.dataset == "crossdocked"
+        or hparams.dataset == "bindingmoad"
+        or hparams.dataset == "kiba"
+    ):
         dataset = hparams.dataset
         if hparams.use_adaptive_loader:
             print("Using adaptive dataloader")
@@ -182,12 +186,14 @@ if __name__ == "__main__":
         and not (
             "sa_score" in hparams.regression_property
             or "docking_score" in hparams.regression_property
+            or "kiba_score" in hparams.regression_property
             or "ic50" in hparams.regression_property
         )
         or hparams.joint_property_prediction
         and not (
             "sa_score" in hparams.regression_property
             or "docking_score" in hparams.regression_property
+            or "kiba_score" in hparams.regression_property
             or "ic50" in hparams.regression_property
         )
     ):
@@ -203,6 +209,7 @@ if __name__ == "__main__":
             and dataset != "crossdocked"
             and dataset != "bindningmoad"
             and dataset != "kinodata"
+            and dataset != "kiba"
         ):
             print("Using continuous diffusion")
             if hparams.diffusion_pretraining:
@@ -216,6 +223,7 @@ if __name__ == "__main__":
             and dataset != "crossdocked"
             and dataset != "bindingmoad"
             and dataset != "kinodata"
+            and dataset != "kiba"
             and not hparams.diffusion_pretraining
         ):
             print("Starting property prediction model via discrete diffusion")
@@ -226,6 +234,7 @@ if __name__ == "__main__":
             and hparams.dataset != "bindingmoad"
             and hparams.dataset != "enamine"
             and dataset != "kinodata"
+            and dataset != "kiba"
         ):
             print("Using latent diffusion")
             from experiments.diffusion_latent_discrete import Trainer
@@ -254,6 +263,7 @@ if __name__ == "__main__":
                     dataset == "crossdocked"
                     or dataset == "bindingmoad"
                     or dataset == "kinodata"
+                    or dataset == "kiba"
                 )
                 and hparams.additional_feats
                 and not hparams.use_qm_props
@@ -277,6 +287,7 @@ if __name__ == "__main__":
                     dataset == "crossdocked"
                     or dataset == "bindingmoad"
                     or dataset == "kinodata"
+                    or dataset == "kiba"
                 ):
                     histogram = os.path.join(
                         hparams.dataset_root, "size_distribution.npy"
