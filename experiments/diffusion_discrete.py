@@ -140,17 +140,9 @@ class Trainer(pl.LightningModule):
 
         if self.hparams.load_ckpt_from_pretrained is not None:
             print("Loading from pre-trained model checkpoint...")
-
             self.model = load_model(
                 self.hparams.load_ckpt_from_pretrained, self.num_atom_features
             )
-            # num_params = len(self.model.state_dict())
-            # for i, param in enumerate(self.model.parameters()):
-            #     if i < num_params // 2:
-            #         param.requires_grad = False
-        # elif self.hparams.load_ckpt:
-        #     print("Loading from model checkpoint...")
-        #     self.model = load_model(self.hparams.load_ckpt, self.num_atom_features)
         else:
             self.model = DenoisingEdgeNetwork(
                 hn_dim=(hparams["sdim"], hparams["vdim"]),
@@ -179,6 +171,10 @@ class Trainer(pl.LightningModule):
                 property_prediction=hparams["property_prediction"],
                 joint_property_prediction=hparams["joint_property_prediction"],
                 regression_property=hparams["regression_property"],
+                use_rbfs=hparams["use_rbfs"],
+                mask_pocket_edges=hparams["mask_pocket_edges"],
+                model_edge_rbf_interaction=hparams["model_edge_rbf_interaction"],
+                model_global_edge=hparams["model_global_edge"],
             )
 
         self.max_nodes = dataset_info.max_n_nodes
@@ -214,9 +210,8 @@ class Trainer(pl.LightningModule):
                     num_layers=hparams["num_layers_latent"],
                     vector_aggr=hparams["vector_aggr"],
                     intermediate_outs=hparams["intermediate_outs"],
-                    use_pos_norm=hparams[
-                        "use_pos_norm"
-                    ],  # for old checkpoint to start sampling.
+                    use_pos_norm=hparams["use_pos_norm_latent"],
+                    use_out_norm=hparams["use_out_norm_latent"],
                 )
                 self.latent_lin = GatedEquivBlock(
                     in_dims=(hparams["sdim_latent"], hparams["vdim_latent"]),
@@ -304,52 +299,53 @@ class Trainer(pl.LightningModule):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="val")
 
     def on_validation_epoch_end(self):
-        if (self.current_epoch + 1) % self.hparams.test_interval == 0:
-            if self.local_rank == 0:
-                print(f"Running evaluation in epoch {self.current_epoch + 1}")
-            final_res = self.run_evaluation(
-                step=self.i,
-                dataset_info=self.dataset_info,
-                ngraphs=1000,
-                bs=self.hparams.inference_batch_size,
-                verbose=True,
-                inner_verbose=False,
-                eta_ddim=1.0,
-                ddpm=True,
-                every_k_step=1,
-                device="cuda" if self.hparams.gpus > 1 else "cpu",
-            )
-            self.i += 1
-            self.log(
-                name="val/validity",
-                value=final_res.validity[0],
-                on_epoch=True,
-                sync_dist=True,
-            )
-            self.log(
-                name="val/uniqueness",
-                value=final_res.uniqueness[0],
-                on_epoch=True,
-                sync_dist=True,
-            )
-            self.log(
-                name="val/novelty",
-                value=final_res.novelty[0],
-                on_epoch=True,
-                sync_dist=True,
-            )
-            self.log(
-                name="val/mol_stable",
-                value=final_res.mol_stable[0],
-                on_epoch=True,
-                sync_dist=True,
-            )
-            self.log(
-                name="val/atm_stable",
-                value=final_res.atm_stable[0],
-                on_epoch=True,
-                sync_dist=True,
-            )
+        if self.hparams.dataset != "enamine":    
+            if (self.current_epoch + 1) % self.hparams.test_interval == 0:
+                if self.local_rank == 0:
+                    print(f"Running evaluation in epoch {self.current_epoch + 1}")
+                final_res = self.run_evaluation(
+                    step=self.i,
+                    dataset_info=self.dataset_info,
+                    ngraphs=1000,
+                    bs=self.hparams.inference_batch_size,
+                    verbose=True,
+                    inner_verbose=False,
+                    eta_ddim=1.0,
+                    ddpm=True,
+                    every_k_step=1,
+                    device="cuda" if self.hparams.gpus > 1 else "cpu",
+                )
+                self.i += 1
+                self.log(
+                    name="val/validity",
+                    value=final_res.validity[0],
+                    on_epoch=True,
+                    sync_dist=True,
+                )
+                self.log(
+                    name="val/uniqueness",
+                    value=final_res.uniqueness[0],
+                    on_epoch=True,
+                    sync_dist=True,
+                )
+                self.log(
+                    name="val/novelty",
+                    value=final_res.novelty[0],
+                    on_epoch=True,
+                    sync_dist=True,
+                )
+                self.log(
+                    name="val/mol_stable",
+                    value=final_res.mol_stable[0],
+                    on_epoch=True,
+                    sync_dist=True,
+                )
+                self.log(
+                    name="val/atm_stable",
+                    value=final_res.atm_stable[0],
+                    on_epoch=True,
+                    sync_dist=True,
+                )
 
     def _log(
         self,
@@ -360,6 +356,8 @@ class Trainer(pl.LightningModule):
         bonds_loss,
         sa_loss,
         polar_loss,
+        prior_loss,
+        num_nodes_loss,
         batch_size,
         stage,
     ):
@@ -407,7 +405,8 @@ class Trainer(pl.LightningModule):
             prog_bar=(stage == "train"),
             sync_dist=self.hparams.gpus > 1 and stage == "val",
         )
-        if sa_loss is not None:
+        
+        if sa_loss != 0.0:
             self.log(
                 f"{stage}/sa_loss",
                 sa_loss,
@@ -417,10 +416,30 @@ class Trainer(pl.LightningModule):
                 sync_dist=self.hparams.gpus > 1 and stage == "val",
             )
 
-        if polar_loss is not None:
+        if polar_loss != 0.0:
             self.log(
                 f"{stage}/polar_loss",
                 polar_loss,
+                on_step=True,
+                batch_size=batch_size,
+                prog_bar=(stage == "train"),
+                sync_dist=self.hparams.gpus > 1 and stage == "val",
+            )
+               
+        if prior_loss != 0.0:
+            self.log(
+                f"{stage}/prior_loss",
+                prior_loss,
+                on_step=True,
+                batch_size=batch_size,
+                prog_bar=(stage == "train"),
+                sync_dist=self.hparams.gpus > 1 and stage == "val",
+            )
+            
+        if num_nodes_loss != 0.0:
+            self.log(
+                f"{stage}/num_nodes_loss",
+                num_nodes_loss,
                 on_step=True,
                 batch_size=batch_size,
                 prog_bar=(stage == "train"),
@@ -494,6 +513,36 @@ class Trainer(pl.LightningModule):
             "charges": charges_pred,
             "bonds": edges_pred,
         }
+        
+        if self.hparams.joint_property_prediction:
+            assert (
+                "sa_score" in self.hparams.regression_property
+                or "polarizability" in self.hparams.regression_property
+            )
+            if "sa_score" in self.hparams.regression_property:
+                label_sa = (
+                    torch.tensor([calculate_sa(mol) for mol in batch.mol])
+                    .to(self.device)
+                    .float()
+                )
+            else:
+                label_sa = None
+            if "polarizability" in self.hparams.regression_property:
+                mean, mad = (
+                    self.prop_dist.normalizer["polarizability"]["mean"],
+                    self.prop_dist.normalizer["polarizability"]["mad"],
+                )
+                label_prop = (batch.y[:, -1].float() - mean) / mad
+            else:
+                label_prop = None
+                
+            true_data["properties"] = {"sa_score": label_sa, "property": label_prop}
+            sa_pred, prop_pred = out_dict["property_pred"]
+            pred_data["properties"] = {"sa_score": sa_pred, "property": prop_pred}
+        else:
+            true_data["properties"] = None
+            pred_data["properties"] = None
+            
 
         loss = self.diffusion_loss(
             true_data=true_data,
@@ -510,49 +559,22 @@ class Trainer(pl.LightningModule):
             + self.hparams.lc_atoms * loss["atoms"]
             + self.hparams.lc_bonds * loss["bonds"]
             + self.hparams.lc_charges * loss["charges"]
+            + self.hparams.lc_properties * loss["sa"]
+            + self.hparams.lc_properties * loss["property"]
         )
-
-        sa_loss, polar_loss = None, None
-        if self.hparams.joint_property_prediction:
-            assert (
-                "sa_score" in self.hparams.regression_property
-                or "polarizability" in self.hparams.regression_property
-            )
-            prop_loss = 0.0
-            if "sa_score" in self.hparams.regression_property:
-                sa_true, sa_pred = (
-                    out_dict["properties_true"]["sa_score"],
-                    out_dict["property_pred"]["sa_score"],
-                )
-                sa_loss = F.mse_loss(
-                    input=sa_pred.squeeze(dim=1), target=sa_true, reduction="none"
-                )
-                sa_loss = torch.mean(weights * sa_loss)
-                prop_loss = prop_loss + sa_loss
-            if "polarizability" in self.hparams.regression_property:
-                polar_true, polar_pred = (
-                    out_dict["properties_true"]["polarizability"],
-                    out_dict["property_pred"]["polarizability"],
-                )
-                polar_loss = F.mse_loss(
-                    input=polar_pred.squeeze(dim=1),
-                    target=polar_true,
-                    reduction="none",
-                )
-                polar_loss = torch.mean(weights * polar_loss)
-                prop_loss = prop_loss + polar_loss
-
-            final_loss = final_loss + prop_loss
 
         if self.hparams.use_latent_encoder:
             prior_loss = self.latentloss(inputdict=out_dict.get("latent"))
             num_nodes_loss = F.cross_entropy(
                 out_dict["nodes"]["num_nodes_pred"], out_dict["nodes"]["num_nodes_true"]
             )
+        else:
+            prior_loss = 0.0
+            num_nodes_loss = 0.0
 
-            final_loss = (
-                final_loss + self.hparams.prior_beta * prior_loss + num_nodes_loss
-            )
+        final_loss = (
+            final_loss + self.hparams.prior_beta * prior_loss + num_nodes_loss
+        )
 
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
@@ -565,8 +587,10 @@ class Trainer(pl.LightningModule):
             loss["atoms"],
             loss["charges"],
             loss["bonds"],
-            sa_loss,
-            polar_loss,
+            loss["sa"],
+            loss["property"],
+            prior_loss,
+            num_nodes_loss,
             batch_size,
             stage,
         )
@@ -741,6 +765,15 @@ class Trainer(pl.LightningModule):
         atom_feats_in_perturbed = torch.cat(
             [atom_types_perturbed, charges_perturbed], dim=-1
         )
+        
+        # edge-initial-features
+        edge_initial_interaction = torch.zeros(
+            (edge_index_global.size(1), 3),
+            dtype=torch.float32,
+            device=atom_types.device,
+            )
+        edge_initial_interaction[:, 0] = 1.0
+         
         out = self.model(
             x=atom_feats_in_perturbed,
             t=temb,
@@ -754,6 +787,7 @@ class Trainer(pl.LightningModule):
             batch=data_batch,
             batch_edge_global=batch_edge_global,
             context=context,
+            edge_attr_initial_ohe=edge_initial_interaction,
         )
 
         out["coords_perturbed"] = pos_perturbed
@@ -775,32 +809,6 @@ class Trainer(pl.LightningModule):
             }
 
         out["bond_aggregation_index"] = edge_index_global[1]
-
-        if self.hparams.joint_property_prediction:
-            if "sa_score" in self.hparams.regression_property:
-                label_sa = (
-                    torch.tensor([calculate_sa(mol) for mol in batch.mol])
-                    .to(self.device)
-                    .float()
-                )
-            else:
-                label_sa = None
-            if "polarizability" in self.hparams.regression_property:
-                mean, mad = (
-                    self.prop_dist.normalizer["polarizability"]["mean"],
-                    self.prop_dist.normalizer["polarizability"]["mad"],
-                )
-                label_polar = (batch.y[:, -1].float() - mean) / mad
-            else:
-                label_polar = None
-            out["properties_true"] = {
-                "sa_score": label_sa,
-                "polarizability": label_polar,
-            }
-            sa_pred, polar_pred = out["property_pred"]
-            out["property_pred"] = {"sa_score": sa_pred, "polarizability": polar_pred}
-        else:
-            out["properties_true"] = None
 
         return out
 
@@ -1617,6 +1625,13 @@ class Trainer(pl.LightningModule):
         )
         edge_index_global, _ = dense_to_sparse(edge_index_global)
         edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
+        # edge-initial-features
+        edge_initial_interaction = torch.zeros(
+            (edge_index_global.size(1), 3),
+            dtype=torch.float32,
+            device=edge_index_global.device,
+            )
+        edge_initial_interaction[:, 0] = 1.0
 
         if scaffold_elaboration or scaffold_hopping:
             # global edge attributes
@@ -1739,6 +1754,7 @@ class Trainer(pl.LightningModule):
                     batch=batch,
                     batch_edge_global=batch_edge_global,
                     context=context,
+                    edge_initial_interaction=edge_initial_interaction,
                 )
                 coords_pred = out["coords_pred"].squeeze()
                 atoms_pred, charges_pred = out["atoms_pred"].split(
@@ -2233,16 +2249,28 @@ class Trainer(pl.LightningModule):
         return molecules
 
     def configure_optimizers(self):
+        if self.hparams.use_latent_encoder:
+            all_params = (
+            list(self.model.parameters())
+            + list(self.encoder.parameters())
+            + list(self.latent_lin.parameters())
+            + list(self.graph_pooling.parameters())
+            + list(self.mu_logvar_z.parameters())
+            + list(self.node_z.parameters())
+        )
+        else:
+            all_params = list(self.model.parameters())
+            
         if self.hparams.optimizer == "adam":
             optimizer = torch.optim.AdamW(
-                self.model.parameters(),
+                all_params,
                 lr=self.hparams["lr"],
                 amsgrad=True,
                 weight_decay=1.0e-12,
             )
         elif self.hparams.optimizer == "sgd":
             optimizer = torch.optim.SGD(
-                self.model.parameters(),
+                all_params,
                 lr=self.hparams["lr"],
                 momentum=0.9,
                 nesterov=True,

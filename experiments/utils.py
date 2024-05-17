@@ -531,9 +531,6 @@ def load_model(filepath, num_atom_features, device="cpu", **kwargs):
 
     ckpt = torch.load(filepath, map_location="cpu")
     args = ckpt["hyper_parameters"]
-
-    args["use_pos_norm"] = True
-
     model = create_model(args, num_atom_features)
 
     state_dict = ckpt["state_dict"]
@@ -741,8 +738,8 @@ def create_encoder_model(hparams, max_n_nodes):
         num_layers=hparams["num_layers_latent"],
         vector_aggr=hparams["vector_aggr"],
         intermediate_outs=hparams["intermediate_outs"],
-        use_pos_norm=hparams["use_pos_norm"],
-        use_out_norm=hparams["use_out_norm"],
+        use_pos_norm=hparams["use_pos_norm_latent"],
+        use_out_norm=hparams["use_out_norm_latent"],
     )
 
     latent_lin = GatedEquivBlock(
@@ -1898,6 +1895,7 @@ def prepare_data_and_generate_ligands(
             joint_importance_sampling=args.joint_importance_sampling,
             property_normalization=args.property_normalization,
             latent_gamma=args.latent_gamma,
+            use_ligand_context=args.use_ligand_context,
         )
     del pocket_data
     torch.cuda.empty_cache()

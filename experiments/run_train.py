@@ -247,7 +247,8 @@ if __name__ == "__main__":
                     print(
                         f"Starting pre-training on {hparams.dataset} with latent shape conditioned encoding"
                     )
-                    from experiments.diffusion_pretrain_latent_discrete import Trainer
+                    from experiments.diffusion_discrete import Trainer
+                    # efrom experiments.diffusion_pretrain_latent_discrete import Trainer
             elif (
                 (
                     dataset == "crossdocked"
