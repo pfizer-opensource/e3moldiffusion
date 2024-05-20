@@ -2077,6 +2077,8 @@ class Trainer(pl.LightningModule):
                                           device=pos_pocket.device) if self.hparams.context_mapping else None
             else:
                 context = get_lipinski_properties(pocket_data.mol).to(self.device)
+                # inflate SA 
+                # context[:, 0] = 0.85
         else:
             context = None
         
