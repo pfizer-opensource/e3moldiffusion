@@ -225,6 +225,7 @@ class Trainer(pl.LightningModule):
                 model_edge_rbf_interaction=hparams["model_edge_rbf_interaction"],
                 model_global_edge=hparams["model_global_edge"],
                 use_cutoff_damping=hparams["use_cutoff_damping"],
+                use_centroid_context_embed=hparams["use_centroid_context_embed"],
             )
 
         self.max_nodes = dataset_info.max_n_nodes
@@ -1156,19 +1157,20 @@ class Trainer(pl.LightningModule):
                 p = torch.rand(z.size(0), device=z.device)
                 p = (p > self.hparams.dropout_prob).unsqueeze(-1).float()
                 z = z * p
-        if self.hparams.context_mapping:
-            # mask context
-            p = torch.rand(context.size(0), device=context.device)
-            p = (p > self.hparams.dropout_prob).unsqueeze(-1).float()
-            context = context * p
-            context = context[data_batch]
-            context_full = torch.zeros((batch_full.size(0), context.size(1)), device=context.device)
-            context_full[:context.size(0)] = context
-            del context
-            context = context_full
-            del context_full
-        else:
-            context = None
+                
+        # if self.hparams.context_mapping:
+        #     # mask context
+        #     p = torch.rand(context.size(0), device=context.device)
+        #     p = (p > self.hparams.dropout_prob).unsqueeze(-1).float()
+        #     context = context * p
+        #     context = context[data_batch]
+        #     context_full = torch.zeros((batch_full.size(0), context.size(1)), device=context.device)
+        #     context_full[:context.size(0)] = context
+        #     del context
+        #     context = context_full
+        #     del context_full
+        # else:
+        #     context = None
          
         out = self.model(
             x=atom_feats_in_perturbed,
@@ -1544,7 +1546,6 @@ class Trainer(pl.LightningModule):
         joint_importance_sampling: bool = False,
         property_normalization: bool = False,
         latent_gamma: float = 1.0,
-        use_lipinski_context: bool = False,
     ):
         # DiffSBDD settings
         if prior_n_atoms == "conditional":
@@ -1665,7 +1666,6 @@ class Trainer(pl.LightningModule):
             joint_importance_sampling=joint_importance_sampling,
             property_normalization=property_normalization,
             latent_gamma=latent_gamma,
-            use_lipinski_context=use_lipinski_context,
         )
         return molecules
 
@@ -2039,7 +2039,6 @@ class Trainer(pl.LightningModule):
         joint_importance_sampling=False,
         property_normalization=False,
         latent_gamma: float = 1.0,
-        use_lipinski_context: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         
         pos_pocket = pocket_data.pos_pocket.to(self.device)
@@ -2058,27 +2057,21 @@ class Trainer(pl.LightningModule):
 
         # Assumption that context enters on the graph-level, e.g., for the ligand a global variable like logp, sa, or qed.
         if self.hparams.context_mapping:
-            if not use_lipinski_context:
-                # sample context condition
-                z = None
+            # sample context condition
+            z = None
+            context = None
+            if self.prop_dist is not None and not self.hparams.use_centroid_context_embed:
+                context = self.prop_dist.sample_batch(num_nodes_lig).to(self.device)[batch]
+            elif self.hparams.use_centroid_context_embed:
+                assert self.hparams.latent_dim is not None
+                if self.hparams.use_lipinski_properties:
+                    context = get_lipinski_properties(pocket_data.mol).to(self.device)
+                    # possibly inflate the SA score
+                    # context[:, 0] = 0.85
+                c = self.cluster_embed(context, train=False)
+                if not self.hparams.use_latent_encoder:
+                    z = c
                 context = None
-                if self.prop_dist is not None and not self.hparams.use_centroid_context_embed:
-                    context = self.prop_dist.sample_batch(num_nodes_lig).to(self.device)[batch]
-                elif self.hparams.use_centroid_context_embed:
-                    assert self.hparams.latent_dim is not None
-                    if self.hparams.use_lipinski_properties:
-                        context = get_lipinski_properties(pocket_data.mol).to(self.device)
-                    c = self.cluster_embed(context, train=False)
-                    if not self.hparams.use_latent_encoder:
-                        z = c
-                    context = None
-                else:  
-                    context = torch.zeros((bs, self.hparams.num_context_features),
-                                          device=pos_pocket.device) if self.hparams.context_mapping else None
-            else:
-                context = get_lipinski_properties(pocket_data.mol).to(self.device)
-                # inflate SA 
-                # context[:, 0] = 0.85
         else:
             context = None
         
@@ -2286,14 +2279,14 @@ class Trainer(pl.LightningModule):
             tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         )
         
-        if context is not None:
-            context_full = torch.zeros((pos_joint.size(0), context.size(1)), device=self.device)
-            # node-slicing creating copies of global context for each node in the graph(s)
-            context = context[batch]
-            context_full[:context.size(0)] = context
-            del context
-            context = context_full
-            del context_full
+        # if context is not None:
+        #     context_full = torch.zeros((pos_joint.size(0), context.size(1)), device=self.device)
+        #     # node-slicing creating copies of global context for each node in the graph(s)
+        #     context = context[batch]
+        #     context_full[:context.size(0)] = context
+        #     del context
+        #     context = context_full
+        #     del context_full
             
 
         for i, timestep in enumerate(iterator):

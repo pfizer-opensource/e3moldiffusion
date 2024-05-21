@@ -1910,7 +1910,6 @@ def prepare_data_and_generate_ligands(
             joint_importance_sampling=args.joint_importance_sampling,
             property_normalization=args.property_normalization,
             latent_gamma=args.latent_gamma,
-            use_lipinski_context=args.use_lipinski_context,
         )
     del pocket_data
     torch.cuda.empty_cache()

@@ -74,6 +74,7 @@ class DenoisingEdgeNetwork(nn.Module):
         model_edge_rbf_interaction: bool = False,
         model_global_edge: bool = False,
         use_cutoff_damping: bool = False,
+        use_centroid_context_embed: bool = False
     ) -> None:
         super(DenoisingEdgeNetwork, self).__init__()
 
@@ -103,12 +104,13 @@ class DenoisingEdgeNetwork(nn.Module):
 
         self.atom_time_mapping = DenseLayer(hn_dim[0], hn_dim[0])
         self.bond_time_mapping = DenseLayer(edge_dim, edge_dim)
-
-        if context_mapping and latent_dim is None:
+       
+        if context_mapping and latent_dim is None and not use_centroid_context_embed:
             self.context_mapping = True
             self.context_mapping = DenseLayer(num_context_features, hn_dim[0])
             self.atom_context_mapping = DenseLayer(hn_dim[0], hn_dim[0])
-
+        elif context_mapping and latent_dim is not None and not use_centroid_context_embed:
+            raise Exception("Context mapping is not possible with latent_dim if use_centroid_context_embed is False. Exception raised and script terminated")
         else:
             self.context_mapping = False
 
