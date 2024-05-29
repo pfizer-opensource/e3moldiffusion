@@ -27,12 +27,14 @@ conda activate e3mol
 
 
 Download the CrossDocked data as described in https://github.com/pengxingang/Pocket2Mol/tree/main/data
+
 Create the CrossDocked data
 ```bash
 python experiments/data/ligand/process_crossdocked.py --basedir /path/to/crossdocked_pocket10-folder --outdir /your/data/folder --no-H --dist-cutoff 7 
 ```
 
 Download the Kinodata-3D dataset here (only kinodata_docked_with_rmsd.sdf.gz needed) https://zenodo.org/records/10410259
+
 Create Kinodata-3D dataset
 ```bash
 python experiments/data/ligand/process_kinodata.py --basedir /path/to/kinodata_folder --outdir /your/data/folder --no-H --dist-cutoff 7 
@@ -61,9 +63,9 @@ python experiments/run_train.py --conf configs/diffusion_kinodata.yaml --save-di
 
 ## Test set (on multiple nodes using SLURM's job array)
 
-Sample de novo ligands given the CrossDocked test set, the sampling can be started on multiple GPU nodes:
+Sample de novo ligands given the CrossDocked (Kinodata-3D) test set, the sampling can be started on multiple GPU nodes:
 
-Modify scripts/generate_ligands_multi.sl:
+Modify scripts/generate_ligands_multi.sl (scripts/generate_ligands_multi_kinodata.sl):
 
     - num-gpus: Number of GPU nodes you want to use (number of test files divided by num-gpus; see IMPORTANT note below)
     - model-path: Set the path to the trained model (normally save_dir/best_valid.ckpt)
