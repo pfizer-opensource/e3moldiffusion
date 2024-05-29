@@ -122,7 +122,7 @@ All ligands per target are saved in sdf files. The molecules in the sdf files co
 
 As soon ligands are generated for the respective pockets, we can start docking.
 
-Modify scripts/docking_multi.sl:
+Modify scripts/docking_multi.sl (scripts/docking_multi_kinodata.sl):
 
     - num-cpus: Number of CPU nodes you want to use (number of generated sdf files divided by num-cpus; see IMPORTANT note below)
      -sdf-dir: Path to the generated ligands 
@@ -159,17 +159,24 @@ python experiments/data/ligand/process_pdb.py --main-path /path/to/main_folder -
 ```
 
 and create the pdbqt file
+Activate the mgltools environment
+```bash
+conda activate mgltools
+```
+
 ```bash
 python experiments/docking_mgl.py path/to/pdb_dir /where/to/store/pdbqt_file dataset
 ```
 (replace dataset with "pdb_file")
+
 
 Then for sampling run
 
 ```bash
 sbatch scripts/generate_ligands_multi_pdb_file.sl
 ```
-(specify all arguments to your needs before)
+(specify all arguments to your needs as before)
+
 
 Afterwards, for docking run
 
