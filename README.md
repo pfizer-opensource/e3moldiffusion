@@ -33,7 +33,7 @@ Create the CrossDocked data
 python experiments/data/ligand/process_crossdocked.py --basedir /path/to/crossdocked_pocket10-folder --outdir /your/data/folder --no-H --dist-cutoff 7 
 ```
 
-## CrossDocked
+## Kinodata-3D
 Download the Kinodata-3D dataset here (only kinodata_docked_with_rmsd.sdf.gz needed) https://zenodo.org/records/10410259
 
 Create Kinodata-3D dataset
