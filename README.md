@@ -98,11 +98,12 @@ Modify scripts/generate_ligands_multi.sl (scripts/generate_ligands_multi_kinodat
 sbatch scripts/generate_ligands_multi.sl
 ```
 
-After sampling is finished, aggregate the results from all jobs:
-
+After sampling is finished, aggregate the results from all jobs to print the full evaluation
 ```bash
 python experiments/aggregate_results.py --files-dir /your/sampling/save_dir
 ```
+
+All ligands per target are saved in sdf files. The molecules in the sdf files contain all properties as well.
 
 ## Docking of generated ligands (on multiple nodes using SLURM's job array)
 
@@ -122,7 +123,7 @@ Modify scripts/docking_multi.sl:
 sbatch scripts/docking_multi.sl
 ```
 
-After docking is finished, aggregate the results from all jobs:
+After docking is finished, aggregate the results from all jobs to print the full evaluation
 ```bash
 python experiments/aggregate_results.py --files-dir /your/docking/save_dir --docked --docking-mode qvina2
 ```
