@@ -3,43 +3,54 @@
 Research repository exploring the capabalities of (continuous and discrete) denoising diffusion probabilistic models applied on molecular data.
 
 ## Installation
-Best installed using mamba.
+Install the main environment via mamba
 ```bash
 mamba env create -f environment.yml
 ```
 
-## Data
-
+For preparing pdbqt files, install a new environment
 ```bash
-python experiments/data/ligand/process_crossdocked.py --basedir /path/to/crossdocked_pocket10-folder --outdir /your/data/folder --no-H --dist-cutoff 5
+conda create -n mgltools -c bioconda mgltools
 ```
 
-## Experiments
+We also recommend installing a separate environment for running the docking
+```bash
+mamba env create -f environment_vina.yml
+```
+
+## Data
+Download the CrossDocked data as described in https://github.com/pengxingang/Pocket2Mol/tree/main/data
+Create the CrossDocked data
+```bash
+python experiments/data/ligand/process_crossdocked.py --basedir /path/to/crossdocked_pocket10-folder --outdir /your/data/folder --no-H --dist-cutoff 7 
+```
+
+Download the Kinodata-3D dataset here (only kinodata_docked_with_rmsd.sdf.gz needed) https://zenodo.org/records/10410259
+Create Kinodata-3D dataset
+```bash
+python experiments/data/ligand/process_kinodata.py --basedir /path/to/kinodata_folder --outdir /your/data/folder --no-H --dist-cutoff 7 
+```
+
+## Training
 
 # Pocket-conditioned diffusion training
-Train a diffusion model:
+
+Train PILOT from scratch on CrossDocked
 ```bash
-python experiments/run_train.py --conf configs/diffusion_crossdocked.yaml --save-dir /your/save/dir --gpus 8 --batch-size 8 --num-bond-classes 5 --loss-weighting snr_t --lr 3.0e-4
+python experiments/run_train.py --conf configs/diffusion_crossdocked.yaml --save-dir /your/save/dir
 ```
 
-# Pre-process pdb files
-
-In general, we assume a single or many ground truth ligands docked to protein(s) given, from which the binding site can be extracted. Otherwise the binding site must be found first.
-To evaluate the sampled ligands using PoseBusters/PoseCheck, we need the full protein information, which we can get by:
-
-experiments/data/ligand/fetch_pdb_files.py:
-
-    - files-dir: Path to the sdf files (ligands). The general naming convention is that every ligand sdf file starts with the name of the protein it's docked to followed by "-", e.g., "4erw-[...]". The script extracts the full protein pdb file, here 4erw.pdb
-    - save-dir: Wherever you want to save the pdb files
-
+Train PILOT from scratch on Kinodata-3D
 ```bash
-python experiments/data/ligand/fetch_pdb_files.py --files-dir /path/to/sdf_files --save-dir /path/to/pdb_dir
+python experiments/run_train.py --conf configs/diffusion_kinodata.yaml --save-dir /your/save/dir
 ```
 
+## Sampling
 
-# De novo ligand generation (on multiple nodes using SLURM's job array)
 
-Assuming we want to sample de novo ligands given multiple pockets, the sampling can be started on multiple GPU nodes:
+# Test set (on multiple nodes using SLURM's job array)
+
+Sample de novo ligands given the CrossDocked test set, the sampling can be started on multiple GPU nodes:
 
 Modify scripts/generate_ligands_multi.sl:
 
@@ -49,10 +60,27 @@ Modify scripts/generate_ligands_multi.sl:
     - test-dir: Path to test directory containing .pdb, .sdf and .txt files
     - pdb-dir: Path to the pre-processed pdb files (see above: experiments/data/ligand/fetch_pdb_files.py)
     - dataset-root: Main path to the dataset
-    - num-ligands-per-pocket: How many ligands per pocket (by default: 100)
     - batch-size: Batch size (40-50 on a V100 GPU)
     - n-nodes-bias: The ligand sizes are sampled from the ligand size distribution extracted from the training data. With n-nodes-bias an additional number of atoms is added (for crossdocked: 10)
     - vary-n-nodes: [0, n-nodes-bias] is added randomly (uniform)
+    - num-ligands-per-pocket-to-sample: 100 [default on CrossDocked 100]
+    - num-ligands-per-pocket-to-save: 100 [default on CrossDocked 100]
+    - max-sample-iter: 50 [max. number of iterations to fulfill num-ligands-per-pocket-to-sample]
+    - batch-size: 40 
+    - n-nodes-bias: 0 [increase sampled/fixed ligand size by the number provided]
+    - fix-n-nodes [whether or not to use the ground truth ligand size for number of atoms]
+    - prior-n-atoms: targetdiff [conditional or targetdiff - how to sample from pocket conditional ligand size distribution]
+    - vary-n-nodes [whether or not to uniformly vary n-nodes-bias. E.g., n-nodes-bias 10 means [0, 10]]
+    - property-importance-sampling [whether or not to use property importance sampling]
+    - property-importance-sampling-start: 200 [when on the diffusion trajectory to start importance sampling]
+    - property-importance-sampling-end: 300 [when on the diffusion trajectory to end importance sampling]
+    - property-every-importance-t: 5 [every n-th step perform importance sampling]
+    - property-tau 0.1 [temperature for importance sampling]
+    - sa-importance-sampling [whether or not to use SA importance sampling]
+    - sa-importance-sampling-start: 0 [when on the diffusion trajectory to start importance sampling]
+    - sa-importance-sampling-end: 300 [when on the diffusion trajectory to start importance sampling]
+    - sa-every-importance-t: 5 [every n-th step perform importance sampling]
+    - sa-tau: 0.1 [temperature for importance sampling]
 
 ```bash
 sbatch scripts/generate_ligands_multi.sl
@@ -61,12 +89,12 @@ sbatch scripts/generate_ligands_multi.sl
 After sampling is finished, aggregate the results from all jobs:
 
 ```bash
-python experiments/aggregate_results.py --files-dir /your/sampling/save_dir --docked
+python experiments/aggregate_results.py --files-dir /your/sampling/save_dir
 ```
 
 # Docking of generated ligands (on multiple nodes using SLURM's job array)
 
-As soon ligands are generated for multiple pockets, we can start docking.
+As soon ligands are generated for the respective pockets, we can start docking.
 
 Modify scripts/docking_multi.sl:
 
@@ -76,6 +104,7 @@ Modify scripts/docking_multi.sl:
      -pdbqt-dir Path where all pdbqt files are stored (see above: experiments/docking_mgl.py)
      -pdb-dir: Path to the pre-processed pdb files (see above: experiments/data/ligand/fetch_pdb_files.py)
      -dataset: Which dataset, e.g., crossdocked
+     -docking-mode: vina_dock or qvina2 (default)
 
 ```bash
 sbatch scripts/docking_multi.sl
@@ -83,14 +112,37 @@ sbatch scripts/docking_multi.sl
 
 After docking is finished, aggregate the results from all jobs:
 ```bash
-python experiments/aggregate_results.py --files-dir /your/docking/save_dir --docked
+python experiments/aggregate_results.py --files-dir /your/docking/save_dir --docked --docking-mode qvina2
 ```
 
-# AQM
-python experiments/data/aqm/split_data.py --file-path /path/to/hdf5 --out-path /path/to/processed/data
 
-For property-conditioned training, specify context_mapping, properties_list and num_context_features in the configs/diffusion_aqm.yaml file (if you choose two properties like [eMBD, mPOL] num_context_features must be set to 2). 
-Important: properties in the properties_list must be ordered according to the order in the dataset (check global variable "mol_properties" in experiments/data/aqm/aqm_dataset_nonadaptive.py)
 
-python experiments/run_train.py --conf configs/diffusion_aqm.yaml --save-dir /your/save/dir --dataset aqm --dataset-root same/as/out-path/from/split_data --gpus 4 --batch-size 32
+# Single PDB file
 
+In general, we assume a ground truth ligand docked to a protein, from which the binding site can be extracted. Otherwise the binding site must be found first.
+
+To get all necessary files for sampling run
+
+```bash
+python experiments/data/ligand/process_pdb.py --main-path /path/to/main_folder --pdb-id PDB_ID --ligand-id LIGAND_ID --no-H --dist-cutoff 7
+```
+
+and create the pdbqt file
+```bash
+python experiments/docking_mgl.py path/to/pdb_dir /where/to/store/pdbqt_file dataset
+```
+(Replace dataset with "pdb_file")
+
+Then for sampling run
+
+```bash
+sbatch scripts/generate_ligands_multi_pdb_file.sl
+```
+(specify all arguments to your needs before)
+
+Afterwards, for docking run
+
+```bash
+sbatch scripts/docking_multi_pdb_file.sl
+```
+(again, specify the arguments; the docking mode can be set to "vina_dock", "vina_score", "qvina2". Default is "qvina2".)
