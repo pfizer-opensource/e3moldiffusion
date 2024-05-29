@@ -1,8 +1,8 @@
-# E(3) Equivariant Diffusion for Molecules
+# PILOT: PILOT: Equivariant diffusion for pocket conditioned de novo ligand generation with multi-objective guidance via importance sampling (https://arxiv.org/pdf/2405.14925)
 
 Research repository exploring the capabalities of (continuous and discrete) denoising diffusion probabilistic models applied on molecular data.
 
-## Installation
+# Installation
 Install the main environment via mamba
 ```bash
 mamba env create -f environment.yml
@@ -18,7 +18,11 @@ We also recommend installing a separate environment for running the docking
 mamba env create -f environment_vina.yml
 ```
 
-## Data
+# Data
+
+Activate the main environment
+conda activate e3mol
+
 Download the CrossDocked data as described in https://github.com/pengxingang/Pocket2Mol/tree/main/data
 Create the CrossDocked data
 ```bash
@@ -31,9 +35,12 @@ Create Kinodata-3D dataset
 python experiments/data/ligand/process_kinodata.py --basedir /path/to/kinodata_folder --outdir /your/data/folder --no-H --dist-cutoff 7 
 ```
 
-## Training
+# Training
 
-# Pocket-conditioned diffusion training
+Activate the main environment
+conda activate e3mol
+
+## Pocket-conditioned diffusion training
 
 Train PILOT from scratch on CrossDocked
 ```bash
@@ -45,10 +52,9 @@ Train PILOT from scratch on Kinodata-3D
 python experiments/run_train.py --conf configs/diffusion_kinodata.yaml --save-dir /your/save/dir
 ```
 
-## Sampling
+# Sampling
 
-
-# Test set (on multiple nodes using SLURM's job array)
+## Test set (on multiple nodes using SLURM's job array)
 
 Sample de novo ligands given the CrossDocked test set, the sampling can be started on multiple GPU nodes:
 
@@ -118,6 +124,9 @@ python experiments/aggregate_results.py --files-dir /your/docking/save_dir --doc
 
 
 # Single PDB file
+
+Activate the main environment
+conda activate e3mol
 
 In general, we assume a ground truth ligand docked to a protein, from which the binding site can be extracted. Otherwise the binding site must be found first.
 
