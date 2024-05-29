@@ -1,4 +1,4 @@
-# PILOT: PILOT: Equivariant diffusion for pocket conditioned de novo ligand generation with multi-objective guidance via importance sampling (https://arxiv.org/pdf/2405.14925)
+# PILOT: Equivariant diffusion for pocket conditioned de novo ligand generation with multi-objective guidance via importance sampling (https://arxiv.org/pdf/2405.14925)
 
 Research repository exploring the capabalities of (continuous and discrete) denoising diffusion probabilistic models applied on molecular data.
 
@@ -21,7 +21,10 @@ mamba env create -f environment_vina.yml
 # Data
 
 Activate the main environment
+```bash
 conda activate e3mol
+```
+
 
 Download the CrossDocked data as described in https://github.com/pengxingang/Pocket2Mol/tree/main/data
 Create the CrossDocked data
@@ -38,7 +41,9 @@ python experiments/data/ligand/process_kinodata.py --basedir /path/to/kinodata_f
 # Training
 
 Activate the main environment
+```bash
 conda activate e3mol
+```
 
 ## Pocket-conditioned diffusion training
 
@@ -126,7 +131,9 @@ python experiments/aggregate_results.py --files-dir /your/docking/save_dir --doc
 # Single PDB file
 
 Activate the main environment
+```bash
 conda activate e3mol
+```
 
 In general, we assume a ground truth ligand docked to a protein, from which the binding site can be extracted. Otherwise the binding site must be found first.
 
