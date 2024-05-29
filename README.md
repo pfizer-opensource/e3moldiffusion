@@ -67,7 +67,7 @@ Sample de novo ligands given the CrossDocked (Kinodata-3D) test set, the samplin
 
 Modify scripts/generate_ligands_multi.sl (scripts/generate_ligands_multi_kinodata.sl):
 
-    - num-gpus: Number of GPU nodes you want to use (number of test files divided by num-gpus; see IMPORTANT note below)
+    - num-gpus: Number of GPU nodes you want to use (number of test files divided by num-gpus)
     - model-path: Set the path to the trained model (normally save_dir/best_valid.ckpt)
     - save-dir: Where the sampled molecules as SDF files shall be saved
     - test-dir: Path to test directory containing .pdb, .sdf and .txt files
@@ -75,15 +75,14 @@ Modify scripts/generate_ligands_multi.sl (scripts/generate_ligands_multi_kinodat
     - dataset-root: Main path to the dataset
     - batch-size: Batch size (40-50 on a V100 GPU)
     - n-nodes-bias: The ligand sizes are sampled from the ligand size distribution extracted from the training data. With n-nodes-bias an additional number of atoms is added (for crossdocked: 10)
-    - vary-n-nodes: [0, n-nodes-bias] is added randomly (uniform)
     - num-ligands-per-pocket-to-sample: 100 [default on CrossDocked 100]
     - num-ligands-per-pocket-to-save: 100 [default on CrossDocked 100]
     - max-sample-iter: 50 [max. number of iterations to fulfill num-ligands-per-pocket-to-sample]
     - batch-size: 40 
     - n-nodes-bias: 0 [increase sampled/fixed ligand size by the number provided]
-    - fix-n-nodes [whether or not to use the ground truth ligand size for number of atoms]
-    - prior-n-atoms: targetdiff [conditional or targetdiff - how to sample from pocket conditional ligand size distribution]
-    - vary-n-nodes [whether or not to uniformly vary n-nodes-bias. E.g., n-nodes-bias 10 means [0, 10]]
+    - vary-n-nodes: [0, n-nodes-bias] is added randomly (uniform)
+    - fix-n-nodes [whether or not to use the ground truth ligand size for number of atoms (hence no sampling of ligand sizes)]
+    - prior-n-atoms: targetdiff [conditional or targetdiff - sample ligand size from pocket conditional ligand size distribution]
     - property-importance-sampling [whether or not to use property importance sampling]
     - property-importance-sampling-start: 200 [when on the diffusion trajectory to start importance sampling]
     - property-importance-sampling-end: 300 [when on the diffusion trajectory to end importance sampling]
@@ -105,7 +104,7 @@ After sampling is finished, aggregate the results from all jobs:
 python experiments/aggregate_results.py --files-dir /your/sampling/save_dir
 ```
 
-# Docking of generated ligands (on multiple nodes using SLURM's job array)
+## Docking of generated ligands (on multiple nodes using SLURM's job array)
 
 As soon ligands are generated for the respective pockets, we can start docking.
 
@@ -130,7 +129,7 @@ python experiments/aggregate_results.py --files-dir /your/docking/save_dir --doc
 
 
 
-# Single PDB file
+## Single PDB file
 
 Activate the main environment
 ```bash
