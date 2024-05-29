@@ -43,6 +43,7 @@ def add_arguments(parser):
             "pepconf",
             "crossdocked",
             "enamine",
+            "kiba",
         ],
     )
     parser.add_argument(
@@ -55,7 +56,7 @@ def add_arguments(parser):
     parser.add_argument("--val-size", default=0.1, type=float)
     parser.add_argument("--test-size", default=0.1, type=float)
 
-    parser.add_argument("--dropout-prob", default=0.3, type=float)
+    parser.add_argument("--dropout-prob", default=0.0, type=float)
 
     # LEARNING
     parser.add_argument("-b", "--batch-size", default=32, type=int)

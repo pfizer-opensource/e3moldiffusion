@@ -433,6 +433,11 @@ def evaluate(args):
             if isinstance(v, list):
                 if len(v) >= len(indices):
                     v = [p for i, p in enumerate(v) if i in indices]
+                    for j, prop in enumerate(v):
+                        valid_molecules[j].rdkit_mol.SetProp(k, str(prop))
+                    violin_dict[k].extend(v)
+                    statistics_dict[k + "_mean"].append(np.mean(v))
+                elif len(v) > 1 and len(v) < len(indices):
                     violin_dict[k].extend(v)
                     statistics_dict[k + "_mean"].append(np.mean(v))
                 elif len(v) == 1:

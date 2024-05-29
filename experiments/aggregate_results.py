@@ -1,11 +1,49 @@
 import argparse
+import itertools
 import os
+import pickle
 from collections import defaultdict
 from glob import glob
 
 import numpy as np
+from rdkit import Chem
 
-from experiments.data.utils import load_pickle, save_pickle
+from experiments.sampling.walters_filter import walters_filter
+
+
+def write_sdf_file(sdf_path, molecules, extract_mol=False):
+    w = Chem.SDWriter(str(sdf_path))
+    for m in molecules:
+        if extract_mol:
+            if m.rdkit_mol is not None:
+                w.write(m.rdkit_mol)
+        else:
+            if m is not None:
+                w.write(m)
+    w.close()
+
+
+def save_pickle(array, path, exist_ok=True):
+    if exist_ok:
+        with open(path, "wb") as f:
+            pickle.dump(array, f)
+    else:
+        if not os.path.exists(path):
+            with open(path, "wb") as f:
+                pickle.dump(array, f)
+
+
+def load_pickle(path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+class dotdict(dict):
+    """dot.notation access to dictionary attributes"""
+
+    __getattr__ = dict.get
+    __setattr__ = dict.__setitem__
+    __delattr__ = dict.__delitem__
 
 
 def get_args():
@@ -199,6 +237,23 @@ def aggregate(args):
     else:
         print("Posecheck was omitted. Violin dict was not creating after sample array.")
     print(f"All files saved at {args.files_dir}.")
+
+    print("Running Pat Walters filtering...")
+    processed = "sampled" if not args.docked else args.docking_mode
+    sdf_path = os.path.join(args.files_dir, "all_sdfs.sdf")
+    mols_path = os.path.join(args.files_dir, processed)
+
+    sdfs = glob(os.path.join(mols_path, "*.sdf"))
+    mols = [[mol for mol in Chem.SDMolSupplier(sdf, sanitize=False)] for sdf in sdfs]
+    mols = list(itertools.chain(*mols))
+    write_sdf_file(sdf_path, mols)
+    args = {
+        "sdf_path": sdf_path,
+        "out_path": args.files_dir,
+        "docking_mode": args.docking_mode if args.docked else None,
+    }
+    args = dotdict(args)
+    walters_filter(args)
 
 
 if __name__ == "__main__":

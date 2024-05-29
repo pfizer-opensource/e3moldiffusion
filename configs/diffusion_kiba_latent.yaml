@@ -69,9 +69,8 @@ local_global_model: false
 vector_aggr: mean
 
 #DATA
-dataset: crossdocked
-dataset_root: /scratch1/cremej01/data/crossdocked_noH_cutoff5_new
-
+dataset: kiba
+dataset_root: /hpfs/projects/mlcs/mlhub/e3moldiffusion/data/KIBA/kiba_noH_cutoff6
 
 # DIFFUSION
 additional_feats: false
