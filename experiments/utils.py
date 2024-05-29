@@ -1871,6 +1871,14 @@ def prepare_data_and_generate_ligands(
             device=device,
         )
         embedding_dict[sdf_file.stem]["seed"].append(ligand_embeds)
+    
+    if args.use_lipinski_context and not args.encode_ligands:
+        ligand_data = get_ligand_data(sdf_file, dataset_info, hparams)
+        # create copies
+        ligand_data = Batch.from_data_list(
+            [deepcopy(ligand_data) for _ in range(batch_size)]
+        )
+        pocket_data.update(ligand_data)
 
     with torch.no_grad():
         molecules = model.generate_ligands(
@@ -1910,16 +1918,15 @@ def prepare_data_and_generate_ligands(
             joint_importance_sampling=args.joint_importance_sampling,
             property_normalization=args.property_normalization,
             latent_gamma=args.latent_gamma,
+            use_lipinski_context=args.use_lipinski_context,
+            context_fixed=args.context_fixed,
         )
     del pocket_data
     torch.cuda.empty_cache()
 
     return molecules
 
-
-def encode_ligands(
-    model, pocket_data, sdf_file, dataset_info, hparams, args, batch_size, device
-):
+def get_ligand_data(sdf_file, dataset_info, hparams):
     suppl = Chem.SDMolSupplier(str(sdf_file))
     mol = []
     for m in suppl:
@@ -1933,17 +1940,23 @@ def encode_ligands(
         remove_hydrogens=hparams.remove_hs,
         cog_proj=True,  # only for processing the ligand-shape encode
     )
+    return ligand_data
+    
+def encode_ligands(
+    model, pocket_data, sdf_file, dataset_info, hparams, args, batch_size, device
+):
+    ligand_data = get_ligand_data(sdf_file, dataset_info, hparams)
+    # put it into single batch
     ligand_data_ = Batch.from_data_list([ligand_data]).to(device)
     ligand_data_.mol, ligand_data_.smiles = ligand_data_.mol[0], ligand_data_.smiles[0]
     with torch.no_grad():
         ligand_embeds = model.encode_ligand(ligand_data_)
-
+    # create copies
     ligand_data = Batch.from_data_list(
         [deepcopy(ligand_data) for _ in range(batch_size)]
     )
     pocket_data.update(ligand_data)
     return pocket_data, ligand_embeds
-
 
 def get_lipinski_properties(rdmols):
     sa = torch.tensor([calculate_sa(mol) for mol in rdmols]).float()

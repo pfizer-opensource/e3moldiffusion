@@ -159,6 +159,10 @@ def evaluate(args):
         run_evaluation=True,
         strict=False,
     ).to(device)
+    
+    # just make sure again the state dict is loaded
+    ckpt = torch.load(args.model_path, map_location=device)
+    model.load_state_dict(ckpt["state_dict"])
     model = model.eval()
 
     args.save_dir.mkdir(exist_ok=args.skip_existing)
@@ -674,6 +678,9 @@ def get_args():
     parser.add_argument("--joint-importance-sampling", default=False, action="store_true")
     parser.add_argument("--property-normalization", default=False, action="store_true")
     parser.add_argument("--latent-gamma", default=1.0, type=float)
+    parser.add_argument("--use-lipinski-context", default=False, action="store_true")
+    parser.add_argument("--context-fixed", default=None) # placeholder
+
     args = parser.parse_args()
     return args
 
