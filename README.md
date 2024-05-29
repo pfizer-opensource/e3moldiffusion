@@ -59,6 +59,12 @@ Train PILOT from scratch on Kinodata-3D
 python experiments/run_train.py --conf configs/diffusion_kinodata.yaml --save-dir /your/save/dir
 ```
 
+Create the pdbqt files for the test complexes (later for docking)
+```bash
+python experiments/docking_mgl.py path/to/test_dir /where/to/store/pdbqt_files dataset
+```
+(replace dataset with "crossdocked" or "kinodata")
+
 # Sampling
 
 ## Test set (on multiple nodes using SLURM's job array)
@@ -139,7 +145,7 @@ conda activate e3mol
 
 In general, we assume a ground truth ligand docked to a protein, from which the binding site can be extracted. Otherwise the binding site must be found first.
 
-To get all necessary files for sampling run
+To get all necessary files for sampling, run
 
 ```bash
 python experiments/data/ligand/process_pdb.py --main-path /path/to/main_folder --pdb-id PDB_ID --ligand-id LIGAND_ID --no-H --dist-cutoff 7
@@ -149,7 +155,7 @@ and create the pdbqt file
 ```bash
 python experiments/docking_mgl.py path/to/pdb_dir /where/to/store/pdbqt_file dataset
 ```
-(Replace dataset with "pdb_file")
+(replace dataset with "pdb_file")
 
 Then for sampling run
 
