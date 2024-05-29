@@ -1546,6 +1546,8 @@ class Trainer(pl.LightningModule):
         joint_importance_sampling: bool = False,
         property_normalization: bool = False,
         latent_gamma: float = 1.0,
+        use_lipinski_context: bool = True,
+        context_fixed=None,
     ):
         # DiffSBDD settings
         if prior_n_atoms == "conditional":
@@ -1666,6 +1668,8 @@ class Trainer(pl.LightningModule):
             joint_importance_sampling=joint_importance_sampling,
             property_normalization=property_normalization,
             latent_gamma=latent_gamma,
+            use_lipinski_context=use_lipinski_context,
+            context_fixed=context_fixed,
         )
         return molecules
 
@@ -2039,6 +2043,8 @@ class Trainer(pl.LightningModule):
         joint_importance_sampling=False,
         property_normalization=False,
         latent_gamma: float = 1.0,
+        use_lipinski_context=True, ## placeholder only used in inference as of now
+        context_fixed=None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         
         pos_pocket = pocket_data.pos_pocket.to(self.device)
@@ -2055,6 +2061,7 @@ class Trainer(pl.LightningModule):
         )
         bs = int(batch.max()) + 1
 
+        z = None
         # Assumption that context enters on the graph-level, e.g., for the ligand a global variable like logp, sa, or qed.
         if self.hparams.context_mapping:
             # sample context condition
@@ -2066,12 +2073,23 @@ class Trainer(pl.LightningModule):
                 assert self.hparams.latent_dim is not None
                 if self.hparams.use_lipinski_properties:
                     context = get_lipinski_properties(pocket_data.mol).to(self.device)
-                    # possibly inflate the SA score
-                    # context[:, 0] = 0.85
+                    if context_fixed is not None:
+                        if context_fixed.ndim==1:
+                            context_fixed = context_fixed.unsqueeze(0)
+                        assert context_fixed.size(1) == context.size(1)
+                        context[:, ] = context_fixed
                 c = self.cluster_embed(context, train=False)
                 if not self.hparams.use_latent_encoder:
                     z = c
                 context = None
+            else:
+                if self.hparams.use_lipinski_properties:
+                    context = get_lipinski_properties(pocket_data.mol).to(self.device)
+                    if context_fixed is not None:
+                        if context_fixed.ndim==1:
+                            context_fixed = context_fixed.unsqueeze(0)
+                        assert context_fixed.size(1) == context.size(1)
+                        context[:, ] = context_fixed
         else:
             context = None
         
@@ -2279,16 +2297,18 @@ class Trainer(pl.LightningModule):
             tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
         )
         
-        # if context is not None:
-        #     context_full = torch.zeros((pos_joint.size(0), context.size(1)), device=self.device)
-        #     # node-slicing creating copies of global context for each node in the graph(s)
-        #     context = context[batch]
-        #     context_full[:context.size(0)] = context
-        #     del context
-        #     context = context_full
-        #     del context_full
+        if context is not None and not self.hparams.use_latent_encoder: # classifier-free guidance
+            context_full = torch.zeros((pos_joint.size(0), context.size(1)), device=self.device)
+            # node-slicing creating copies of global context for each node in the graph(s)
+            context = context[batch]
+            context_full[:context.size(0)] = context
+            del context
+            context = context_full
+            del context_full
             
-
+            if not use_lipinski_context:
+                context = torch.zeros_like(context)
+        
         for i, timestep in enumerate(iterator):
             s = torch.full(
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=self.device
