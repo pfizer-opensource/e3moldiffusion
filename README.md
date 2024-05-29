@@ -74,6 +74,10 @@ python experiments/run_train.py --conf configs/diffusion_kinodata.yaml --save-di
 
 # Sampling
 
+## Model checkpoints
+
+Model checkpoints go here!
+
 ## Test set (on multiple nodes using SLURM's job array)
 
 Sample de novo ligands given the CrossDocked (Kinodata-3D) test set, the sampling can be started on multiple GPU nodes:
@@ -158,8 +162,7 @@ To get all necessary files for sampling, run
 python experiments/data/ligand/process_pdb.py --main-path /path/to/main_folder --pdb-id PDB_ID --ligand-id LIGAND_ID --no-H --dist-cutoff 7
 ```
 
-and create the pdbqt file
-Activate the mgltools environment
+Activate the mgltools environment and create the pdbqt file
 ```bash
 conda activate mgltools
 ```
