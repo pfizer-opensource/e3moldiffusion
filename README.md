@@ -40,6 +40,12 @@ Create Kinodata-3D dataset
 python experiments/data/ligand/process_kinodata.py --basedir /path/to/kinodata_folder --outdir /your/data/folder --no-H --dist-cutoff 7 
 ```
 
+Create the pdbqt files for the test complexes (later for docking)
+```bash
+python experiments/docking_mgl.py path/to/test_dir /where/to/store/pdbqt_files dataset
+```
+(replace dataset with "crossdocked" or "kinodata")
+
 # Training
 
 Activate the main environment
@@ -58,12 +64,6 @@ Train PILOT from scratch on Kinodata-3D
 ```bash
 python experiments/run_train.py --conf configs/diffusion_kinodata.yaml --save-dir /your/save/dir
 ```
-
-Create the pdbqt files for the test complexes (later for docking)
-```bash
-python experiments/docking_mgl.py path/to/test_dir /where/to/store/pdbqt_files dataset
-```
-(replace dataset with "crossdocked" or "kinodata")
 
 # Sampling
 
