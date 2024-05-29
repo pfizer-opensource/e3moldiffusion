@@ -25,7 +25,7 @@ Activate the main environment
 conda activate e3mol
 ```
 
-
+## CrossDocked
 Download the CrossDocked data as described in https://github.com/pengxingang/Pocket2Mol/tree/main/data
 
 Create the CrossDocked data
@@ -33,6 +33,7 @@ Create the CrossDocked data
 python experiments/data/ligand/process_crossdocked.py --basedir /path/to/crossdocked_pocket10-folder --outdir /your/data/folder --no-H --dist-cutoff 7 
 ```
 
+## CrossDocked
 Download the Kinodata-3D dataset here (only kinodata_docked_with_rmsd.sdf.gz needed) https://zenodo.org/records/10410259
 
 Create Kinodata-3D dataset
@@ -40,7 +41,13 @@ Create Kinodata-3D dataset
 python experiments/data/ligand/process_kinodata.py --basedir /path/to/kinodata_folder --outdir /your/data/folder --no-H --dist-cutoff 7 
 ```
 
-Create the pdbqt files for the test complexes (later for docking)
+## PDBQT files for docking
+Create the pdbqt files for the test complexes
+Activate the mgltools environment
+```bash
+conda activate mgltools
+```
+
 ```bash
 python experiments/docking_mgl.py path/to/test_dir /where/to/store/pdbqt_files dataset
 ```
