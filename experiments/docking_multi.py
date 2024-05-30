@@ -101,11 +101,6 @@ def calculate_vina_score(
                 mode="minimize", exhaustiveness=exhaustiveness
             )
             score = score_only_results[0]["affinity"]
-            if score is not None or not pd.isna(score):
-                rdmols.append(mol)
-            else:
-                continue
-
             vina_scores["vina_score"].append(score)
             vina_scores["vina_minimize"].append(minimize_results[0]["affinity"])
 
@@ -116,6 +111,19 @@ def calculate_vina_score(
                 vina_scores["vina_dock"].append(docking_results[0]["affinity"])
                 vina_scores["pose"].append(docking_results[0]["pose"])
             ligand_pdbqt_file.unlink()
+
+            if score is not None and not pd.isna(score):
+                mol.SetProp("vina_score", str(score))
+                mol.SetProp("vina_minimize", str(minimize_results[0]["affinity"]))
+                if (
+                    mode == "vina_dock"
+                    and docking_results[0]["affinity"] is not None
+                    and not pd.isna(docking_results[0]["affinity"])
+                ):
+                    mol.SetProp("vina_dock", str(docking_results[0]["affinity"]))
+                rdmols.append(mol)
+            else:
+                continue
         except Exception:
             ligand_pdbqt_file.unlink()
             continue
@@ -390,9 +398,9 @@ if __name__ == "__main__":
             receptor_name = ligand_name.split("_")[0]
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
             pdb_file = Path(args.pdb_dir, receptor_name + ".pdb")
-        elif args.dataset == "cdk2":
+        elif args.dataset == "pdb_file":
             ligand_name = sdf_file.stem
-            receptor_name = ligand_name.split("_")[0]
+            receptor_name = ligand_name.split("_")[1]
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
             pdb_file = Path(args.pdb_dir, receptor_name + ".pdb")
         elif args.dataset == "kinodata":

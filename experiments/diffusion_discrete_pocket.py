@@ -1152,7 +1152,7 @@ class Trainer(pl.LightningModule):
         )
 
         if self.hparams.use_latent_encoder:
-            if self.training:
+            if self.training and self.hparams.dropout_prob > 0.0:
                 # mask the latents
                 p = torch.rand(z.size(0), device=z.device)
                 p = (p > self.hparams.dropout_prob).unsqueeze(-1).float()
