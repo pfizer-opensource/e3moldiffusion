@@ -123,7 +123,7 @@ def evaluate(args):
         prop_dist.set_normalizer(prop_norm)
 
     if hparams.additional_feats:
-        from experiments.diffusion_discrete_pocket_addfeats import Trainer
+        from experiments.deprecated.diffusion_discrete_pocket_addfeats import Trainer
 
         # from experiments.diffusion_discrete_pocket_addfeats_reduced import Trainer
     else:
