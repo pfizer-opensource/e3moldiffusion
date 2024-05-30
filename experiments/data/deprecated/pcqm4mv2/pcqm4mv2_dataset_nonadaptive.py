@@ -1,6 +1,6 @@
 from typing import Optional
 
-from experiments.data.pcqm4mv2.pcqm4mv2_dataset_adaptive import PCQM4Mv2Dataset
+from experiments.data.deprecated.pcqm4mv2.pcqm4mv2_dataset_adaptive import PCQM4Mv2Dataset
 from pytorch_lightning import LightningDataModule
 from torch_geometric.data import DataLoader
 from tqdm import tqdm

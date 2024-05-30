@@ -64,13 +64,13 @@ def evaluate(args):
 
     elif hparams.dataset == "aqm":
         dataset = "aqm"
-        from experiments.data.aqm.aqm_dataset_nonadaptive import (
+        from experiments.data.deprecated.aqm.aqm_dataset_nonadaptive import (
             AQMDataModule as DataModule,
         )
 
     elif hparams.dataset == "aqm_qm7x":
         dataset = "aqm_qm7x"
-        from experiments.data.aqm_qm7x.aqm_qm7x_dataset_nonadaptive import (
+        from experiments.data.deprecated.aqm_qm7x.aqm_qm7x_dataset_nonadaptive import (
             AQMQM7XDataModule as DataModule,
         )
     elif hparams.dataset == "pubchem":
@@ -124,10 +124,10 @@ def evaluate(args):
 
     if hparams.continuous:
         print("Using continuous diffusion")
-        from experiments.diffusion_continuous import Trainer
+        from experiments.deprecated.diffusion_continuous import Trainer
     elif hparams.bond_prediction:
         print("Starting bond prediction model via discrete diffusion")
-        from experiments.bond_prediction_discrete import Trainer
+        from experiments.deprecated.bond_prediction_discrete import Trainer
     elif hparams.latent_dim:
         print("Using latent diffusion")
         # from experiments.diffusion_latent_discrete import Trainer #need refactor
@@ -136,7 +136,7 @@ def evaluate(args):
         print("Using discrete diffusion")
         if hparams.additional_feats:
             print("Using additional features")
-            from experiments.diffusion_discrete_moreFeats import Trainer
+            from experiments.deprecated.diffusion_discrete_moreFeats import Trainer
         else:
             from experiments.diffusion_discrete import Trainer
 

@@ -107,7 +107,7 @@ def bootstrap(args):
         prop_dist = DistributionProperty(datamodule, hparams.properties_list)
         prop_dist.set_normalizer(prop_norm)
 
-    from experiments.diffusion_bootstrapping import Trainer
+    from experiments.deprecated.diffusion_bootstrapping import Trainer
 
     torch.cuda.empty_cache()
 

@@ -11,7 +11,7 @@ warnings.filterwarnings(
     "ignore", category=UserWarning, message="TypedStorage is deprecated"
 )
 
-from experiments.hparams_eval import add_arguments
+from experiments.deprecated.hparams_eval import add_arguments
 
 if __name__ == "__main__":
     parser = ArgumentParser()

@@ -70,25 +70,25 @@ if __name__ == "__main__":
 
     elif hparams.dataset == "aqm":
         dataset = "aqm"
-        from experiments.data.aqm.aqm_dataset_nonadaptive import (
+        from experiments.data.deprecated.aqm.aqm_dataset_nonadaptive import (
             AQMDataModule as DataModule,
         )
 
     elif hparams.dataset == "aqm_qm7x":
         dataset = "aqm_qm7x"
-        from experiments.data.aqm_qm7x.aqm_qm7x_dataset_nonadaptive import (
+        from experiments.data.deprecated.aqm_qm7x.aqm_qm7x_dataset_nonadaptive import (
             AQMQM7XDataModule as DataModule,
         )
     elif hparams.dataset == "pcqm4mv2":
         dataset = "pcqm4mv2"
         if hparams.use_adaptive_loader:
             print("Using adaptive dataloader")
-            from experiments.data.pcqm4mv2.pcqm4mv2_dataset_adaptive import (
+            from experiments.data.deprecated.pcqm4mv2.pcqm4mv2_dataset_adaptive import (
                 PCQM4Mv2DataModule as DataModule,
             )
         else:
             print("Using non-adaptive dataloader")
-            from experiments.data.pcqm4mv2.pcqm4mv2_dataset_nonadaptive import (
+            from experiments.data.deprecated.pcqm4mv2.pcqm4mv2_dataset_nonadaptive import (
                 PCQM4Mv2DataModule as DataModule,
             )
     elif hparams.dataset == "pubchem":
@@ -131,12 +131,12 @@ if __name__ == "__main__":
         if hparams.use_adaptive_loader:
             print("Using adaptive dataloader")
             non_adaptive = False
-            from experiments.data.pepconf.pepconf_dataset_adaptive import (
+            from experiments.data.deprecated.pepconf.pepconf_dataset_adaptive import (
                 PepconfDataModule as DataModule,
             )
         else:
             print("Using non-adaptive dataloader")
-            from experiments.data.pepconf.pepconf_dataset_nonadaptive import (
+            from experiments.data.deprecated.pepconf.pepconf_dataset_nonadaptive import (
                 PepConfDataModule as DataModule,
             )
     elif hparams.dataset == "geomqm":
@@ -157,7 +157,7 @@ if __name__ == "__main__":
     from experiments.data.data_info import GeneralInfos as DataInfos
 
     if hparams.dataset == "aqm_qm7x":
-        from experiments.data.aqm.aqm_dataset_nonadaptive import (
+        from experiments.data.deprecated.aqm.aqm_dataset_nonadaptive import (
             AQMDataModule as DataModule,
         )
 
@@ -214,7 +214,7 @@ if __name__ == "__main__":
             print("Using continuous diffusion")
             if hparams.diffusion_pretraining:
                 print(f"Starting continuous pre-training on {dataset} dataset")
-            from experiments.diffusion_continuous import Trainer
+            from experiments.deprecated.diffusion_continuous import Trainer
         elif hparams.bond_prediction:
             print("Starting bond prediction model via discrete diffusion")
             from experiments.diffusion_discrete import Trainer
@@ -237,7 +237,7 @@ if __name__ == "__main__":
             and dataset != "kiba"
         ):
             print("Using latent diffusion")
-            from experiments.diffusion_latent_discrete import Trainer
+            from experiments.deprecated.diffusion_latent_discrete import Trainer
         else:
             print("Using discrete diffusion")
             if hparams.diffusion_pretraining:
@@ -246,12 +246,12 @@ if __name__ == "__main__":
                         print(
                             f"Starting pre-training on {hparams.dataset} with additional features"
                         )
-                        from experiments.diffusion_pretrain_discrete_addfeats import (
+                        from experiments.deprecated.diffusion_pretrain_discrete_addfeats import (
                             Trainer,
                         )
                     else:
                         print(f"Starting pre-training on {hparams.dataset}")
-                        from experiments.diffusion_pretrain_discrete import Trainer
+                        from experiments.deprecated.diffusion_pretrain_discrete import Trainer
                 else:
                     print(
                         f"Starting pre-training on {hparams.dataset} with latent shape conditioned encoding"
@@ -296,7 +296,7 @@ if __name__ == "__main__":
                     if hparams.latent_dim is None:
                         if hparams.continuous:
                             print("Continuous ligand-pocket training")
-                            from experiments.diffusion_continuous_pocket import Trainer
+                            from experiments.deprecated.diffusion_continuous_pocket import Trainer
                         else:
                             print("Discrete ligand-pocket training")
                             from experiments.diffusion_discrete_pocket import (
@@ -312,34 +312,34 @@ if __name__ == "__main__":
                 elif dataset == "geomqm":
                     if hparams.additional_feats and hparams.use_qm_props:
                         print("Using RDKit and QM props as additional features")
-                        from experiments.diffusion_discrete_addfeats_qm import Trainer
+                        from experiments.deprecated.diffusion_discrete_addfeats_qm import Trainer
                     elif hparams.additional_feats and not hparams.use_qm_props:
-                        from experiments.diffusion_discrete_addfeats import Trainer
+                        from experiments.deprecated.diffusion_discrete_addfeats import Trainer
                     elif hparams.use_qm_props and not hparams.additional_feats:
                         print("Using QM props as additional features")
-                        from experiments.diffusion_discrete_qm import Trainer
+                        from experiments.deprecated.diffusion_discrete_qm import Trainer
                     else:
                         print("Training on GEOM-QM dataset without additional features")
                         from experiments.diffusion_discrete import Trainer
                 else:
                     if hparams.additional_feats:
-                        from experiments.diffusion_discrete_moreFeats import Trainer
+                        from experiments.deprecated.diffusion_discrete_moreFeats import Trainer
                     else:
                         from experiments.diffusion_discrete import Trainer
     else:
         if hparams.energy_training:
             print("Running energy training")
             assert hparams.dataset == "drugs"
-            from experiments.energy_training import Trainer
+            from experiments.deprecated.energy_training import Trainer
         else:
             print(f"Running {hparams.regression_property} training")
             if hparams.regression_property == "sascore":
-                from experiments.property_training import Trainer
+                from experiments.deprecated.property_training import Trainer
             elif hparams.regression_property == "docking_score":
-                from experiments.property_training_pocket import Trainer
+                from experiments.deprecated.property_training_pocket import Trainer
             else:
                 assert hparams.dataset == "geomqm"
-                from experiments.property_training_qm import Trainer
+                from experiments.deprecated.property_training_qm import Trainer
 
     model = Trainer(
         hparams=hparams.__dict__,

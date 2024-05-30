@@ -51,7 +51,7 @@ def evaluate(
 
     elif hparams.dataset == "aqm":
         dataset = "aqm"
-        from experiments.data.aqm.aqm_dataset_nonadaptive import (
+        from experiments.data.deprecated.aqm.aqm_dataset_nonadaptive import (
             AQMDataModule as DataModule,
         )
 
@@ -103,11 +103,11 @@ def evaluate(
     if hparams.energy_training:
         print("Running energy model testing")
         assert hparams.dataset == "drugs"
-        from experiments.energy_training import Trainer
+        from experiments.deprecated.energy_training import Trainer
     else:
         print(f"Running {hparams.regression_property} model testing")
         assert hparams.dataset == "geomqm"
-        from experiments.property_training import Trainer
+        from experiments.deprecated.property_training import Trainer
 
     trainer = pl.Trainer(
         accelerator="gpu" if hparams.gpus else "cpu",

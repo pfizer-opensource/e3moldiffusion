@@ -106,11 +106,11 @@ def evaluate(
         prop_dist.set_normalizer(prop_norm)
 
     if hparams.additional_feats:
-        from experiments.diffusion_discrete_pocket_addfeats import Trainer
+        from experiments.deprecated.diffusion_discrete_pocket_addfeats import Trainer
     elif hparams.latent_dim is None:
         from experiments.diffusion_discrete_pocket import Trainer
     else:
-        from experiments.diffusion_discrete_latent_pocket_ligand import Trainer
+        from experiments.deprecated.diffusion_discrete_latent_pocket_ligand import Trainer
 
     torch.cuda.empty_cache()
 

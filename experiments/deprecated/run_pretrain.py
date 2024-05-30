@@ -64,13 +64,13 @@ if __name__ == "__main__":
     dataset_info = PubChemInfos(datamodule, hparams)
 
     if hparams.continuous:
-        from experiments.diffusion_pretrain_continuous import Trainer
+        from experiments.deprecated.diffusion_pretrain_continuous import Trainer
 
         model = Trainer(
             hparams=hparams.__dict__,
         )
     else:
-        from experiments.diffusion_pretrain_discrete import Trainer
+        from experiments.deprecated.diffusion_pretrain_discrete import Trainer
 
         model = Trainer(
             hparams=hparams.__dict__,

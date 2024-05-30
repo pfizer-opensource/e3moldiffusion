@@ -89,7 +89,7 @@ def evaluate(
 
     elif hparams.dataset == "aqm":
         dataset = "aqm"
-        from experiments.data.aqm.aqm_dataset_nonadaptive import (
+        from experiments.data.deprecated.aqm.aqm_dataset_nonadaptive import (
             AQMDataModule as DataModule,
         )
 
@@ -139,10 +139,10 @@ def evaluate(
 
     if hparams.continuous:
         print("Using continuous diffusion")
-        from experiments.diffusion_continuous import Trainer
+        from experiments.deprecated.diffusion_continuous import Trainer
     elif hparams.bond_prediction:
         print("Starting bond prediction model via discrete diffusion")
-        from experiments.bond_prediction_discrete import Trainer
+        from experiments.deprecated.bond_prediction_discrete import Trainer
     elif hparams.latent_dim:
         print("Using latent diffusion")
         # from experiments.diffusion_latent_discrete import Trainer #need refactor
@@ -151,11 +151,11 @@ def evaluate(
         print("Using discrete diffusion")
         if hparams.additional_feats and hparams.use_qm_props:
             print("Using additional RDKit and QM features")
-            from experiments.diffusion_discrete_addfeats_qm import Trainer
+            from experiments.deprecated.diffusion_discrete_addfeats_qm import Trainer
         elif hparams.use_qm_props and not hparams.additional_feats:
-            from experiments.diffusion_discrete_qm import Trainer
+            from experiments.deprecated.diffusion_discrete_qm import Trainer
         elif hparams.additional_feats and not hparams.use_qm_props:
-            from experiments.diffusion_discrete_addfeats import Trainer
+            from experiments.deprecated.diffusion_discrete_addfeats import Trainer
         else:
             from experiments.diffusion_discrete import Trainer
 
@@ -364,7 +364,7 @@ def evaluate(
         import matplotlib.pyplot as plt
         import numpy as np
 
-        from experiments.evaluate_geom_change import calc_diff_mols
+        from experiments.deprecated.evaluate_geom_change import calc_diff_mols
 
         print(f"Calculating change of internal coordinates...")
 
