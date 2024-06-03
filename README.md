@@ -38,7 +38,7 @@ Download the Kinodata-3D dataset here (only kinodata_docked_with_rmsd.sdf.gz nee
 
 Create Kinodata-3D dataset
 ```bash
-python experiments/data/ligand/process_kinodata.py --basedir /path/to/kinodata_folder --outdir /your/data/folder --no-H --dist-cutoff 7 
+python experiments/data/ligand/process_kinodata.py --basedir /path/to/kinodata_folder --outdir /your/data/folder --no-H --dist-cutoff 5 
 ```
 
 ## PDBQT files for docking
