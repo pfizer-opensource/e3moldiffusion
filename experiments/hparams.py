@@ -33,17 +33,23 @@ def add_arguments(parser):
 
     parser.add_argument(
         "--dataset",
-        default="drugs",
+        default="crossdocked",
+        #choices=[
+        #    "qm9",
+        #    "drugs",
+        #    "aqm",
+        #    "aqm_qm7x",
+        #    "pcqm4mv2",
+        #    "pepconf",
+        #    "crossdocked",
+        #    "enamine",
+        #    "kiba",
+        #    "kinodata"
+        #],
         choices=[
-            "qm9",
-            "drugs",
-            "aqm",
-            "aqm_qm7x",
-            "pcqm4mv2",
-            "pepconf",
             "crossdocked",
             "enamine",
-            "kiba",
+            "kinodata",
         ],
     )
     parser.add_argument(

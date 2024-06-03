@@ -7,7 +7,7 @@ bond_prediction: false
  
 #REGRESSION
 joint_property_prediction: true
-regression_property: "sa_score, ic50"
+regression_property: [sa_score, ic50]
  
 #LIG-POCKET INTERACTION
 ligand_pocket_interaction: true
@@ -15,7 +15,7 @@ use_pos_norm: false
  
 molsize_loss_weighting: false
  
-seed: 42
+seed: 2 # 1, 2, 15, 500, 800, 1000
 batch_size: 8
 inference_batch_size: 8
 ema_decay: 0.999
@@ -79,7 +79,7 @@ max_time: 06:00:00:00
 #LOGGING
 id: 0
  
-save_dir: /scratch1/e3moldiffusion/logs/kinodata_tuan/x0_snr_cutoff5_bonds5_norm_rbf-5A_edge-stuff_sa_ic50
+save_dir: /scratch1/e3moldiffusion/logs/kinodata_tuan/x0_snr_cutoff5_bonds5_norm_rbf-5A_edge-stuff_sa_ic50_seed2
 load_ckpt:
 load_ckpt_from_pretrained:
 

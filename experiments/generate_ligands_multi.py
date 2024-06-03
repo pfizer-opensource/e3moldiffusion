@@ -160,10 +160,7 @@ def evaluate(args):
         strict=False,
     ).to(device)
     
-    # just make sure again the state dict is loaded
-    ckpt = torch.load(args.model_path, map_location=device)
-    model.load_state_dict(ckpt["state_dict"])
-    model = model.eval()
+    model.eval()
 
     args.save_dir.mkdir(exist_ok=args.skip_existing)
     raw_sdf_dir = Path(args.save_dir, "sampled")
