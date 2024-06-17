@@ -89,8 +89,10 @@ atom_decoder = dataset_info["atom_decoder"]
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--main-path", type=Path)
-    parser.add_argument("--pdb-id", type=str)
-    parser.add_argument("--ligand-id", type=str)
+    parser.add_argument("--pdb-id", type=str,
+                        help="The PDB ID of the Protein. E.g., 4ERW")
+    parser.add_argument("--ligand-id", type=str, 
+                        help="The ligand identifier, which is taken from the residue name list. Fpr 4ERW, this corresponds to STU.")
     parser.add_argument("--no-H", action="store_true")
     parser.add_argument("--ca-only", action="store_true")
     parser.add_argument("--dist-cutoff", type=float, default=8.0)
