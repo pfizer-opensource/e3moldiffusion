@@ -43,3 +43,5 @@ notebooks/
 _old/
 
 *xlsx
+
+experiment/data/pdbbind
