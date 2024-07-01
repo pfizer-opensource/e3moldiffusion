@@ -208,7 +208,7 @@ def evaluate(args):
     print(
         f"Processing {len(test_files)} SDF files on job index {args.mp_index} sampling {num_ligands_per_pocket_to_sample} ligands."
     )
-
+        
     for sdf_file in test_files:
         ligand_name = sdf_file.stem
 
@@ -696,7 +696,10 @@ def get_args():
     parser.add_argument("--latent-gamma", default=1.0, type=float)
     parser.add_argument("--use-lipinski-context", default=False, action="store_true")
     parser.add_argument("--context-fixed", default=None) # placeholder
-    
+    parser.add_argument("--clash-guidance", default=False, action="store_true")
+    parser.add_argument("--clash-guidance-scale", default=0.1, type=float)
+    parser.add_argument("--clash-guidance-start", default=None, type=int)
+    parser.add_argument("--clash-guidance-end", default=None, type=int)
     args = parser.parse_args()
     return args
 

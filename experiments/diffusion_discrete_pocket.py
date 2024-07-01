@@ -60,6 +60,7 @@ from experiments.utils import (
     load_model_ligand,
     load_property_model,
     remove_mean_pocket,
+    pocket_clash_guidance
 )
 from experiments.xtb_energy import calculate_xtb_energy
 
@@ -1548,6 +1549,10 @@ class Trainer(pl.LightningModule):
         latent_gamma: float = 1.0,
         use_lipinski_context: bool = True,
         context_fixed=None,
+        clash_guidance: bool = False,
+        clash_guidance_start=None,
+        clash_guidance_end=None,
+        clash_guidance_scale: float = 0.1,
     ):
         # DiffSBDD settings
         if prior_n_atoms == "conditional":
@@ -1670,6 +1675,10 @@ class Trainer(pl.LightningModule):
             latent_gamma=latent_gamma,
             use_lipinski_context=use_lipinski_context,
             context_fixed=context_fixed,
+            clash_guidance=clash_guidance,
+            clash_guidance_scale=clash_guidance_scale,
+            clash_guidance_start=clash_guidance_start,
+            clash_guidance_end=clash_guidance_end,
         )
         return molecules
 
@@ -2045,6 +2054,10 @@ class Trainer(pl.LightningModule):
         latent_gamma: float = 1.0,
         use_lipinski_context=True, ## placeholder only used in inference as of now
         context_fixed=None,
+        clash_guidance: bool = False,
+        clash_guidance_start=None,
+        clash_guidance_end=None,
+        clash_guidance_scale: float = 0.1,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
         
         pos_pocket = pocket_data.pos_pocket.to(self.device)
@@ -2309,6 +2322,11 @@ class Trainer(pl.LightningModule):
             if not use_lipinski_context:
                 context = torch.zeros_like(context)
         
+        if clash_guidance_start is None:
+            clash_guidance_start = 0
+        if clash_guidance_end is None:
+            clash_guidance_end = self.hparams.timesteps
+            
         for i, timestep in enumerate(iterator):
             s = torch.full(
                 size=(bs,), fill_value=timestep, dtype=torch.long, device=self.device
@@ -2355,7 +2373,15 @@ class Trainer(pl.LightningModule):
             edges_pred = out["bonds_pred"].softmax(dim=-1)
             # E x b_0
             charges_pred = charges_pred.softmax(dim=-1)
-
+            
+            if clash_guidance:
+                if clash_guidance_start <= i <= clash_guidance_end:
+                    _, delta = pocket_clash_guidance(x_l=pos, x_p=pos_pocket,
+                                                    batch_l=batch, batch_p=batch_pocket,
+                                                    sigma=2.0
+                                                    )
+                    pos = pos + clash_guidance_scale * delta
+                
             if ddpm:
                 if self.hparams.noise_scheduler == "adaptive":
                     # positions

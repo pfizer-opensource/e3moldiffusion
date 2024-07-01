@@ -108,6 +108,7 @@ if __name__ == "__main__":
         hparams.dataset == "crossdocked"
         or hparams.dataset == "bindingmoad"
         or hparams.dataset == "kiba"
+        or hparams.dataset == "pdbbind"
     ):
         dataset = hparams.dataset
         if hparams.use_adaptive_loader:
@@ -207,9 +208,10 @@ if __name__ == "__main__":
         if (
             hparams.continuous
             and dataset != "crossdocked"
-            and dataset != "bindningmoad"
+            and dataset != "bindingmoad"
             and dataset != "kinodata"
             and dataset != "kiba"
+            and dataset != "pdbbind"
         ):
             print("Using continuous diffusion")
             if hparams.diffusion_pretraining:
@@ -224,6 +226,7 @@ if __name__ == "__main__":
             and dataset != "bindingmoad"
             and dataset != "kinodata"
             and dataset != "kiba"
+            and dataset != "pdbbind"
             and not hparams.diffusion_pretraining
         ):
             print("Starting property prediction model via discrete diffusion")
@@ -235,6 +238,7 @@ if __name__ == "__main__":
             and hparams.dataset != "enamine"
             and dataset != "kinodata"
             and dataset != "kiba"
+            and dataset != "pdbbind"
         ):
             print("Using latent diffusion")
             from experiments.deprecated.diffusion_latent_discrete import Trainer
@@ -264,6 +268,7 @@ if __name__ == "__main__":
                     or dataset == "bindingmoad"
                     or dataset == "kinodata"
                     or dataset == "kiba"
+                    or dataset == "pdbbind"
                 )
                 and hparams.additional_feats
                 and not hparams.use_qm_props
@@ -288,6 +293,7 @@ if __name__ == "__main__":
                     or dataset == "bindingmoad"
                     or dataset == "kinodata"
                     or dataset == "kiba"
+                    or dataset == "pdbbind"
                 ):
                     histogram = os.path.join(
                         hparams.dataset_root, "size_distribution.npy"

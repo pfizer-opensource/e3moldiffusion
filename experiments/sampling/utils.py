@@ -24,7 +24,10 @@ sys.path.append(os.path.join(RDConfig.RDContribDir, "SA_Score"))
 import sascorer
 from rdkit.DataStructs import TanimotoSimilarity
 from rdkit.ML.Descriptors import MoleculeDescriptors
-from scipy import histogram
+try:
+    from scipy import histogram
+except:
+    pass
 from scipy.stats import entropy, gaussian_kde
 
 # Mute RDKit logger

@@ -179,7 +179,7 @@ class LigandPocketDataset(InMemoryDataset):
         kiba_scores = []
         ic50s = []
         for k, v in data.items():
-            if k == "names" or k == "receptors" or k == "lig_mol":
+            if k == "names" or k == "receptors" or k == "lig_mol" or k == "lig_smiles":
                 mol_data[k] = v
                 continue
 

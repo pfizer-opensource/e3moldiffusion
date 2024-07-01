@@ -521,11 +521,22 @@ def concat_ligand_pocket_addfeats(
 
     return pos_ctx, atom_feats, batch_ctx, mask_ligand
 
+def pocket_clash_guidance(x_l, x_p, batch_l, batch_p, sigma=2.):
+    with torch.enable_grad():
+        x_in = x_l.detach().requires_grad_(True)
+        e = torch.exp(
+            -torch.sum((x_p.view(1, -1, 3) - x_in.view(-1, 1, 3) )** 2, dim=-1) / float(sigma)
+            )  # (n_l, n_p)
+        connectivity_mask = batch_l.view(-1, 1) == batch_p.view(1, -1)
+        e = e * connectivity_mask
+        clash_loss =  -sigma * torch.log(1e-3 + e.sum(dim=-1)) # (n_l,)
+        clash_loss = scatter_mean(clash_loss, batch_l).sum() # (b,)->()
+        grads = torch.autograd.grad(clash_loss, x_in)[0]
+    return clash_loss, grads
 
 def assert_zero_mean(x: Tensor, batch: Tensor, dim_size: int, dim=0, eps: float = 1e-6):
     out = scatter_mean(x, index=batch, dim=dim, dim_size=dim_size).mean()
     return abs(out) < eps
-
 
 def load_model(filepath, num_atom_features, device="cpu", **kwargs):
 
@@ -1920,6 +1931,10 @@ def prepare_data_and_generate_ligands(
             latent_gamma=args.latent_gamma,
             use_lipinski_context=args.use_lipinski_context,
             context_fixed=args.context_fixed,
+            clash_guidance=args.clash_guidance,
+            clash_guidance_start=args.clash_guidance_start,
+            clash_guidance_end=args.clash_guidance_end,
+            clash_guidance_scale=args.clash_guidance_scale,
         )
     del pocket_data
     torch.cuda.empty_cache()

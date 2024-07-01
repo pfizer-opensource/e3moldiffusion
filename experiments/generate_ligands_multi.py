@@ -94,6 +94,18 @@ def evaluate(args):
         from experiments.data.ligand.kino_dataset_nonadaptive import (
             LigandPocketDataModule as DataModule,
         )
+    elif hparams.dataset == "pdbbind":
+        dataset = "pdbbind"
+        if hparams.use_adaptive_loader:
+            print(f"Using non-adaptive dataloader for {dataset}")
+            from experiments.data.ligand.ligand_dataset_adaptive import (
+                LigandPocketDataModule as DataModule,
+            )
+        else:
+            print("Using non-adaptive dataloader")
+            from experiments.data.ligand.ligand_dataset_nonadaptive import (
+                LigandPocketDataModule as DataModule,
+            )
     else:
         raise Exception("Dataset not available!")
 
@@ -208,7 +220,11 @@ def evaluate(args):
         ligand_name = sdf_file.stem
 
         pdb_name, pocket_id, *suffix = ligand_name.split("_")
-        pdb_file = Path(sdf_file.parent, f"{pdb_name}.pdb")
+        if dataset == "pdbbind":
+            pdb_file = Path(sdf_file.parent, f"{pdb_name}_pocket.pdb")
+        else:
+            pdb_file = Path(sdf_file.parent, f"{pdb_name}.pdb")
+            
         txt_file = Path(sdf_file.parent, f"{ligand_name}.txt")
         if args.test_dir_10A is not None:
             pdb_file_10A = Path(args.test_dir_10A, f"{pdb_name}.pdb")
@@ -682,7 +698,10 @@ def get_args():
     parser.add_argument("--latent-gamma", default=1.0, type=float)
     parser.add_argument("--use-lipinski-context", default=False, action="store_true")
     parser.add_argument("--context-fixed", default=None) # placeholder
-
+    parser.add_argument("--clash-guidance", default=False, action="store_true")
+    parser.add_argument("--clash-guidance-scale", default=0.1, type=float)
+    parser.add_argument("--clash-guidance-start", default=None, type=int)
+    parser.add_argument("--clash-guidance-end", default=None, type=int)
     args = parser.parse_args()
     return args
 
