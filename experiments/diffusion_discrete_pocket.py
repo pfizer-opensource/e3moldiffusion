@@ -14,7 +14,7 @@ from torch import Tensor
 from torch_geometric.data import Batch
 from torch_geometric.nn import radius_graph
 from torch_geometric.utils import dense_to_sparse, sort_edge_index
-from torch_scatter import scatter_mean
+from torch_scatter import scatter_mean, scatter_add
 from tqdm import tqdm
 
 from e3moldiffusion.coordsatomsbonds import (
@@ -1505,7 +1505,7 @@ class Trainer(pl.LightningModule):
             return total_res, all_generated_smiles, valid_molecules
         else:
             return total_res
-
+        
     @torch.no_grad()
     def generate_ligands(
         self,
@@ -1553,57 +1553,13 @@ class Trainer(pl.LightningModule):
         clash_guidance_start=None,
         clash_guidance_end=None,
         clash_guidance_scale: float = 0.1,
-    ):
-        # DiffSBDD settings
-        if prior_n_atoms == "conditional":
+        inpainting=False,
+    ):  
+        
+        if not inpainting:
+            # DiffSBDD settings
+            if prior_n_atoms == "conditional":
 
-            if fix_n_nodes:
-                num_nodes_lig = pocket_data.batch.bincount().to(self.device)
-                if vary_n_nodes:
-                    num_nodes_lig += torch.randint(
-                        low=-n_nodes_bias // 2,
-                        high=n_nodes_bias // 2,
-                        size=num_nodes_lig.size(),
-                    ).to(self.device)
-                else:
-                    num_nodes_lig += n_nodes_bias
-
-            else:
-
-                try:
-                    pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(
-                        0
-                    )
-                    num_nodes_lig = (
-                        self.conditional_size_distribution.sample_conditional(
-                            n1=None, n2=pocket_size
-                        )
-                        .repeat(num_graphs)
-                        .to(self.device)
-                    )
-                except Exception:
-                    print(
-                        "Could not retrieve ligand size from the conditional size distribution given the pocket size. Taking the ground truth size."
-                    )
-                    num_nodes_lig = pocket_data.batch.bincount().to(self.device)
-
-                if vary_n_nodes:
-                    num_nodes_lig += torch.randint(
-                        low=0, high=n_nodes_bias, size=num_nodes_lig.size()
-                    ).to(self.device)
-                else:
-                    num_nodes_lig += n_nodes_bias
-        # TargetDiff settings
-        elif prior_n_atoms == "targetdiff":
-            if "ligand_sizes" in pocket_data:
-                num_nodes_lig = pocket_data.ligand_sizes
-                if vary_n_nodes:
-                    num_nodes_lig += torch.randint(
-                        low=0, high=n_nodes_bias, size=num_nodes_lig.size()
-                    ).to(self.device)
-                else:
-                    num_nodes_lig += n_nodes_bias
-            else:
                 if fix_n_nodes:
                     num_nodes_lig = pocket_data.batch.bincount().to(self.device)
                     if vary_n_nodes:
@@ -1616,19 +1572,23 @@ class Trainer(pl.LightningModule):
                         num_nodes_lig += n_nodes_bias
 
                 else:
-                    _num_nodes_pockets = pocket_data.pos_pocket_batch.bincount()
-                    _pos_pocket_splits = pocket_data.pos_pocket.split(
-                        _num_nodes_pockets.cpu().numpy().tolist(), dim=0
-                    )
-                    num_nodes_lig = torch.tensor(
-                        [
-                            sample_atom_num(
-                                get_space_size(n.cpu().numpy()),
-                                cutoff=self.hparams.dataset_cutoff,
+
+                    try:
+                        pocket_size = pocket_data.pos_pocket_batch.bincount()[0].unsqueeze(
+                            0
+                        )
+                        num_nodes_lig = (
+                            self.conditional_size_distribution.sample_conditional(
+                                n1=None, n2=pocket_size
                             )
-                            for n in _pos_pocket_splits
-                        ]
-                    ).to(self.device)
+                            .repeat(num_graphs)
+                            .to(self.device)
+                        )
+                    except Exception:
+                        print(
+                            "Could not retrieve ligand size from the conditional size distribution given the pocket size. Taking the ground truth size."
+                        )
+                        num_nodes_lig = pocket_data.batch.bincount().to(self.device)
 
                     if vary_n_nodes:
                         num_nodes_lig += torch.randint(
@@ -1636,50 +1596,107 @@ class Trainer(pl.LightningModule):
                         ).to(self.device)
                     else:
                         num_nodes_lig += n_nodes_bias
+            # TargetDiff settings
+            elif prior_n_atoms == "targetdiff":
+                if "ligand_sizes" in pocket_data:
+                    num_nodes_lig = pocket_data.ligand_sizes
+                    if vary_n_nodes:
+                        num_nodes_lig += torch.randint(
+                            low=0, high=n_nodes_bias, size=num_nodes_lig.size()
+                        ).to(self.device)
+                    else:
+                        num_nodes_lig += n_nodes_bias
+                else:
+                    if fix_n_nodes:
+                        num_nodes_lig = pocket_data.batch.bincount().to(self.device)
+                        if vary_n_nodes:
+                            num_nodes_lig += torch.randint(
+                                low=-n_nodes_bias // 2,
+                                high=n_nodes_bias // 2,
+                                size=num_nodes_lig.size(),
+                            ).to(self.device)
+                        else:
+                            num_nodes_lig += n_nodes_bias
 
-        molecules = self.reverse_sampling(
-            num_graphs=num_graphs,
-            num_nodes_lig=num_nodes_lig,
-            pocket_data=pocket_data,
-            verbose=inner_verbose,
-            save_traj=save_traj,
-            ddpm=ddpm,
-            eta_ddim=eta_ddim,
-            every_k_step=every_k_step,
-            relax_mol=relax_mol,
-            max_relax_iter=max_relax_iter,
-            sanitize=sanitize,
-            build_obabel_mol=build_obabel_mol,
-            ckpt_property_model=ckpt_property_model,
-            ckpt_sa_model=ckpt_sa_model,
-            ckpts_ensemble=ckpts_ensemble,
-            property_classifier_guidance=property_classifier_guidance,
-            property_classifier_guidance_complex=property_classifier_guidance_complex,
-            property_classifier_self_guidance=property_classifier_self_guidance,
-            classifier_guidance_scale=classifier_guidance_scale,
-            sa_importance_sampling=sa_importance_sampling,
-            sa_importance_sampling_start=sa_importance_sampling_start,
-            sa_importance_sampling_end=sa_importance_sampling_end,
-            sa_every_importance_t=sa_every_importance_t,
-            sa_tau=sa_tau,
-            property_importance_sampling=property_importance_sampling,
-            property_importance_sampling_start=property_importance_sampling_start,
-            property_importance_sampling_end=property_importance_sampling_end,
-            property_every_importance_t=property_every_importance_t,
-            property_tau=property_tau,
-            maximize_property=maximize_property,
-            save_dir=save_dir,
-            encode_ligand=encode_ligand,
-            joint_importance_sampling=joint_importance_sampling,
-            property_normalization=property_normalization,
-            latent_gamma=latent_gamma,
-            use_lipinski_context=use_lipinski_context,
-            context_fixed=context_fixed,
-            clash_guidance=clash_guidance,
-            clash_guidance_scale=clash_guidance_scale,
-            clash_guidance_start=clash_guidance_start,
-            clash_guidance_end=clash_guidance_end,
-        )
+                    else:
+                        _num_nodes_pockets = pocket_data.pos_pocket_batch.bincount()
+                        _pos_pocket_splits = pocket_data.pos_pocket.split(
+                            _num_nodes_pockets.cpu().numpy().tolist(), dim=0
+                        )
+                        num_nodes_lig = torch.tensor(
+                            [
+                                sample_atom_num(
+                                    get_space_size(n.cpu().numpy()),
+                                    cutoff=self.hparams.dataset_cutoff,
+                                )
+                                for n in _pos_pocket_splits
+                            ]
+                        ).to(self.device)
+
+                        if vary_n_nodes:
+                            num_nodes_lig += torch.randint(
+                                low=0, high=n_nodes_bias, size=num_nodes_lig.size()
+                            ).to(self.device)
+                        else:
+                            num_nodes_lig += n_nodes_bias
+
+            molecules = self.reverse_sampling(
+                num_graphs=num_graphs,
+                num_nodes_lig=num_nodes_lig,
+                pocket_data=pocket_data,
+                verbose=inner_verbose,
+                save_traj=save_traj,
+                ddpm=ddpm,
+                eta_ddim=eta_ddim,
+                every_k_step=every_k_step,
+                relax_mol=relax_mol,
+                max_relax_iter=max_relax_iter,
+                sanitize=sanitize,
+                build_obabel_mol=build_obabel_mol,
+                ckpt_property_model=ckpt_property_model,
+                ckpt_sa_model=ckpt_sa_model,
+                ckpts_ensemble=ckpts_ensemble,
+                property_classifier_guidance=property_classifier_guidance,
+                property_classifier_guidance_complex=property_classifier_guidance_complex,
+                property_classifier_self_guidance=property_classifier_self_guidance,
+                classifier_guidance_scale=classifier_guidance_scale,
+                sa_importance_sampling=sa_importance_sampling,
+                sa_importance_sampling_start=sa_importance_sampling_start,
+                sa_importance_sampling_end=sa_importance_sampling_end,
+                sa_every_importance_t=sa_every_importance_t,
+                sa_tau=sa_tau,
+                property_importance_sampling=property_importance_sampling,
+                property_importance_sampling_start=property_importance_sampling_start,
+                property_importance_sampling_end=property_importance_sampling_end,
+                property_every_importance_t=property_every_importance_t,
+                property_tau=property_tau,
+                maximize_property=maximize_property,
+                save_dir=save_dir,
+                encode_ligand=encode_ligand,
+                joint_importance_sampling=joint_importance_sampling,
+                property_normalization=property_normalization,
+                latent_gamma=latent_gamma,
+                use_lipinski_context=use_lipinski_context,
+                context_fixed=context_fixed,
+                clash_guidance=clash_guidance,
+                clash_guidance_scale=clash_guidance_scale,
+                clash_guidance_start=clash_guidance_start,
+                clash_guidance_end=clash_guidance_end,
+            )
+        else:
+            molecules = self.inpainting(
+                pocket_data=pocket_data,
+                num_graphs=num_graphs,
+                verbose=inner_verbose,
+                relax_mol=relax_mol,
+                max_relax_iter=max_relax_iter,
+                sanitize=sanitize,
+                build_obabel_mol=build_obabel_mol,
+                clash_guidance=clash_guidance,
+                clash_guidance_scale=clash_guidance_scale,
+                clash_guidance_start=clash_guidance_start,
+                clash_guidance_end=clash_guidance_end,
+            )
         return molecules
 
     def sample_prior_z(self, bs, device):
@@ -2013,7 +2030,7 @@ class Trainer(pl.LightningModule):
             batch_num_nodes_new.to(self.device),
         )
         return out
-
+    
     def reverse_sampling(
         self,
         num_graphs: int,
@@ -2854,6 +2871,324 @@ class Trainer(pl.LightningModule):
 
         return molecules
 
+    def inpainting(
+        self,
+        num_graphs: int,
+        pocket_data: Tensor,
+        verbose: bool = False,
+        relax_mol=False,
+        max_relax_iter=200,
+        sanitize=False,
+        build_obabel_mol=False,
+        clash_guidance: bool = False,
+        clash_guidance_start=None,
+        clash_guidance_end=None,
+        clash_guidance_scale: float = 0.1,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List]:
+        
+        pos_pocket = pocket_data.pos_pocket.to(self.device)
+        pos_ligand = pocket_data.pos.to(self.device)
+        batch_pocket = pocket_data.pos_pocket_batch.to(self.device)
+        batch_ligand = pocket_data.batch.to(self.device)
+        lig_inpaint_mask = pocket_data.lig_inpaint_mask.to(self.device)
+        lig_inpaint_mask_f = lig_inpaint_mask.float().unsqueeze(-1)
+        
+        pos_ligand_initial = pocket_data.pos.to(self.device)
+        atom_types_ligand_initial = pocket_data.x.to(self.device)
+        x_pocket = pocket_data.x_pocket.to(self.device)
+
+        try:
+            ca_mask = pocket_data.ca_mask.to(self.device)
+        except Exception:
+            ca_mask = None
+
+        bs = num_graphs
+                      
+        pocket_cog = scatter_mean(pos_pocket, batch_pocket, dim=0)
+        pos_pocket = pos_pocket - pocket_cog[batch_pocket]
+        pos_ligand_initial = pos_ligand_initial - pocket_cog[batch_ligand]
+        
+        # initialize random coordinates for all ligand atoms
+        pos_ligand = torch.randn_like(pos_ligand_initial)
+        n = len(pos_ligand)
+
+        # ligand
+        atom_types_ligand = torch.multinomial(
+            self.atoms_prior, num_samples=n, replacement=True
+        )
+        atom_types_ligand = F.one_hot(atom_types_ligand, self.num_atom_types).float()
+        charges_ligand = torch.multinomial(
+            self.charges_prior, num_samples=n, replacement=True
+        )
+        charges_ligand = F.one_hot(charges_ligand, self.num_charge_classes).float()
+       
+       # pocket
+        atom_types_pocket = F.one_hot(
+            x_pocket.squeeze().long(), num_classes=self.num_atom_types
+        ).float()
+        charges_pocket = torch.zeros(
+            pos_pocket.shape[0], charges_ligand.shape[1], dtype=torch.float32
+        ).to(self.device)
+
+        edge_index_local = None
+        edge_index_global = (
+            torch.eq(batch_ligand.unsqueeze(0), batch_ligand.unsqueeze(-1))
+            .int()
+            .fill_diagonal_(0)
+        )
+        edge_index_global, _ = dense_to_sparse(edge_index_global)
+        edge_index_global = sort_edge_index(edge_index_global, sort_by_row=False)
+        (
+            edge_attr_global_lig,
+            edge_index_global_lig,
+            mask,
+            mask_i,
+        ) = initialize_edge_attrs_reverse(
+            edge_index_global,
+            n,
+            self.bonds_prior,
+            self.num_bond_classes,
+            self.device,
+        )
+
+        (
+            pos_joint,
+            atom_types_joint,
+            charge_types_joint,
+            batch_full,
+            pocket_mask,
+        ) = concat_ligand_pocket(
+            pos_ligand,
+            pos_pocket,
+            atom_types_ligand,
+            atom_types_pocket,
+            charges_ligand,
+            charges_pocket,
+            batch_ligand,
+            batch_pocket,
+            sorting=False,
+        )
+        (
+            edge_index_global,
+            edge_attr_global,
+            batch_edge_global,
+            edge_mask,
+            edge_mask_pocket,
+            edge_initial_interaction,
+        ) = get_joint_edge_attrs(
+            pos_ligand,
+            pos_pocket,
+            batch_ligand,
+            batch_pocket,
+            edge_attr_global_lig,
+            self.num_bond_classes,
+            self.device,
+            cutoff_p=self.cutoff_p,
+            cutoff_lp=self.cutoff_lp,
+            knn=self.knn,
+            hybrid_knn=self.hybrid_knn,
+            knn_with_cutoff=self.knn_with_cutoff,
+            pocket_mask=pocket_mask,
+        )
+
+        if clash_guidance_start is None:
+            clash_guidance_start = 0
+        if clash_guidance_end is None:
+            clash_guidance_end = self.hparams.timesteps
+            
+        chain = range(0, self.hparams.timesteps)
+
+        iterator = (
+            tqdm(reversed(chain), total=len(chain)) if verbose else reversed(chain)
+        )
+               
+        for i, timestep in enumerate(iterator):
+            
+            s = torch.full(
+                size=(bs,), fill_value=timestep, dtype=torch.long, device=self.device
+            )
+            t = s + 1
+            
+            node_feats_in = torch.cat([atom_types_joint, charge_types_joint], dim=-1)
+            temb = t / self.hparams.timesteps
+            temb = temb.unsqueeze(dim=1)
+                    
+            out = self.model(
+                x=node_feats_in,
+                z=None,
+                t=temb,
+                pos=pos_joint,
+                edge_index_local=edge_index_local,
+                edge_index_global=edge_index_global,
+                edge_index_global_lig=edge_index_global_lig,
+                edge_attr_global=edge_attr_global,
+                batch=batch_full,
+                batch_edge_global=batch_edge_global,
+                context=None,
+                pocket_mask=pocket_mask.unsqueeze(1),
+                edge_mask=edge_mask,
+                edge_mask_pocket=edge_mask_pocket,
+                batch_lig=batch_ligand,
+                ca_mask=ca_mask,
+                batch_pocket=batch_pocket,
+                edge_attr_initial_ohe=edge_initial_interaction,
+                latent_gamma=None,
+            )
+
+            coords_pred = out["coords_pred"].squeeze()
+            atoms_pred, charges_pred = out["atoms_pred"].split(
+                [self.num_atom_types, self.num_charge_classes], dim=-1
+            )
+            atoms_pred = atoms_pred.softmax(dim=-1)
+            # N x a_0
+            edges_pred = out["bonds_pred"].softmax(dim=-1)
+            # E x b_0
+            charges_pred = charges_pred.softmax(dim=-1)
+            # positions
+            pos_ligand = self.sde_pos.sample_reverse_adaptive(
+                s, t, pos_ligand, coords_pred, batch_ligand, cog_proj=False, eta_ddim=1.0
+            ) # here is cog_proj false as it will be downprojected later      
+            # atoms
+            atom_types_ligand = self.cat_atoms.sample_reverse_categorical(
+                xt=atom_types_ligand,
+                x0=atoms_pred,
+                t=t[batch_ligand],
+                num_classes=self.num_atom_types,
+            )
+            
+            # inpainting through forward noising
+            _, pos_ligand_inpaint = self.sde_pos.sample_pos(
+                s,
+                pos_ligand_initial,
+                batch_ligand,
+                remove_mean=False,
+            )            
+            _, atom_types_inpaint = self.cat_atoms.sample_categorical(
+                s,
+                atom_types_ligand_initial,
+                batch_ligand,
+                self.dataset_info,
+                num_classes=self.num_atom_types,
+                type="atoms",
+            )
+            # combine
+            pos_ligand = pos_ligand * (1.0 - lig_inpaint_mask_f) + pos_ligand_inpaint * lig_inpaint_mask_f
+            atom_types_ligand = atom_types_ligand * (1.0 - lig_inpaint_mask_f) + atom_types_inpaint * lig_inpaint_mask_f
+            
+            # charges
+            charges_ligand = self.cat_charges.sample_reverse_categorical(
+                xt=charges_ligand,
+                x0=charges_pred,
+                t=t[batch_ligand],
+                num_classes=self.num_charge_classes,
+            )
+            # edges
+            (
+                edge_attr_global_lig,
+                edge_index_global_lig,
+                mask,
+                mask_i,
+            ) = self.cat_bonds.sample_reverse_edges_categorical(
+                edge_attr_global_lig,
+                edges_pred,
+                t,
+                mask,
+                mask_i,
+                batch=batch_ligand,
+                edge_index_global=edge_index_global_lig,
+                num_classes=self.num_bond_classes,
+            )
+            
+            if clash_guidance:
+                if clash_guidance_start <= i <= clash_guidance_end:
+                    _, delta = pocket_clash_guidance(x_l=pos_ligand, x_p=pos_pocket,
+                                                    batch_l=batch_ligand, batch_p=batch_pocket,
+                                                    sigma=2.0
+                                                    )
+                    pos_ligand = pos_ligand + clash_guidance_scale * delta
+                    
+            # concatenate again into joint ligand-pocket graph
+            (
+            pos_joint,
+            atom_types_joint,
+            charge_types_joint,
+            batch_full,
+            pocket_mask,
+            ) = concat_ligand_pocket(
+            pos_ligand,
+            pos_pocket,
+            atom_types_ligand,
+            atom_types_pocket,
+            charges_ligand,
+            charges_pocket,
+            batch_ligand,
+            batch_pocket,
+            sorting=False,
+            )
+            
+            (
+            edge_index_global,
+            edge_attr_global,
+            batch_edge_global,
+            edge_mask,
+            edge_mask_pocket,
+            edge_initial_interaction,
+            ) = get_joint_edge_attrs(
+            pos_ligand,
+            pos_pocket,
+            batch_ligand,
+            batch_pocket,
+            edge_attr_global_lig,
+            self.num_bond_classes,
+            self.device,
+            cutoff_p=self.cutoff_p,
+            cutoff_lp=self.cutoff_lp,
+            knn=self.knn,
+            hybrid_knn=self.hybrid_knn,
+            knn_with_cutoff=self.knn_with_cutoff,
+            pocket_mask=pocket_mask,
+            )
+        
+        # at last step, just infill the ground truth inpaintings
+        pos_ligand = pos_ligand * (1.0 - lig_inpaint_mask_f) + pos_ligand_initial * lig_inpaint_mask_f
+        atom_types_ligand_initial = F.one_hot(atom_types_ligand_initial, atom_types_inpaint.size(1)).float()
+        atom_types_ligand = atom_types_ligand * (1.0 - lig_inpaint_mask_f) + atom_types_ligand_initial * lig_inpaint_mask_f
+
+        # Move generated molecule back to the original pocket position for docking
+        pos_ligand += pocket_cog[batch_ligand]
+        pos_pocket += pocket_cog[batch_pocket]
+
+        out_dict = {
+            "coords_pred": pos_ligand,
+            "coords_pocket": pos_pocket,
+            "atoms_pred": atom_types_ligand,
+            "atoms_pocket": atom_types_pocket,
+            "charges_pred": charges_ligand,
+            "bonds_pred": edge_attr_global_lig,
+        }
+        molecules = get_molecules(
+            out_dict,
+            batch_ligand,
+            edge_index_global_lig,
+            self.num_atom_types,
+            self.num_charge_classes,
+            self.dataset_info,
+            data_batch_pocket=batch_pocket,
+            pocket_name=(
+                pocket_data.pocket_name if "pocket_name" in pocket_data else None
+            ),
+            device=self.device,
+            mol_device="cpu",
+            context=None,
+            relax_mol=relax_mol,
+            max_relax_iter=max_relax_iter,
+            sanitize=sanitize,
+            while_train=False,
+            build_obabel_mol=build_obabel_mol,
+        )
+
+        return molecules
+        
     def configure_optimizers(self):
 
         if self.hparams.use_latent_encoder:

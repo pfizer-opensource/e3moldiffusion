@@ -31,6 +31,7 @@ from experiments.data.ligand.process_crossdocked import amino_acid_dict, three_t
 from experiments.data.ligand.utils import get_space_size, sample_atom_num
 from experiments.data.utils import mol_to_torch_geometric
 from experiments.molecule_utils import Molecule
+from experiments.sampling.inpainting import prepare_inpainting_ligand_batch
 from experiments.sampling.utils import (
     calculate_hacceptors,
     calculate_hdonors,
@@ -1871,6 +1872,7 @@ def prepare_data_and_generate_ligands(
     )
 
     if args.encode_ligands:
+        assert not args.inpainting
         pocket_data, ligand_embeds = encode_ligands(
             model,
             pocket_data,
@@ -1884,13 +1886,25 @@ def prepare_data_and_generate_ligands(
         embedding_dict[sdf_file.stem]["seed"].append(ligand_embeds)
     
     if args.use_lipinski_context and not args.encode_ligands:
+        assert not args.inpainting
         ligand_data = get_ligand_data(sdf_file, dataset_info, hparams)
         # create copies
         ligand_data = Batch.from_data_list(
             [deepcopy(ligand_data) for _ in range(batch_size)]
         )
         pocket_data.update(ligand_data)
-
+        
+    if args.inpainting:
+        ligand_data = get_ligand_data(sdf_file, dataset_info, hparams, cog_proj=False)
+        ligand_data = prepare_inpainting_ligand_batch(data=ligand_data,
+                                                      vary_n_nodes=args.vary_n_nodes,
+                                                      nodes_bias=args.n_nodes_bias,
+                                                      num_graphs=batch_size,
+                                                      device=device,
+                                                      keep_ids=args.keep_ids
+                                                      )
+        pocket_data.update(ligand_data)
+    
     with torch.no_grad():
         molecules = model.generate_ligands(
             pocket_data,
@@ -1935,13 +1949,14 @@ def prepare_data_and_generate_ligands(
             clash_guidance_start=args.clash_guidance_start,
             clash_guidance_end=args.clash_guidance_end,
             clash_guidance_scale=args.clash_guidance_scale,
+            inpainting=args.inpainting,
         )
     del pocket_data
     torch.cuda.empty_cache()
 
     return molecules
 
-def get_ligand_data(sdf_file, dataset_info, hparams):
+def get_ligand_data(sdf_file, dataset_info, hparams, cog_proj=True):
     suppl = Chem.SDMolSupplier(str(sdf_file))
     mol = []
     for m in suppl:
@@ -1953,7 +1968,7 @@ def get_ligand_data(sdf_file, dataset_info, hparams):
         dataset_info.atom_encoder,
         smiles=Chem.MolToSmiles(mol),
         remove_hydrogens=hparams.remove_hs,
-        cog_proj=True,  # only for processing the ligand-shape encode
+        cog_proj=cog_proj,  # only for processing the ligand-shape encode
     )
     return ligand_data
     

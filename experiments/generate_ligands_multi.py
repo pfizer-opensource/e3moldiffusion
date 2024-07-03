@@ -702,6 +702,7 @@ def get_args():
     parser.add_argument("--clash-guidance-scale", default=0.1, type=float)
     parser.add_argument("--clash-guidance-start", default=None, type=int)
     parser.add_argument("--clash-guidance-end", default=None, type=int)
+    parser.add_argument("--inpainting", default=False, action="store_true")
     args = parser.parse_args()
     return args
 
