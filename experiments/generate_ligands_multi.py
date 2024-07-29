@@ -680,7 +680,13 @@ def get_args():
     parser.add_argument("--property-classifier-guidance", default=False, action="store_true")
     parser.add_argument("--property-classifier-self-guidance", default=False, action="store_true")
     parser.add_argument("--property-classifier-guidance-complex", default=False, action="store_true")
-    parser.add_argument("--classifier-guidance-scale", default=1.e-4, type=float)
+    parser.add_argument("--classifier-guidance-scale", default=1e-1, type=float)
+    parser.add_argument("--classifier-guidance-kind", default=None, type=str,
+                        choices=["sa_score", "docking_score", "sa_score,docking_score"]
+                        )
+    parser.add_argument("--classifier-guidance-period", default=None, type=str,
+                        choices=["all", "selected"]
+                    )
     # importance sampling
     parser.add_argument("--sa-importance-sampling", default=False, action="store_true")
     parser.add_argument("--sa-tau", default=0.1, type=float)
@@ -703,6 +709,9 @@ def get_args():
     parser.add_argument("--clash-guidance-start", default=None, type=int)
     parser.add_argument("--clash-guidance-end", default=None, type=int)
     parser.add_argument("--inpainting", default=False, action="store_true")
+    parser.add_argument("--keep-ids",  default=None, nargs="+", type=int)
+    parser.add_argument("--emd-ot",  default=False, action="store_true")
+    parser.add_argument("--importance-gradient-guidance",  default=False, action="store_true")
     args = parser.parse_args()
     return args
 

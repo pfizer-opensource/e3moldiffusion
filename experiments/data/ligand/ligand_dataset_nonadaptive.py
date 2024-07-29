@@ -335,6 +335,8 @@ class LigandPocketDataset(InMemoryDataset):
         ):
             data = self.get(self.indices()[idx])
             data = data if self.transform is None else self.transform(data)
+            if hasattr(data, "docking_scores"):
+                data.docking_scores = data.docking_scores.clamp(max=100.)
             return data
 
         else:

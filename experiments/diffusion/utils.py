@@ -398,6 +398,7 @@ def property_guidance_lig_pocket(
     edge_index_global=None,
     edge_index_global_lig=None,
     edge_attr_global=None,
+    edge_initial_interaction=None,
     batch=None,
     batch_pocket=None,
     batch_full=None,
@@ -409,8 +410,7 @@ def property_guidance_lig_pocket(
     context=None,
     num_atom_types=None,
     atoms_continuous=False,
-    signal=1.0e-3,
-    guidance_scale=100,
+    guidance_scale=1e-1,
     minimize_property=False,
 ):
 
@@ -465,6 +465,7 @@ def property_guidance_lig_pocket(
             edge_index_global=edge_index_global,
             edge_index_global_lig=edge_index_global_lig,
             edge_attr_global=edge_attr_global,
+            edge_attr_initial_ohe=edge_initial_interaction,
             batch=batch_full,
             batch_edge_global=batch_edge_global,
             context=context,
@@ -480,7 +481,11 @@ def property_guidance_lig_pocket(
         else:
             sign = 1.0
 
-        property_pred = guidance_scale * out["property_pred"]
+        # docking_score
+        if minimize_property:
+            property_pred = out["property_pred"][1]
+        else:
+            property_pred = out["property_pred"][0]
 
         grad_outputs: List[Optional[torch.Tensor]] = [torch.ones_like(property_pred)]
         if atoms_continuous:
@@ -500,14 +505,14 @@ def property_guidance_lig_pocket(
                 retain_graph=False,
             )[0]
 
-    pos = pos + sign * signal * grad_shift[:, :3]
+    pos = pos + sign * guidance_scale * grad_shift[:, :3]
     pos.detach_()
 
     if atoms_continuous:
-        atom_types = atom_types + sign * signal * grad_shift[:, 3 : num_atom_types + 3]
+        atom_types = atom_types + sign * guidance_scale * grad_shift[:, 3 : num_atom_types + 3]
         atom_types.detach_()
         charge_types = (
-            charge_types + sign * signal * grad_shift[:, 3 + num_atom_types :]
+            charge_types + sign * guidance_scale * grad_shift[:, 3 + num_atom_types :]
         )
         charge_types.detach_()
         # pos = zero_mean(pos, batch=batch, dim_size=batch_size, dim=0)

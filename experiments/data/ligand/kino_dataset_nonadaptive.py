@@ -182,6 +182,10 @@ class LigandPocketDataset(InMemoryDataset):
                 mol_data[k] = v
                 continue
 
+            if k == "docking_scores":
+                docking_scores = torch.from_numpy(v)
+                continue
+            
             if k == "ic50s":
                 ic50s = torch.tensor([float(i) for i in v]).float()
                 continue
@@ -231,6 +235,7 @@ class LigandPocketDataset(InMemoryDataset):
             mask_pocket,
             pocket_ca_mask,
             ic50,
+            docking_score,
         ) in enumerate(
             tqdm(
                 zip_longest(
@@ -243,6 +248,7 @@ class LigandPocketDataset(InMemoryDataset):
                     mol_data["pocket_mask"],
                     mol_data["pocket_ca_mask"],
                     ic50s,
+                    docking_scores,
                     fillvalue=None,
                 ),
                 total=len(mol_data["lig_mol"]),
@@ -273,6 +279,7 @@ class LigandPocketDataset(InMemoryDataset):
             # data.pocket_one_hot = pocket_one_hot
             # data.pocket_one_hot_mask = pocket_one_hot_mask
             data.ic50 = ic50
+            data.docking_scores = docking_score
             all_smiles.append(smiles_lig)
             data_list_lig.append(data)
 
@@ -321,6 +328,8 @@ class LigandPocketDataset(InMemoryDataset):
         ):
             data = self.get(self.indices()[idx])
             data = data if self.transform is None else self.transform(data)
+            if hasattr(data, "docking_scores"):
+                data.docking_scores = data.docking_scores.clamp(max=100.)
             return data
 
         else:

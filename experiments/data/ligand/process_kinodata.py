@@ -314,6 +314,8 @@ def saveall(
     pocket_one_hot,
     pocket_ca_mask,
     ic50s,
+    docking_scores,
+    docking_confidences,
 ):
     np.savez(
         filename,
@@ -328,6 +330,8 @@ def saveall(
         pocket_one_hot=pocket_one_hot,
         pocket_ca_mask=pocket_ca_mask,
         ic50s=ic50s,
+        docking_scores=docking_scores,
+        docking_confidences=docking_confidences,
     )
     return True
 
@@ -403,6 +407,7 @@ if __name__ == "__main__":
         lig_mol = []
         ic50s = []
         docking_scores = []
+        docking_confidences = []
         pocket_coords = []
         pocket_atom = []
         pocket_mask = []
@@ -475,6 +480,12 @@ if __name__ == "__main__":
             ic50s.append(
                 float(ligand_data["lig_mol"].GetProp("activities.standard_value"))
             )
+            docking_scores.append(
+                float(ligand_data["lig_mol"].GetProp('docking.chemgauss_score'))
+            )
+            docking_confidences.append(
+                float(ligand_data["lig_mol"].GetProp('docking.posit_probability'))
+            )
             pocket_coords.append(pocket_data["pocket_coords"])
             pocket_atom.append(pocket_data["pocket_atoms"])
             pocket_mask.append(count * np.ones(len(pocket_data["pocket_coords"])))
@@ -503,6 +514,8 @@ if __name__ == "__main__":
         pocket_atom = np.concatenate(pocket_atom, axis=0)
         pocket_mask = np.concatenate(pocket_mask, axis=0)
         ic50s = np.array(ic50s)
+        docking_scores = np.array(docking_scores)
+        docking_confidences = np.array(docking_confidences)
 
         if not args.ca_only:
             pocket_one_hot_resids = np.concatenate(pocket_one_hot_resids, axis=0)
@@ -524,6 +537,8 @@ if __name__ == "__main__":
             pocket_one_hot=pocket_one_hot_resids,
             pocket_ca_mask=pocket_ca_mask,
             ic50s=ic50s,
+            docking_scores=docking_scores,
+            docking_confidences=docking_confidences,
         )
 
         n_samples_after[split] = len(pdb_and_mol_ids)

@@ -1594,6 +1594,11 @@ def prepare_pocket(
 
     if ligand_sdf is not None:
         ligand = Chem.SDMolSupplier(str(ligand_sdf), sanitize=False)[0]
+        
+        if no_H:
+            ligand = Chem.RemoveHs(ligand)
+            Chem.Kekulize(ligand, clearAromaticFlags=True)
+            
         batch = (
             torch.cat(
                 [torch.tensor([i] * ligand.GetNumAtoms()) for i in range(repeats)]
@@ -1709,6 +1714,11 @@ def prepare_pocket_cutoff(
 
     if ligand_sdf is not None:
         ligand = Chem.SDMolSupplier(str(ligand_sdf), sanitize=False)[0]
+        
+        if no_H:
+            ligand = Chem.RemoveHs(ligand)
+            Chem.Kekulize(ligand, clearAromaticFlags=True)
+            
         batch = (
             torch.cat(
                 [torch.tensor([i] * ligand.GetNumAtoms()) for i in range(repeats)]
@@ -1904,7 +1914,7 @@ def prepare_data_and_generate_ligands(
                                                       keep_ids=args.keep_ids
                                                       )
         pocket_data.update(ligand_data)
-    
+            
     with torch.no_grad():
         molecules = model.generate_ligands(
             pocket_data,
@@ -1927,6 +1937,8 @@ def prepare_data_and_generate_ligands(
             property_classifier_guidance_complex=args.property_classifier_guidance_complex,
             property_classifier_self_guidance=args.property_classifier_self_guidance,
             classifier_guidance_scale=args.classifier_guidance_scale,
+            classifier_guidance_kind=args.classifier_guidance_kind,
+            classifier_guidance_period=args.classifier_guidance_period,
             sa_importance_sampling=args.sa_importance_sampling,
             sa_importance_sampling_start=args.sa_importance_sampling_start,
             sa_importance_sampling_end=args.sa_importance_sampling_end,
@@ -1950,6 +1962,8 @@ def prepare_data_and_generate_ligands(
             clash_guidance_end=args.clash_guidance_end,
             clash_guidance_scale=args.clash_guidance_scale,
             inpainting=args.inpainting,
+            emd_ot=args.emd_ot,
+            importance_gradient_guidance=args.importance_gradient_guidance,
         )
     del pocket_data
     torch.cuda.empty_cache()

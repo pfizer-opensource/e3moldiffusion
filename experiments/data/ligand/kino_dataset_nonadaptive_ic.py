@@ -181,6 +181,8 @@ class LigandPocketDataset(InMemoryDataset):
         for k, v in data.items():
             if k == "names":
                 ic50s = []
+                docking_scores = []
+                docking_confidences = []
                 for i, name in enumerate(v):
                     sdf = os.path.join(
                         self.root,
@@ -192,9 +194,17 @@ class LigandPocketDataset(InMemoryDataset):
                     else:
                         ic50s.append(0.0)
                         failed_ids.append(i)
+                    
+                    docking_scores.append(float(mol.GetProp("docking.chemgauss_score")))
+                    docking_confidences.append(float(mol.GetProp("docking.posit_probability")))
+                    
                 ic50s = torch.tensor(ic50s).float()
+                docking_scores = torch.tensor(docking_scores).float()
+                docking_confidences = torch.tensor(docking_confidences).float()
 
         mol_data["ic50s"] = ic50s
+        mol_data["docking_scores"] = docking_scores
+        mol_data["docking_confidence"] = docking_confidences
         for k, v in data.items():
             if k == "names" or k == "receptors" or k == "lig_mol":
                 mol_data[k] = v
@@ -246,6 +256,8 @@ class LigandPocketDataset(InMemoryDataset):
             mask_pocket,
             pocket_ca_mask,
             ic50,
+            docking_score,
+            docking_confidence,
         ) in enumerate(
             tqdm(
                 zip_longest(
@@ -258,6 +270,8 @@ class LigandPocketDataset(InMemoryDataset):
                     mol_data["pocket_mask"],
                     mol_data["pocket_ca_mask"],
                     ic50s,
+                    docking_scores,
+                    docking_confidences,
                     fillvalue=None,
                 ),
                 total=len(mol_data["lig_mol"]),
@@ -290,6 +304,8 @@ class LigandPocketDataset(InMemoryDataset):
             # data.pocket_one_hot = pocket_one_hot
             # data.pocket_one_hot_mask = pocket_one_hot_mask
             data.ic50 = ic50
+            data.docking_score = docking_score
+            data.docking_confidence = docking_confidence
             all_smiles.append(smiles_lig)
             data_list_lig.append(data)
 

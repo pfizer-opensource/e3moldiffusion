@@ -2,6 +2,7 @@ import torch
 from copy import deepcopy
 from torch_geometric.data import Data, Batch
 from typing import List, Union, Optional
+import numpy as np
 
 def create_copy_and_fill(data: Data, lig_mask: torch.Tensor) -> Data:
     
@@ -25,6 +26,30 @@ def create_copy_and_fill(data: Data, lig_mask: torch.Tensor) -> Data:
     
     return data_copy
 
+def get_edge_mask_inpainting(edge_index: torch.Tensor, edge_attr: torch.Tensor, fixed_nodes_indices: torch.Tensor):
+    
+    if str(fixed_nodes_indices.dtype) == torch.bool:
+        fixed_nodes_indices = torch.where(fixed_nodes_indices)[0]
+        
+    edge_0 = torch.where(
+                    edge_index[0][:, None] == fixed_nodes_indices[None, :]
+                )[0]
+    
+    edge_1 = torch.where(
+        edge_index[1][:, None] == fixed_nodes_indices[None, :]
+    )[0]
+    
+    edge_index_between_fixed_nodes = edge_0[
+        torch.where(edge_0[:, None] == edge_1[None, :])[0]
+    ]
+    
+    edge_mask_between_fixed_nodes = torch.zeros_like(
+        edge_attr, dtype=torch.bool, device=edge_index.device
+    )
+    
+    edge_mask_between_fixed_nodes[edge_index_between_fixed_nodes] = True
+    
+    return edge_index_between_fixed_nodes, edge_mask_between_fixed_nodes
 
 def prepare_inpainting_ligand_batch(data: Data,
                                     vary_n_nodes: bool, 

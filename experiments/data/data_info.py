@@ -100,7 +100,6 @@ class GeneralInfos(AbstractDatasetInfos):
             (C + self.charge_offset).long(), num_classes=self.num_charge_classes
         ).float()
 
-
 full_atom_encoder_drugs = {
     "H": 0,
     "B": 1,
