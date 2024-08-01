@@ -3,8 +3,7 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
-from torch_scatter import scatter_mean
-
+from torch_scatter import scatter_mean, scatter_add
 
 class DiffusionLoss(nn.Module):
     def __init__(
@@ -427,3 +426,50 @@ class EdgePredictionLoss(nn.Module):
         bonds_loss = F.cross_entropy(pred_data, true_data, reduction="mean")
 
         return bonds_loss
+    
+def LJ_potential_loss(x_l, x_p, batch_l, batch_p, N=6, eps=1e-3, clamp_max=100., w=None, full_cross=False):
+    with torch.enable_grad():
+        if not full_cross:
+            i_l, i_p = (batch_l[:, None] == batch_p[None, :]).nonzero().T
+            dm = torch.pow(x_l[i_l] - x_p[i_p], 2).sum(-1).clamp_min(eps).sqrt()
+            rdm = (1 / dm.clamp_min(eps))
+            vdw1 = torch.pow(rdm , 2 * N)
+            vdw2 = -2 * torch.pow(rdm, N)
+            energy = scatter_add(vdw1 + vdw2, i_l, dim=0) # (n_l)
+        else:
+            dm = torch.sqrt(torch.sum((x_p.view(1, -1, 3) - x_l.view(-1, 1, 3) )** 2, dim=-1) + eps) # (n_l, n_p)
+            connectivity_mask = batch_l.view(-1, 1) == batch_p.view(1, -1)
+            rdm = connectivity_mask * (1 / dm.clamp_min(eps))
+            vdw1 = torch.pow(rdm, 2 * N)
+            vdw2 = -2 * torch.pow(rdm, N)
+            energy = torch.sum(vdw1 + vdw2, dim=-1) # (n_l)
+            
+        energy = torch.clamp(energy, max=clamp_max)
+        energy = scatter_add(energy, batch_l, dim=0) # (b,)
+        if w is None:
+            w = torch.ones_like(energy)
+        energy = w * energy
+        grads = torch.autograd.grad(energy.sum(), dm, retain_graph=True, create_graph=True)[0]
+    return energy, grads
+
+def pocket_clash_loss(x_l, x_p, batch_l, batch_p, sigma=2., eps=1e-3, clamp_max=100., w=None, full_cross=False):
+    with torch.enable_grad():
+        if not full_cross:
+            i_l, i_p = (batch_l[:, None] == batch_p[None, :]).nonzero().T
+            dm = torch.pow(x_l[i_l] - x_p[i_p], 2).sum(-1).clamp_min(eps)
+            e = torch.exp(- dm / float(sigma))
+            e = scatter_add(e, i_l, dim=0) # (n_l)
+        else:
+            dm = torch.sum((x_p.view(1, -1, 3) - x_l.view(-1, 1, 3) )** 2, dim=-1)
+            e = torch.exp(- dm / float(sigma))  # (n_l, n_p)
+            connectivity_mask = batch_l.view(-1, 1) == batch_p.view(1, -1)
+            e = torch.sum(e * connectivity_mask, dim=-1)
+            
+        energy = -sigma * torch.log(e.clamp_min(eps)) # (n_l,)
+        energy = torch.clamp(energy, max=clamp_max)
+        energy = scatter_mean(energy, batch_l, dim=0) # (b,)
+        if w is None:
+            w = torch.ones_like(energy)
+        energy = w * energy
+        grads = torch.autograd.grad(energy.sum(), dm, retain_graph=True, create_graph=True)[0]
+    return energy, grads

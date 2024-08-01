@@ -49,7 +49,7 @@ from experiments.diffusion.utils import (
     property_guidance_lig_pocket,
 )
 from experiments.sampling.inpainting import get_edge_mask_inpainting
-from experiments.losses import DiffusionLoss
+from experiments.losses import DiffusionLoss, LJ_potential_loss, pocket_clash_loss
 from experiments.sampling.analyze import analyze_stability_for_molecules
 from experiments.sampling.utils import calculate_sa
 from experiments.utils import (
@@ -364,7 +364,11 @@ class Trainer(pl.LightningModule):
         return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="train")
 
     def validation_step(self, batch, batch_idx):
-        return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="val")
+        if self.hparams.ligand_pocket_distance_loss:
+            with torch.enable_grad():
+                return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="val")
+        else:
+            return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="val")
 
     def test_step(self, batch, batch_idx):
         # return self.step_fnc(batch=batch, batch_idx=batch_idx, stage="test")
@@ -524,6 +528,8 @@ class Trainer(pl.LightningModule):
         sa_loss,
         property_loss,
         dloss,
+        lj_loss,
+        cl_loss,
         prior_loss,
         num_nodes_loss,
         batch_size,
@@ -596,6 +602,24 @@ class Trainer(pl.LightningModule):
             self.log(
                 f"{stage}/d_loss",
                 dloss,
+                on_step=True,
+                batch_size=batch_size,
+                prog_bar=(stage == "train"),
+                sync_dist=self.hparams.gpus > 1 and stage == "val",
+            )
+        if lj_loss is not None:
+            self.log(
+                f"{stage}/lj_loss",
+                lj_loss,
+                on_step=True,
+                batch_size=batch_size,
+                prog_bar=(stage == "train"),
+                sync_dist=self.hparams.gpus > 1 and stage == "val",
+            )
+        if cl_loss is not None:
+            self.log(
+                f"{stage}/cl_loss",
+                cl_loss,
                 on_step=True,
                 batch_size=batch_size,
                 prog_bar=(stage == "train"),
@@ -798,9 +822,55 @@ class Trainer(pl.LightningModule):
                 dloss12 = weights * dloss12
                 dloss12 = torch.sum(dloss12, dim=0)
                 dloss = dloss + dloss12
-            final_loss = final_loss + 3.0 * dloss
+            
+            final_loss = final_loss + 1.0 * dloss
+            
+            # energy terms: (a) LJ, (b) pocket clash
+            x_l=out_dict["coords_pred"]
+            x_p=out_dict["energy_loss_data"]["pos_centered_pocket"]
+            batch_l=out_dict["energy_loss_data"]["batch_ligand"]
+            batch_p=out_dict["energy_loss_data"]["batch_pocket"]
+            ligand_i, pocket_j = (batch_l[:, None] == batch_p[None, :]).nonzero().T
+            fc = False
+            energy = True
+            
+            if energy:
+                _, lj_grad = LJ_potential_loss(x_l=x_l,
+                                            x_p=x_p, 
+                                            batch_l=batch_l,
+                                            batch_p=batch_p,
+                                            eps=1e-5, clamp_max=100.,
+                                            w=None, full_cross=fc
+                                            )
+                lj_grad = lj_grad.relu()
+                if not fc:
+                    lj_loss = scatter_add(lj_grad, ligand_i, dim=0)
+                else:
+                    lj_loss = lj_grad.sum(-1)
+                lj_loss = scatter_mean(lj_loss, batch_l, dim=0)
+                lj_loss = torch.sum(weights * lj_loss, dim=0)                
+                _, cl_grad = pocket_clash_loss(x_l=x_l,
+                                            x_p=x_p,
+                                            batch_l=batch_l,
+                                            batch_p=batch_p,
+                                            sigma=2.0,
+                                            eps=1e-5, clamp_max=100.,
+                                            w=None, full_cross=fc
+                                            )
+                cl_grad = cl_grad.relu()
+                if not fc:
+                    cl_loss = scatter_add(cl_grad, ligand_i, dim=0)
+                else:
+                    cl_loss = cl_grad.sum(-1)
+                cl_loss = scatter_mean(cl_loss, batch_l, dim=0)
+                cl_loss = torch.sum(weights * cl_loss, dim=0)
+            else:
+                lj_loss = cl_loss = 0.0
+            final_loss = final_loss + 1.0 * lj_loss + 1.0 * cl_loss
         else:
             dloss = None
+            lj_loss = None
+            cl_loss = None
 
         if torch.any(final_loss.isnan()):
             final_loss = final_loss[~final_loss.isnan()]
@@ -826,6 +896,8 @@ class Trainer(pl.LightningModule):
             loss["sa"],
             loss["property"],
             dloss,
+            lj_loss,
+            cl_loss,
             prior_loss,
             num_nodes_loss,
             batch_size,
@@ -1224,14 +1296,20 @@ class Trainer(pl.LightningModule):
         if self.hparams.ligand_pocket_distance_loss:
             # Protein Pocket Coords for Distance Loss computation
             # Only select subset based on C-alpha representatives
-            data_batch_pocket = data_batch_pocket[batch.pocket_ca_mask]
+            data_batch_pocket_subset = data_batch_pocket[batch.pocket_ca_mask]
             # create cross indices between ligand and c-alpha
-            adj_cross = (data_batch[:, None] == data_batch_pocket[None, :]).nonzero().T
+            adj_cross = (data_batch[:, None] == data_batch_pocket_subset[None, :]).nonzero().T
             out["distance_loss_data"] = {
                 "pos_centered_pocket": pos_centered_pocket[batch.pocket_ca_mask],
                 "edge_index_cross": adj_cross,
             }
-
+            
+            out["energy_loss_data"] = {
+                "pos_centered_pocket": pos_centered_pocket,
+                "batch_ligand": data_batch,
+                "batch_pocket": data_batch_pocket,
+            }
+            
         return out
 
     def sample_flow(
