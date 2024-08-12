@@ -789,26 +789,32 @@ class Trainer(pl.LightningModule):
             prior_loss = num_nodes_loss = None
 
         if self.hparams.ligand_pocket_distance_loss:
-            coords_pocket = out_dict["distance_loss_data"]["pos_centered_pocket"]
-            ligand_i, pocket_j = out_dict["distance_loss_data"]["edge_index_cross"]
-            dloss_true = (
-                (out_dict["coords_true"][ligand_i] - coords_pocket[pocket_j])
-                .pow(2)
-                .sum(-1)
-                .sqrt()
-            )
-            dloss_pred = (
-                (out_dict["coords_pred"][ligand_i] - coords_pocket[pocket_j])
-                .pow(2)
-                .sum(-1)
-                .sqrt()
-            )
-            # geometry loss
-            dloss = self.dist_loss(dloss_true, dloss_pred)
-            dloss = scatter_mean(dloss, ligand_i, dim=0)
-            # apply loss weighting
-            dloss = scatter_mean(dloss, batch.batch, dim=0)
-            dloss = torch.sum(weights * dloss, dim=0)
+            
+            _dloss=True
+            
+            if _dloss:
+                coords_pocket = out_dict["distance_loss_data"]["pos_centered_pocket"]
+                ligand_i, pocket_j = out_dict["distance_loss_data"]["edge_index_cross"]
+                dloss_true = (
+                    (out_dict["coords_true"][ligand_i] - coords_pocket[pocket_j])
+                    .pow(2)
+                    .sum(-1)
+                    .sqrt()
+                )
+                dloss_pred = (
+                    (out_dict["coords_pred"][ligand_i] - coords_pocket[pocket_j])
+                    .pow(2)
+                    .sum(-1)
+                    .sqrt()
+                )
+                # geometry loss
+                dloss = self.dist_loss(dloss_true, dloss_pred)
+                dloss = scatter_mean(dloss, ligand_i, dim=0)
+                # apply loss weighting
+                dloss = scatter_mean(dloss, batch.batch, dim=0)
+                dloss = torch.sum(weights * dloss, dim=0)
+            else:
+                dloss = 0.0
             if self.hparams.ligand_pocket_hidden_distance:
                 d_hidden = out_dict["dist_pred"]
                 # latent loss
@@ -833,37 +839,45 @@ class Trainer(pl.LightningModule):
             ligand_i, pocket_j = (batch_l[:, None] == batch_p[None, :]).nonzero().T
             fc = False
             energy = True
+            lj = True  ### this seems to be the best setting
+            cl = False  ### turn on LJ turn off CL
             
             if energy:
-                _, lj_grad = LJ_potential_loss(x_l=x_l,
-                                            x_p=x_p, 
-                                            batch_l=batch_l,
-                                            batch_p=batch_p,
-                                            eps=1e-5, clamp_max=100.,
-                                            w=None, full_cross=fc
-                                            )
-                lj_grad = lj_grad.relu()
-                if not fc:
-                    lj_loss = scatter_add(lj_grad, ligand_i, dim=0)
+                if lj:
+                    _, lj_grad = LJ_potential_loss(x_l=x_l,
+                                                x_p=x_p, 
+                                                batch_l=batch_l,
+                                                batch_p=batch_p,
+                                                eps=1e-5, clamp_max=100.,
+                                                w=None, full_cross=fc
+                                                )
+                    lj_grad = lj_grad.relu()
+                    if not fc:
+                        lj_loss = scatter_add(lj_grad, ligand_i, dim=0)
+                    else:
+                        lj_loss = lj_grad.sum(-1)
+                    lj_loss = scatter_mean(lj_loss, batch_l, dim=0)
+                    lj_loss = torch.sum(weights * lj_loss, dim=0)  
                 else:
-                    lj_loss = lj_grad.sum(-1)
-                lj_loss = scatter_mean(lj_loss, batch_l, dim=0)
-                lj_loss = torch.sum(weights * lj_loss, dim=0)                
-                _, cl_grad = pocket_clash_loss(x_l=x_l,
-                                            x_p=x_p,
-                                            batch_l=batch_l,
-                                            batch_p=batch_p,
-                                            sigma=2.0,
-                                            eps=1e-5, clamp_max=100.,
-                                            w=None, full_cross=fc
-                                            )
-                cl_grad = cl_grad.relu()
-                if not fc:
-                    cl_loss = scatter_add(cl_grad, ligand_i, dim=0)
+                    lj_loss = 0.0     
+                if cl:         
+                    _, cl_grad = pocket_clash_loss(x_l=x_l,
+                                                x_p=x_p,
+                                                batch_l=batch_l,
+                                                batch_p=batch_p,
+                                                sigma=2.0,
+                                                eps=1e-5, clamp_max=100.,
+                                                w=None, full_cross=fc
+                                                )
+                    cl_grad = cl_grad.relu()
+                    if not fc:
+                        cl_loss = scatter_add(cl_grad, ligand_i, dim=0)
+                    else:
+                        cl_loss = cl_grad.sum(-1)
+                    cl_loss = scatter_mean(cl_loss, batch_l, dim=0)
+                    cl_loss = torch.sum(weights * cl_loss, dim=0)
                 else:
-                    cl_loss = cl_grad.sum(-1)
-                cl_loss = scatter_mean(cl_loss, batch_l, dim=0)
-                cl_loss = torch.sum(weights * cl_loss, dim=0)
+                    cl_loss = 0.0
             else:
                 lj_loss = cl_loss = 0.0
             final_loss = final_loss + 1.0 * lj_loss + 1.0 * cl_loss

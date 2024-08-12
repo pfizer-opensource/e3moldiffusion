@@ -122,9 +122,11 @@ def calculate_vina_score(
                 ):
                     mol.SetProp("vina_dock", str(docking_results[0]["affinity"]))
                 rdmols.append(mol)
+                print(f"Mol = {sdf_file}, i = {i}, Score: {score}")
             else:
                 continue
-        except Exception:
+        except Exception as e:
+            print(e)
             ligand_pdbqt_file.unlink()
             continue
 
@@ -418,6 +420,11 @@ if __name__ == "__main__":
             receptor_name = ligand_name.split("_")[0]
             receptor_file = Path(args.pdbqt_dir, receptor_name + ".pdbqt")
             pdb_file = Path(args.pdb_dir, receptor_name + ".pdb")
+        elif args.dataset == "pdbbind":
+            ligand_name = sdf_file.stem
+            receptor_name = ligand_name.split("_")[0]
+            receptor_file = Path(args.pdbqt_dir, receptor_name + "pocket_.pdbqt")
+            pdb_file = Path(args.pdb_dir, receptor_name + "_pocket.pdb")
         else:
             raise Exception("Dataset not available!")
 
