@@ -1,0 +1,38 @@
+name: vina
+channels:
+  - conda-forge
+  - nvidia
+  - mx
+dependencies:
+  - python=3.9
+  - pip
+  - notebook
+  - matplotlib
+  - conda-forge::rdkit=2023.9.3
+  - conda-forge::jupyter
+  - conda-forge::openbabel
+  - conda-forge::prody
+  - conda-forge::prolif
+  - conda-forge::pypdb
+  - conda-forge::datamol
+  - conda-forge::py3dmol
+  - conda-forge::seaborn
+  - conda-forge::setuptools=65.6.3
+  - conda-forge::scipy==1.11.4
+  - mx::reduce
+  - conda-forge::swig 
+  - conda-forge::boost-cpp 
+  - conda-forge::sphinx 
+  - conda-forge::sphinx_rtd_theme
+  - conda-forge::biopython=1.81
+  - pip:
+      - ase
+      - nglview
+      - rmsd
+      - tensorboard
+      - datamol
+      - prolif
+      - prody
+      - seaborn
+      - meeko
+      - vina
