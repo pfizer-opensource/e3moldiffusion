@@ -1,0 +1,13 @@
+name: walters
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12.0
+  - pip:
+      - git+https://github.com/PatWalters/useful_rdkit_utils.git
+      - posebusters 
+      - rdkit
+      - mols2grid 
+      - seaborn
+      - tqdm
+      - pandas==2.0.3
