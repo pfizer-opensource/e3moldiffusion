@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH -J SampleArray
+#SBATCH -J DockingArray
 #SBATCH --time=1-00:00:00
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=12G
 #SBATCH --cpus-per-task=12
 #SBATCH --partition=your_partition
-#SBATCH --array=1-15
+#SBATCH --array=1-40
 #SBATCH --output=./your_log_folder/array_run_%j.out
 #SBATCH --error=./your_log_folder/array_run_%j.err
 

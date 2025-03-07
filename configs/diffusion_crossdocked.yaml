@@ -31,7 +31,7 @@ gpus: 8
 num_epochs: 301
 test_interval: 20
  
-#EQGAT
+#EQGAT: main backbone diffusion model
 sdim: 256
 vdim: 256
 edim: 128
@@ -61,6 +61,16 @@ use_lipinski_properties: false
 num_context_features:
 dropout_prob: 0.2
 use_centroid_context_embed: false
+
+#LATENT: encoding network processing the ground-truth ligand
+use_latent_encoder: true # this will train the joint model EQGAT + Latent simultaneously
+prior_beta: 1.0
+sdim_latent: 128
+vdim_latent: 32
+latent_dim: 128 # set the latent dimension describig the entire ligand to 128 channels
+edim_latent: 16
+num_layers_latent: 8
+latentmodel: mmd # we penalize the latent z to follow ~ N(0, 1) by computing a MMD loss
 
 #DATA
 dataset: crossdocked

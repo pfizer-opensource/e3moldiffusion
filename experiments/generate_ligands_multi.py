@@ -711,7 +711,6 @@ def get_args():
     parser.add_argument("--property-importance-sampling-end", default=None, type=int)
     parser.add_argument("--joint-importance-sampling", default=False, action="store_true")
     parser.add_argument("--property-normalization", default=False, action="store_true")
-    parser.add_argument("--latent-gamma", default=1.0, type=float)
     parser.add_argument("--use-lipinski-context", default=False, action="store_true")
     parser.add_argument("--context-fixed", default=None) # placeholder
     parser.add_argument("--clash-guidance", default=False, action="store_true")
@@ -722,6 +721,8 @@ def get_args():
     parser.add_argument("--keep-ids",  default=None, nargs="+", type=int)
     parser.add_argument("--emd-ot",  default=False, action="store_true")
     parser.add_argument("--importance-gradient-guidance",  default=False, action="store_true")
+    # latent conditioning
+    parser.add_argument("--latent-gamma", default=1.0, type=float)
     args = parser.parse_args()
     return args
 

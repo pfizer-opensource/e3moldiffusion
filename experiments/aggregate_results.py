@@ -144,10 +144,13 @@ def aggregate(args):
             mean_top10_score = np.mean(
                 [np.mean(sorted(r)[:10]) for r in score_dict["scores"] if len(r) >= 1]
             )
+            std_top_10_score =  np.std(
+                [np.mean(sorted(r)[:10]) for r in score_dict["scores"] if len(r) >= 1]
+            )
             print("\n")
             print(f"Mean QVina2 score (re-docking): {mean_score}")
             print(f"Std. QVina2 score (re-docking): {std_score}")
-            print(f"Top-10 QVina2 mean score  (re-docking): {mean_top10_score}")
+            print(f"Top-10 QVina2 mean score  (re-docking): {mean_top10_score} ({std_top_10_score})")
             print("\n")
 
         else:

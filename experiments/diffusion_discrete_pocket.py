@@ -1982,7 +1982,10 @@ class Trainer(pl.LightningModule):
         pos = pos[pocket_mask]
         prop_pred = out["property_pred"]
         sa, prop = prop_pred
-        sa, prop = sa.detach(), prop.detach()
+        if isinstance(prop, Tensor):
+            prop = prop.detach()
+        if isinstance(sa, Tensor):
+            sa = sa.detach()
         sa = (
             sa.squeeze(1).sigmoid()
             if sa is not None and (kind == "sa_score" or kind == "joint")
