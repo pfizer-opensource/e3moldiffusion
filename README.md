@@ -151,9 +151,11 @@ python experiments/aggregate_results.py --files-dir /your/docking/save_dir --doc
 ## Acknowledgement
 This study was partially funded by the European Union’s Horizon 2020 research and innovation programme under the Marie Skłodowska-Curie Actions grant agreement “Advanced machine learning for Innovative Drug Discovery (AIDD)” No. 956832.
 
-If you make use of this code in your research, please also consider citing the following works:
 
 ## Citation
+
+If you make use of this code in your research, please also consider citing the following works:
+
 ```
 @inproceedings{
 le2024navigating,
