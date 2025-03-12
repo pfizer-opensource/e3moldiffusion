@@ -38,6 +38,8 @@ python experiments/generate_ligands_multi.py \
     --max-sample-iter 50 \
     --batch-size 40 \
     --n-nodes-bias 2 \
+    --latent-gamma 1.0 \
+    --encode-ligands \
     # --fix-n-nodes
     # --prior-n-atoms targetdiff \
     # --omit-posecheck
