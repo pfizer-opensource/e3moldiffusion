@@ -197,3 +197,36 @@ sbatch scripts/docking_multi_pdb_file.sl
 
 ## Acknowledgement
 This study was partially funded by the European Union’s Horizon 2020 research and innovation programme under the Marie Skłodowska-Curie Actions grant agreement “Advanced machine learning for Innovative Drug Discovery (AIDD)” No. 956832.
+
+If you make use of this code in your research, please also consider citing the following works:
+
+
+## Citation
+
+If you make use of this code in your research, please also consider citing the following works:
+
+```
+@inproceedings{
+le2024navigating,
+title={Navigating the Design Space of Equivariant Diffusion-Based Generative Models for De Novo 3D Molecule Generation},
+author={Tuan Le and Julian Cremer and Frank Noe and Djork-Arn{\'e} Clevert and Kristof T Sch{\"u}tt},
+booktitle={The Twelfth International Conference on Learning Representations},
+year={2024},
+url={https://openreview.net/forum?id=kzGuiRXZrQ}
+}
+
+
+@Article{cremer2024pilotequivariantdiffusionpocket,
+author ="Cremer, Julian and Le, Tuan and Noé, Frank and Clevert, Djork-Arné and Schütt, Kristof T.",
+title  ="PILOT: equivariant diffusion for pocket-conditioned de novo ligand generation with multi-objective guidance via importance sampling",
+journal  ="Chem. Sci.",
+year  ="2024",
+volume  ="15",
+issue  ="36",
+pages  ="14954-14967",
+publisher  ="The Royal Society of Chemistry",
+doi  ="10.1039/D4SC03523B",
+url  ="http://dx.doi.org/10.1039/D4SC03523B",
+abstract  ="The generation of ligands that both are tailored to a given protein pocket and exhibit a range of desired chemical properties is a major challenge in structure-based drug design. Here{,} we propose an in silico approach for the de novo generation of 3D ligand structures using the equivariant diffusion model PILOT{,} combining pocket conditioning with a large-scale pre-training and property guidance. Its multi-objective trajectory-based importance sampling strategy is designed to direct the model towards molecules that not only exhibit desired characteristics such as increased binding affinity for a given protein pocket but also maintains high synthetic accessibility. This ensures the practicality of sampled molecules{,} thus maximizing their potential for the drug discovery pipeline. PILOT significantly outperforms existing methods across various metrics on the common benchmark dataset CrossDocked2020. Moreover{,} we employ PILOT to generate novel ligands for unseen protein pockets from the Kinodata-3D dataset{,} which encompasses a substantial portion of the human kinome. The generated structures exhibit predicted IC50 values indicative of potent biological activity{,} which highlights the potential of PILOT as a powerful tool for structure-based drug design."}
+
+```
